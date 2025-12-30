@@ -9,7 +9,11 @@ let backendProcess;
 const AUTO_START_BACKEND = true;
 
 // Set to true to hide the backend terminal window
-const HIDE_BACKEND_WINDOW = true;
+// Can be overridden by SHOW_TERMINALS environment variable (1 = show, 0 = hide)
+// Check both environment variable and if it's set to '1' or 'true'
+const SHOW_TERMINALS_ENV = process.env.SHOW_TERMINALS;
+const SHOW_TERMINALS = SHOW_TERMINALS_ENV === '1' || SHOW_TERMINALS_ENV === 'true' || SHOW_TERMINALS_ENV === 'TRUE';
+const HIDE_BACKEND_WINDOW = !SHOW_TERMINALS;
 
 function createWindow() {
     mainWindow = new BrowserWindow({
@@ -55,33 +59,71 @@ function startBackend() {
         pythonCmd = path.join(backendPath, 'venv', 'bin', 'python');
     }
     
-    const spawnOptions = {
-        cwd: backendPath,
-        shell: true
-    };
-
-    // Hide the terminal window on Windows
-    if (HIDE_BACKEND_WINDOW && process.platform === 'win32') {
-        spawnOptions.windowsHide = true;
-        spawnOptions.creationFlags = 0x08000000; // CREATE_NO_WINDOW flag
-    } else if (HIDE_BACKEND_WINDOW) {
-        spawnOptions.detached = false;
-        spawnOptions.stdio = ['ignore', 'pipe', 'pipe'];
+    // If SHOW_TERMINALS is enabled, start backend in a separate visible terminal window
+    if (!HIDE_BACKEND_WINDOW && process.platform === 'win32') {
+        // Start in a new visible terminal window on Windows
+        const startBackendScript = path.join(__dirname, '..', 'start-backend.bat');
+        const { exec } = require('child_process');
+        
+        console.log('Starting backend in separate terminal window...');
+        
+        // Start backend in a new visible terminal window with SHOW_TERMINALS=1
+        const cmd = `start "Backend Server" cmd /k "set SHOW_TERMINALS=1 && ${startBackendScript}"`;
+        exec(cmd, {
+            cwd: path.join(__dirname, '..'),
+            env: { ...process.env, SHOW_TERMINALS: '1' }
+        }, (error) => {
+            if (error) {
+                console.error('Error starting backend in separate terminal:', error);
+                // Fallback to normal spawn
+                startBackendSpawn();
+            } else {
+                console.log('Backend started in separate terminal window');
+            }
+        });
+        return;
     }
+    
+    // Normal spawn (hidden or visible based on setting)
+    startBackendSpawn();
+    
+    function startBackendSpawn() {
+        const spawnOptions = {
+            cwd: backendPath,
+            shell: true
+        };
 
-    backendProcess = spawn(pythonCmd, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000'], spawnOptions);
+        // Show or hide the terminal window based on HIDE_BACKEND_WINDOW setting
+        if (HIDE_BACKEND_WINDOW && process.platform === 'win32') {
+            // Hide the terminal window on Windows
+            spawnOptions.windowsHide = true;
+            spawnOptions.creationFlags = 0x08000000; // CREATE_NO_WINDOW flag
+        } else if (HIDE_BACKEND_WINDOW) {
+            // Hide on other platforms
+            spawnOptions.detached = false;
+            spawnOptions.stdio = ['ignore', 'pipe', 'pipe'];
+        } else {
+            // Show terminal - don't hide it
+            spawnOptions.detached = false;
+            spawnOptions.stdio = 'inherit';
+        }
 
-    backendProcess.stdout.on('data', (data) => {
-        console.log(`Backend: ${data}`);
-    });
+        backendProcess = spawn(pythonCmd, ['-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000'], spawnOptions);
 
-    backendProcess.stderr.on('data', (data) => {
-        console.error(`Backend Error: ${data}`);
-    });
+        if (backendProcess) {
+            backendProcess.stdout.on('data', (data) => {
+                console.log(`Backend: ${data}`);
+            });
 
-    backendProcess.on('close', (code) => {
-        console.log(`Backend process exited with code ${code}`);
-    });
+            backendProcess.stderr.on('data', (data) => {
+                console.error(`Backend Error: ${data}`);
+            });
+
+            backendProcess.on('close', (code) => {
+                console.log(`Backend process exited with code ${code}`);
+            });
+        }
+    }
 }
 
 function killAllProcesses() {
