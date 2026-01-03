@@ -71,12 +71,12 @@ async def sync_shopify_products():
         supabase = get_supabase()
         
         # Get existing products by shopify_product_id and shopify_variant_id for matching
-        existing_products_response = supabase.table("products").select("id, shopify_product_id, shopify_variant_id").execute()
+        existing_products_response = supabase.table("products").select("id, shopify_product_id, shopify_variant_id, shopify_updated_at").execute()
         existing_products = {}
         for p in existing_products_response.data:
             if p.get("shopify_product_id") and p.get("shopify_variant_id"):
                 key = (p["shopify_product_id"], p["shopify_variant_id"])
-                existing_products[key] = p["id"]
+                existing_products[key] = p
         
         synced_count = 0
         created_count = 0
@@ -180,10 +180,23 @@ async def sync_shopify_products():
                 # Check if product exists by shopify_product_id + shopify_variant_id
                 product_key = (shopify_product_id, shopify_variant_id)
                 if product_key in existing_products:
-                    # Update existing product
-                    product_id = existing_products[product_key]
-                    supabase.table("products").update(product_data).eq("id", product_id).execute()
-                    updated_count += 1
+                    existing_product = existing_products[product_key]
+                    
+                    # Check if update is needed based on timestamp
+                    should_update = True
+                    if existing_product.get("shopify_updated_at") and shopify_updated_at:
+                        try:
+                            # Compare timestamps (basic string comparison usually works for ISO, 
+                            # but let's be safe if format varies slightly)
+                            if existing_product["shopify_updated_at"] == shopify_updated_at:
+                                should_update = False
+                        except:
+                            should_update = True
+                    
+                    if should_update:
+                        product_id = existing_product["id"]
+                        supabase.table("products").update(product_data).eq("id", product_id).execute()
+                        updated_count += 1
                 else:
                     # Create new product
                     product_data["created_at"] = datetime.utcnow().isoformat()
