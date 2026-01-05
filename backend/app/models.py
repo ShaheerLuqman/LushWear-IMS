@@ -37,13 +37,13 @@ class Product(ProductBase):
 class OrderBase(BaseModel):
     order_number: int
     courier: str
+    order_status: str
+    delivery_status: Optional[str] = None
     total_amount: float
-    status: str
-    delivery_charge: Optional[float] = None
-    advance_amount: Optional[float] = None
-    tax_amount: Optional[float] = None
-    cost_price: Optional[float] = None
-    folio: Optional[str] = None
+    advance_amount: float = 0.0
+    delivery_charge: float = 0.0
+    tax_amount: float = 0.0
+    cost_price: float = 0.0
 
 class OrderCreate(OrderBase):
     pass
@@ -51,13 +51,13 @@ class OrderCreate(OrderBase):
 class OrderUpdate(BaseModel):
     order_number: Optional[int] = None
     courier: Optional[str] = None
+    order_status: Optional[str] = None
+    delivery_status: Optional[str] = None
     total_amount: Optional[float] = None
-    status: Optional[str] = None
-    delivery_charge: Optional[float] = None
     advance_amount: Optional[float] = None
+    delivery_charge: Optional[float] = None
     tax_amount: Optional[float] = None
     cost_price: Optional[float] = None
-    folio: Optional[str] = None
 
 class Order(OrderBase):
     id: str

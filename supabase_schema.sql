@@ -27,13 +27,13 @@ CREATE TABLE IF NOT EXISTS orders (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     order_number INTEGER NOT NULL UNIQUE,
     courier VARCHAR(100) NOT NULL,
-    status VARCHAR(50) NOT NULL,
+    order_status VARCHAR(50) NOT NULL,
+    delivery_status VARCHAR(50),
     total_amount DECIMAL(10, 2) NOT NULL,
-    advance_amount DECIMAL(10, 2),
-    delivery_charge DECIMAL(10, 2),
-    tax_amount DECIMAL(10, 2),
-    cost_price DECIMAL(10, 2),
-    folio VARCHAR(255),
+    advance_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    delivery_charge DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -43,4 +43,5 @@ CREATE INDEX IF NOT EXISTS idx_products_name ON products(name);
 CREATE INDEX IF NOT EXISTS idx_products_shopify_product_id ON products(shopify_product_id);
 CREATE INDEX IF NOT EXISTS idx_products_shopify_variant_id ON products(shopify_variant_id);
 CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
-CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_order_status ON orders(order_status);
+CREATE INDEX IF NOT EXISTS idx_orders_delivery_status ON orders(delivery_status);
