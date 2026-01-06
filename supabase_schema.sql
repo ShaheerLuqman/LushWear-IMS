@@ -27,13 +27,16 @@ CREATE TABLE IF NOT EXISTS orders (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     order_number INTEGER NOT NULL UNIQUE,
     courier VARCHAR(100) NOT NULL,
+    tracking_number VARCHAR(255),
     order_status VARCHAR(50) NOT NULL,
-    delivery_status VARCHAR(50),
+    delivery_status JSONB,
     total_amount DECIMAL(10, 2) NOT NULL,
     advance_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     delivery_charge DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    order_receiving_date TIMESTAMP WITH TIME ZONE,
+    items TEXT[],
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

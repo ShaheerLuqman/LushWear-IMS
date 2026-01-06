@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException
-from typing import List
+from typing import List, Dict, Any
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
@@ -7,6 +7,7 @@ from datetime import datetime
 import httpx
 import re
 from urllib.parse import unquote, urlparse, parse_qs
+from bs4 import BeautifulSoup
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -132,13 +133,22 @@ async def sync_shopify_orders():
                     continue
         
         def extract_courier(order):
-            if "note_attributes" in order:
-                for attr in order["note_attributes"]:
-                    if attr.get("name") == "hxs_courier_name":
-                        return attr.get("value", "")
-            if "shipping_lines" in order and len(order["shipping_lines"]) > 0:
-                return order["shipping_lines"][0].get("title", "")
-            return ""
+            if "fulfillments" in order and len(order["fulfillments"]) > 0:
+                tracking_company = order["fulfillments"][0].get("tracking_company")
+                if tracking_company:
+                    tracking_company = str(tracking_company).strip()
+                    if tracking_company:
+                        return tracking_company
+            return "Unassigned"
+        
+        def extract_tracking_number(order):
+            if "fulfillments" in order and len(order["fulfillments"]) > 0:
+                tracking_number = order["fulfillments"][0].get("tracking_number")
+                if tracking_number:
+                    tracking_number = str(tracking_number).strip()
+                    if tracking_number:
+                        return tracking_number
+            return None
         
         def extract_order_status(order):
             if order.get("cancelled_at") is not None:
@@ -201,6 +211,16 @@ async def sync_shopify_orders():
                             return None
             return None
         
+        def extract_items(order):
+            if "line_items" not in order or not order["line_items"]:
+                return []
+            item_names = []
+            for item in order["line_items"]:
+                name = item.get("name", "")
+                if name:
+                    item_names.append(name)
+            return item_names
+        
         def normalize_value(val):
             if val is None:
                 return None
@@ -209,7 +229,7 @@ async def sync_shopify_orders():
             return str(val).strip() if val else None
         
         def has_changed(shopify_data, existing_data):
-            fields_to_compare = ["courier", "order_status", "delivery_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]
+            fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price", "items"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
@@ -217,6 +237,21 @@ async def sync_shopify_orders():
                     shopify_num = float(shopify_val) if shopify_val is not None else 0.0
                     existing_num = float(existing_val) if existing_val is not None else 0.0
                     if abs(shopify_num - existing_num) > 0.01:
+                        return True
+                elif field == "items":
+                    shopify_list = shopify_val if isinstance(shopify_val, list) else []
+                    existing_list = existing_val if isinstance(existing_val, list) else []
+                    if set(shopify_list) != set(existing_list):
+                        return True
+                elif field == "courier":
+                    shopify_str = (shopify_val or "").strip() or "Unassigned"
+                    existing_str = (existing_val or "").strip() or "Unassigned"
+                    if shopify_str.lower() != existing_str.lower():
+                        return True
+                elif field == "tracking_number":
+                    shopify_str = (shopify_val or "").strip() if shopify_val else None
+                    existing_str = (existing_val or "").strip() if existing_val else None
+                    if shopify_str != existing_str:
                         return True
                 else:
                     if shopify_val != existing_val:
@@ -236,24 +271,39 @@ async def sync_shopify_orders():
             order_number = int(order_number)
             
             courier = extract_courier(sp_order)
+            tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
-            delivery_status = extract_delivery_status(sp_order)
             total_amount = float(sp_order.get("total_price", 0))
             advance_amount = extract_advance_amount(sp_order) or 0.0
             delivery_charge = extract_delivery_charges(sp_order) or 0.0
             tax_amount = extract_tax_amount(sp_order) or 0.0
             cost_price = extract_cost_price(sp_order) or 0.0
+            items = extract_items(sp_order)
+            
+            order_received_date = sp_order.get("created_at")
+            if order_received_date:
+                try:
+                    order_received_date = datetime.fromisoformat(order_received_date.replace('Z', '+00:00')).isoformat()
+                except:
+                    try:
+                        order_received_date = datetime.strptime(order_received_date, "%Y-%m-%dT%H:%M:%S%z").isoformat()
+                    except:
+                        order_received_date = current_time
+            else:
+                order_received_date = current_time
             
             order_data = {
                 "order_number": order_number,
                 "courier": courier,
+                "tracking_number": tracking_number,
                 "order_status": order_status,
-                "delivery_status": delivery_status,
                 "total_amount": total_amount,
                 "advance_amount": advance_amount,
                 "delivery_charge": delivery_charge,
                 "tax_amount": tax_amount,
                 "cost_price": cost_price,
+                "order_receiving_date": order_received_date,
+                "items": items,
                 "updated_at": current_time
             }
             
@@ -359,6 +409,121 @@ async def update_order(order_id: str, order: OrderUpdate):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{order_id}/delivery-status")
+async def get_delivery_status(order_id: str):
+    """Fetch delivery status from courier API (does not store in database)"""
+    try:
+        supabase = get_supabase()
+        order_response = supabase.table("orders").select("*").eq("id", order_id).single().execute()
+        
+        if not order_response.data:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        order = order_response.data
+        courier = order.get("courier", "").strip()
+        tracking_number = order.get("tracking_number", "").strip()
+        
+        if not tracking_number:
+            raise HTTPException(status_code=400, detail="Tracking number not available")
+        
+        if courier.upper() == "UNASSIGNED":
+            raise HTTPException(status_code=400, detail="Courier not assigned")
+        
+        delivery_status_data = None
+        
+        if courier.upper() == "POSTEX":
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
+                response = await client.get(api_url)
+                response.raise_for_status()
+                data = response.json()
+                
+                if data.get("statusCode") == "200" and "dist" in data:
+                    dist = data["dist"]
+                    status_history = dist.get("transactionStatusHistory", [])
+                    
+                    delivery_status_data = {
+                        "courier": "PostEx",
+                        "tracking_number": dist.get("trackingNumber", tracking_number),
+                        "customer_name": dist.get("customerName", ""),
+                        "order_pickup_date": dist.get("orderPickupDate", ""),
+                        "status_history": [
+                            {
+                                "status": item.get("transactionStatusMessage", ""),
+                                "status_code": item.get("transactionStatusMessageCode", ""),
+                                "datetime": item.get("modifiedDatetime", "")
+                            }
+                            for item in status_history
+                        ],
+                        "latest_status": status_history[0].get("transactionStatusMessage", "") if status_history else "",
+                        "fetched_at": datetime.utcnow().isoformat()
+                    }
+        
+        elif courier.upper() == "SCS":
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                api_url = f"https://portal.scscourier.com/track?code={tracking_number}"
+                response = await client.get(api_url)
+                response.raise_for_status()
+                html_content = response.text
+                
+                soup = BeautifulSoup(html_content, 'html.parser')
+                
+                recipient_name = ""
+                recipient_contact = ""
+                tracking_id = tracking_number
+                
+                detail_items = soup.find_all("div", class_="detail-item")
+                for item in detail_items:
+                    strong = item.find("strong")
+                    span = item.find("span")
+                    if strong and span:
+                        label = strong.get_text(strip=True)
+                        value = span.get_text(strip=True)
+                        if "Receipient Name" in label or "Recipient Name" in label:
+                            recipient_name = value
+                        elif "Receipient Contact" in label or "Recipient Contact" in label:
+                            recipient_contact = value
+                        elif "Tracking ID" in label:
+                            tracking_id = value
+                
+                status_history = []
+                timeline_items = soup.find_all("div", class_="timeline-item")
+                for item in timeline_items:
+                    date_elem = item.find("div", class_="timeline-date")
+                    status_elem = item.find("div", class_="status-text")
+                    if date_elem and status_elem:
+                        status_history.append({
+                            "status": status_elem.get_text(strip=True),
+                            "datetime": date_elem.get_text(strip=True),
+                            "is_active": "active" in item.get("class", [])
+                        })
+                
+                delivery_status_data = {
+                    "courier": "SCS",
+                    "tracking_number": tracking_id,
+                    "recipient_name": recipient_name,
+                    "recipient_contact": recipient_contact,
+                    "status_history": status_history,
+                    "latest_status": status_history[0].get("status", "") if status_history else "",
+                    "fetched_at": datetime.utcnow().isoformat()
+                }
+        else:
+            raise HTTPException(status_code=400, detail=f"Courier '{courier}' not supported for delivery status tracking")
+        
+        if not delivery_status_data:
+            raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
+        
+        return delivery_status_data
+        
+    except httpx.HTTPStatusError as e:
+        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch delivery status: {e.response.text}")
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=500, detail=f"Failed to connect to courier API: {str(e)}")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching delivery status: {str(e)}")
 
 @router.delete("/{order_id}")
 async def delete_order(order_id: str):

@@ -14,6 +14,27 @@
 </head>
 
 <body>
+    <!-- Loading Screen -->
+    <div id="loadingScreen" class="loading-screen">
+        <div class="loading-content">
+            <div class="loading-spinner"></div>
+            <h2>Inventory Manager</h2>
+            <p>Loading your data...</p>
+        </div>
+    </div>
+    
+    <!-- Delivery Status Modal -->
+    <div id="deliveryStatusModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Delivery Status</h2>
+                <button class="modal-close" id="closeDeliveryStatusModal">&times;</button>
+            </div>
+            <div class="modal-body" id="deliveryStatusContent">
+                <div class="loading">Loading...</div>
+            </div>
+        </div>
+    </div>
     <!-- Title Bar for Window Controls -->
     <div class="titlebar">
         <div class="titlebar-drag"></div>
@@ -57,6 +78,14 @@
                     <p class="header-subtitle" id="viewSubtitle">Overview of your inventory</p>
                 </div>
                 <div class="header-actions">
+                    <button id="syncShopifyBtn" class="btn btn-primary" style="display: none;">
+                        <span style="margin-right: 8px;">🔄</span>
+                        Sync from Shopify
+                    </button>
+                    <button id="syncOrdersBtn" class="btn btn-primary" style="display: none;">
+                        <span style="margin-right: 8px;">🔄</span>
+                        Sync from Shopify
+                    </button>
                     <div class="search-box">
                         <span class="search-icon">⌕</span>
                         <input type="text" id="searchInput" placeholder="Search products...">
@@ -100,21 +129,22 @@
                     </div>
 
                     <div class="section">
-                        <h2 class="section-title">Recent Products</h2>
+                        <h2 class="section-title">Recent Orders</h2>
                         <div class="table-container">
                             <table class="data-table">
                                 <thead>
                                     <tr>
-                                        <th>Product Name</th>
-                                        <th>SKU</th>
-                                        <th>Category</th>
-                                        <th>Quantity</th>
-                                        <th>Price (Rs)</th>
+                                        <th>Order #</th>
+                                        <th>Courier</th>
+                                        <th>Order Status</th>
+                                        <th>Total Amount</th>
+                                        <th>Items</th>
+                                        <th>Order Date</th>
                                     </tr>
                                 </thead>
-                                <tbody id="recentProductsTable">
+                                <tbody id="recentOrdersTable">
                                     <tr>
-                                        <td colspan="5" class="empty-state">Loading products...</td>
+                                        <td colspan="6" class="empty-state">Loading orders...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -124,27 +154,27 @@
 
                 <!-- Orders View -->
                 <div id="ordersView" class="view">
-                    <div style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
-                        <button id="syncOrdersBtn" class="btn btn-primary">
-                            <span style="margin-right: 8px;">🔄</span>
-                            Sync from Shopify
-                        </button>
-                    </div>
                     <div class="table-container">
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Order #</th>
                                     <th>Courier</th>
-                                    <th>T. Amount</th>
-                                    <th>Status</th>
+                                    <th>Tracking Number</th>
+                                    <th>Order Status</th>
+                                    <th>Delivery Status</th>
+                                    <th>Total Amount</th>
+                                    <th>Advance</th>
                                     <th>D. Charge</th>
-                                    <th>Folio</th>
+                                    <th>Tax</th>
+                                    <th>Cost Price</th>
+                                    <th>Items</th>
+                                    <th>Order Date</th>
                                 </tr>
                             </thead>
                             <tbody id="ordersTable">
                                 <tr>
-                                    <td colspan="8" class="empty-state">Loading orders...</td>
+                                    <td colspan="12" class="empty-state">Loading orders...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -153,12 +183,6 @@
 
                 <!-- Products View -->
                 <div id="productsView" class="view">
-                    <div style="margin-bottom: 20px; display: flex; justify-content: flex-end;">
-                        <button id="syncShopifyBtn" class="btn btn-primary">
-                            <span style="margin-right: 8px;">🔄</span>
-                            Sync from Shopify
-                        </button>
-                    </div>
                     <div class="table-container">
                         <table class="data-table">
                             <thead>
@@ -200,14 +224,6 @@
                         <input type="text" id="editProductName" required>
                     </div>
                     <div class="form-group">
-                        <label for="editProductSku">SKU *</label>
-                        <input type="text" id="editProductSku" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="editProductCategory">Category</label>
-                        <input type="text" id="editProductCategory">
-                    </div>
-                    <div class="form-group">
                         <label for="editProductQuantity">Quantity</label>
                         <input type="number" id="editProductQuantity" min="0">
                     </div>
@@ -215,9 +231,13 @@
                         <label for="editProductPrice">Price</label>
                         <input type="number" id="editProductPrice" min="0" step="0.01">
                     </div>
-                    <div class="form-group full-width">
-                        <label for="editProductDescription">Description</label>
-                        <textarea id="editProductDescription" rows="3"></textarea>
+                    <div class="form-group">
+                        <label for="editProductCostPrice">Cost Price</label>
+                        <input type="number" id="editProductCostPrice" min="0" step="0.01">
+                    </div>
+                    <div class="form-group">
+                        <label for="editProductImageUrl">Image URL</label>
+                        <input type="url" id="editProductImageUrl">
                     </div>
                 </div>
                 <div class="form-actions">

@@ -14,15 +14,78 @@ const searchInput = document.getElementById('searchInput');
 const toast = document.getElementById('toast');
 
 // Initialize
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+    // Show loading screen
+    const loadingScreen = document.getElementById('loadingScreen');
+    const appContainer = document.querySelector('.app-container');
+    
+    if (loadingScreen) {
+        loadingScreen.style.display = 'flex';
+    }
+    
+    // Hide main content completely until data is loaded
+    if (appContainer) {
+        appContainer.style.visibility = 'hidden';
+        appContainer.style.opacity = '0';
+    }
+    
     initNavigation();
     initForms();
     checkConnection();
-    loadProducts();
-    loadOrders();
+    
+    // Load data in parallel - wait for both to complete successfully
+    let productsLoaded = false;
+    let ordersLoaded = false;
+    
+    const loadProductsPromise = loadProducts().then(() => {
+        productsLoaded = true;
+    }).catch(error => {
+        console.error('Error loading products:', error);
+        showToast('Failed to load products', 'error');
+        productsLoaded = true; // Still mark as loaded to allow app to show
+    });
+    
+    const loadOrdersPromise = loadOrders().then(() => {
+        ordersLoaded = true;
+    }).catch(error => {
+        console.error('Error loading orders:', error);
+        showToast('Failed to load orders', 'error');
+        ordersLoaded = true; // Still mark as loaded to allow app to show
+    });
+    
+    // Wait for both to complete
+    await Promise.all([loadProductsPromise, loadOrdersPromise]);
+    
+    // Only show app when both are loaded
+    if (productsLoaded && ordersLoaded) {
+        // Ensure recent orders are rendered (in case loadOrders completed before loadProducts)
+        renderRecentOrders();
+        
+        // Hide loading screen
+        if (loadingScreen) {
+            loadingScreen.style.display = 'none';
+        }
+        
+        // Show app with fade-in
+        if (appContainer) {
+            appContainer.style.visibility = 'visible';
+            // Use setTimeout to ensure visibility is set before opacity transition
+            setTimeout(() => {
+                appContainer.style.opacity = '1';
+            }, 10);
+        }
+    }
 
     // Search functionality
     searchInput.addEventListener('input', debounce(handleSearch, 300));
+    
+    // Initialize sync button visibility
+    const syncProductsBtn = document.getElementById('syncShopifyBtn');
+    const syncOrdersBtn = document.getElementById('syncOrdersBtn');
+    if (syncProductsBtn && syncOrdersBtn) {
+        syncProductsBtn.style.display = 'none';
+        syncOrdersBtn.style.display = 'none';
+    }
 });
 
 // Navigation
@@ -57,6 +120,22 @@ function switchView(viewName) {
 
     document.getElementById('viewTitle').textContent = titles[viewName].title;
     document.getElementById('viewSubtitle').textContent = titles[viewName].subtitle;
+
+    // Show/hide sync buttons based on view
+    const syncProductsBtn = document.getElementById('syncShopifyBtn');
+    const syncOrdersBtn = document.getElementById('syncOrdersBtn');
+    if (syncProductsBtn && syncOrdersBtn) {
+        if (viewName === 'products') {
+            syncProductsBtn.style.display = 'inline-flex';
+            syncOrdersBtn.style.display = 'none';
+        } else if (viewName === 'orders') {
+            syncProductsBtn.style.display = 'none';
+            syncOrdersBtn.style.display = 'inline-flex';
+        } else {
+            syncProductsBtn.style.display = 'none';
+            syncOrdersBtn.style.display = 'none';
+        }
+    }
 
     // Refresh data when switching views
     if (viewName === 'products' || viewName === 'dashboard') {
@@ -93,7 +172,7 @@ async function loadProducts() {
         products = await response.json();
         updateDashboard();
         renderProductsTable();
-        renderRecentProducts();
+        // Don't call renderRecentOrders() here - it will be called after orders are loaded
     } catch (error) {
         console.error('Error loading products:', error);
         showToast('Failed to load products', 'error');
@@ -245,6 +324,7 @@ async function loadOrders() {
 
         orders = await response.json();
         renderOrdersTable();
+        renderRecentOrders(); // Render recent orders after orders are loaded
     } catch (error) {
         console.error('Error loading orders:', error);
         showToast('Failed to load orders', 'error');
@@ -252,24 +332,19 @@ async function loadOrders() {
         if (error.message.includes('relation "orders" does not exist')) {
             orders = getSampleOrders();
             renderOrdersTable();
+            renderRecentOrders(); // Render recent orders even with sample data
         }
     }
 }
 
 function getSampleOrders() {
-    // Sample data based on user's example
+    // Sample data based on new schema
     return [
-        { id: '1', order_number: 2719, courier: '1289', total_amount: 4247, status: 'DVD', delivery_charge: 211, folio: '15/10' },
-        { id: '2', order_number: 2720, courier: 'RIDER', total_amount: 7697, status: 'DVD', delivery_charge: 247, folio: 'PC#143' },
-        { id: '3', order_number: 2721, courier: '1287', total_amount: 3248, status: 'DVD', delivery_charge: 211, folio: '15/10' },
-        { id: '4', order_number: 2722, courier: 'RIDER', total_amount: 8247, status: 'DVD', delivery_charge: 247, folio: 'PC#143' },
-        { id: '5', order_number: 2724, courier: '1293', total_amount: 3247, status: 'RETURNED', delivery_charge: -211, folio: '22/10' },
-        { id: '6', order_number: 2725, courier: '1292', total_amount: 5996, status: 'DVD', delivery_charge: 211, folio: '15/10' },
-        { id: '7', order_number: 2726, courier: 'RIDER', total_amount: 6298, status: 'DVD', delivery_charge: 248, folio: 'PC#143' },
-        { id: '8', order_number: 2727, courier: '1291', total_amount: 2998, status: 'DVD', delivery_charge: -159, folio: 'PC#144 / 08/10' },
-        { id: '9', order_number: 2728, courier: '1285', total_amount: 2998, status: 'DVD', delivery_charge: 159, folio: '10-Aug' },
-        { id: '10', order_number: 2729, courier: '1284', total_amount: 5998, status: 'DVD', delivery_charge: 211, folio: '15/10' },
-        { id: '11', order_number: 2730, courier: '1283', total_amount: 5148, status: 'RETURNED', delivery_charge: -211, folio: '22/10' }
+        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
     ];
 }
 
@@ -287,7 +362,7 @@ async function handleSearch(e) {
 
         products = await response.json();
         renderProductsTable();
-        renderRecentProducts();
+        renderRecentOrders();
     } catch (error) {
         console.error('Search error:', error);
     }
@@ -319,7 +394,7 @@ function renderProductsTable() {
             <td>
                 ${product.image_url ? `<img src="${product.image_url}" alt="Product" style="width: 40px; height: 40px; object-fit: cover; border-radius: 4px;">` : '<div style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px;">No Img</div>'}
             </td>
-            <td><strong>${escapeHtml(product.name)}</strong></td>
+            <td>${escapeHtml(product.name)}</td>
             <td>${Math.round(product.price || 0)}</td>
             <td>
                 <span class="quantity-badge ${product.quantity < 10 ? 'low' : 'ok'}">
@@ -331,28 +406,48 @@ function renderProductsTable() {
     `).join('');
 }
 
-function renderRecentProducts() {
-    const tbody = document.getElementById('recentProductsTable');
-    const recentProducts = products.slice(0, 5);
+function renderRecentOrders() {
+    const tbody = document.getElementById('recentOrdersTable');
+    const recentOrders = orders.slice(0, 10);
 
-    if (recentProducts.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">No products yet. Add your first product!</td></tr>';
+    if (recentOrders.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No orders found.</td></tr>';
         return;
     }
 
-    tbody.innerHTML = recentProducts.map(product => `
+    tbody.innerHTML = recentOrders.map(order => {
+        const orderStatus = order.order_status || '';
+        const orderDate = order.order_receiving_date 
+            ? new Date(order.order_receiving_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+            : (order.created_at 
+                ? new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                : '');
+        
+        const statusColor = orderStatus === 'returned' || orderStatus === 'cancelled' 
+            ? 'background: rgba(196, 92, 92, 0.2); color: var(--danger);'
+            : orderStatus === 'fulfilled'
+            ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
+            : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
+
+        return `
         <tr>
-            <td><strong>${escapeHtml(product.name)}</strong></td>
-            <td><code style="font-family: var(--font-mono); color: var(--text-secondary);">${escapeHtml(product.sku)}</code></td>
-            <td>${escapeHtml(product.category || '-')}</td>
+            <td><strong>${order.order_number || ''}</strong></td>
+            <td>${escapeHtml(order.courier || '-')}</td>
             <td>
-                <span class="quantity-badge ${product.quantity < 10 ? 'low' : 'ok'}">
-                    ${product.quantity}
+                <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; ${statusColor}">
+                    ${escapeHtml(orderStatus)}
                 </span>
             </td>
-            <td>${Math.round(product.price || 0)}</td>
+            <td>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
+            <td class="items-cell" style="width: 10vw; max-width: 10vw;" title="${order.items && Array.isArray(order.items) && order.items.length > 0 ? escapeHtml(order.items.join(', ')) : ''}">
+                ${order.items && Array.isArray(order.items) && order.items.length > 0
+                    ? `<div class="items-content">${escapeHtml(order.items.slice(0, 3).join(', ') + (order.items.length > 3 ? '...' : ''))}</div>`
+                    : '-'}
+            </td>
+            <td>${orderDate}</td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
 }
 
 function populateProductSelect() {
@@ -365,26 +460,86 @@ function renderOrdersTable() {
     const tbody = document.getElementById('ordersTable');
 
     if (orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No orders found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No orders found.</td></tr>';
         return;
     }
 
-    tbody.innerHTML = orders.map(order => `
-        <tr>
-            <td><strong>${order.order_number || ''}</strong></td>
-            <td>${escapeHtml(order.courier || '')}</td>
-            <td>${order.total_amount ? order.total_amount.toLocaleString() : ''}</td>
-            <td>
-                <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; 
-                    ${order.status === 'RETURNED' ? 'background: rgba(196, 92, 92, 0.2); color: var(--danger);' :
-            'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);'}">
-                    ${escapeHtml(order.status || '')}
+    tbody.innerHTML = orders.map(order => {
+        const orderStatus = order.order_status || '';
+        const courier = order.courier || '';
+        const isCancelled = orderStatus === 'cancelled';
+        const hasCourier = courier && courier.trim() !== '' && courier.trim().toLowerCase() !== 'unassigned';
+        
+        const statusColor = orderStatus === 'returned' || orderStatus === 'cancelled' 
+            ? 'background: rgba(196, 92, 92, 0.2); color: var(--danger);'
+            : orderStatus === 'fulfilled'
+            ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
+            : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
+        
+        const deliveryStatusColor = 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
+        
+        const orderDate = order.order_receiving_date 
+            ? new Date(order.order_receiving_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+            : (order.created_at 
+                ? new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
+                : '');
+
+        const rowStyle = isCancelled ? 'style="opacity: 0.5; text-decoration: line-through; color: #9ca3af;"' : '';
+        const cellStyle = isCancelled ? 'style="color: #9ca3af;"' : '';
+
+        return `
+        <tr ${rowStyle}>
+            <td ${cellStyle}><strong>${order.order_number || ''}</strong></td>
+            <td ${cellStyle}>${escapeHtml(order.courier || '')}</td>
+            <td ${cellStyle}>${escapeHtml(order.tracking_number || '-')}</td>
+            <td ${cellStyle}>
+                <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; ${statusColor}">
+                    ${escapeHtml(orderStatus)}
                 </span>
             </td>
-            <td>${Math.round(order.delivery_charge || 0)}</td>
-            <td>${escapeHtml(order.folio || '')}</td>
+            <td ${cellStyle}>
+                ${hasCourier 
+                    ? `<button class="delivery-status-btn" data-order-id="${order.id}" data-courier="${escapeHtml(courier)}" data-tracking="${escapeHtml(order.tracking_number || '')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; border: none; cursor: pointer; ${deliveryStatusColor}">
+                        <span>Fetch Status</span>
+                        <span style="font-size: 10px;">🔄</span>
+                      </button>`
+                    : '<span style="color: var(--text-muted);">-</span>'
+                }
+            </td>
+            <td ${cellStyle}>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
+            <td ${cellStyle}>${order.advance_amount ? Math.round(order.advance_amount).toLocaleString() : '0'}</td>
+            <td ${cellStyle}>${order.delivery_charge ? Math.round(order.delivery_charge).toLocaleString() : '0'}</td>
+            <td ${cellStyle}>${order.tax_amount ? Math.round(order.tax_amount).toLocaleString() : '0'}</td>
+            <td ${cellStyle}>${order.cost_price ? Math.round(order.cost_price).toLocaleString() : '0'}</td>
+            <td ${cellStyle} class="items-cell" style="width: 10vw; max-width: 10vw;">
+                ${order.items && Array.isArray(order.items) && order.items.length > 0
+                    ? `<div class="items-content" title="${escapeHtml(order.items.join(', '))}">${escapeHtml(order.items.join(', '))}</div>`
+                    : '-'}
+            </td>
+            <td ${cellStyle}>${orderDate}</td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
+    
+    // Add event listeners for delivery status buttons
+    setTimeout(() => {
+        const deliveryStatusButtons = document.querySelectorAll('.delivery-status-btn');
+        deliveryStatusButtons.forEach(button => {
+            button.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const orderId = button.getAttribute('data-order-id');
+                const courier = button.getAttribute('data-courier');
+                const trackingNumber = button.getAttribute('data-tracking');
+                if (orderId && window.fetchDeliveryStatus) {
+                    fetchDeliveryStatus(orderId, courier, trackingNumber);
+                } else {
+                    console.error('Missing orderId or fetchDeliveryStatus function', { orderId, fetchDeliveryStatus: window.fetchDeliveryStatus });
+                }
+            });
+        });
+        
+    }, 100);
 }
 
 // Forms
@@ -397,11 +552,10 @@ function initForms() {
 
             const productData = {
                 name: document.getElementById('productName').value,
-                sku: document.getElementById('productSku').value,
-                category: document.getElementById('productCategory').value || null,
                 quantity: parseInt(document.getElementById('productQuantity').value) || 0,
                 price: parseFloat(document.getElementById('productPrice').value) || 0,
-                description: document.getElementById('productDescription').value || null
+                cost_price: parseFloat(document.getElementById('productCostPrice').value) || null,
+                image_url: document.getElementById('productImageUrl').value || null
             };
 
             await createProduct(productData);
@@ -417,11 +571,10 @@ function initForms() {
             const productId = document.getElementById('editProductId').value;
             const productData = {
                 name: document.getElementById('editProductName').value,
-                sku: document.getElementById('editProductSku').value,
-                category: document.getElementById('editProductCategory').value || null,
                 quantity: parseInt(document.getElementById('editProductQuantity').value) || 0,
                 price: parseFloat(document.getElementById('editProductPrice').value) || 0,
-                description: document.getElementById('editProductDescription').value || null
+                cost_price: parseFloat(document.getElementById('editProductCostPrice').value) || null,
+                image_url: document.getElementById('editProductImageUrl').value || null
             };
 
             await updateProduct(productId, productData);
@@ -458,11 +611,10 @@ function openEditModal(productId) {
 
     document.getElementById('editProductId').value = product.id;
     document.getElementById('editProductName').value = product.name;
-    document.getElementById('editProductSku').value = product.sku;
-    document.getElementById('editProductCategory').value = product.category || '';
-    document.getElementById('editProductQuantity').value = product.quantity;
-    document.getElementById('editProductPrice').value = product.price;
-    document.getElementById('editProductDescription').value = product.description || '';
+    document.getElementById('editProductQuantity').value = product.quantity || 0;
+    document.getElementById('editProductPrice').value = product.price || 0;
+    document.getElementById('editProductCostPrice').value = product.cost_price || 0;
+    document.getElementById('editProductImageUrl').value = product.image_url || '';
 
     document.getElementById('editModal').classList.add('active');
 }
@@ -508,10 +660,139 @@ function debounce(func, wait) {
     };
 }
 
+// Delivery Status Functions
+async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
+    console.log('fetchDeliveryStatus called with:', { orderId, courier, trackingNumber });
+    
+    if (!orderId) {
+        showToast('Order ID not available', 'error');
+        return;
+    }
+    
+    if (!trackingNumber || trackingNumber === '' || trackingNumber === '-') {
+        showToast('Tracking number not available', 'error');
+        return;
+    }
+    
+    const modal = document.getElementById('deliveryStatusModal');
+    const content = document.getElementById('deliveryStatusContent');
+    
+    if (!modal || !content) {
+        console.error('Modal elements not found');
+        showToast('Error: Modal not found', 'error');
+        return;
+    }
+    
+    modal.style.display = 'flex';
+    content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
+    
+    try {
+        console.log('Making request to:', `${API_BASE}/orders/${orderId}/delivery-status`);
+        const response = await fetch(`${API_BASE}/orders/${orderId}/delivery-status`, {
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        console.log('Response status:', response.status);
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to fetch delivery status');
+        }
+        
+        const data = await response.json();
+        console.log('Received data:', data);
+        displayDeliveryStatus(data);
+    } catch (error) {
+        console.error('Error fetching delivery status:', error);
+        content.innerHTML = `<div class="error-message">Error: ${escapeHtml(error.message)}</div>`;
+    }
+}
+
+function displayDeliveryStatus(data) {
+    const content = document.getElementById('deliveryStatusContent');
+    
+    let html = `
+        <div class="delivery-status-info">
+            <div class="info-row">
+                <strong>Courier:</strong> ${escapeHtml(data.courier || '')}
+            </div>
+            <div class="info-row">
+                <strong>Tracking Number:</strong> ${escapeHtml(data.tracking_number || '')}
+            </div>
+    `;
+    
+    if (data.customer_name) {
+        html += `<div class="info-row"><strong>Customer Name:</strong> ${escapeHtml(data.customer_name)}</div>`;
+    }
+    if (data.recipient_name) {
+        html += `<div class="info-row"><strong>Recipient Name:</strong> ${escapeHtml(data.recipient_name)}</div>`;
+    }
+    if (data.recipient_contact) {
+        html += `<div class="info-row"><strong>Recipient Contact:</strong> ${escapeHtml(data.recipient_contact)}</div>`;
+    }
+    if (data.order_pickup_date) {
+        html += `<div class="info-row"><strong>Pickup Date:</strong> ${escapeHtml(data.order_pickup_date)}</div>`;
+    }
+    
+    html += `</div><h3 style="margin-top: 20px; margin-bottom: 10px;">Status History</h3><div class="status-timeline">`;
+    
+    if (data.status_history && data.status_history.length > 0) {
+        data.status_history.forEach((status, index) => {
+            const isActive = status.is_active || index === 0;
+            html += `
+                <div class="timeline-item ${isActive ? 'active' : ''}">
+                    <div class="timeline-dot"></div>
+                    <div class="timeline-content">
+                        <div class="timeline-date">${escapeHtml(status.datetime || '')}</div>
+                        <div class="timeline-status">${escapeHtml(status.status || '')}</div>
+                    </div>
+                </div>
+            `;
+        });
+    } else {
+        html += '<div class="no-status">No status history available</div>';
+    }
+    
+    html += '</div>';
+    content.innerHTML = html;
+}
+
+function closeDeliveryStatusModal() {
+    const modal = document.getElementById('deliveryStatusModal');
+    if (modal) {
+        modal.style.display = 'none';
+    }
+}
+
+// Close modal when clicking outside or on close button
+document.addEventListener('DOMContentLoaded', () => {
+    const modal = document.getElementById('deliveryStatusModal');
+    const closeButton = document.getElementById('closeDeliveryStatusModal');
+    
+    if (modal) {
+        modal.addEventListener('click', (e) => {
+            if (e.target === modal) {
+                closeDeliveryStatusModal();
+            }
+        });
+    }
+    
+    if (closeButton) {
+        closeButton.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            closeDeliveryStatusModal();
+        });
+    }
+});
+
 // Make functions globally accessible
 window.openEditModal = openEditModal;
 window.closeModal = closeModal;
 window.deleteProduct = deleteProduct;
 window.resetForm = resetForm;
 window.syncShopifyProducts = syncShopifyProducts;
+window.fetchDeliveryStatus = fetchDeliveryStatus;
+window.closeDeliveryStatusModal = closeDeliveryStatusModal;
 
