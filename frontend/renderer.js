@@ -5,13 +5,17 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 let products = [];
 let orders = [];
 let currentView = 'dashboard';
+let isEditMode = false;
+let costPriceChanges = {}; // Store changes: { productId: newCostPrice }
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
 const views = document.querySelectorAll('.view');
-const connectionStatus = document.getElementById('connectionStatus');
 const searchInput = document.getElementById('searchInput');
 const toast = document.getElementById('toast');
+
+// Sidebar state
+let sidebarCollapsed = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -31,7 +35,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     initNavigation();
     initForms();
-    checkConnection();
     
     // Load data in parallel - wait for both to complete successfully
     let productsLoaded = false;
@@ -86,7 +89,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncProductsBtn.style.display = 'none';
         syncOrdersBtn.style.display = 'none';
     }
+    
+    // Initialize sidebar toggle
+    initSidebarToggle();
 });
+
+// Sidebar Toggle
+function initSidebarToggle() {
+    const sidebar = document.getElementById('sidebar');
+    const toggleBtn = document.getElementById('sidebarToggle');
+    
+    if (!sidebar || !toggleBtn) return;
+    
+    // Load saved state from localStorage, default to collapsed
+    const savedState = localStorage.getItem('sidebarCollapsed');
+    if (savedState === 'false') {
+        sidebarCollapsed = false;
+        // Don't add collapsed class
+    } else {
+        // Default to collapsed if no saved state or if saved state is 'true'
+        sidebarCollapsed = true;
+        sidebar.classList.add('collapsed');
+    }
+    
+    toggleBtn.addEventListener('click', () => {
+        sidebarCollapsed = !sidebarCollapsed;
+        sidebar.classList.toggle('collapsed', sidebarCollapsed);
+        // Save state to localStorage
+        localStorage.setItem('sidebarCollapsed', sidebarCollapsed.toString());
+    });
+}
 
 // Navigation
 function initNavigation() {
@@ -100,6 +132,18 @@ function initNavigation() {
 
 function switchView(viewName) {
     currentView = viewName;
+
+    // Exit edit mode if switching away from products view
+    if (isEditMode && viewName !== 'products') {
+        isEditMode = false;
+        costPriceChanges = {};
+        const editBtn = document.getElementById('editCostPricesBtn');
+        if (editBtn) {
+            editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
+            editBtn.classList.remove('btn-success');
+            editBtn.classList.add('btn-primary');
+        }
+    }
 
     // Update nav
     navItems.forEach(item => {
@@ -121,9 +165,15 @@ function switchView(viewName) {
     document.getElementById('viewTitle').textContent = titles[viewName].title;
     document.getElementById('viewSubtitle').textContent = titles[viewName].subtitle;
 
-    // Show/hide sync buttons based on view
+    // Show/hide buttons based on view
+    const editCostPricesBtn = document.getElementById('editCostPricesBtn');
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
+    
+    if (editCostPricesBtn) {
+        editCostPricesBtn.style.display = viewName === 'products' ? 'inline-flex' : 'none';
+    }
+    
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
@@ -146,30 +196,18 @@ function switchView(viewName) {
 }
 
 // API Functions
-async function checkConnection() {
-    try {
-        const response = await fetch('http://127.0.0.1:8000/health');
-        if (response.ok) {
-            connectionStatus.classList.add('connected');
-            connectionStatus.classList.remove('error');
-            connectionStatus.innerHTML = '<span class="status-dot"></span><span>Connected</span>';
-        }
-    } catch (error) {
-        connectionStatus.classList.add('error');
-        connectionStatus.classList.remove('connected');
-        connectionStatus.innerHTML = '<span class="status-dot"></span><span>Disconnected</span>';
-
-        // Retry connection
-        setTimeout(checkConnection, 5000);
-    }
-}
-
 async function loadProducts() {
     try {
         const response = await fetch(`${API_BASE}/products/`);
         if (!response.ok) throw new Error('Failed to fetch products');
 
         products = await response.json();
+        // Sort by name (case-insensitive) as a backup to ensure proper sorting
+        products.sort((a, b) => {
+            const nameA = (a.name || '').toLowerCase();
+            const nameB = (b.name || '').toLowerCase();
+            return nameA.localeCompare(nameB);
+        });
         updateDashboard();
         renderProductsTable();
         // Don't call renderRecentOrders() here - it will be called after orders are loaded
@@ -239,6 +277,83 @@ async function deleteProduct(productId) {
     }
 }
 
+function toggleEditMode() {
+    isEditMode = !isEditMode;
+    const editBtn = document.getElementById('editCostPricesBtn');
+    
+    if (isEditMode) {
+        // Switch to Save mode
+        editBtn.innerHTML = '<span style="margin-right: 8px;">💾</span>Save Cost Prices';
+        editBtn.classList.remove('btn-primary');
+        editBtn.classList.add('btn-success');
+        // Initialize costPriceChanges with current values
+        costPriceChanges = {};
+    } else {
+        // Switch back to Edit mode
+        editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
+        editBtn.classList.remove('btn-success');
+        editBtn.classList.add('btn-primary');
+        // Clear changes
+        costPriceChanges = {};
+    }
+    
+    renderProductsTable();
+}
+
+async function saveCostPrices() {
+    if (Object.keys(costPriceChanges).length === 0) {
+        showToast('No changes to save', 'info');
+        toggleEditMode();
+        return;
+    }
+
+    const editBtn = document.getElementById('editCostPricesBtn');
+    
+    // Disable button and show loading
+    editBtn.disabled = true;
+    editBtn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Saving...';
+
+    try {
+        const updates = Object.entries(costPriceChanges).map(([id, cost_price]) => ({
+            id: id,
+            cost_price: cost_price
+        }));
+
+        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: updates })
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update cost prices');
+        }
+
+        const result = await response.json();
+        showToast(result.message || 'Cost prices updated successfully', 'success');
+        
+        // Clear changes and exit edit mode (this will update the button)
+        costPriceChanges = {};
+        isEditMode = false;
+        
+        // Update button to Edit mode
+        editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
+        editBtn.classList.remove('btn-success');
+        editBtn.classList.add('btn-primary');
+        editBtn.disabled = false;
+        
+        // Reload products to get updated data
+        await loadProducts();
+    } catch (error) {
+        console.error('Error saving cost prices:', error);
+        showToast(error.message || 'Failed to save cost prices', 'error');
+        // Re-enable button and keep it in Save mode since we're still in edit mode
+        editBtn.disabled = false;
+        editBtn.innerHTML = '<span style="margin-right: 8px;">💾</span>Save Cost Prices';
+    }
+}
+
 
 
 async function syncShopifyProducts() {
@@ -261,8 +376,10 @@ async function syncShopifyProducts() {
         }
 
         const result = await response.json();
+        const productsInfo = result.products || {};
+        const variantsInfo = result.variants || {};
         showToast(
-            `Sync complete! ${result.synced} products synced (${result.created} created, ${result.updated} updated)`,
+            `Sync complete! Products: ${productsInfo.created || 0} created, ${productsInfo.updated || 0} updated. Variants: ${variantsInfo.created || 0} created, ${variantsInfo.updated || 0} updated.`,
             'success'
         );
 
@@ -371,9 +488,12 @@ async function handleSearch(e) {
 // UI Updates
 function updateDashboard() {
     const totalProducts = products.length;
-    const totalStock = products.reduce((sum, p) => sum + (p.quantity || 0), 0);
-    const lowStock = products.filter(p => p.quantity < 10).length;
-    const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.quantity || 0)), 0);
+    // Calculate total stock from total_quantity (sum of all variants)
+    const totalStock = products.reduce((sum, p) => sum + (p.total_quantity || 0), 0);
+    // Count products with low total stock
+    const lowStock = products.filter(p => (p.total_quantity || 0) < 10).length;
+    // Calculate total value based on total_quantity
+    const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.total_quantity || 0)), 0);
 
     document.getElementById('totalProducts').textContent = totalProducts;
     document.getElementById('totalStock').textContent = totalStock.toLocaleString();
@@ -389,7 +509,62 @@ function renderProductsTable() {
         return;
     }
 
-    tbody.innerHTML = products.map(product => `
+    tbody.innerHTML = products.map(product => {
+        const currentCostPrice = costPriceChanges[product.id] !== undefined 
+            ? costPriceChanges[product.id] 
+            : (product.cost_price || 0);
+        
+        const costPriceDisplay = isEditMode 
+            ? `<input type="number" 
+                      class="cost-price-input" 
+                      data-product-id="${product.id}" 
+                      value="${currentCostPrice}" 
+                      step="0.01" 
+                      min="0"
+                      style="width: 100px; padding: 4px 8px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; background: rgba(0,0,0,0.2); color: var(--text-primary);">`
+            : `${Math.round(currentCostPrice)}`;
+        
+        // Calculate total quantity from variants
+        const totalQuantity = product.total_quantity || 0;
+        
+        // Build variants display with size ordering
+        const variants = product.variants || [];
+        let variantsDisplay = '';
+        if (variants.length > 0) {
+            // Sort variants by size order (S, M, L, XL, XXL, etc.)
+            const sortedVariants = [...variants].sort((a, b) => {
+                const sizeOrder = {
+                    'xxs': 1, 'xs': 2, 's': 3, 'small': 3,
+                    'm': 4, 'medium': 4, 'med': 4,
+                    'l': 5, 'large': 5,
+                    'xl': 6, 'x-large': 6,
+                    'xxl': 7, '2xl': 7,
+                    'xxxl': 8, '3xl': 8,
+                    '4xl': 9, '5xl': 10
+                };
+                const titleA = (a.title || '').toLowerCase().trim();
+                const titleB = (b.title || '').toLowerCase().trim();
+                const orderA = sizeOrder[titleA] || 100;
+                const orderB = sizeOrder[titleB] || 100;
+                
+                // If both have size order, sort by size
+                if (orderA !== 100 || orderB !== 100) {
+                    return orderA - orderB;
+                }
+                // Otherwise sort alphabetically
+                return titleA.localeCompare(titleB);
+            });
+            
+            variantsDisplay = sortedVariants.map(v => {
+                const qty = v.quantity || 0;
+                const isLow = qty < 10;
+                return `<span class="variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}</span>`;
+            }).join('');
+        } else {
+            variantsDisplay = '<span class="variant-tag">No variants</span>';
+        }
+        
+        return `
         <tr>
             <td>
                 ${product.image_url ? `<img src="${product.image_url}" alt="Product" style="width: 40px; height: 40px; object-fit: cover; border-radius: 4px;">` : '<div style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px;">No Img</div>'}
@@ -397,13 +572,31 @@ function renderProductsTable() {
             <td>${escapeHtml(product.name)}</td>
             <td>${Math.round(product.price || 0)}</td>
             <td>
-                <span class="quantity-badge ${product.quantity < 10 ? 'low' : 'ok'}">
-                    ${product.quantity}
+                <div class="variants-container">
+                    ${variantsDisplay}
+                </div>
+            </td>
+            <td>
+                <span class="quantity-badge ${totalQuantity < 10 ? 'low' : 'ok'}">
+                    ${totalQuantity}
                 </span>
             </td>
-            <td>${Math.round(product.cost_price || 0)}</td>
+            <td>${costPriceDisplay}</td>
         </tr>
-    `).join('');
+    `;
+    }).join('');
+
+    // Add event listeners for cost price inputs if in edit mode
+    if (isEditMode) {
+        const costPriceInputs = document.querySelectorAll('.cost-price-input');
+        costPriceInputs.forEach(input => {
+            input.addEventListener('input', (e) => {
+                const productId = e.target.getAttribute('data-product-id');
+                const newValue = parseFloat(e.target.value) || 0;
+                costPriceChanges[productId] = newValue;
+            });
+        });
+    }
 }
 
 function renderRecentOrders() {
@@ -411,7 +604,7 @@ function renderRecentOrders() {
     const recentOrders = orders.slice(0, 10);
 
     if (recentOrders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No orders found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No orders found.</td></tr>';
         return;
     }
 
@@ -428,6 +621,11 @@ function renderRecentOrders() {
             : orderStatus === 'fulfilled'
             ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
             : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
+        
+        // Calculate CoD = Total Amount - Advance
+        const totalAmount = parseFloat(order.total_amount) || 0;
+        const advanceAmount = parseFloat(order.advance_amount) || 0;
+        const cod = totalAmount - advanceAmount;
 
         return `
         <tr>
@@ -439,6 +637,7 @@ function renderRecentOrders() {
                 </span>
             </td>
             <td>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
+            <td>${Math.round(cod).toLocaleString()}</td>
             <td class="items-cell" style="width: 10vw; max-width: 10vw;" title="${order.items && Array.isArray(order.items) && order.items.length > 0 ? escapeHtml(order.items.join(', ')) : ''}">
                 ${order.items && Array.isArray(order.items) && order.items.length > 0
                     ? `<div class="items-content">${escapeHtml(order.items.slice(0, 3).join(', ') + (order.items.length > 3 ? '...' : ''))}</div>`
@@ -460,7 +659,7 @@ function renderOrdersTable() {
     const tbody = document.getElementById('ordersTable');
 
     if (orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="12" class="empty-state">No orders found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="16" class="empty-state">No orders found.</td></tr>';
         return;
     }
 
@@ -483,9 +682,54 @@ function renderOrdersTable() {
             : (order.created_at 
                 ? new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
                 : '');
+        
+        // Calculate values
+        const totalAmount = parseFloat(order.total_amount) || 0;
+        const advanceAmount = parseFloat(order.advance_amount) || 0;
+        const deliveryCharge = parseFloat(order.delivery_charge) || 0;
+        const taxAmount = parseFloat(order.tax_amount) || 0;
+        const costPrice = parseFloat(order.cost_price) || 0;
+        
+        // Calculate CoD = Total Amount - Advance
+        const cod = totalAmount - advanceAmount;
+        
+        // Calculate Receivable
+        let receivable = 0;
+        if (orderStatus.toLowerCase() === 'returned') {
+            receivable = -deliveryCharge;
+        } else {
+            receivable = totalAmount - (advanceAmount + deliveryCharge + taxAmount);
+        }
+        
+        // Calculate Net Profit
+        let netProfit = 0;
+        if (orderStatus.toLowerCase() === 'returned') {
+            // For returned orders: Net Profit = - Delivery charges
+            netProfit = -deliveryCharge;
+        } else {
+            // For other orders: Net Profit = Total Sale - (DC + Tax + CostPrice)
+            netProfit = totalAmount - (deliveryCharge + taxAmount + costPrice);
+        }
+        
+        // Calculate Profit % = Net Profit / Total Sale * 100
+        let profitPercent = 0;
+        if (totalAmount > 0) {
+            profitPercent = (netProfit / totalAmount) * 100;
+        }
 
         const rowStyle = isCancelled ? 'style="opacity: 0.5; text-decoration: line-through; color: #9ca3af;"' : '';
         const cellStyle = isCancelled ? 'style="color: #9ca3af;"' : '';
+        
+        // Color coding for profit
+        const profitColor = netProfit >= 0 
+            ? 'color: #4ade80;' 
+            : 'color: var(--danger);';
+        const profitPercentColor = profitPercent >= 0 
+            ? 'color: #4ade80;' 
+            : 'color: var(--danger);';
+        const receivableColor = receivable >= 0 
+            ? 'color: var(--text-primary);' 
+            : 'color: var(--danger);';
 
         return `
         <tr ${rowStyle}>
@@ -508,9 +752,13 @@ function renderOrdersTable() {
             </td>
             <td ${cellStyle}>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
             <td ${cellStyle}>${order.advance_amount ? Math.round(order.advance_amount).toLocaleString() : '0'}</td>
-            <td ${cellStyle}>${order.delivery_charge ? Math.round(order.delivery_charge).toLocaleString() : '0'}</td>
-            <td ${cellStyle}>${order.tax_amount ? Math.round(order.tax_amount).toLocaleString() : '0'}</td>
-            <td ${cellStyle}>${order.cost_price ? Math.round(order.cost_price).toLocaleString() : '0'}</td>
+            <td ${cellStyle}>${Math.round(cod).toLocaleString()}</td>
+            <td ${cellStyle}>${Math.round(deliveryCharge).toLocaleString()}</td>
+            <td ${cellStyle}>${Math.round(taxAmount).toLocaleString()}</td>
+            <td ${cellStyle} style="${receivableColor}">${Math.round(receivable).toLocaleString()}</td>
+            <td ${cellStyle}>${Math.round(costPrice).toLocaleString()}</td>
+            <td ${cellStyle} style="${profitColor}">${Math.round(netProfit).toLocaleString()}</td>
+            <td ${cellStyle} style="${profitPercentColor}">${profitPercent.toFixed(1)}%</td>
             <td ${cellStyle} class="items-cell" style="width: 10vw; max-width: 10vw;">
                 ${order.items && Array.isArray(order.items) && order.items.length > 0
                     ? `<div class="items-content" title="${escapeHtml(order.items.join(', '))}">${escapeHtml(order.items.join(', '))}</div>`
@@ -596,6 +844,18 @@ function initForms() {
     if (syncOrdersBtn) {
         syncOrdersBtn.addEventListener('click', async () => {
             await syncShopifyOrders();
+        });
+    }
+
+    // Edit Cost Prices Button
+    const editCostPricesBtn = document.getElementById('editCostPricesBtn');
+    if (editCostPricesBtn) {
+        editCostPricesBtn.addEventListener('click', () => {
+            if (isEditMode) {
+                saveCostPrices();
+            } else {
+                toggleEditMode();
+            }
         });
     }
 }

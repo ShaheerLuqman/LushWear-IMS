@@ -21,7 +21,7 @@
     --warning: #c4a35c;
     --success: #8b5cf6;
     --font-primary: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-    --font-mono: 'JetBrains Mono', monospace;
+    --font-mono: 'Roboto Mono', monospace;
     --radius-sm: 6px;
     --radius-md: 10px;
     --radius-lg: 16px;
@@ -94,6 +94,33 @@ body {
     display: flex;
     flex-direction: column;
     padding: 20px 0;
+    position: relative;
+    transition: width 0.3s ease;
+}
+
+.sidebar.collapsed {
+    width: 70px;
+}
+
+.sidebar.collapsed .logo-text,
+.sidebar.collapsed .nav-text {
+    opacity: 0;
+    width: 0;
+    overflow: hidden;
+}
+
+.sidebar.collapsed .logo {
+    justify-content: center;
+    padding: 0 20px 24px;
+}
+
+.sidebar.collapsed .nav-item {
+    justify-content: center;
+    padding: 14px;
+}
+
+.sidebar.collapsed .sidebar-toggle .toggle-icon {
+    transform: rotate(180deg);
 }
 
 .logo {
@@ -103,6 +130,37 @@ body {
     padding: 0 24px 24px;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 20px;
+    transition: var(--transition);
+}
+
+.sidebar-toggle {
+    position: absolute;
+    top: 20px;
+    right: -15px;
+    width: 30px;
+    height: 30px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: var(--transition);
+    z-index: 10;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.sidebar-toggle:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 12px var(--accent-glow);
+}
+
+.toggle-icon {
+    font-size: 12px;
+    color: var(--text-primary);
+    transition: transform 0.3s ease;
 }
 
 .logo-icon {
@@ -155,41 +213,18 @@ body {
 }
 
 .nav-icon {
-    font-size: 16px;
-    width: 20px;
+    font-size: 18px;
+    width: 24px;
     text-align: center;
+    flex-shrink: 0;
 }
 
-.sidebar-footer {
-    padding: 16px 24px;
-    border-top: 1px solid var(--border-color);
+.nav-text {
+    transition: opacity 0.3s ease, width 0.3s ease;
+    white-space: nowrap;
+    overflow: hidden;
 }
 
-.connection-status {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.status-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background: var(--warning);
-    animation: pulse 2s infinite;
-}
-
-.connection-status.connected .status-dot {
-    background: var(--success);
-    animation: none;
-}
-
-.connection-status.error .status-dot {
-    background: var(--danger);
-    animation: none;
-}
 
 @keyframes pulse {
     0%, 100% { opacity: 1; }
@@ -390,6 +425,10 @@ body {
     letter-spacing: 1px;
     color: var(--text-muted);
     border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
 }
 
 .data-table td {
@@ -476,6 +515,17 @@ body {
 
 .btn-danger:hover {
     background: #d46c6c;
+}
+
+.btn-success {
+    background: linear-gradient(135deg, #4ade80, #22c55e);
+    color: white;
+    box-shadow: 0 4px 16px rgba(74, 222, 128, 0.3);
+}
+
+.btn-success:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 24px rgba(74, 222, 128, 0.4);
 }
 
 /* Forms */
@@ -681,6 +731,34 @@ body {
 .quantity-badge.ok {
     background: rgba(139, 92, 246, 0.2);
     color: var(--success);
+}
+
+/* Variants display */
+.variants-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-width: 300px;
+}
+
+.variant-tag {
+    display: inline-flex;
+    align-items: center;
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 500;
+    background: rgba(139, 92, 246, 0.15);
+    color: var(--accent-primary);
+    border: 1px solid rgba(139, 92, 246, 0.3);
+    white-space: nowrap;
+}
+
+.variant-tag.low {
+    background: rgba(196, 163, 92, 0.15);
+    color: var(--warning);
+    border-color: rgba(196, 163, 92, 0.3);
 }
 
 /* Scrollbar */

@@ -8,7 +8,7 @@
         content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src http://127.0.0.1:8000; img-src 'self' data: https:;">
     <title>Inventory Manager</title>
     <link
-        href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
 </head>
@@ -42,31 +42,28 @@
     </div>
     <div class="app-container">
         <!-- Sidebar -->
-        <aside class="sidebar">
+        <aside class="sidebar" id="sidebar">
             <div class="logo">
-                <div class="logo-icon">◈</div>
+                <div class="logo-icon">📊</div>
                 <span class="logo-text">INVENTORY</span>
             </div>
+            <button class="sidebar-toggle" id="sidebarToggle" title="Toggle Sidebar">
+                <span class="toggle-icon">◀</span>
+            </button>
             <nav class="nav-menu">
                 <button class="nav-item active" data-view="dashboard">
-                    <span class="nav-icon">◉</span>
-                    <span>Dashboard</span>
+                    <span class="nav-icon">🏠</span>
+                    <span class="nav-text">Dashboard</span>
                 </button>
                 <button class="nav-item" data-view="orders">
                     <span class="nav-icon">📦</span>
-                    <span>Orders</span>
+                    <span class="nav-text">Orders</span>
                 </button>
                 <button class="nav-item" data-view="products">
-                    <span class="nav-icon">◫</span>
-                    <span>Products</span>
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-text">Products</span>
                 </button>
             </nav>
-            <div class="sidebar-footer">
-                <div class="connection-status" id="connectionStatus">
-                    <span class="status-dot"></span>
-                    <span>Connecting...</span>
-                </div>
-            </div>
         </aside>
 
         <!-- Main Content -->
@@ -78,6 +75,10 @@
                     <p class="header-subtitle" id="viewSubtitle">Overview of your inventory</p>
                 </div>
                 <div class="header-actions">
+                    <button id="editCostPricesBtn" class="btn btn-primary" style="display: none;">
+                        <span style="margin-right: 8px;">✏️</span>
+                        Edit Cost Prices
+                    </button>
                     <button id="syncShopifyBtn" class="btn btn-primary" style="display: none;">
                         <span style="margin-right: 8px;">🔄</span>
                         Sync from Shopify
@@ -138,13 +139,14 @@
                                         <th>Courier</th>
                                         <th>Order Status</th>
                                         <th>Total Amount</th>
+                                        <th>CoD</th>
                                         <th>Items</th>
                                         <th>Order Date</th>
                                     </tr>
                                 </thead>
                                 <tbody id="recentOrdersTable">
                                     <tr>
-                                        <td colspan="6" class="empty-state">Loading orders...</td>
+                                        <td colspan="7" class="empty-state">Loading orders...</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -156,27 +158,31 @@
                 <div id="ordersView" class="view">
                     <div class="table-container">
                         <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Order #</th>
-                                    <th>Courier</th>
-                                    <th>Tracking Number</th>
-                                    <th>Order Status</th>
-                                    <th>Delivery Status</th>
-                                    <th>Total Amount</th>
-                                    <th>Advance</th>
-                                    <th>D. Charge</th>
-                                    <th>Tax</th>
-                                    <th>Cost Price</th>
-                                    <th>Items</th>
-                                    <th>Order Date</th>
-                                </tr>
-                            </thead>
-                            <tbody id="ordersTable">
-                                <tr>
-                                    <td colspan="12" class="empty-state">Loading orders...</td>
-                                </tr>
-                            </tbody>
+                                <thead>
+                                    <tr>
+                                        <th>Order #</th>
+                                        <th>Courier</th>
+                                        <th>Tracking Number</th>
+                                        <th>Order Status</th>
+                                        <th>Delivery Status</th>
+                                        <th>Total Amount</th>
+                                        <th>Advance</th>
+                                        <th>CoD</th>
+                                        <th>D. Charge</th>
+                                        <th>Tax</th>
+                                        <th>Receivable</th>
+                                        <th>Cost Price</th>
+                                        <th>Net Profit</th>
+                                        <th>Profit %</th>
+                                        <th>Items</th>
+                                        <th>Order Date</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="ordersTable">
+                                    <tr>
+                                        <td colspan="16" class="empty-state">Loading orders...</td>
+                                    </tr>
+                                </tbody>
                         </table>
                     </div>
                 </div>
@@ -190,7 +196,8 @@
                                     <th>Image</th>
                                     <th>Product Name</th>
                                     <th>Price (Rs)</th>
-                                    <th>Quantity</th>
+                                    <th>Variants</th>
+                                    <th>Total Qty</th>
                                     <th>Cost Price (Rs)</th>
                                 </tr>
                             </thead>

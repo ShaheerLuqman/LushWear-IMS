@@ -2,27 +2,48 @@ from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
-class ProductBase(BaseModel):
-    name: str
-    price: float = 0.0
-    cost_price: Optional[float] = None
+# ==================== VARIANT MODELS ====================
+
+class VariantBase(BaseModel):
+    title: str
     quantity: int = 0
-    image_url: Optional[str] = None
-    # Shopify-specific fields (for syncing)
-    shopify_product_id: Optional[int] = None
     shopify_variant_id: Optional[int] = None
 
+class VariantCreate(VariantBase):
+    product_id: Optional[str] = None  # Will be set when creating with product
+
+class VariantUpdate(BaseModel):
+    title: Optional[str] = None
+    quantity: Optional[int] = None
+    shopify_variant_id: Optional[int] = None
+
+class Variant(VariantBase):
+    id: str
+    product_id: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+# ==================== PRODUCT MODELS ====================
+
+class ProductBase(BaseModel):
+    name: str
+    price: float = 0.0  # Selling price (same across all variants)
+    cost_price: Optional[float] = None  # Cost price (same across all variants)
+    image_url: Optional[str] = None
+    shopify_product_id: Optional[int] = None
+
 class ProductCreate(ProductBase):
-    pass
+    variants: Optional[List[VariantCreate]] = None
 
 class ProductUpdate(BaseModel):
     name: Optional[str] = None
     price: Optional[float] = None
     cost_price: Optional[float] = None
-    quantity: Optional[int] = None
     image_url: Optional[str] = None
     shopify_product_id: Optional[int] = None
-    shopify_variant_id: Optional[int] = None
 
 class Product(ProductBase):
     id: str
@@ -32,7 +53,17 @@ class Product(ProductBase):
     class Config:
         from_attributes = True
 
+class ProductWithVariants(Product):
+    variants: List[Variant] = []
 
+class ProductCostPriceUpdate(BaseModel):
+    id: str
+    cost_price: Optional[float] = None
+
+class ProductBatchCostPriceUpdate(BaseModel):
+    updates: List[ProductCostPriceUpdate]
+
+# ==================== ORDER MODELS ====================
 
 class OrderBase(BaseModel):
     order_number: int
@@ -73,4 +104,3 @@ class Order(OrderBase):
     
     class Config:
         from_attributes = True
-

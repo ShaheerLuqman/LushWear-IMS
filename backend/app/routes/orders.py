@@ -111,6 +111,15 @@ async def sync_shopify_orders():
                     break
         
         supabase = get_supabase()
+        
+        # Fetch all products with their cost prices for cost calculation
+        products_response = supabase.table("products").select("name, cost_price").execute()
+        products_cost_map = {}
+        for p in products_response.data:
+            if p.get("name") and p.get("cost_price") is not None:
+                # Store by lowercase name for case-insensitive matching
+                products_cost_map[p["name"].lower().strip()] = float(p["cost_price"])
+        
         existing_orders_map = {}
         existing_orders_all = []
         offset = 0
@@ -211,6 +220,36 @@ async def sync_shopify_orders():
                             return None
             return None
         
+        def calculate_cost_from_items(items, products_cost_map):
+            """Calculate total cost price by looking up each item in the products table"""
+            if not items:
+                return 0.0
+            
+            total_cost = 0.0
+            for item_name in items:
+                item_lower = item_name.lower().strip()
+                
+                # Try exact match first
+                if item_lower in products_cost_map:
+                    total_cost += products_cost_map[item_lower]
+                    continue
+                
+                # Try matching without variant suffix (e.g., "Product Name - S" -> "Product Name")
+                # Items from Shopify are like "Product Name - Variant"
+                if " - " in item_name:
+                    product_name = item_name.rsplit(" - ", 1)[0].lower().strip()
+                    if product_name in products_cost_map:
+                        total_cost += products_cost_map[product_name]
+                        continue
+                
+                # Try partial match - find products whose name is contained in item name
+                for product_name, cost in products_cost_map.items():
+                    if product_name in item_lower or item_lower in product_name:
+                        total_cost += cost
+                        break
+            
+            return total_cost
+        
         def extract_items(order):
             if "line_items" not in order or not order["line_items"]:
                 return []
@@ -278,7 +317,15 @@ async def sync_shopify_orders():
             delivery_charge = extract_delivery_charges(sp_order) or 0.0
             tax_amount = extract_tax_amount(sp_order) or 0.0
             cost_price = extract_cost_price(sp_order) or 0.0
+            
+            # Set fixed delivery charge for SCS courier
+            if courier.upper() == "SCS":
+                delivery_charge = 180.0
             items = extract_items(sp_order)
+            
+            # If cost_price is 0, calculate it from items using products table
+            if cost_price == 0.0 and items:
+                cost_price = calculate_cost_from_items(items, products_cost_map)
             
             order_received_date = sp_order.get("created_at")
             if order_received_date:
