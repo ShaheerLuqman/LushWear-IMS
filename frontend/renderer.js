@@ -5,17 +5,14 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 let products = [];
 let orders = [];
 let currentView = 'dashboard';
-let isEditMode = false;
-let costPriceChanges = {}; // Store changes: { productId: newCostPrice }
+let productsGridApi = null;
+let ordersGridApi = null;
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
 const views = document.querySelectorAll('.view');
-const searchInput = document.getElementById('searchInput');
 const toast = document.getElementById('toast');
 
-// Sidebar state
-let sidebarCollapsed = false;
 
 // Initialize
 document.addEventListener('DOMContentLoaded', async () => {
@@ -35,6 +32,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     initNavigation();
     initForms();
+    initGrids();
     
     // Load data in parallel - wait for both to complete successfully
     let productsLoaded = false;
@@ -45,7 +43,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }).catch(error => {
         console.error('Error loading products:', error);
         showToast('Failed to load products', 'error');
-        productsLoaded = true; // Still mark as loaded to allow app to show
+        productsLoaded = true;
     });
     
     const loadOrdersPromise = loadOrders().then(() => {
@@ -53,7 +51,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }).catch(error => {
         console.error('Error loading orders:', error);
         showToast('Failed to load orders', 'error');
-        ordersLoaded = true; // Still mark as loaded to allow app to show
+        ordersLoaded = true;
     });
     
     // Wait for both to complete
@@ -61,7 +59,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Only show app when both are loaded
     if (productsLoaded && ordersLoaded) {
-        // Ensure recent orders are rendered (in case loadOrders completed before loadProducts)
         renderRecentOrders();
         
         // Hide loading screen
@@ -72,16 +69,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Show app with fade-in
         if (appContainer) {
             appContainer.style.visibility = 'visible';
-            // Use setTimeout to ensure visibility is set before opacity transition
             setTimeout(() => {
                 appContainer.style.opacity = '1';
             }, 10);
         }
     }
 
-    // Search functionality
-    searchInput.addEventListener('input', debounce(handleSearch, 300));
-    
     // Initialize sync button visibility
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
@@ -90,37 +83,536 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncOrdersBtn.style.display = 'none';
     }
     
-    // Initialize sidebar toggle
-    initSidebarToggle();
 });
 
-// Sidebar Toggle
-function initSidebarToggle() {
-    const sidebar = document.getElementById('sidebar');
-    const toggleBtn = document.getElementById('sidebarToggle');
-    
-    if (!sidebar || !toggleBtn) return;
-    
-    // Load saved state from localStorage, default to collapsed
-    const savedState = localStorage.getItem('sidebarCollapsed');
-    if (savedState === 'false') {
-        sidebarCollapsed = false;
-        // Don't add collapsed class
-    } else {
-        // Default to collapsed if no saved state or if saved state is 'true'
-        sidebarCollapsed = true;
-        sidebar.classList.add('collapsed');
-    }
-    
-    toggleBtn.addEventListener('click', () => {
-        sidebarCollapsed = !sidebarCollapsed;
-        sidebar.classList.toggle('collapsed', sidebarCollapsed);
-        // Save state to localStorage
-        localStorage.setItem('sidebarCollapsed', sidebarCollapsed.toString());
+// ============================================
+// AG Grid Initialization
+// ============================================
+
+function initGrids() {
+    initProductsGrid();
+    initOrdersGrid();
+}
+
+// Size order mapping for variant sorting
+const sizeOrder = {
+    'xxs': 1, 'xs': 2, 's': 3, 'small': 3,
+    'm': 4, 'medium': 4, 'med': 4,
+    'l': 5, 'large': 5,
+    'xl': 6, 'x-large': 6,
+    'xxl': 7, '2xl': 7,
+    'xxxl': 8, '3xl': 8,
+    '4xl': 9, '5xl': 10
+};
+
+function sortVariantsBySize(variants) {
+    if (!variants || !Array.isArray(variants)) return [];
+    return [...variants].sort((a, b) => {
+        const titleA = (a.title || '').toLowerCase().trim();
+        const titleB = (b.title || '').toLowerCase().trim();
+        const orderA = sizeOrder[titleA] || 100;
+        const orderB = sizeOrder[titleB] || 100;
+        if (orderA !== 100 || orderB !== 100) {
+            return orderA - orderB;
+        }
+        return titleA.localeCompare(titleB);
     });
 }
 
+function initProductsGrid() {
+    const gridDiv = document.getElementById('productsGrid');
+    if (!gridDiv) return;
+
+    const columnDefs = [
+        {
+            headerName: 'Image',
+            field: 'image_url',
+            width: 80,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => {
+                if (params.value) {
+                    return `<div class="grid-image-cell"><img src="${escapeHtml(params.value)}" alt="Product"></div>`;
+                }
+                return '<div class="grid-image-cell"><div class="grid-image-placeholder">No Img</div></div>';
+            }
+        },
+        {
+            headerName: 'Product Name',
+            field: 'name',
+            flex: 2,
+            filter: 'agTextColumnFilter',
+            filterParams: {
+                filterOptions: ['contains', 'startsWith', 'endsWith'],
+                defaultOption: 'contains'
+            }
+        },
+        {
+            headerName: 'Price (Rs)',
+            field: 'price',
+            width: 120,
+            filter: 'agNumberColumnFilter',
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+        },
+        {
+            headerName: 'Variants',
+            field: 'variants',
+            flex: 2,
+            filter: false,
+            sortable: false,
+            autoHeight: true,
+            wrapText: true,
+            cellRenderer: (params) => {
+                const variants = params.value || [];
+                if (variants.length === 0) {
+                    return '<span class="grid-variant-tag">No variants</span>';
+                }
+                const sortedVariants = sortVariantsBySize(variants);
+                return `<div class="grid-variants-container">${sortedVariants.map(v => {
+                    const qty = v.quantity || 0;
+                    const isLow = qty < 10;
+                    return `<span class="grid-variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}</span>`;
+                }).join('')}</div>`;
+            }
+        },
+        {
+            headerName: 'Total Qty',
+            field: 'total_quantity',
+            width: 120,
+            filter: 'agNumberColumnFilter',
+            cellRenderer: (params) => {
+                const qty = params.value || 0;
+                const cssClass = qty < 10 ? 'low' : 'ok';
+                return `<span class="grid-quantity-badge ${cssClass}">${qty}</span>`;
+            }
+        },
+        {
+            headerName: 'Cost Price (Rs)',
+            field: 'cost_price',
+            width: 140,
+            filter: 'agNumberColumnFilter',
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.cost_price = newValue;
+                    // Save to backend
+                    saveCostPrice(params.data.id, newValue);
+                    return true;
+                }
+                return false;
+            }
+        }
+    ];
+
+    const gridOptions = {
+        columnDefs: columnDefs,
+        rowData: [],
+        defaultColDef: {
+            sortable: true,
+            resizable: true,
+            filter: true,
+            floatingFilter: true,
+            minWidth: 80
+        },
+        animateRows: true,
+        pagination: true,
+        paginationPageSize: 50,
+        paginationPageSizeSelector: [25, 50, 100, 200],
+        domLayout: 'normal',
+        suppressCellFocus: false,
+        stopEditingWhenCellsLoseFocus: true,
+        getRowId: (params) => params.data.id,
+        onGridReady: (params) => {
+            productsGridApi = params.api;
+        }
+    };
+
+    agGrid.createGrid(gridDiv, gridOptions);
+}
+
+function initOrdersGrid() {
+    const gridDiv = document.getElementById('ordersGrid');
+    if (!gridDiv) return;
+
+    const numberFilterValueGetter = (params) => {
+        const v = params.api.getValue(params.column.getColId(), params.node);
+        return (v != null && v !== '') ? String(v) : '';
+    };
+    const textFilterContains = { filterOptions: ['contains'], defaultOption: 'contains' };
+
+    const columnDefs = [
+        {
+            headerName: '',
+            width: 48,
+            minWidth: 48,
+            maxWidth: 48,
+            checkboxSelection: true,
+            headerCheckboxSelection: true,
+            filter: false,
+            sortable: false,
+            floatingFilter: false,
+            suppressSizeToFit: true
+        },
+        {
+            headerName: 'Order #',
+            field: 'order_number',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            cellStyle: { fontWeight: 'bold' }
+        },
+        {
+            headerName: 'Courier',
+            field: 'courier',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains
+        },
+        {
+            headerName: 'Tracking #',
+            field: 'tracking_number',
+            width: 130,
+            hide: true,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            valueFormatter: (params) => params.value || '-'
+        },
+        {
+            headerName: 'Order Status',
+            field: 'order_status',
+            width: 130,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            cellRenderer: (params) => {
+                const status = params.value || '';
+                let cssClass = 'grid-status-pending';
+                if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
+                else if (status === 'returned' || status === 'cancelled') cssClass = 'grid-status-returned';
+                return `<span class="grid-status-badge ${cssClass}">${escapeHtml(status)}</span>`;
+            }
+        },
+        {
+            headerName: 'Delivery',
+            field: 'id',
+            width: 120,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => {
+                const order = params.data;
+                const courier = order.courier || '';
+                const hasCourier = courier && courier.trim() !== '' && courier.trim().toLowerCase() !== 'unassigned';
+                if (hasCourier) {
+                    return `<button class="grid-delivery-btn" onclick="fetchDeliveryStatus('${order.id}', '${escapeHtml(courier)}', '${escapeHtml(order.tracking_number || '')}')">
+                        <span>Fetch</span><span style="font-size: 10px;">🔄</span>
+                    </button>`;
+                }
+                return '<span style="color: var(--text-muted);">-</span>';
+            }
+        },
+        {
+            headerName: 'Total',
+            field: 'total_amount',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+        },
+        {
+            headerName: 'Advance',
+            field: 'advance_amount',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.advance_amount = newValue;
+                    saveOrderField(params.data.id, 'advance_amount', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            headerName: 'CoD',
+            field: 'cod',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            valueGetter: (params) => {
+                const total = parseFloat(params.data.total_amount) || 0;
+                const advance = parseFloat(params.data.advance_amount) || 0;
+                return total - advance;
+            },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+        },
+        {
+            headerName: 'D. Charge',
+            field: 'delivery_charge',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.delivery_charge = newValue;
+                    saveOrderField(params.data.id, 'delivery_charge', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            headerName: 'Tax',
+            field: 'tax_amount',
+            width: 80,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.tax_amount = newValue;
+                    saveOrderField(params.data.id, 'tax_amount', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            headerName: 'Receivable',
+            field: 'receivable',
+            width: 110,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            valueGetter: (params) => {
+                const status = (params.data.order_status || '').toLowerCase();
+                const total = parseFloat(params.data.total_amount) || 0;
+                const advance = parseFloat(params.data.advance_amount) || 0;
+                const delivery = parseFloat(params.data.delivery_charge) || 0;
+                const tax = parseFloat(params.data.tax_amount) || 0;
+                if (status === 'returned') return -delivery;
+                return total - (advance + delivery + tax);
+            },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            cellStyle: (params) => ({
+                color: params.value >= 0 ? 'var(--text-primary)' : 'var(--danger)'
+            })
+        },
+        {
+            headerName: 'Cost Price',
+            field: 'cost_price',
+            width: 110,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.cost_price = newValue;
+                    saveOrderField(params.data.id, 'cost_price', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
+            headerName: 'Net Profit',
+            field: 'net_profit',
+            width: 110,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            valueGetter: (params) => {
+                const status = (params.data.order_status || '').toLowerCase();
+                const total = parseFloat(params.data.total_amount) || 0;
+                const delivery = parseFloat(params.data.delivery_charge) || 0;
+                const tax = parseFloat(params.data.tax_amount) || 0;
+                const cost = parseFloat(params.data.cost_price) || 0;
+                if (status === 'returned') return -delivery;
+                return total - (delivery + tax + cost);
+            },
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
+        },
+        {
+            headerName: 'Profit %',
+            field: 'profit_percent',
+            width: 100,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            valueGetter: (params) => {
+                const status = (params.data.order_status || '').toLowerCase();
+                const total = parseFloat(params.data.total_amount) || 0;
+                const delivery = parseFloat(params.data.delivery_charge) || 0;
+                const tax = parseFloat(params.data.tax_amount) || 0;
+                const cost = parseFloat(params.data.cost_price) || 0;
+                let netProfit = status === 'returned' ? -delivery : total - (delivery + tax + cost);
+                if (total > 0) return (netProfit / total) * 100;
+                return 0;
+            },
+            valueFormatter: (params) => (params.value || 0).toFixed(1) + '%',
+            cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
+        },
+        {
+            headerName: 'Items',
+            field: 'items',
+            flex: 1,
+            minWidth: 150,
+            hide: true,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            valueGetter: (params) => {
+                const items = params.data.items;
+                if (items && Array.isArray(items) && items.length > 0) {
+                    return items.join(', ');
+                }
+                return '';
+            },
+            cellRenderer: (params) => {
+                if (params.value) {
+                    return `<div class="grid-items-cell" title="${escapeHtml(params.value)}">${escapeHtml(params.value)}</div>`;
+                }
+                return '-';
+            }
+        },
+        {
+            headerName: 'Order Date',
+            field: 'order_receiving_date',
+            width: 130,
+            hide: true,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            filterValueGetter: (params) => {
+                const v = params.api.getValue(params.column.getColId(), params.node);
+                if (v instanceof Date) return v.toISOString().slice(0, 10);
+                if (v) return String(v).slice(0, 10);
+                return '';
+            },
+            valueGetter: (params) => {
+                const date = params.data.order_receiving_date || params.data.created_at;
+                return date ? new Date(date) : null;
+            },
+            valueFormatter: (params) => {
+                if (params.value) {
+                    return params.value.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                }
+                return '';
+            }
+        }
+    ];
+
+    const gridOptions = {
+        columnDefs: columnDefs,
+        rowData: [],
+        rowSelection: 'multiple',
+        suppressRowClickSelection: true,
+        defaultColDef: {
+            sortable: true,
+            resizable: true,
+            filter: true,
+            floatingFilter: true,
+            minWidth: 70,
+            suppressHeaderMenuButton: true,
+            suppressHeaderFilterButton: true,
+            suppressFloatingFilterButton: true,
+            floatingFilterComponentParams: { suppressFilterButton: true }
+        },
+        animateRows: true,
+        pagination: true,
+        paginationPageSize: 50,
+        paginationPageSizeSelector: [25, 50, 100, 200],
+        domLayout: 'normal',
+        suppressCellFocus: false,
+        stopEditingWhenCellsLoseFocus: true,
+        getRowId: (params) => params.data.id,
+        getRowStyle: (params) => {
+            const status = (params.data.order_status || '').toLowerCase();
+            if (status === 'cancelled') {
+                return { opacity: '0.5', textDecoration: 'line-through' };
+            }
+            return null;
+        },
+        onGridReady: (params) => {
+            ordersGridApi = params.api;
+        }
+    };
+
+    agGrid.createGrid(gridDiv, gridOptions);
+}
+
+// ============================================
+// Save Functions for Editable Cells
+// ============================================
+
+async function saveCostPrice(productId, costPrice) {
+    try {
+        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ updates: [{ id: productId, cost_price: costPrice }] })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to update cost price');
+        }
+
+        showToast('Cost price updated', 'success');
+    } catch (error) {
+        console.error('Error saving cost price:', error);
+        showToast('Failed to save cost price', 'error');
+    }
+}
+
+async function saveOrderField(orderId, field, value) {
+    try {
+        const response = await fetch(`${API_BASE}/orders/${orderId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ [field]: value })
+        });
+
+        if (!response.ok) {
+            throw new Error(`Failed to update ${field}`);
+        }
+
+        showToast(`Order ${field.replace('_', ' ')} updated`, 'success');
+    } catch (error) {
+        console.error(`Error saving ${field}:`, error);
+        showToast(`Failed to save ${field}`, 'error');
+    }
+}
+
+// ============================================
 // Navigation
+// ============================================
+
 function initNavigation() {
     navItems.forEach(item => {
         item.addEventListener('click', () => {
@@ -132,18 +624,6 @@ function initNavigation() {
 
 function switchView(viewName) {
     currentView = viewName;
-
-    // Exit edit mode if switching away from products view
-    if (isEditMode && viewName !== 'products') {
-        isEditMode = false;
-        costPriceChanges = {};
-        const editBtn = document.getElementById('editCostPricesBtn');
-        if (editBtn) {
-            editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
-            editBtn.classList.remove('btn-success');
-            editBtn.classList.add('btn-primary');
-        }
-    }
 
     // Update nav
     navItems.forEach(item => {
@@ -171,7 +651,7 @@ function switchView(viewName) {
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     
     if (editCostPricesBtn) {
-        editCostPricesBtn.style.display = viewName === 'products' ? 'inline-flex' : 'none';
+        editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
     }
     
     if (syncProductsBtn && syncOrdersBtn) {
@@ -187,180 +667,89 @@ function switchView(viewName) {
         }
     }
 
-    // Refresh data when switching views
-    if (viewName === 'products' || viewName === 'dashboard') {
+    // Refresh data and resize grids when switching views
+    if (viewName === 'products') {
         loadProducts();
+        setTimeout(() => {
+            if (productsGridApi) productsGridApi.sizeColumnsToFit();
+        }, 100);
     } else if (viewName === 'orders') {
         loadOrders();
+        setTimeout(() => {
+            if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+        }, 100);
+    } else if (viewName === 'dashboard') {
+        loadProducts();
     }
 }
 
+// ============================================
 // API Functions
+// ============================================
+
 async function loadProducts() {
     try {
         const response = await fetch(`${API_BASE}/products/`);
         if (!response.ok) throw new Error('Failed to fetch products');
 
         products = await response.json();
-        // Sort by name (case-insensitive) as a backup to ensure proper sorting
         products.sort((a, b) => {
             const nameA = (a.name || '').toLowerCase();
             const nameB = (b.name || '').toLowerCase();
             return nameA.localeCompare(nameB);
         });
+        
         updateDashboard();
-        renderProductsTable();
-        // Don't call renderRecentOrders() here - it will be called after orders are loaded
+        
+        // Update AG Grid
+        if (productsGridApi) {
+            productsGridApi.setGridOption('rowData', products);
+        }
     } catch (error) {
         console.error('Error loading products:', error);
         showToast('Failed to load products', 'error');
     }
 }
 
-async function createProduct(productData) {
+async function loadOrders() {
     try {
-        const response = await fetch(`${API_BASE}/products/`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(productData)
-        });
+        const response = await fetch(`${API_BASE}/orders/`);
+        if (!response.ok) throw new Error('Failed to fetch orders');
 
-        if (!response.ok) throw new Error('Failed to create product');
-
-        const newProduct = await response.json();
-        products.unshift(newProduct);
-        showToast('Product created successfully', 'success');
-        resetForm();
-        loadProducts();
-        return newProduct;
-    } catch (error) {
-        console.error('Error creating product:', error);
-        showToast('Failed to create product', 'error');
-        throw error;
-    }
-}
-
-async function updateProduct(productId, productData) {
-    try {
-        const response = await fetch(`${API_BASE}/products/${productId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(productData)
-        });
-
-        if (!response.ok) throw new Error('Failed to update product');
-
-        showToast('Product updated successfully', 'success');
-        closeModal();
-        loadProducts();
-    } catch (error) {
-        console.error('Error updating product:', error);
-        showToast('Failed to update product', 'error');
-    }
-}
-
-async function deleteProduct(productId) {
-    if (!confirm('Are you sure you want to delete this product?')) return;
-
-    try {
-        const response = await fetch(`${API_BASE}/products/${productId}`, {
-            method: 'DELETE'
-        });
-
-        if (!response.ok) throw new Error('Failed to delete product');
-
-        showToast('Product deleted successfully', 'success');
-        loadProducts();
-    } catch (error) {
-        console.error('Error deleting product:', error);
-        showToast('Failed to delete product', 'error');
-    }
-}
-
-function toggleEditMode() {
-    isEditMode = !isEditMode;
-    const editBtn = document.getElementById('editCostPricesBtn');
-    
-    if (isEditMode) {
-        // Switch to Save mode
-        editBtn.innerHTML = '<span style="margin-right: 8px;">💾</span>Save Cost Prices';
-        editBtn.classList.remove('btn-primary');
-        editBtn.classList.add('btn-success');
-        // Initialize costPriceChanges with current values
-        costPriceChanges = {};
-    } else {
-        // Switch back to Edit mode
-        editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
-        editBtn.classList.remove('btn-success');
-        editBtn.classList.add('btn-primary');
-        // Clear changes
-        costPriceChanges = {};
-    }
-    
-    renderProductsTable();
-}
-
-async function saveCostPrices() {
-    if (Object.keys(costPriceChanges).length === 0) {
-        showToast('No changes to save', 'info');
-        toggleEditMode();
-        return;
-    }
-
-    const editBtn = document.getElementById('editCostPricesBtn');
-    
-    // Disable button and show loading
-    editBtn.disabled = true;
-    editBtn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Saving...';
-
-    try {
-        const updates = Object.entries(costPriceChanges).map(([id, cost_price]) => ({
-            id: id,
-            cost_price: cost_price
-        }));
-
-        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates: updates })
-        });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to update cost prices');
+        orders = await response.json();
+        renderRecentOrders();
+        
+        // Update AG Grid
+        if (ordersGridApi) {
+            ordersGridApi.setGridOption('rowData', orders);
         }
-
-        const result = await response.json();
-        showToast(result.message || 'Cost prices updated successfully', 'success');
-        
-        // Clear changes and exit edit mode (this will update the button)
-        costPriceChanges = {};
-        isEditMode = false;
-        
-        // Update button to Edit mode
-        editBtn.innerHTML = '<span style="margin-right: 8px;">✏️</span>Edit Cost Prices';
-        editBtn.classList.remove('btn-success');
-        editBtn.classList.add('btn-primary');
-        editBtn.disabled = false;
-        
-        // Reload products to get updated data
-        await loadProducts();
     } catch (error) {
-        console.error('Error saving cost prices:', error);
-        showToast(error.message || 'Failed to save cost prices', 'error');
-        // Re-enable button and keep it in Save mode since we're still in edit mode
-        editBtn.disabled = false;
-        editBtn.innerHTML = '<span style="margin-right: 8px;">💾</span>Save Cost Prices';
+        console.error('Error loading orders:', error);
+        showToast('Failed to load orders', 'error');
+        if (error.message.includes('relation "orders" does not exist')) {
+            orders = getSampleOrders();
+            renderRecentOrders();
+            if (ordersGridApi) {
+                ordersGridApi.setGridOption('rowData', orders);
+            }
+        }
     }
 }
 
-
+function getSampleOrders() {
+    return [
+        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
+    ];
+}
 
 async function syncShopifyProducts() {
     const btn = document.getElementById('syncShopifyBtn');
     const originalText = btn.innerHTML;
 
-    // Disable button and show loading state
     btn.disabled = true;
     btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Syncing...';
 
@@ -383,13 +772,11 @@ async function syncShopifyProducts() {
             'success'
         );
 
-        // Reload products to show updated data
         loadProducts();
     } catch (error) {
         console.error('Error syncing Shopify products:', error);
         showToast(error.message || 'Failed to sync products from Shopify', 'error');
     } finally {
-        // Re-enable button
         btn.disabled = false;
         btn.innerHTML = originalText;
     }
@@ -401,7 +788,6 @@ async function syncShopifyOrders() {
 
     const originalText = btn.innerHTML;
 
-    // Disable button and show loading state
     btn.disabled = true;
     btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Syncing...';
 
@@ -422,181 +808,30 @@ async function syncShopifyOrders() {
             'success'
         );
 
-        // Reload orders to show updated data
         loadOrders();
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');
     } finally {
-        // Re-enable button
         btn.disabled = false;
         btn.innerHTML = originalText;
     }
 }
 
-async function loadOrders() {
-    try {
-        const response = await fetch(`${API_BASE}/orders/`);
-        if (!response.ok) throw new Error('Failed to fetch orders');
-
-        orders = await response.json();
-        renderOrdersTable();
-        renderRecentOrders(); // Render recent orders after orders are loaded
-    } catch (error) {
-        console.error('Error loading orders:', error);
-        showToast('Failed to load orders', 'error');
-        // If orders table doesn't exist in database, show sample data
-        if (error.message.includes('relation "orders" does not exist')) {
-            orders = getSampleOrders();
-            renderOrdersTable();
-            renderRecentOrders(); // Render recent orders even with sample data
-        }
-    }
-}
-
-function getSampleOrders() {
-    // Sample data based on new schema
-    return [
-        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
-    ];
-}
-
-async function handleSearch(e) {
-    const query = e.target.value.trim();
-
-    if (!query) {
-        loadProducts();
-        return;
-    }
-
-    try {
-        const response = await fetch(`${API_BASE}/products/search/${encodeURIComponent(query)}`);
-        if (!response.ok) throw new Error('Search failed');
-
-        products = await response.json();
-        renderProductsTable();
-        renderRecentOrders();
-    } catch (error) {
-        console.error('Search error:', error);
-    }
-}
-
+// ============================================
 // UI Updates
+// ============================================
+
 function updateDashboard() {
     const totalProducts = products.length;
-    // Calculate total stock from total_quantity (sum of all variants)
     const totalStock = products.reduce((sum, p) => sum + (p.total_quantity || 0), 0);
-    // Count products with low total stock
     const lowStock = products.filter(p => (p.total_quantity || 0) < 10).length;
-    // Calculate total value based on total_quantity
     const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.total_quantity || 0)), 0);
 
     document.getElementById('totalProducts').textContent = totalProducts;
     document.getElementById('totalStock').textContent = totalStock.toLocaleString();
     document.getElementById('lowStock').textContent = lowStock;
     document.getElementById('totalValue').textContent = `Rs ${Math.round(totalValue).toLocaleString()}`;
-}
-
-function renderProductsTable() {
-    const tbody = document.getElementById('productsTable');
-
-    if (products.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No products found. Add your first product!</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = products.map(product => {
-        const currentCostPrice = costPriceChanges[product.id] !== undefined 
-            ? costPriceChanges[product.id] 
-            : (product.cost_price || 0);
-        
-        const costPriceDisplay = isEditMode 
-            ? `<input type="number" 
-                      class="cost-price-input" 
-                      data-product-id="${product.id}" 
-                      value="${currentCostPrice}" 
-                      step="0.01" 
-                      min="0"
-                      style="width: 100px; padding: 4px 8px; border: 1px solid rgba(255,255,255,0.2); border-radius: 4px; background: rgba(0,0,0,0.2); color: var(--text-primary);">`
-            : `${Math.round(currentCostPrice)}`;
-        
-        // Calculate total quantity from variants
-        const totalQuantity = product.total_quantity || 0;
-        
-        // Build variants display with size ordering
-        const variants = product.variants || [];
-        let variantsDisplay = '';
-        if (variants.length > 0) {
-            // Sort variants by size order (S, M, L, XL, XXL, etc.)
-            const sortedVariants = [...variants].sort((a, b) => {
-                const sizeOrder = {
-                    'xxs': 1, 'xs': 2, 's': 3, 'small': 3,
-                    'm': 4, 'medium': 4, 'med': 4,
-                    'l': 5, 'large': 5,
-                    'xl': 6, 'x-large': 6,
-                    'xxl': 7, '2xl': 7,
-                    'xxxl': 8, '3xl': 8,
-                    '4xl': 9, '5xl': 10
-                };
-                const titleA = (a.title || '').toLowerCase().trim();
-                const titleB = (b.title || '').toLowerCase().trim();
-                const orderA = sizeOrder[titleA] || 100;
-                const orderB = sizeOrder[titleB] || 100;
-                
-                // If both have size order, sort by size
-                if (orderA !== 100 || orderB !== 100) {
-                    return orderA - orderB;
-                }
-                // Otherwise sort alphabetically
-                return titleA.localeCompare(titleB);
-            });
-            
-            variantsDisplay = sortedVariants.map(v => {
-                const qty = v.quantity || 0;
-                const isLow = qty < 10;
-                return `<span class="variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}</span>`;
-            }).join('');
-        } else {
-            variantsDisplay = '<span class="variant-tag">No variants</span>';
-        }
-        
-        return `
-        <tr>
-            <td>
-                ${product.image_url ? `<img src="${product.image_url}" alt="Product" style="width: 40px; height: 40px; object-fit: cover; border-radius: 4px;">` : '<div style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 10px;">No Img</div>'}
-            </td>
-            <td>${escapeHtml(product.name)}</td>
-            <td>${Math.round(product.price || 0)}</td>
-            <td>
-                <div class="variants-container">
-                    ${variantsDisplay}
-                </div>
-            </td>
-            <td>
-                <span class="quantity-badge ${totalQuantity < 10 ? 'low' : 'ok'}">
-                    ${totalQuantity}
-                </span>
-            </td>
-            <td>${costPriceDisplay}</td>
-        </tr>
-    `;
-    }).join('');
-
-    // Add event listeners for cost price inputs if in edit mode
-    if (isEditMode) {
-        const costPriceInputs = document.querySelectorAll('.cost-price-input');
-        costPriceInputs.forEach(input => {
-            input.addEventListener('input', (e) => {
-                const productId = e.target.getAttribute('data-product-id');
-                const newValue = parseFloat(e.target.value) || 0;
-                costPriceChanges[productId] = newValue;
-            });
-        });
-    }
 }
 
 function renderRecentOrders() {
@@ -622,7 +857,6 @@ function renderRecentOrders() {
             ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
             : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
         
-        // Calculate CoD = Total Amount - Advance
         const totalAmount = parseFloat(order.total_amount) || 0;
         const advanceAmount = parseFloat(order.advance_amount) || 0;
         const cod = totalAmount - advanceAmount;
@@ -649,188 +883,11 @@ function renderRecentOrders() {
     }).join('');
 }
 
-function populateProductSelect() {
-    const select = document.getElementById('stockProduct');
-    select.innerHTML = '<option value="">-- Select a product --</option>' +
-        products.map(p => `<option value="${p.id}">${escapeHtml(p.name)} (${p.quantity} in stock)</option>`).join('');
-}
-
-function renderOrdersTable() {
-    const tbody = document.getElementById('ordersTable');
-
-    if (orders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="16" class="empty-state">No orders found.</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = orders.map(order => {
-        const orderStatus = order.order_status || '';
-        const courier = order.courier || '';
-        const isCancelled = orderStatus === 'cancelled';
-        const hasCourier = courier && courier.trim() !== '' && courier.trim().toLowerCase() !== 'unassigned';
-        
-        const statusColor = orderStatus === 'returned' || orderStatus === 'cancelled' 
-            ? 'background: rgba(196, 92, 92, 0.2); color: var(--danger);'
-            : orderStatus === 'fulfilled'
-            ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
-            : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
-        
-        const deliveryStatusColor = 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
-        
-        const orderDate = order.order_receiving_date 
-            ? new Date(order.order_receiving_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-            : (order.created_at 
-                ? new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-                : '');
-        
-        // Calculate values
-        const totalAmount = parseFloat(order.total_amount) || 0;
-        const advanceAmount = parseFloat(order.advance_amount) || 0;
-        const deliveryCharge = parseFloat(order.delivery_charge) || 0;
-        const taxAmount = parseFloat(order.tax_amount) || 0;
-        const costPrice = parseFloat(order.cost_price) || 0;
-        
-        // Calculate CoD = Total Amount - Advance
-        const cod = totalAmount - advanceAmount;
-        
-        // Calculate Receivable
-        let receivable = 0;
-        if (orderStatus.toLowerCase() === 'returned') {
-            receivable = -deliveryCharge;
-        } else {
-            receivable = totalAmount - (advanceAmount + deliveryCharge + taxAmount);
-        }
-        
-        // Calculate Net Profit
-        let netProfit = 0;
-        if (orderStatus.toLowerCase() === 'returned') {
-            // For returned orders: Net Profit = - Delivery charges
-            netProfit = -deliveryCharge;
-        } else {
-            // For other orders: Net Profit = Total Sale - (DC + Tax + CostPrice)
-            netProfit = totalAmount - (deliveryCharge + taxAmount + costPrice);
-        }
-        
-        // Calculate Profit % = Net Profit / Total Sale * 100
-        let profitPercent = 0;
-        if (totalAmount > 0) {
-            profitPercent = (netProfit / totalAmount) * 100;
-        }
-
-        const rowStyle = isCancelled ? 'style="opacity: 0.5; text-decoration: line-through; color: #9ca3af;"' : '';
-        const cellStyle = isCancelled ? 'style="color: #9ca3af;"' : '';
-        
-        // Color coding for profit
-        const profitColor = netProfit >= 0 
-            ? 'color: #4ade80;' 
-            : 'color: var(--danger);';
-        const profitPercentColor = profitPercent >= 0 
-            ? 'color: #4ade80;' 
-            : 'color: var(--danger);';
-        const receivableColor = receivable >= 0 
-            ? 'color: var(--text-primary);' 
-            : 'color: var(--danger);';
-
-        return `
-        <tr ${rowStyle}>
-            <td ${cellStyle}><strong>${order.order_number || ''}</strong></td>
-            <td ${cellStyle}>${escapeHtml(order.courier || '')}</td>
-            <td ${cellStyle}>${escapeHtml(order.tracking_number || '-')}</td>
-            <td ${cellStyle}>
-                <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; ${statusColor}">
-                    ${escapeHtml(orderStatus)}
-                </span>
-            </td>
-            <td ${cellStyle}>
-                ${hasCourier 
-                    ? `<button class="delivery-status-btn" data-order-id="${order.id}" data-courier="${escapeHtml(courier)}" data-tracking="${escapeHtml(order.tracking_number || '')}" style="display: inline-flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; border: none; cursor: pointer; ${deliveryStatusColor}">
-                        <span>Fetch Status</span>
-                        <span style="font-size: 10px;">🔄</span>
-                      </button>`
-                    : '<span style="color: var(--text-muted);">-</span>'
-                }
-            </td>
-            <td ${cellStyle}>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
-            <td ${cellStyle}>${order.advance_amount ? Math.round(order.advance_amount).toLocaleString() : '0'}</td>
-            <td ${cellStyle}>${Math.round(cod).toLocaleString()}</td>
-            <td ${cellStyle}>${Math.round(deliveryCharge).toLocaleString()}</td>
-            <td ${cellStyle}>${Math.round(taxAmount).toLocaleString()}</td>
-            <td ${cellStyle} style="${receivableColor}">${Math.round(receivable).toLocaleString()}</td>
-            <td ${cellStyle}>${Math.round(costPrice).toLocaleString()}</td>
-            <td ${cellStyle} style="${profitColor}">${Math.round(netProfit).toLocaleString()}</td>
-            <td ${cellStyle} style="${profitPercentColor}">${profitPercent.toFixed(1)}%</td>
-            <td ${cellStyle} class="items-cell" style="width: 10vw; max-width: 10vw;">
-                ${order.items && Array.isArray(order.items) && order.items.length > 0
-                    ? `<div class="items-content" title="${escapeHtml(order.items.join(', '))}">${escapeHtml(order.items.join(', '))}</div>`
-                    : '-'}
-            </td>
-            <td ${cellStyle}>${orderDate}</td>
-        </tr>
-    `;
-    }).join('');
-    
-    // Add event listeners for delivery status buttons
-    setTimeout(() => {
-        const deliveryStatusButtons = document.querySelectorAll('.delivery-status-btn');
-        deliveryStatusButtons.forEach(button => {
-            button.addEventListener('click', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const orderId = button.getAttribute('data-order-id');
-                const courier = button.getAttribute('data-courier');
-                const trackingNumber = button.getAttribute('data-tracking');
-                if (orderId && window.fetchDeliveryStatus) {
-                    fetchDeliveryStatus(orderId, courier, trackingNumber);
-                } else {
-                    console.error('Missing orderId or fetchDeliveryStatus function', { orderId, fetchDeliveryStatus: window.fetchDeliveryStatus });
-                }
-            });
-        });
-        
-    }, 100);
-}
-
+// ============================================
 // Forms
+// ============================================
+
 function initForms() {
-    // Add Product Form
-    const productForm = document.getElementById('productForm');
-    if (productForm) {
-        productForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const productData = {
-                name: document.getElementById('productName').value,
-                quantity: parseInt(document.getElementById('productQuantity').value) || 0,
-                price: parseFloat(document.getElementById('productPrice').value) || 0,
-                cost_price: parseFloat(document.getElementById('productCostPrice').value) || null,
-                image_url: document.getElementById('productImageUrl').value || null
-            };
-
-            await createProduct(productData);
-        });
-    }
-
-    // Edit Product Form
-    const editForm = document.getElementById('editForm');
-    if (editForm) {
-        editForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-
-            const productId = document.getElementById('editProductId').value;
-            const productData = {
-                name: document.getElementById('editProductName').value,
-                quantity: parseInt(document.getElementById('editProductQuantity').value) || 0,
-                price: parseFloat(document.getElementById('editProductPrice').value) || 0,
-                cost_price: parseFloat(document.getElementById('editProductCostPrice').value) || null,
-                image_url: document.getElementById('editProductImageUrl').value || null
-            };
-
-            await updateProduct(productId, productData);
-        });
-    }
-
-
-
     // Sync Shopify Products Button
     const syncBtn = document.getElementById('syncShopifyBtn');
     if (syncBtn) {
@@ -846,51 +903,27 @@ function initForms() {
             await syncShopifyOrders();
         });
     }
-
-    // Edit Cost Prices Button
-    const editCostPricesBtn = document.getElementById('editCostPricesBtn');
-    if (editCostPricesBtn) {
-        editCostPricesBtn.addEventListener('click', () => {
-            if (isEditMode) {
-                saveCostPrices();
-            } else {
-                toggleEditMode();
-            }
-        });
-    }
 }
 
-function resetForm() {
-    document.getElementById('productForm').reset();
-}
-
+// ============================================
 // Modal
-function openEditModal(productId) {
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-
-    document.getElementById('editProductId').value = product.id;
-    document.getElementById('editProductName').value = product.name;
-    document.getElementById('editProductQuantity').value = product.quantity || 0;
-    document.getElementById('editProductPrice').value = product.price || 0;
-    document.getElementById('editProductCostPrice').value = product.cost_price || 0;
-    document.getElementById('editProductImageUrl').value = product.image_url || '';
-
-    document.getElementById('editModal').classList.add('active');
-}
+// ============================================
 
 function closeModal() {
     document.getElementById('editModal').classList.remove('active');
 }
 
 // Close modal on backdrop click
-document.getElementById('editModal').addEventListener('click', (e) => {
+document.getElementById('editModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'editModal') {
         closeModal();
     }
 });
 
+// ============================================
 // Toast
+// ============================================
+
 function showToast(message, type = 'info') {
     toast.textContent = message;
     toast.className = `toast ${type} show`;
@@ -900,7 +933,10 @@ function showToast(message, type = 'info') {
     }, 3000);
 }
 
+// ============================================
 // Utilities
+// ============================================
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -920,7 +956,10 @@ function debounce(func, wait) {
     };
 }
 
+// ============================================
 // Delivery Status Functions
+// ============================================
+
 async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     console.log('fetchDeliveryStatus called with:', { orderId, courier, trackingNumber });
     
@@ -1048,11 +1087,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 // Make functions globally accessible
-window.openEditModal = openEditModal;
 window.closeModal = closeModal;
-window.deleteProduct = deleteProduct;
-window.resetForm = resetForm;
 window.syncShopifyProducts = syncShopifyProducts;
 window.fetchDeliveryStatus = fetchDeliveryStatus;
 window.closeDeliveryStatusModal = closeDeliveryStatusModal;
-

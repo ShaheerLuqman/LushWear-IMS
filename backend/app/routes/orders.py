@@ -267,8 +267,14 @@ async def sync_shopify_orders():
                 return round(float(val), 2)
             return str(val).strip() if val else None
         
-        def has_changed(shopify_data, existing_data):
+        def has_changed(shopify_data, existing_data, skip_assigned_courier_fields=False):
+            """
+            skip_assigned_courier_fields: when True, do not compare courier, tracking_number,
+            total_amount, delivery_charge, tax_amount, cost_price, items (used when courier is assigned).
+            """
             fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price", "items"]
+            if skip_assigned_courier_fields:
+                fields_to_compare = ["order_status", "advance_amount"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
@@ -356,12 +362,37 @@ async def sync_shopify_orders():
             
             if order_number in existing_orders_map:
                 existing_order = existing_orders_map[order_number]
-                if has_changed(order_data, existing_order):
+                # Preserve advance_amount if it has been set to a non-zero value
+                try:
+                    existing_adv = float(existing_order.get("advance_amount") or 0)
+                except (TypeError, ValueError):
+                    existing_adv = 0
+                if existing_adv != 0:
+                    order_data["advance_amount"] = existing_order.get("advance_amount")
+
+                existing_courier = (existing_order.get("courier") or "").strip()
+                courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
+
+                if courier_is_assigned:
+                    # Keep existing values; do not overwrite from Shopify
+                    order_data["courier"] = existing_order.get("courier")
+                    order_data["tracking_number"] = existing_order.get("tracking_number")
+                    order_data["total_amount"] = existing_order.get("total_amount")
+                    order_data["delivery_charge"] = existing_order.get("delivery_charge")
+                    order_data["tax_amount"] = existing_order.get("tax_amount")
+                    order_data["cost_price"] = existing_order.get("cost_price")
+                    order_data["items"] = existing_order.get("items")
+                    skip_fields = True
+                else:
+                    skip_fields = False
+
+                if has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:
                     orders_to_skip.append(order_number)
             else:
+                # First-time create: sync all fields from Shopify
                 order_data["created_at"] = current_time
                 orders_to_insert.append(order_data)
         
