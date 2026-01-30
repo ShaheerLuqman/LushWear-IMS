@@ -185,12 +185,34 @@ async def sync_shopify_orders():
                 return fulfillment_status or "not_delivered"
         
         def extract_delivery_charges(order):
+            # Prefer: sum of shipping_lines where is_removed is not True (avoids double-counting
+            # when shipping is updated and old lines remain with is_removed=true)
+            if "shipping_lines" in order and order["shipping_lines"]:
+                total = 0.0
+                for line in order["shipping_lines"]:
+                    if line.get("is_removed"):
+                        continue
+                    amt = line.get("discounted_price") or line.get("price") or "0.00"
+                    total += float(amt)
+                if total > 0:
+                    return total
+            # Fallback: derive from current_* (shipping = total - subtotal - tax + discounts)
+            try:
+                ct = float(order.get("current_total_price") or 0)
+                cs = float(order.get("current_subtotal_price") or 0)
+                ctx = float(order.get("current_total_tax") or 0)
+                cdisc = float(order.get("current_total_discounts") or 0)
+                if ct > 0 or cs > 0:
+                    derived = ct - cs - ctx + cdisc
+                    if derived >= 0:
+                        return derived
+            except (TypeError, ValueError):
+                pass
+            # Last resort: total_shipping_price_set (may double-count if shipping was updated)
             if "total_shipping_price_set" in order and order["total_shipping_price_set"]:
                 shop_money = order["total_shipping_price_set"].get("shop_money", {})
                 if shop_money:
                     return float(shop_money.get("amount", "0.00"))
-            if "shipping_lines" in order and len(order["shipping_lines"]) > 0:
-                return float(order["shipping_lines"][0].get("price", "0.00"))
             return 0.0
         
         def extract_advance_amount(order):
@@ -204,6 +226,15 @@ async def sync_shopify_orders():
             return None
         
         def extract_tax_amount(order):
+            # Prefer current_* (reflects edits/refunds; avoids discrepancies when order is updated)
+            if "current_total_tax_set" in order and order["current_total_tax_set"]:
+                shop_money = order["current_total_tax_set"].get("shop_money", {})
+                if shop_money:
+                    return float(shop_money.get("amount", "0.00"))
+            try:
+                return float(order.get("current_total_tax") or 0)
+            except (TypeError, ValueError):
+                pass
             if "total_tax_set" in order and order["total_tax_set"]:
                 shop_money = order["total_tax_set"].get("shop_money", {})
                 if shop_money:
@@ -318,7 +349,8 @@ async def sync_shopify_orders():
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
-            total_amount = float(sp_order.get("total_price", 0))
+            # Use current_total_price (reflects edits/refunds; avoids double-counting when e.g. shipping is updated)
+            total_amount = float(sp_order.get("current_total_price") or sp_order.get("total_price") or 0)
             advance_amount = extract_advance_amount(sp_order) or 0.0
             delivery_charge = extract_delivery_charges(sp_order) or 0.0
             tax_amount = extract_tax_amount(sp_order) or 0.0

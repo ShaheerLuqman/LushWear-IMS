@@ -270,7 +270,8 @@ function initOrdersGrid() {
             field: 'courier',
             width: 100,
             filter: 'agTextColumnFilter',
-            filterParams: textFilterContains
+            filterParams: textFilterContains,
+            valueFormatter: (params) => getCourierDisplayName(params.data || {})
         },
         {
             headerName: 'Tracking #',
@@ -864,7 +865,7 @@ function renderRecentOrders() {
         return `
         <tr>
             <td><strong>${order.order_number || ''}</strong></td>
-            <td>${escapeHtml(order.courier || '-')}</td>
+            <td>${escapeHtml(getCourierDisplayName(order))}</td>
             <td>
                 <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; ${statusColor}">
                     ${escapeHtml(orderStatus)}
@@ -942,6 +943,17 @@ function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+}
+
+/** When courier is "Other" and tracking_number is not purely numeric, show tracking_number in the Courier column. */
+function getCourierDisplayName(order) {
+    if (!order) return '-';
+    const courier = (order.courier != null) ? String(order.courier).trim() : '';
+    const tracking = (order.tracking_number != null) ? String(order.tracking_number).trim() : '';
+    const isOther = courier.toLowerCase() === 'other';
+    const trackingIsNotNumeric = tracking !== '' && !/^\d+$/.test(tracking);
+    if (isOther && trackingIsNotNumeric) return tracking;
+    return courier || '-';
 }
 
 function debounce(func, wait) {

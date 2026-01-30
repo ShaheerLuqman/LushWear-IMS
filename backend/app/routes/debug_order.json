@@ -1,0 +1,524 @@
+{
+    "id": 7088968827184,
+    "admin_graphql_api_id": "gid://shopify/Order/7088968827184",
+    "app_id": 580111,
+    "browser_ip": "103.149.9.130",
+    "buyer_accepts_marketing": false,
+    "cancel_reason": null,
+    "cancelled_at": null,
+    "cart_token": "hWN7R6NIV5LGfnT8UObUch9P",
+    "checkout_id": 40450361491760,
+    "checkout_token": "2afce92f0e49377a163dca6224d737b8",
+    "client_details": {
+        "accept_language": "en-PK",
+        "browser_height": null,
+        "browser_ip": "103.149.9.130",
+        "browser_width": null,
+        "session_hash": null,
+        "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/22H124 Instagram 410.1.0.36.70 (iPhone11,6; iOS 18_7_2; en_GB; en-GB; scale=3.00; 1242x2688; IABMV/1; 849447290) Safari/604.1"
+    },
+    "closed_at": null,
+    "confirmation_number": "AM3NHI0A0",
+    "confirmed": true,
+    "created_at": "2026-01-10T11:19:00+05:00",
+    "currency": "PKR",
+    "current_subtotal_price": "2998.00",
+    "current_subtotal_price_set": {
+        "shop_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        }
+    },
+    "current_total_additional_fees_set": null,
+    "current_total_discounts": "0.00",
+    "current_total_discounts_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "current_total_duties_set": null,
+    "current_total_price": "3247.00",
+    "current_total_price_set": {
+        "shop_money": {
+            "amount": "3247.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "3247.00",
+            "currency_code": "PKR"
+        }
+    },
+    "current_total_tax": "0.00",
+    "current_total_tax_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "customer_locale": "en-PK",
+    "device_id": null,
+    "discount_codes": [],
+    "duties_included": false,
+    "estimated_taxes": false,
+    "financial_status": "paid",
+    "fulfillment_status": "fulfilled",
+    "landing_site": "/collections/silk-collection/products/serenique?utm_source=ig&utm_medium=social&utm_content=link_in_bio&fbclid=PAZXh0bgNhZW0CMTEAc3J0YwZhcHBfaWQPNTY3MDY3MzQzMzUyNDI3AAGnSBw7YMLrwsbNnnEXakLMM1RiNZZ0FocBT-psFlPlFPNW19nY1PbieZTKt7Y_aem_Dlr5uu_tIkzvy1pq9nELPQ",
+    "landing_site_ref": null,
+    "location_id": null,
+    "merchant_business_entity_id": "MTg5NDI2NDYwOTc2",
+    "merchant_of_record_app_id": null,
+    "name": "#4303",
+    "note": "Order has been shipped via PostEx with Tracking 22306960002454. ",
+    "note_attributes": [
+        {
+            "name": "hxs_courier_name",
+            "value": "PostEx"
+        },
+        {
+            "name": "hxs_courier_tracking",
+            "value": "22306960002454"
+        },
+        {
+            "name": "hxs_courier_url",
+            "value": "https://postex.pk/tracking?cn=22306960002454"
+        },
+        {
+            "name": "hxs_courier_label",
+            "value": "https://merchant.postex.pk/get-invoice?trackingNumbers=22306960002454"
+        }
+    ],
+    "number": 3303,
+    "order_number": 4303,
+    "original_total_additional_fees_set": null,
+    "original_total_duties_set": null,
+    "payment_gateway_names": [
+        "Bank Deposit"
+    ],
+    "po_number": null,
+    "presentment_currency": "PKR",
+    "processed_at": "2026-01-10T11:18:59+05:00",
+    "reference": null,
+    "referring_site": "https://l.instagram.com/",
+    "source_identifier": null,
+    "source_name": "web",
+    "source_url": null,
+    "subtotal_price": "2998.00",
+    "subtotal_price_set": {
+        "shop_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        }
+    },
+    "tags": "PostEx, ✅ Order Confirmed",
+    "tax_exempt": false,
+    "tax_lines": [],
+    "taxes_included": false,
+    "test": false,
+    "token": "0b6d1fc97cbd19da717c825e4ab6d3bd",
+    "total_cash_rounding_payment_adjustment_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_cash_rounding_refund_adjustment_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_discounts": "0.00",
+    "total_discounts_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_line_items_price": "2998.00",
+    "total_line_items_price_set": {
+        "shop_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "2998.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_outstanding": "0.00",
+    "total_price": "3496.00",
+    "total_price_set": {
+        "shop_money": {
+            "amount": "3496.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "3496.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_shipping_price_set": {
+        "shop_money": {
+            "amount": "498.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "498.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_tax": "0.00",
+    "total_tax_set": {
+        "shop_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        },
+        "presentment_money": {
+            "amount": "0.00",
+            "currency_code": "PKR"
+        }
+    },
+    "total_tip_received": "0.00",
+    "total_weight": 0,
+    "updated_at": "2026-01-21T15:50:50+05:00",
+    "user_id": null,
+    "billing_address": {
+        "province": null,
+        "country": "Pakistan",
+        "country_code": "PK",
+        "province_code": null
+    },
+    "customer": {
+        "id": 9498538770736,
+        "created_at": "2026-01-10T11:18:59+05:00",
+        "updated_at": "2026-01-10T14:07:10+05:00",
+        "state": "disabled",
+        "note": null,
+        "verified_email": true,
+        "multipass_identifier": null,
+        "tax_exempt": false,
+        "email_marketing_consent": null,
+        "sms_marketing_consent": {
+            "state": "not_subscribed",
+            "opt_in_level": "single_opt_in",
+            "consent_updated_at": null,
+            "consent_collected_from": "SHOPIFY"
+        },
+        "tags": "",
+        "currency": "PKR",
+        "tax_exemptions": [],
+        "admin_graphql_api_id": "gid://shopify/Customer/9498538770736",
+        "default_address": {
+            "id": 11317022818608,
+            "customer_id": 9498538770736,
+            "company": null,
+            "province": null,
+            "country": "Pakistan",
+            "province_code": null,
+            "country_code": "PK",
+            "country_name": "Pakistan",
+            "default": true
+        }
+    },
+    "discount_applications": [
+        {
+            "target_type": "line_item",
+            "type": "manual",
+            "value": "2998.0",
+            "value_type": "fixed_amount",
+            "allocation_method": "each",
+            "target_selection": "explicit",
+            "title": "",
+            "description": ""
+        }
+    ],
+    "fulfillments": [
+        {
+            "id": 6235366359344,
+            "admin_graphql_api_id": "gid://shopify/Fulfillment/6235366359344",
+            "created_at": "2026-01-10T18:00:57+05:00",
+            "location_id": 100809048368,
+            "name": "#4303.1",
+            "order_id": 7088968827184,
+            "origin_address": {},
+            "receipt": {},
+            "service": "manual",
+            "shipment_status": null,
+            "status": "success",
+            "tracking_company": "PostEx",
+            "tracking_number": "22306960002454",
+            "tracking_numbers": [
+                "22306960002454"
+            ],
+            "tracking_url": "https://postex.pk/tracking?cn=22306960002454",
+            "tracking_urls": [
+                "https://postex.pk/tracking?cn=22306960002454"
+            ],
+            "updated_at": "2026-01-10T18:00:57+05:00",
+            "line_items": [
+                {
+                    "id": 17327500591408,
+                    "admin_graphql_api_id": "gid://shopify/LineItem/17327500591408",
+                    "attributed_staffs": [],
+                    "current_quantity": 1,
+                    "fulfillable_quantity": 0,
+                    "fulfillment_service": "manual",
+                    "fulfillment_status": "fulfilled",
+                    "gift_card": false,
+                    "grams": 0,
+                    "name": "Serenique - XL",
+                    "price": "2998.00",
+                    "price_set": {
+                        "shop_money": {
+                            "amount": "2998.00",
+                            "currency_code": "PKR"
+                        },
+                        "presentment_money": {
+                            "amount": "2998.00",
+                            "currency_code": "PKR"
+                        }
+                    },
+                    "product_exists": true,
+                    "product_id": 9974943842608,
+                    "properties": [],
+                    "quantity": 1,
+                    "requires_shipping": true,
+                    "sku": null,
+                    "taxable": false,
+                    "title": "Serenique",
+                    "total_discount": "0.00",
+                    "total_discount_set": {
+                        "shop_money": {
+                            "amount": "0.00",
+                            "currency_code": "PKR"
+                        },
+                        "presentment_money": {
+                            "amount": "0.00",
+                            "currency_code": "PKR"
+                        }
+                    },
+                    "variant_id": 50189882032432,
+                    "variant_inventory_management": "shopify",
+                    "variant_title": "XL",
+                    "vendor": "Lush Wear",
+                    "tax_lines": [],
+                    "duties": [],
+                    "discount_allocations": [
+                        {
+                            "amount": "0.00",
+                            "amount_set": {
+                                "shop_money": {
+                                    "amount": "0.00",
+                                    "currency_code": "PKR"
+                                },
+                                "presentment_money": {
+                                    "amount": "0.00",
+                                    "currency_code": "PKR"
+                                }
+                            },
+                            "discount_application_index": 0
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "line_items": [
+        {
+            "id": 17327500591408,
+            "admin_graphql_api_id": "gid://shopify/LineItem/17327500591408",
+            "attributed_staffs": [],
+            "current_quantity": 1,
+            "fulfillable_quantity": 0,
+            "fulfillment_service": "manual",
+            "fulfillment_status": "fulfilled",
+            "gift_card": false,
+            "grams": 0,
+            "name": "Serenique - XL",
+            "price": "2998.00",
+            "price_set": {
+                "shop_money": {
+                    "amount": "2998.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "2998.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "product_exists": true,
+            "product_id": 9974943842608,
+            "properties": [],
+            "quantity": 1,
+            "requires_shipping": true,
+            "sku": null,
+            "taxable": false,
+            "title": "Serenique",
+            "total_discount": "0.00",
+            "total_discount_set": {
+                "shop_money": {
+                    "amount": "0.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "0.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "variant_id": 50189882032432,
+            "variant_inventory_management": "shopify",
+            "variant_title": "XL",
+            "vendor": "Lush Wear",
+            "tax_lines": [],
+            "duties": [],
+            "discount_allocations": [
+                {
+                    "amount": "0.00",
+                    "amount_set": {
+                        "shop_money": {
+                            "amount": "0.00",
+                            "currency_code": "PKR"
+                        },
+                        "presentment_money": {
+                            "amount": "0.00",
+                            "currency_code": "PKR"
+                        }
+                    },
+                    "discount_application_index": 0
+                }
+            ]
+        }
+    ],
+    "payment_terms": null,
+    "refunds": [
+        {
+            "id": 1047412932912,
+            "admin_graphql_api_id": "gid://shopify/Refund/1047412932912",
+            "created_at": "2026-01-10T13:04:25+05:00",
+            "note": null,
+            "order_id": 7088968827184,
+            "processed_at": "2026-01-10T13:04:25+05:00",
+            "restock": false,
+            "total_duties_set": {
+                "shop_money": {
+                    "amount": "0.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "0.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "user_id": 113381769520,
+            "order_adjustments": [],
+            "transactions": [],
+            "refund_line_items": [],
+            "duties": []
+        }
+    ],
+    "shipping_address": {
+        "province": null,
+        "country": "Pakistan",
+        "country_code": "PK",
+        "province_code": null
+    },
+    "shipping_lines": [
+        {
+            "id": 5676518900016,
+            "carrier_identifier": null,
+            "code": "Standard",
+            "discounted_price": "249.00",
+            "discounted_price_set": {
+                "shop_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "is_removed": true,
+            "phone": null,
+            "price": "249.00",
+            "price_set": {
+                "shop_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "requested_fulfillment_service_id": null,
+            "source": "shopify",
+            "title": "Standard",
+            "tax_lines": [],
+            "discount_allocations": []
+        },
+        {
+            "id": 5676650234160,
+            "carrier_identifier": null,
+            "code": "custom",
+            "discounted_price": "249.00",
+            "discounted_price_set": {
+                "shop_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "is_removed": false,
+            "phone": null,
+            "price": "249.00",
+            "price_set": {
+                "shop_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                },
+                "presentment_money": {
+                    "amount": "249.00",
+                    "currency_code": "PKR"
+                }
+            },
+            "requested_fulfillment_service_id": null,
+            "source": null,
+            "title": "Standard",
+            "tax_lines": [],
+            "discount_allocations": []
+        }
+    ]
+}
