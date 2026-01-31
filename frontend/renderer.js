@@ -328,7 +328,7 @@ function initOrdersGrid() {
             valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
         },
         {
-            headerName: 'Advance',
+            headerName: 'Received',
             field: 'advance_amount',
             width: 100,
             filter: 'agTextColumnFilter',
@@ -432,19 +432,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: true,
-            cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
-            valueSetter: (params) => {
-                const newValue = parseFloat(params.newValue);
-                if (!isNaN(newValue) && newValue >= 0) {
-                    params.data.cost_price = newValue;
-                    saveOrderField(params.data.id, 'cost_price', newValue);
-                    params.api.refreshCells({ rowNodes: [params.node], force: true });
-                    return true;
-                }
-                return false;
-            }
+            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
         },
         {
             headerName: 'Net Profit',
@@ -561,6 +549,64 @@ function initOrdersGrid() {
                     return params.value.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
                 }
                 return '';
+            }
+        },
+        {
+            headerName: 'Final Status',
+            field: 'final_status',
+            width: 110,
+            filter: 'agSetColumnFilter',
+            floatingFilter: true,
+            filterParams: {
+                values: ['OK', 'Warning', 'Alert', 'None']
+            },
+            sortable: true,
+            valueGetter: (params) => {
+                const order = params.data;
+                const status = (order.order_status || '').toLowerCase();
+                const pieceWith = (order.piece_with || '').trim();
+                
+                // Calculate receivable amount (same logic as Receivable column)
+                const total = parseFloat(order.total_amount) || 0;
+                const advance = parseFloat(order.advance_amount) || 0;
+                const delivery = parseFloat(order.delivery_charge) || 0;
+                const tax = parseFloat(order.tax_amount) || 0;
+                let receivable = 0;
+                
+                if (status === 'returned') {
+                    receivable = -delivery;
+                } else {
+                    receivable = total - (advance + delivery + tax);
+                }
+                
+                // Apply status rules
+                if (status === 'fulfilled') {
+                    if (receivable === 0) {
+                        return 'OK';
+                    } else {
+                        return 'Warning';
+                    }
+                } else if (status === 'returned') {
+                    if (pieceWith === 'Warehouse') {
+                        return 'OK';
+                    } else {
+                        return 'Alert';
+                    }
+                }
+                
+                // Default: no indicator for other cases
+                return 'None';
+            },
+            cellRenderer: (params) => {
+                const value = params.value || 'None';
+                if (value === 'OK') {
+                    return '<span style="font-size: 18px;">🟢</span>';
+                } else if (value === 'Warning') {
+                    return '<span style="font-size: 18px;">🟡</span>';
+                } else if (value === 'Alert') {
+                    return '<span style="font-size: 18px;">🔴</span>';
+                }
+                return '<span style="color: var(--text-muted);">-</span>';
             }
         }
     ];
