@@ -159,15 +159,32 @@ async def sync_shopify_orders():
                         return tracking_number
             return None
         
+        def _parse_iso(s):
+            if not s:
+                return None
+            if isinstance(s, datetime):
+                return s
+            s = str(s).strip().replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(s)
+            except (ValueError, TypeError):
+                return None
+
         def extract_order_status(order):
-            if order.get("cancelled_at") is not None:
+            cancelled_at_raw = order.get("cancelled_at")
+            fulfillment_dt = None
+            for f in order.get("fulfillments") or []:
+                ct = f.get("created_at")
+                if ct:
+                    parsed = _parse_iso(ct)
+                    if parsed and (fulfillment_dt is None or parsed > fulfillment_dt):
+                        fulfillment_dt = parsed
+            if cancelled_at_raw and fulfillment_dt is not None:
+                cancelled_at = _parse_iso(cancelled_at_raw)
+                if cancelled_at and cancelled_at > fulfillment_dt:
+                    return "returned"
+            if cancelled_at_raw is not None:
                 return "cancelled"
-            if "refunds" in order and order["refunds"]:
-                for refund in order["refunds"]:
-                    if "refund_line_items" in refund and refund["refund_line_items"]:
-                        for item in refund["refund_line_items"]:
-                            if item.get("quantity", 0) > 0:
-                                return "returned"
             fulfillment_status = order.get("fulfillment_status")
             if fulfillment_status == "fulfilled":
                 return "fulfilled"
@@ -305,7 +322,7 @@ async def sync_shopify_orders():
             """
             fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price", "items"]
             if skip_assigned_courier_fields:
-                fields_to_compare = ["order_status", "advance_amount"]
+                fields_to_compare = ["order_status", "piece_with", "advance_amount"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
@@ -382,6 +399,7 @@ async def sync_shopify_orders():
                 "courier": courier,
                 "tracking_number": tracking_number,
                 "order_status": order_status,
+                "piece_with": _piece_with_from_status(order_status),
                 "total_amount": total_amount,
                 "advance_amount": advance_amount,
                 "delivery_charge": delivery_charge,
@@ -491,12 +509,22 @@ async def get_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _piece_with_from_status(status: str) -> str:
+    """Derive piece_with from order_status: fulfilled -> Customer, returned -> Rider, else Warehouse."""
+    if status == "fulfilled":
+        return "Customer"
+    if status == "returned":
+        return "Rider"
+    return "Warehouse"
+
+
 @router.post("/", response_model=dict)
 async def create_order(order: OrderCreate):
     """Create a new order"""
     try:
         supabase = get_supabase()
         order_data = order.model_dump()
+        order_data["piece_with"] = _piece_with_from_status(order_data.get("order_status", "") or "")
         order_data["created_at"] = datetime.utcnow().isoformat()
         order_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").insert(order_data).execute()
@@ -510,6 +538,8 @@ async def update_order(order_id: str, order: OrderUpdate):
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in order.model_dump().items() if v is not None}
+        if "order_status" in update_data:
+            update_data["piece_with"] = _piece_with_from_status(update_data["order_status"])
         update_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:

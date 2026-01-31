@@ -50,11 +50,11 @@
                 <div class="logo-icon">📊</div>
             </div>
             <nav class="nav-menu">
-                <button class="nav-item active" data-view="dashboard" title="Dashboard">
+                <button class="nav-item" data-view="dashboard" title="Dashboard">
                     <span class="nav-icon">🏠</span>
                     <span class="nav-tooltip">Dashboard</span>
                 </button>
-                <button class="nav-item" data-view="orders" title="Orders">
+                <button class="nav-item active" data-view="orders" title="Orders">
                     <span class="nav-icon">📦</span>
                     <span class="nav-tooltip">Orders</span>
                 </button>
@@ -70,8 +70,8 @@
             <!-- Header -->
             <header class="header">
                 <div class="header-title">
-                    <h1 id="viewTitle">Dashboard</h1>
-                    <p class="header-subtitle" id="viewSubtitle">Overview of your inventory</p>
+                    <h1 id="viewTitle">Orders</h1>
+                    <p class="header-subtitle" id="viewSubtitle">View and manage orders</p>
                 </div>
                 <div class="header-actions">
                     <button id="editCostPricesBtn" class="btn btn-primary" style="display: none;">
@@ -92,7 +92,7 @@
             <!-- Content Area -->
             <div class="content-area">
                 <!-- Dashboard View -->
-                <div id="dashboardView" class="view active">
+                <div id="dashboardView" class="view">
                     <div class="stats-grid">
                         <div class="stat-card">
                             <div class="stat-icon">◫</div>
@@ -123,34 +123,10 @@
                             </div>
                         </div>
                     </div>
-
-                    <div class="section">
-                        <h2 class="section-title">Recent Orders</h2>
-                        <div class="table-container">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>Order #</th>
-                                        <th>Courier</th>
-                                        <th>Order Status</th>
-                                        <th>Total Amount</th>
-                                        <th>CoD</th>
-                                        <th>Items</th>
-                                        <th>Order Date</th>
-                                    </tr>
-                                </thead>
-                                <tbody id="recentOrdersTable">
-                                    <tr>
-                                        <td colspan="7" class="empty-state">Loading orders...</td>
-                                    </tr>
-                                </tbody>
-                            </table>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Orders View -->
-                <div id="ordersView" class="view">
+                <div id="ordersView" class="view active">
                     <div id="ordersGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 

@@ -4,7 +4,7 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 // State
 let products = [];
 let orders = [];
-let currentView = 'dashboard';
+let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
 
@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     
     // Only show app when both are loaded
     if (productsLoaded && ordersLoaded) {
-        renderRecentOrders();
+        switchView('orders');
         
         // Hide loading screen
         if (loadingScreen) {
@@ -73,6 +73,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                 appContainer.style.opacity = '1';
             }, 10);
         }
+
+        // Auto-trigger sync from Shopify for both products and orders on startup
+        syncShopifyProducts();
+        syncShopifyOrders();
     }
 
     // Initialize sync button visibility
@@ -482,6 +486,38 @@ function initOrdersGrid() {
             cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
         },
         {
+            headerName: 'Piece With',
+            field: 'piece_with',
+            width: 120,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            cellEditor: 'agSelectCellEditor',
+            cellEditorParams: {
+                values: ['Customer', 'Rider', 'Warehouse']
+            },
+            valueFormatter: (params) => params.value || '-',
+            cellRenderer: (params) => {
+                const v = (params.value || '').trim();
+                if (!v) return '<span style="color: var(--text-muted);">-</span>';
+                let cssClass = 'grid-status-pending';
+                if (v === 'Customer') cssClass = 'grid-status-fulfilled';
+                else if (v === 'Rider') cssClass = 'grid-status-returned';
+                return `<span class="grid-status-badge ${cssClass}">${escapeHtml(v)}</span>`;
+            },
+            valueSetter: (params) => {
+                const newValue = (params.newValue || '').trim();
+                if (['Customer', 'Rider', 'Warehouse'].includes(newValue)) {
+                    params.data.piece_with = newValue;
+                    saveOrderField(params.data.id, 'piece_with', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
+            }
+        },
+        {
             headerName: 'Items',
             field: 'items',
             flex: 1,
@@ -718,7 +754,6 @@ async function loadOrders() {
         if (!response.ok) throw new Error('Failed to fetch orders');
 
         orders = await response.json();
-        renderRecentOrders();
         
         // Update AG Grid
         if (ordersGridApi) {
@@ -729,7 +764,6 @@ async function loadOrders() {
         showToast('Failed to load orders', 'error');
         if (error.message.includes('relation "orders" does not exist')) {
             orders = getSampleOrders();
-            renderRecentOrders();
             if (ordersGridApi) {
                 ordersGridApi.setGridOption('rowData', orders);
             }
@@ -739,11 +773,11 @@ async function loadOrders() {
 
 function getSampleOrders() {
     return [
-        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
+        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', piece_with: 'Warehouse', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', piece_with: 'Rider', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
     ];
 }
 
@@ -833,55 +867,6 @@ function updateDashboard() {
     document.getElementById('totalStock').textContent = totalStock.toLocaleString();
     document.getElementById('lowStock').textContent = lowStock;
     document.getElementById('totalValue').textContent = `Rs ${Math.round(totalValue).toLocaleString()}`;
-}
-
-function renderRecentOrders() {
-    const tbody = document.getElementById('recentOrdersTable');
-    const recentOrders = orders.slice(0, 10);
-
-    if (recentOrders.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No orders found.</td></tr>';
-        return;
-    }
-
-    tbody.innerHTML = recentOrders.map(order => {
-        const orderStatus = order.order_status || '';
-        const orderDate = order.order_receiving_date 
-            ? new Date(order.order_receiving_date).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-            : (order.created_at 
-                ? new Date(order.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })
-                : '');
-        
-        const statusColor = orderStatus === 'returned' || orderStatus === 'cancelled' 
-            ? 'background: rgba(196, 92, 92, 0.2); color: var(--danger);'
-            : orderStatus === 'fulfilled'
-            ? 'background: rgba(92, 196, 92, 0.2); color: #4ade80;'
-            : 'background: rgba(139, 92, 246, 0.2); color: var(--accent-primary);';
-        
-        const totalAmount = parseFloat(order.total_amount) || 0;
-        const advanceAmount = parseFloat(order.advance_amount) || 0;
-        const cod = totalAmount - advanceAmount;
-
-        return `
-        <tr>
-            <td><strong>${order.order_number || ''}</strong></td>
-            <td>${escapeHtml(getCourierDisplayName(order))}</td>
-            <td>
-                <span style="padding: 4px 8px; border-radius: 4px; font-size: 12px; font-weight: 500; ${statusColor}">
-                    ${escapeHtml(orderStatus)}
-                </span>
-            </td>
-            <td>${order.total_amount ? Math.round(order.total_amount).toLocaleString() : '0'}</td>
-            <td>${Math.round(cod).toLocaleString()}</td>
-            <td class="items-cell" style="width: 10vw; max-width: 10vw;" title="${order.items && Array.isArray(order.items) && order.items.length > 0 ? escapeHtml(order.items.join(', ')) : ''}">
-                ${order.items && Array.isArray(order.items) && order.items.length > 0
-                    ? `<div class="items-content">${escapeHtml(order.items.slice(0, 3).join(', ') + (order.items.length > 3 ? '...' : ''))}</div>`
-                    : '-'}
-            </td>
-            <td>${orderDate}</td>
-        </tr>
-    `;
-    }).join('');
 }
 
 // ============================================

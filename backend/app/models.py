@@ -70,6 +70,7 @@ class OrderBase(BaseModel):
     courier: str
     tracking_number: Optional[str] = None
     order_status: str
+    piece_with: str = "Warehouse"  # Customer | Rider | Warehouse
     delivery_status: Optional[Dict[str, Any]] = None
     total_amount: float
     advance_amount: float = 0.0
@@ -87,6 +88,7 @@ class OrderUpdate(BaseModel):
     courier: Optional[str] = None
     tracking_number: Optional[str] = None
     order_status: Optional[str] = None
+    piece_with: Optional[str] = None
     delivery_status: Optional[Dict[str, Any]] = None
     total_amount: Optional[float] = None
     advance_amount: Optional[float] = None
