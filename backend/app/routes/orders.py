@@ -3,7 +3,7 @@ from typing import List, Dict, Any
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
-from datetime import datetime
+from datetime import datetime, timedelta
 import httpx
 import re
 import csv
@@ -77,13 +77,15 @@ async def sync_shopify_orders():
         all_orders = []
         page_info = None
         page_count = 0
-        
+        # Only sync orders from the last 30 days
+        created_since = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+
         async with httpx.AsyncClient(timeout=60.0) as client:
             while True:
                 if page_info:
                     api_url = f"{base_url}?page_info={page_info}"
                 else:
-                    api_url = f"{base_url}?status=any&limit=250"
+                    api_url = f"{base_url}?status=any&limit=250&created_at_min={created_since}"
                 
                 response = await client.get(api_url, headers=headers)
                 if response.status_code == 404:
