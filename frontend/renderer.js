@@ -74,21 +74,9 @@ document.addEventListener('DOMContentLoaded', async () => {
             }, 10);
         }
 
-        // Auto-trigger sync from Shopify for both products and orders on startup
         syncShopifyProducts();
         syncShopifyOrders();
     }
-
-    // Initialize sync button visibility
-    const syncProductsBtn = document.getElementById('syncShopifyBtn');
-    const syncOrdersBtn = document.getElementById('syncOrdersBtn');
-    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
-    if (syncProductsBtn && syncOrdersBtn) {
-        syncProductsBtn.style.display = 'none';
-        syncOrdersBtn.style.display = 'none';
-    }
-    if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
-    
 });
 
 // ============================================
@@ -304,20 +292,36 @@ function initOrdersGrid() {
         },
         {
             headerName: 'Delivery',
-            field: 'id',
-            width: 120,
+            field: 'delivery_status',
+            width: 240,
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
                 const order = params.data;
                 const courier = order.courier || '';
                 const hasCourier = courier && courier.trim() !== '' && courier.trim().toLowerCase() !== 'unassigned';
-                if (hasCourier) {
-                    return `<button class="grid-delivery-btn" onclick="fetchDeliveryStatus('${order.id}', '${escapeHtml(courier)}', '${escapeHtml(order.tracking_number || '')}')">
-                        <span>Fetch</span><span style="font-size: 10px;">🔄</span>
-                    </button>`;
+                if (!hasCourier) {
+                    return '<span style="color: var(--text-muted);">-</span>';
                 }
-                return '<span style="color: var(--text-muted);">-</span>';
+                const lastStatus = order.delivery_status;
+                const hasStoredStatus = lastStatus && (lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history.length > 0));
+                if (hasStoredStatus) {
+                    const statusText = ((lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history[0] && lastStatus.status_history[0].status)) || '').trim();
+                    const displayStatus = statusText || '—';
+                    const fetchedAt = lastStatus.fetched_at ? new Date(lastStatus.fetched_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '';
+                    const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                    const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                    return `<div class="delivery-cell-with-status" title="${escapeHtml(statusText)}">
+                        <button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>
+                        <span class="delivery-status-preview">${escapeHtml(displayStatus)}</span>
+                        ${fetchedAt ? `<span class="delivery-fetched-at">${escapeHtml(fetchedAt)}</span>` : ''}
+                    </div>`;
+                }
+                const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                return `<button class="grid-delivery-btn" onclick="fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')">
+                    <span>Fetch</span><span style="font-size: 10px;">🔄</span>
+                </button>`;
             }
         },
         {
@@ -1080,8 +1084,9 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
     
     try {
-        console.log('Making request to:', `${API_BASE}/orders/${orderId}/delivery-status`);
-        const response = await fetch(`${API_BASE}/orders/${orderId}/delivery-status`, {
+        const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
+        console.log('Making request to:', url);
+        const response = await fetch(url, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -1089,21 +1094,32 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         console.log('Response status:', response.status);
         
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to fetch delivery status');
+            const error = await response.json().catch(() => ({}));
+            const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
+            throw new Error(detail);
         }
         
         const data = await response.json();
         console.log('Received data:', data);
-        displayDeliveryStatus(data);
+        displayDeliveryStatus(data, orderId);
+        // Update order in grid so Delivery column shows last status + Refresh
+        if (ordersGridApi) {
+            ordersGridApi.forEachNode(node => {
+                if (node.data && node.data.id === orderId) {
+                    node.setData({ ...node.data, delivery_status: data });
+                }
+            });
+        }
     } catch (error) {
         console.error('Error fetching delivery status:', error);
         content.innerHTML = `<div class="error-message">Error: ${escapeHtml(error.message)}</div>`;
     }
 }
 
-function displayDeliveryStatus(data) {
+function displayDeliveryStatus(data, orderId) {
     const content = document.getElementById('deliveryStatusContent');
+    const courierSafe = (data.courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    const trackingSafe = (data.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
     
     let html = `
         <div class="delivery-status-info">
@@ -1148,6 +1164,7 @@ function displayDeliveryStatus(data) {
     }
     
     html += '</div>';
+    html += `<div class="delivery-status-modal-actions"><button type="button" class="btn btn-primary delivery-status-btn" onclick="fetchDeliveryStatus('${orderId}', '${courierSafe}', '${trackingSafe}')">Refresh status</button></div>`;
     content.innerHTML = html;
 }
 

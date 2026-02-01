@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from typing import List, Dict, Any
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
@@ -393,6 +393,8 @@ async def sync_shopify_orders():
                     order_data["advance_amount"] = existing_order.get("advance_amount")
                 # Preserve delivery_charge (filled manually, not from Shopify)
                 order_data["delivery_charge"] = existing_order.get("delivery_charge", 0)
+                # Preserve last fetched delivery status (from courier tracking)
+                order_data["delivery_status"] = existing_order.get("delivery_status")
 
                 existing_courier = (existing_order.get("courier") or "").strip()
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
@@ -624,16 +626,17 @@ async def update_order(order_id: str, order: OrderUpdate):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{order_id}/delivery-status")
-async def get_delivery_status(order_id: str):
-    """Fetch delivery status from courier API (does not store in database)"""
+async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status")):
+    """Fetch delivery status from courier API. Optionally store in order.delivery_status when save=true."""
     try:
         supabase = get_supabase()
-        order_response = supabase.table("orders").select("*").eq("id", order_id).single().execute()
+        # Use limit(1) instead of single() so "not found" returns 404, not 500
+        order_response = supabase.table("orders").select("*").eq("id", order_id).limit(1).execute()
         
-        if not order_response.data:
+        if not order_response.data or len(order_response.data) == 0:
             raise HTTPException(status_code=404, detail="Order not found")
         
-        order = order_response.data
+        order = order_response.data[0]
         courier = order.get("courier", "").strip()
         tracking_number = order.get("tracking_number", "").strip()
         
@@ -679,60 +682,91 @@ async def get_delivery_status(order_id: str):
                 response = await client.get(api_url)
                 response.raise_for_status()
                 html_content = response.text
-                
-                soup = BeautifulSoup(html_content, 'html.parser')
-                
-                recipient_name = ""
-                recipient_contact = ""
-                tracking_id = tracking_number
-                
-                detail_items = soup.find_all("div", class_="detail-item")
-                for item in detail_items:
-                    strong = item.find("strong")
-                    span = item.find("span")
-                    if strong and span:
-                        label = strong.get_text(strip=True)
-                        value = span.get_text(strip=True)
-                        if "Receipient Name" in label or "Recipient Name" in label:
-                            recipient_name = value
-                        elif "Receipient Contact" in label or "Recipient Contact" in label:
-                            recipient_contact = value
-                        elif "Tracking ID" in label:
-                            tracking_id = value
-                
-                status_history = []
-                timeline_items = soup.find_all("div", class_="timeline-item")
-                for item in timeline_items:
-                    date_elem = item.find("div", class_="timeline-date")
-                    status_elem = item.find("div", class_="status-text")
-                    if date_elem and status_elem:
-                        status_history.append({
-                            "status": status_elem.get_text(strip=True),
-                            "datetime": date_elem.get_text(strip=True),
-                            "is_active": "active" in item.get("class", [])
-                        })
-                
-                delivery_status_data = {
-                    "courier": "SCS",
-                    "tracking_number": tracking_id,
-                    "recipient_name": recipient_name,
-                    "recipient_contact": recipient_contact,
-                    "status_history": status_history,
-                    "latest_status": status_history[0].get("status", "") if status_history else "",
-                    "fetched_at": datetime.utcnow().isoformat()
-                }
+
+                try:
+                    soup = BeautifulSoup(html_content, 'html.parser')
+
+                    recipient_name = ""
+                    recipient_contact = ""
+                    tracking_id = tracking_number
+
+                    def _safe_text(elem, default=""):
+                        if elem is None or not hasattr(elem, "get_text"):
+                            return default
+                        try:
+                            return elem.get_text(strip=True)
+                        except Exception:
+                            return default
+
+                    detail_items = soup.find_all("div", class_="detail-item")
+                    for item in detail_items:
+                        strong = item.find("strong")
+                        span = item.find("span")
+                        if strong and span:
+                            label = _safe_text(strong)
+                            value = _safe_text(span)
+                            if "Receipient Name" in label or "Recipient Name" in label:
+                                recipient_name = value
+                            elif "Receipient Contact" in label or "Recipient Contact" in label:
+                                recipient_contact = value
+                            elif "Tracking ID" in label:
+                                tracking_id = value
+
+                    status_history = []
+                    timeline_items = soup.find_all("div", class_="timeline-item")
+                    for item in timeline_items:
+                        date_elem = item.find("div", class_="timeline-date")
+                        status_elem = item.find("div", class_="status-text")
+                        if date_elem and status_elem:
+                            classes = getattr(item, "get", lambda k, d=None: d)("class", None) or []
+                            if not isinstance(classes, list):
+                                classes = [classes] if classes else []
+                            is_active = "active" in classes
+                            status_history.append({
+                                "status": _safe_text(status_elem),
+                                "datetime": _safe_text(date_elem),
+                                "is_active": is_active
+                            })
+
+                    delivery_status_data = {
+                        "courier": "SCS",
+                        "tracking_number": tracking_id,
+                        "recipient_name": recipient_name,
+                        "recipient_contact": recipient_contact,
+                        "status_history": status_history,
+                        "latest_status": status_history[0].get("status", "") if status_history else "",
+                        "fetched_at": datetime.utcnow().isoformat()
+                    }
+                except HTTPException:
+                    raise
+                except Exception as e:
+                    raise HTTPException(
+                        status_code=500,
+                        detail=f"SCS delivery status error: {type(e).__name__}: {str(e)}"
+                    )
         else:
             raise HTTPException(status_code=400, detail=f"Courier '{courier}' not supported for delivery status tracking")
         
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
-        
+
+        if save:
+            supabase.table("orders").update({
+                "delivery_status": delivery_status_data,
+                "updated_at": datetime.utcnow().isoformat()
+            }).eq("id", order_id).execute()
+
         return delivery_status_data
         
     except httpx.HTTPStatusError as e:
         raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch delivery status: {e.response.text}")
     except httpx.RequestError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to courier API: {str(e)}")
+        err_msg = str(e) or getattr(e, "message", "") or type(e).__name__
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not reach the courier tracking site ({type(e).__name__}: {err_msg}). "
+                   "Check that this server can access the internet and that the courier site is not blocked."
+        )
     except HTTPException:
         raise
     except Exception as e:

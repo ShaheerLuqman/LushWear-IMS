@@ -1202,21 +1202,25 @@ body {
 .ag-theme-alpine .ag-icon-first::before {
     content: "⏮";
     font-family: inherit;
+    font-size: 14px;
 }
 
 .ag-theme-alpine .ag-icon-previous::before {
     content: "◀";
     font-family: inherit;
+    font-size: 14px;
 }
 
 .ag-theme-alpine .ag-icon-next::before {
     content: "▶";
     font-family: inherit;
+    font-size: 14px;
 }
 
 .ag-theme-alpine .ag-icon-last::before {
     content: "⏭";
     font-family: inherit;
+    font-size: 14px;
 }
 
 .ag-theme-alpine .ag-icon-checkbox-checked::before {
@@ -1447,5 +1451,59 @@ body {
 .grid-delivery-btn:hover {
     background: rgba(139, 92, 246, 0.2);
     transform: scale(1.02);
+}
+
+.delivery-cell-with-status {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    min-height: 0;
+    height: 100%;
+    overflow: hidden;
+}
+
+.delivery-cell-with-status .delivery-status-preview {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text-primary);
+    font-weight: 500;
+}
+
+.delivery-cell-with-status .delivery-fetched-at {
+    flex-shrink: 0;
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.delivery-cell-with-status .grid-delivery-refresh-btn {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 12px;
+    line-height: 1;
+    border-radius: 4px;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+    cursor: pointer;
+    background: rgba(59, 130, 246, 0.2);
+    color: #2563eb;
+}
+
+.delivery-cell-with-status .grid-delivery-refresh-btn:hover {
+    background: rgba(59, 130, 246, 0.35);
+}
+
+.delivery-status-modal-actions {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
 }
 
