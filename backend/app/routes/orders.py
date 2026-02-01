@@ -13,11 +13,38 @@ from bs4 import BeautifulSoup
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
+def _period_start_end(month: int, year: int):
+    """Return (start_iso, end_iso) for period: month's 22 00:00 to next month's 21 23:59:59."""
+    from datetime import datetime as dt
+    start = dt(year, month, 22, 0, 0, 0)
+    next_month = month % 12 + 1
+    next_year = year if month != 12 else year + 1
+    end = dt(next_year, next_month, 21, 23, 59, 59)
+    return start.isoformat(), end.isoformat()
+
+
 @router.get("/", response_model=List[dict])
-async def get_all_orders():
-    """Get all orders"""
+async def get_all_orders(
+    month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
+    year: int = Query(None, ge=2000, le=2100, description="Filter by period year.")
+):
+    """Get all orders, optionally filtered by month period (month's 22 to next month's 21)."""
     try:
         supabase = get_supabase()
+        if month is not None and year is not None:
+            start_iso, end_iso = _period_start_end(month, year)
+            # Orders with order_receiving_date in range
+            r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lte("order_receiving_date", end_iso).order("order_number", desc=True).execute()
+            # Orders with null order_receiving_date but created_at in range
+            r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lte("created_at", end_iso).order("order_number", desc=True).execute()
+            seen_ids = {o["id"] for o in r1.data}
+            merged = list(r1.data)
+            for o in r2.data:
+                if o["id"] not in seen_ids:
+                    merged.append(o)
+                    seen_ids.add(o["id"])
+            merged.sort(key=lambda x: (x.get("order_number") or 0), reverse=True)
+            return merged
         response = supabase.table("orders").select("*").order("order_number", desc=True).execute()
         return response.data
     except Exception as e:

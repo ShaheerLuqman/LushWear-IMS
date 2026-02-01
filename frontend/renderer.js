@@ -7,6 +7,9 @@ let orders = [];
 let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
+// Month-based pagination: period is month's 22 to next month's 21
+let ordersPeriodMonth = null;
+let ordersPeriodYear = null;
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
@@ -31,6 +34,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     initNavigation();
+    initOrdersMonthNav();
     initForms();
     initGrids();
     
@@ -634,9 +638,7 @@ function initOrdersGrid() {
             floatingFilterComponentParams: { suppressFilterButton: true }
         },
         animateRows: true,
-        pagination: true,
-        paginationPageSize: 50,
-        paginationPageSizeSelector: [25, 50, 100, 200],
+        pagination: false,
         domLayout: 'normal',
         suppressCellFocus: false,
         stopEditingWhenCellsLoseFocus: true,
@@ -711,6 +713,13 @@ function initNavigation() {
     });
 }
 
+function initOrdersMonthNav() {
+    const prevBtn = document.getElementById('ordersMonthPrev');
+    const nextBtn = document.getElementById('ordersMonthNext');
+    if (prevBtn) prevBtn.addEventListener('click', ordersMonthPrev);
+    if (nextBtn) nextBtn.addEventListener('click', ordersMonthNext);
+}
+
 function switchView(viewName) {
     currentView = viewName;
 
@@ -744,19 +753,23 @@ function switchView(viewName) {
         editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
     }
     
+    const ordersMonthNav = document.getElementById('ordersMonthNav');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (ordersMonthNav) ordersMonthNav.style.display = 'none';
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
+            if (ordersMonthNav) ordersMonthNav.style.display = 'flex';
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (ordersMonthNav) ordersMonthNav.style.display = 'none';
         }
     }
 
@@ -804,14 +817,44 @@ async function loadProducts() {
     }
 }
 
+function getOrdersPeriodForToday() {
+    const d = new Date();
+    const day = d.getDate();
+    const month = d.getMonth() + 1;
+    const year = d.getFullYear();
+    if (day >= 22) return { month, year };
+    if (month === 1) return { month: 12, year: year - 1 };
+    return { month: month - 1, year };
+}
+
+function formatOrdersPeriodLabel(month, year) {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    return `${monthNames[month - 1]} 22 – ${monthNames[nextMonth - 1]} 21, ${nextMonth === 1 ? nextYear : year}`;
+}
+
+function updateOrdersMonthLabel() {
+    if (ordersPeriodMonth == null || ordersPeriodYear == null) return;
+    const el = document.getElementById('ordersMonthLabel');
+    if (el) el.textContent = formatOrdersPeriodLabel(ordersPeriodMonth, ordersPeriodYear);
+}
+
 async function loadOrders() {
+    if (ordersPeriodMonth == null || ordersPeriodYear == null) {
+        const { month, year } = getOrdersPeriodForToday();
+        ordersPeriodMonth = month;
+        ordersPeriodYear = year;
+    }
+    updateOrdersMonthLabel();
+    if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
-        const response = await fetch(`${API_BASE}/orders/`);
+        const url = `${API_BASE}/orders/?month=${ordersPeriodMonth}&year=${ordersPeriodYear}`;
+        const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to fetch orders');
 
         orders = await response.json();
-        
-        // Update AG Grid
+
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
         }
@@ -824,7 +867,29 @@ async function loadOrders() {
                 ordersGridApi.setGridOption('rowData', orders);
             }
         }
+    } finally {
+        if (ordersGridApi) ordersGridApi.hideOverlay();
     }
+}
+
+function ordersMonthPrev() {
+    if (ordersPeriodMonth === 1) {
+        ordersPeriodMonth = 12;
+        ordersPeriodYear -= 1;
+    } else {
+        ordersPeriodMonth -= 1;
+    }
+    loadOrders();
+}
+
+function ordersMonthNext() {
+    if (ordersPeriodMonth === 12) {
+        ordersPeriodMonth = 1;
+        ordersPeriodYear += 1;
+    } else {
+        ordersPeriodMonth += 1;
+    }
+    loadOrders();
 }
 
 function getSampleOrders() {
