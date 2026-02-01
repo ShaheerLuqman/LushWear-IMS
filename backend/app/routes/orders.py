@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, UploadFile, File
 from typing import List, Dict, Any
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
@@ -6,6 +6,8 @@ from app.config import settings
 from datetime import datetime
 import httpx
 import re
+import csv
+import io
 from urllib.parse import unquote, urlparse, parse_qs
 from bs4 import BeautifulSoup
 
@@ -465,6 +467,105 @@ async def sync_shopify_orders():
         raise HTTPException(status_code=500, detail=f"Failed to connect to Shopify: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error syncing orders: {str(e)}")
+
+
+def _parse_float(val: Any, default: float = 0.0) -> float:
+    """Parse a CSV cell to float; return default if invalid."""
+    if val is None or (isinstance(val, str) and val.strip() == ""):
+        return default
+    try:
+        return float(str(val).strip().replace(",", ""))
+    except (ValueError, TypeError):
+        return default
+
+
+@router.post("/upload-postex-csv")
+async def upload_postex_csv(file: UploadFile = File(...)):
+    """
+    Upload a PostEx CSV file. Matches rows by TRACKING_NUMBER to orders and updates
+    delivery_charge (from SHIPPING_CHARGES) and tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX).
+    """
+    if not file.filename or not file.filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Please upload a CSV file.")
+    try:
+        content = await file.read()
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("utf-8-sig")
+        reader = csv.DictReader(io.StringIO(text))
+        if not reader.fieldnames:
+            raise HTTPException(status_code=400, detail="CSV has no header row.")
+        # Normalize header names (strip spaces)
+        fieldnames = [f.strip() for f in reader.fieldnames]
+        # Map possible column names to canonical keys
+        col_map = {}
+        for i, name in enumerate(fieldnames):
+            key = name.strip()
+            if "SHIPPING_CHARGES" in key.upper():
+                col_map["shipping_charges"] = key
+            elif "GST" in key.upper() and "TAX" not in key.upper():
+                col_map["gst"] = key
+            elif "WH_INCOME_TAX" in key.upper() or "INCOME_TAX" in key.upper():
+                col_map["wh_income_tax"] = key
+            elif "WH_SALES_TAX" in key.upper() or "SALES_TAX" in key.upper():
+                col_map["wh_sales_tax"] = key
+            elif "TRACKING_NUMBER" in key.upper():
+                col_map["tracking_number"] = key
+        if "tracking_number" not in col_map:
+            raise HTTPException(status_code=400, detail="CSV must contain a TRACKING_NUMBER column.")
+        if "shipping_charges" not in col_map:
+            raise HTTPException(status_code=400, detail="CSV must contain SHIPPING_CHARGES column.")
+        rows = []
+        for row in reader:
+            # Rebuild dict with stripped keys for lookup
+            raw = {f.strip(): row.get(f, "") for f in reader.fieldnames}
+            tracking = (raw.get(col_map["tracking_number"]) or "").strip()
+            if not tracking:
+                continue
+            shipping = _parse_float(raw.get(col_map["shipping_charges"], 0))
+            gst = _parse_float(raw.get(col_map.get("gst", ""), 0))
+            income_tax = _parse_float(raw.get(col_map.get("wh_income_tax", ""), 0))
+            sales_tax = _parse_float(raw.get(col_map.get("wh_sales_tax", ""), 0))
+            tax_total = gst + income_tax + sales_tax
+            rows.append({"tracking_number": tracking, "delivery_charge": shipping, "tax_amount": tax_total})
+        if not rows:
+            return {"updated": 0, "message": "No valid rows with TRACKING_NUMBER in CSV."}
+        supabase = get_supabase()
+        # Fetch all orders (we need to match by tracking_number)
+        all_orders = []
+        limit = 1000
+        offset = 0
+        while True:
+            resp = supabase.table("orders").select("id, tracking_number").range(offset, offset + limit - 1).execute()
+            if not resp.data:
+                break
+            all_orders.extend(resp.data)
+            if len(resp.data) < limit:
+                break
+            offset += limit
+        tracking_to_order = {}
+        for o in all_orders:
+            tn = (o.get("tracking_number") or "").strip()
+            if tn:
+                tracking_to_order[tn] = o
+        updated_count = 0
+        for r in rows:
+            order = tracking_to_order.get(r["tracking_number"])
+            if not order:
+                continue
+            update_data = {
+                "delivery_charge": r["delivery_charge"],
+                "tax_amount": r["tax_amount"],
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            supabase.table("orders").update(update_data).eq("id", order["id"]).execute()
+            updated_count += 1
+        return {"updated": updated_count, "message": f"Updated delivery charges and tax for {updated_count} order(s)."}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error processing CSV: {str(e)}")
 
 
 @router.get("/{order_id}")

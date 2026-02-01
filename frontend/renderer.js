@@ -82,10 +82,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Initialize sync button visibility
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
+    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         syncProductsBtn.style.display = 'none';
         syncOrdersBtn.style.display = 'none';
     }
+    if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
     
 });
 
@@ -732,6 +734,7 @@ function switchView(viewName) {
     const editCostPricesBtn = document.getElementById('editCostPricesBtn');
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
+    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
     
     if (editCostPricesBtn) {
         editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
@@ -741,12 +744,15 @@ function switchView(viewName) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
+            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
+            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
+            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
         }
     }
 
@@ -899,6 +905,38 @@ async function syncShopifyOrders() {
     }
 }
 
+async function uploadPostExCsv(file) {
+    const btn = document.getElementById('uploadPostExCsvBtn');
+    const originalText = btn?.innerHTML;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Uploading...';
+    }
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch(`${API_BASE}/orders/upload-postex-csv`, {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const detail = Array.isArray(data.detail) ? data.detail.map(d => d.msg || d).join(' ') : data.detail;
+            throw new Error(detail || response.statusText || 'Upload failed');
+        }
+        showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
+        await loadOrders();
+    } catch (error) {
+        console.error('Error uploading PostEx CSV', error);
+        showToast(error.message || 'Failed to upload PostEx CSV', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalText;
+        }
+    }
+}
+
 // ============================================
 // UI Updates
 // ============================================
@@ -933,6 +971,19 @@ function initForms() {
     if (syncOrdersBtn) {
         syncOrdersBtn.addEventListener('click', async () => {
             await syncShopifyOrders();
+        });
+    }
+
+    // Upload PostEx CSV Button
+    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
+    const postExCsvInput = document.getElementById('postExCsvInput');
+    if (uploadPostExCsvBtn && postExCsvInput) {
+        uploadPostExCsvBtn.addEventListener('click', () => postExCsvInput.click());
+        postExCsvInput.addEventListener('change', async (e) => {
+            const file = e.target.files?.[0];
+            if (!file) return;
+            e.target.value = '';
+            await uploadPostExCsv(file);
         });
     }
 }
