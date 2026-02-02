@@ -289,7 +289,7 @@ function initOrdersGrid() {
             cellRenderer: (params) => {
                 const status = params.value || '';
                 let cssClass = 'grid-status-pending';
-                if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
+                if (status === 'fulfilled' || status === 'delivered') cssClass = 'grid-status-fulfilled';
                 else if (status === 'returned' || status === 'cancelled') cssClass = 'grid-status-returned';
                 return `<span class="grid-status-badge ${cssClass}">${escapeHtml(status)}</span>`;
             }
@@ -297,7 +297,7 @@ function initOrdersGrid() {
         {
             headerName: 'Delivery',
             field: 'delivery_status',
-            width: 240,
+            width: 150,
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
@@ -316,10 +316,14 @@ function initOrdersGrid() {
                 const fetchedAt = hasStoredStatus && lastStatus.fetched_at
                     ? new Date(lastStatus.fetched_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
                     : '';
+                const isPostEx = (courier || '').trim().toUpperCase() === 'POSTEX';
                 const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+                const refreshBtn = isPostEx
+                    ? `<button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>`
+                    : '';
                 return `<div class="delivery-cell-with-status" title="${escapeHtml(displayStatus)}">
-                    <button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>
+                    ${refreshBtn}
                     <span class="delivery-status-preview">${escapeHtml(displayStatus)}</span>
                     ${fetchedAt ? `<span class="delivery-fetched-at">${escapeHtml(fetchedAt)}</span>` : ''}
                 </div>`;
@@ -593,7 +597,7 @@ function initOrdersGrid() {
                 }
                 
                 // Apply status rules
-                if (status === 'fulfilled') {
+                if (status === 'fulfilled' || status === 'delivered') {
                     if (receivable === 0) {
                         return 'OK';
                     } else {
@@ -768,11 +772,19 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'inline-flex';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
             if (ordersMonthNav) ordersMonthNav.style.display = 'flex';
+            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
+            if (deliveryProgress) deliveryProgress.style.display = 'none';
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
             if (ordersMonthNav) ordersMonthNav.style.display = 'none';
+            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
+            if (deliveryProgress) deliveryProgress.style.display = 'none';
         }
     }
 
@@ -1058,6 +1070,12 @@ function initForms() {
             await uploadPostExCsv(file);
         });
     }
+
+    // Refresh delivery status for selected orders
+    const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+    if (refreshDeliveryStatusSelectedBtn) {
+        refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
+    }
 }
 
 // ============================================
@@ -1126,15 +1144,102 @@ function debounce(func, wait) {
 // Delivery Status Functions
 // ============================================
 
-/** Derive piece_with from last delivery status: "At Lushwear Warehouse" -> Warehouse, "Delivered to Customer" -> Customer, else Rider. */
+/** Derive piece_with from last delivery status. */
 function pieceWithFromLastStatus(deliveryStatus) {
     if (!deliveryStatus) return null;
     const last = (deliveryStatus.latest_status || '').trim() ||
         (deliveryStatus.status_history && deliveryStatus.status_history[0] && (deliveryStatus.status_history[0].status || '').trim()) || '';
     if (!last) return null;
     if (/at lushwear warehouse/i.test(last)) return 'Warehouse';
+    if (/returned at merchant warehouse/i.test(last)) return 'Warehouse';
     if (/delivered to customer/i.test(last)) return 'Customer';
     return 'Rider';
+}
+
+/** True if delivery status contains "Return Process Initiated" anywhere (latest_status or status_history). */
+function deliveryStatusIndicatesReturned(data) {
+    if (!data) return false;
+    const needle = 'Return Process Initiated';
+    if ((data.latest_status || '').includes(needle)) return true;
+    const history = data.status_history || [];
+    for (const item of history) {
+        if ((item.status || '').includes(needle)) return true;
+    }
+    return false;
+}
+
+/** True if delivery status contains "Delivered to Customer" anywhere (latest_status or status_history). */
+function deliveryStatusIndicatesDelivered(data) {
+    if (!data) return false;
+    const needle = 'Delivered to Customer';
+    if ((data.latest_status || '').includes(needle)) return true;
+    const history = data.status_history || [];
+    for (const item of history) {
+        if ((item.status || '').includes(needle)) return true;
+    }
+    return false;
+}
+
+/** Fetch delivery status for one order (no modal). Returns data or throws. */
+async function fetchDeliveryStatusForOrder(orderId, courier, trackingNumber) {
+    const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
+    const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+    if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
+        throw new Error(detail);
+    }
+    return response.json();
+}
+
+/** Refresh delivery status for all selected orders: sequential fetch, row-by-row update, progress shown. No modals. */
+async function refreshDeliveryStatusSelected() {
+    if (!ordersGridApi) return;
+    const selected = ordersGridApi.getSelectedRows();
+    const toFetch = selected.filter(row => {
+        const courier = (row.courier || '').trim();
+        const track = (row.tracking_number || '').trim();
+        return courier && courier.toUpperCase() === 'POSTEX' && track && track !== '-';
+    });
+    if (toFetch.length === 0) {
+        showToast('Select PostEx orders with tracking number to refresh delivery status', 'warning');
+        return;
+    }
+    const progressEl = document.getElementById('deliveryRefreshProgress');
+    const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+    if (progressEl) progressEl.style.display = 'inline';
+    if (btn) btn.disabled = true;
+    const total = toFetch.length;
+    let fetched = 0;
+    const updateProgress = () => {
+        if (progressEl) progressEl.textContent = `Fetched ${fetched} / ${total}`;
+    };
+    updateProgress();
+    for (const order of toFetch) {
+        try {
+            const data = await fetchDeliveryStatusForOrder(order.id, order.courier, order.tracking_number);
+            const derivedPieceWith = pieceWithFromLastStatus(data);
+            ordersGridApi.forEachNode(node => {
+                if (node.data && node.data.id === order.id) {
+                    const updated = { ...node.data, delivery_status: data };
+                    if (derivedPieceWith) updated.piece_with = derivedPieceWith;
+                    const currentStatus = (node.data.order_status || '').toLowerCase();
+                    if (currentStatus !== 'returned') {
+                        if (deliveryStatusIndicatesReturned(data)) updated.order_status = 'returned';
+                        else if (deliveryStatusIndicatesDelivered(data)) updated.order_status = 'delivered';
+                    }
+                    node.setData(updated);
+                }
+            });
+        } catch (err) {
+            console.warn('Delivery status fetch failed for order', order.id, err.message);
+        }
+        fetched += 1;
+        updateProgress();
+    }
+    if (progressEl) progressEl.style.display = 'none';
+    if (btn) btn.disabled = false;
+    showToast(`Updated delivery status for ${fetched} of ${total} selected orders`, 'success');
 }
 
 async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
@@ -1142,6 +1247,11 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     
     if (!orderId) {
         showToast('Order ID not available', 'error');
+        return;
+    }
+    
+    if ((courier || '').trim().toUpperCase() !== 'POSTEX') {
+        showToast('Delivery status is only available for PostEx courier', 'warning');
         return;
     }
     
@@ -1181,13 +1291,18 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         const data = await response.json();
         console.log('Received data:', data);
         displayDeliveryStatus(data, orderId);
-        // Update order in grid: Delivery column shows last status; Piece With from last status (backend already saved piece_with when save=true)
+        // Update order in grid: Delivery, Piece With, order_status=returned or delivered (backend already saved when save=true)
         const derivedPieceWith = pieceWithFromLastStatus(data);
         if (ordersGridApi) {
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === orderId) {
                     const updated = { ...node.data, delivery_status: data };
                     if (derivedPieceWith) updated.piece_with = derivedPieceWith;
+                    const currentStatus = (node.data.order_status || '').toLowerCase();
+                    if (currentStatus !== 'returned') {
+                        if (deliveryStatusIndicatesReturned(data)) updated.order_status = 'returned';
+                        else if (deliveryStatusIndicatesDelivered(data)) updated.order_status = 'delivered';
+                    }
                     node.setData(updated);
                 }
             });

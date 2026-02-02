@@ -232,6 +232,12 @@ body {
     gap: 16px;
 }
 
+.delivery-refresh-progress {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin-left: 4px;
+}
+
 .search-box {
     position: relative;
     display: flex;

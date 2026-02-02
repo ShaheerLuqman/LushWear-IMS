@@ -95,6 +95,11 @@
                         <span style="margin-right: 8px;">📄</span>
                         Upload PostEx CSV
                     </button>
+                    <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
+                        <span style="margin-right: 8px;">📍</span>
+                        Refresh Delivery Status
+                    </button>
+                    <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
                     <input type="file" id="postExCsvInput" accept=".csv" style="display: none;">
                 </div>
             </header>

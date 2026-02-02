@@ -1,6 +1,6 @@
 const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
-const { spawn, exec } = require('child_process');
+const { spawn, exec, execSync } = require('child_process');
 
 let mainWindow;
 let backendProcess;
@@ -44,7 +44,6 @@ function createWindow() {
     });
 
     mainWindow.on('closed', () => {
-        killAllProcesses();
         mainWindow = null;
     });
 }
@@ -127,64 +126,81 @@ function startBackend() {
     }
 }
 
-function killAllProcesses() {
-    // Kill the backend process if it exists
+/**
+ * Terminate the backend and any process on port 8000.
+ * @param {() => void} [callback] - Called when all kill operations are finished. If omitted, runs without waiting.
+ */
+function killAllProcesses(callback) {
+    const done = () => {
+        if (typeof callback === 'function') callback();
+    };
+
+    // 1) Kill the backend process if we spawned it
     if (backendProcess && !backendProcess.killed) {
         try {
             if (process.platform === 'win32') {
-                // Windows: Kill process tree
-                exec(`taskkill /PID ${backendProcess.pid} /T /F`, (error) => {
-                    if (error && !error.message.includes('not found')) {
-                        console.log('Backend process already terminated');
-                    }
-                });
+                try {
+                    execSync(`taskkill /PID ${backendProcess.pid} /T /F`, { stdio: 'ignore' });
+                } catch (e) {
+                    // Process may already be gone
+                }
             } else {
-                // Unix: Kill process tree
                 backendProcess.kill('SIGTERM');
                 setTimeout(() => {
-                    if (!backendProcess.killed) {
+                    if (backendProcess && !backendProcess.killed) {
                         backendProcess.kill('SIGKILL');
                     }
-                }, 1000);
+                }, 500);
             }
         } catch (error) {
             console.log('Error killing backend process:', error);
         }
     }
 
-    // Kill any processes using port 8000 (our backend port)
+    // 2) Kill any process using port 8000 (covers backend started in separate terminal)
     if (process.platform === 'win32') {
         exec('netstat -ano | findstr :8000', (error, stdout) => {
-            if (!error && stdout) {
-                const lines = stdout.trim().split('\n');
-                const pids = new Set();
-                
-                lines.forEach(line => {
-                    const parts = line.trim().split(/\s+/);
-                    const pid = parts[parts.length - 1];
-                    if (pid && pid.match(/^\d+$/) && pid !== '0') {
-                        pids.add(pid);
-                    }
-                });
-                
-                pids.forEach(pid => {
-                    exec(`taskkill /PID ${pid} /T /F`, (err) => {
-                        // Silently fail - process might already be terminated
-                    });
-                });
+            if (error || !stdout || !stdout.trim()) {
+                done();
+                return;
             }
+            const pids = new Set();
+            stdout.trim().split('\n').forEach(line => {
+                const parts = line.trim().split(/\s+/);
+                const pid = parts[parts.length - 1];
+                if (pid && /^\d+$/.test(pid) && pid !== '0') pids.add(pid);
+            });
+            const arr = [...pids];
+            if (arr.length === 0) {
+                done();
+                return;
+            }
+            let completed = 0;
+            arr.forEach(pid => {
+                exec(`taskkill /PID ${pid} /T /F`, () => {
+                    completed++;
+                    if (completed === arr.length) done();
+                });
+            });
         });
     } else {
-        // Unix: Find and kill processes on port 8000
         exec('lsof -ti:8000', (error, stdout) => {
-            if (!error && stdout) {
-                const pids = stdout.trim().split('\n');
-                pids.forEach(pid => {
-                    if (pid) {
-                        exec(`kill -9 ${pid}`, () => {});
-                    }
-                });
+            if (error || !stdout || !stdout.trim()) {
+                done();
+                return;
             }
+            const pids = stdout.trim().split('\n').filter(Boolean);
+            if (pids.length === 0) {
+                done();
+                return;
+            }
+            let completed = 0;
+            pids.forEach(pid => {
+                exec(`kill -9 ${pid}`, () => {
+                    completed++;
+                    if (completed === pids.length) done();
+                });
+            });
         });
     }
 }
@@ -206,15 +222,25 @@ app.whenReady().then(() => {
     });
 });
 
+/** Set when we have finished killing backend and are calling app.quit(); prevents before-quit from re-running kill. */
+let exitingAfterKill = false;
+
 app.on('window-all-closed', () => {
-    killAllProcesses();
-    if (process.platform !== 'darwin') {
-        app.quit();
-    }
+    killAllProcesses(() => {
+        if (process.platform !== 'darwin') {
+            exitingAfterKill = true;
+            app.quit();
+        }
+    });
 });
 
-app.on('before-quit', () => {
-    killAllProcesses();
+app.on('before-quit', (event) => {
+    if (exitingAfterKill) return;
+    event.preventDefault();
+    exitingAfterKill = true;
+    killAllProcesses(() => {
+        app.quit();
+    });
 });
 
 // Handle app termination

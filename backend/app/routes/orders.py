@@ -413,6 +413,11 @@ async def sync_shopify_orders():
             
             if order_number in existing_orders_map:
                 existing_order = existing_orders_map[order_number]
+                # Skip orders that are delivered or returned (do not overwrite from Shopify)
+                existing_status = (existing_order.get("order_status") or "").strip().lower()
+                if existing_status in ("delivered", "returned"):
+                    orders_to_skip.append(order_number)
+                    continue
                 # Preserve advance_amount if it has been set to a non-zero value
                 try:
                     existing_adv = float(existing_order.get("advance_amount") or 0)
@@ -616,18 +621,49 @@ async def get_order(order_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 def _piece_with_from_delivery_status(delivery_status_data: dict) -> str:
-    """Derive piece_with from last delivery status text: At Lushwear Warehouse -> Warehouse, Delivered to Customer -> Customer, else Rider."""
+    """Derive piece_with from last delivery status text."""
     last_status = (delivery_status_data or {}).get("latest_status") or ""
     if not last_status and delivery_status_data:
         history = (delivery_status_data.get("status_history") or [])
         if history:
             last_status = (history[0].get("status") or "").strip()
     last_status = (last_status or "").strip()
-    if "At Lushwear Warehouse" in last_status or "at lushwear warehouse" in last_status.lower():
+    lower = last_status.lower()
+    if "at lushwear warehouse" in lower:
         return "Warehouse"
-    if "Delivered to Customer" in last_status or "delivered to customer" in last_status.lower():
+    if "returned at merchant warehouse" in lower:
+        return "Warehouse"
+    if "delivered to customer" in lower:
         return "Customer"
     return "Rider"
+
+
+def _delivery_status_indicates_returned(delivery_status_data: dict) -> bool:
+    """True if delivery status contains 'Return Process Initiated' (e.g. in latest_status or status_history)."""
+    if not delivery_status_data:
+        return False
+    needle = "Return Process Initiated"
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if needle in latest:
+        return True
+    for item in delivery_status_data.get("status_history") or []:
+        if needle in (item.get("status") or ""):
+            return True
+    return False
+
+
+def _delivery_status_indicates_delivered(delivery_status_data: dict) -> bool:
+    """True if delivery status contains 'Delivered to Customer' (e.g. in latest_status or status_history)."""
+    if not delivery_status_data:
+        return False
+    needle = "Delivered to Customer"
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if needle in latest:
+        return True
+    for item in delivery_status_data.get("status_history") or []:
+        if needle in (item.get("status") or ""):
+            return True
+    return False
 
 
 @router.post("/", response_model=dict)
@@ -788,11 +824,19 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
 
         if save:
             piece_with = _piece_with_from_delivery_status(delivery_status_data)
-            supabase.table("orders").update({
+            update_payload = {
                 "delivery_status": delivery_status_data,
                 "piece_with": piece_with,
                 "updated_at": datetime.utcnow().isoformat()
-            }).eq("id", order_id).execute()
+            }
+            # Do not overwrite order_status if it is already "returned"
+            current_status = (order.get("order_status") or "").strip().lower()
+            if current_status != "returned":
+                if _delivery_status_indicates_returned(delivery_status_data):
+                    update_payload["order_status"] = "returned"
+                elif _delivery_status_indicates_delivered(delivery_status_data):
+                    update_payload["order_status"] = "delivered"
+            supabase.table("orders").update(update_payload).eq("id", order_id).execute()
 
         return delivery_status_data
         
