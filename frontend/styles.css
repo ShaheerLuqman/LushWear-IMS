@@ -209,19 +209,20 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 24px 32px;
+    padding: 12px 20px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
+    flex-shrink: 0;
 }
 
 .header-title h1 {
-    font-size: 24px;
+    font-size: 18px;
     font-weight: 600;
-    margin-bottom: 4px;
+    margin-bottom: 2px;
 }
 
 .header-subtitle {
-    font-size: 13px;
+    font-size: 12px;
     color: var(--text-muted);
 }
 
@@ -1485,26 +1486,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 200px;
-}
-
-.grid-delivery-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 8px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    border: none;
-    cursor: pointer;
-    background: rgba(139, 92, 246, 0.12);
-    color: #7c3aed;
-    transition: all 0.2s ease;
-}
-
-.grid-delivery-btn:hover {
-    background: rgba(139, 92, 246, 0.2);
-    transform: scale(1.02);
 }
 
 .delivery-cell-with-status {

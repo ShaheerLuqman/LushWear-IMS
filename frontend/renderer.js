@@ -309,23 +309,20 @@ function initOrdersGrid() {
                 }
                 const lastStatus = order.delivery_status;
                 const hasStoredStatus = lastStatus && (lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history.length > 0));
-                if (hasStoredStatus) {
-                    const statusText = ((lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history[0] && lastStatus.status_history[0].status)) || '').trim();
-                    const displayStatus = statusText || '—';
-                    const fetchedAt = lastStatus.fetched_at ? new Date(lastStatus.fetched_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' }) : '';
-                    const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                    const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                    return `<div class="delivery-cell-with-status" title="${escapeHtml(statusText)}">
-                        <button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>
-                        <span class="delivery-status-preview">${escapeHtml(displayStatus)}</span>
-                        ${fetchedAt ? `<span class="delivery-fetched-at">${escapeHtml(fetchedAt)}</span>` : ''}
-                    </div>`;
-                }
+                const statusText = hasStoredStatus
+                    ? ((lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history[0] && lastStatus.status_history[0].status)) || '').trim()
+                    : '';
+                const displayStatus = statusText || '';
+                const fetchedAt = hasStoredStatus && lastStatus.fetched_at
+                    ? new Date(lastStatus.fetched_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+                    : '';
                 const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                return `<button class="grid-delivery-btn" onclick="fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')">
-                    <span>Fetch</span><span style="font-size: 10px;">🔄</span>
-                </button>`;
+                return `<div class="delivery-cell-with-status" title="${escapeHtml(displayStatus)}">
+                    <button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>
+                    <span class="delivery-status-preview">${escapeHtml(displayStatus)}</span>
+                    ${fetchedAt ? `<span class="delivery-fetched-at">${escapeHtml(fetchedAt)}</span>` : ''}
+                </div>`;
             }
         },
         {
@@ -494,6 +491,12 @@ function initOrdersGrid() {
             cellEditor: 'agSelectCellEditor',
             cellEditorParams: {
                 values: ['Customer', 'Rider', 'Warehouse']
+            },
+            valueGetter: (params) => {
+                const order = params.data;
+                const fromStatus = pieceWithFromLastStatus(order.delivery_status);
+                if (fromStatus) return fromStatus;
+                return (order.piece_with || '').trim() || null;
             },
             valueFormatter: (params) => params.value || '-',
             cellRenderer: (params) => {
@@ -1123,6 +1126,17 @@ function debounce(func, wait) {
 // Delivery Status Functions
 // ============================================
 
+/** Derive piece_with from last delivery status: "At Lushwear Warehouse" -> Warehouse, "Delivered to Customer" -> Customer, else Rider. */
+function pieceWithFromLastStatus(deliveryStatus) {
+    if (!deliveryStatus) return null;
+    const last = (deliveryStatus.latest_status || '').trim() ||
+        (deliveryStatus.status_history && deliveryStatus.status_history[0] && (deliveryStatus.status_history[0].status || '').trim()) || '';
+    if (!last) return null;
+    if (/at lushwear warehouse/i.test(last)) return 'Warehouse';
+    if (/delivered to customer/i.test(last)) return 'Customer';
+    return 'Rider';
+}
+
 async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     console.log('fetchDeliveryStatus called with:', { orderId, courier, trackingNumber });
     
@@ -1167,11 +1181,14 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         const data = await response.json();
         console.log('Received data:', data);
         displayDeliveryStatus(data, orderId);
-        // Update order in grid so Delivery column shows last status + Refresh
+        // Update order in grid: Delivery column shows last status; Piece With from last status (backend already saved piece_with when save=true)
+        const derivedPieceWith = pieceWithFromLastStatus(data);
         if (ordersGridApi) {
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === orderId) {
-                    node.setData({ ...node.data, delivery_status: data });
+                    const updated = { ...node.data, delivery_status: data };
+                    if (derivedPieceWith) updated.piece_with = derivedPieceWith;
+                    node.setData(updated);
                 }
             });
         }

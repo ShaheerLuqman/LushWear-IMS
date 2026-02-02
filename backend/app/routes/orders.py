@@ -400,7 +400,7 @@ async def sync_shopify_orders():
                 "courier": courier,
                 "tracking_number": tracking_number,
                 "order_status": order_status,
-                "piece_with": _piece_with_from_status(order_status),
+                "piece_with": "Warehouse",
                 "total_amount": total_amount,
                 "advance_amount": advance_amount,
                 "delivery_charge": delivery_charge,
@@ -424,6 +424,8 @@ async def sync_shopify_orders():
                 order_data["delivery_charge"] = existing_order.get("delivery_charge", 0)
                 # Preserve last fetched delivery status (from courier tracking)
                 order_data["delivery_status"] = existing_order.get("delivery_status")
+                # Preserve piece_with (set by delivery status or manually; default Warehouse)
+                order_data["piece_with"] = existing_order.get("piece_with") or "Warehouse"
 
                 existing_courier = (existing_order.get("courier") or "").strip()
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
@@ -613,13 +615,19 @@ async def get_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _piece_with_from_status(status: str) -> str:
-    """Derive piece_with from order_status: fulfilled -> Customer, returned -> Rider, else Warehouse."""
-    if status == "fulfilled":
+def _piece_with_from_delivery_status(delivery_status_data: dict) -> str:
+    """Derive piece_with from last delivery status text: At Lushwear Warehouse -> Warehouse, Delivered to Customer -> Customer, else Rider."""
+    last_status = (delivery_status_data or {}).get("latest_status") or ""
+    if not last_status and delivery_status_data:
+        history = (delivery_status_data.get("status_history") or [])
+        if history:
+            last_status = (history[0].get("status") or "").strip()
+    last_status = (last_status or "").strip()
+    if "At Lushwear Warehouse" in last_status or "at lushwear warehouse" in last_status.lower():
+        return "Warehouse"
+    if "Delivered to Customer" in last_status or "delivered to customer" in last_status.lower():
         return "Customer"
-    if status == "returned":
-        return "Rider"
-    return "Warehouse"
+    return "Rider"
 
 
 @router.post("/", response_model=dict)
@@ -628,7 +636,7 @@ async def create_order(order: OrderCreate):
     try:
         supabase = get_supabase()
         order_data = order.model_dump()
-        order_data["piece_with"] = _piece_with_from_status(order_data.get("order_status", "") or "")
+        order_data["piece_with"] = "Warehouse"
         order_data["created_at"] = datetime.utcnow().isoformat()
         order_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").insert(order_data).execute()
@@ -642,8 +650,7 @@ async def update_order(order_id: str, order: OrderUpdate):
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in order.model_dump().items() if v is not None}
-        if "order_status" in update_data:
-            update_data["piece_with"] = _piece_with_from_status(update_data["order_status"])
+        # Do not set piece_with from order_status; it defaults to Warehouse and is updated from delivery status
         update_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
@@ -780,8 +787,10 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
         if save:
+            piece_with = _piece_with_from_delivery_status(delivery_status_data)
             supabase.table("orders").update({
                 "delivery_status": delivery_status_data,
+                "piece_with": piece_with,
                 "updated_at": datetime.utcnow().isoformat()
             }).eq("id", order_id).execute()
 
