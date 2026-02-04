@@ -11,7 +11,7 @@ REM Or set it here: set SHOW_TERMINALS=1
 if "%1"=="hidden" goto :hidden
 
 REM If SHOW_TERMINALS is 1, run normally (visible)
-if "%SHOW_TERMINALS%"=="1" (
+if "%SHOW_TERMINALS%"=="0" (
     goto :visible
 )
 
