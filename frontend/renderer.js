@@ -239,7 +239,7 @@ function initProductsGrid() {
 }
 
 // Custom floating filter for Order Status: shows a <select> dropdown in the filter row
-const ORDER_STATUS_VALUES = ['pending', 'fulfilled', 'delivered', 'RFD', 'returned', 'CNA', 'ICA'];
+const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'CNA', 'ICA'];
 function OrderStatusFloatingFilter() {}
 OrderStatusFloatingFilter.prototype.init = function (params) {
     this.params = params;
@@ -281,6 +281,54 @@ OrderStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel
     if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
         this.select.value = '__all__';
     } else if (ORDER_STATUS_VALUES.indexOf(parentModel.filter) !== -1) {
+        this.select.value = parentModel.filter;
+    } else {
+        this.select.value = '__all__';
+    }
+};
+
+// Custom floating filter for Final Status: dropdown (OK, Warning, None, All)
+const FINAL_STATUS_VALUES = ['OK', 'Warning', 'None'];
+function FinalStatusFloatingFilter() {}
+FinalStatusFloatingFilter.prototype.init = function (params) {
+    this.params = params;
+    this.eGui = document.createElement('div');
+    this.eGui.style.width = '100%';
+    const select = document.createElement('select');
+    select.style.width = '100%';
+    select.style.padding = '4px 6px';
+    select.style.fontSize = '12px';
+    const allOption = document.createElement('option');
+    allOption.value = '__all__';
+    allOption.textContent = 'All';
+    select.appendChild(allOption);
+    FINAL_STATUS_VALUES.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        select.appendChild(opt);
+    });
+    const api = params.api;
+    const columnId = params.column.getColId();
+    select.addEventListener('change', function () {
+        const val = select.value;
+        const currentModel = api.getFilterModel() || {};
+        const newModel = Object.assign({}, currentModel);
+        if (val === '__all__') {
+            delete newModel[columnId];
+        } else {
+            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
+        }
+        api.setFilterModel(newModel);
+    });
+    this.eGui.appendChild(select);
+    this.select = select;
+};
+FinalStatusFloatingFilter.prototype.getGui = function () { return this.eGui; };
+FinalStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
+    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
+        this.select.value = '__all__';
+    } else if (FINAL_STATUS_VALUES.indexOf(parentModel.filter) !== -1) {
         this.select.value = parentModel.filter;
     } else {
         this.select.value = '__all__';
@@ -398,7 +446,7 @@ function initOrdersGrid() {
             floatingFilterComponent: OrderStatusFloatingFilter,
             cellRenderer: (params) => {
                 const status = params.value || '';
-                let cssClass = 'grid-status-pending';
+                let cssClass = 'grid-status-unfulfilled';
                 if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
                 else if (status === 'delivered') cssClass = 'grid-status-delivered';
                 else if (status === 'returned') cssClass = 'grid-status-returned';
@@ -406,6 +454,7 @@ function initOrdersGrid() {
                 else if (status === 'RFD') cssClass = 'grid-status-rfd';
                 else if (status === 'ICA') cssClass = 'grid-status-rfd';
                 else if (status === 'CNA') cssClass = 'grid-status-rfd';
+                else if (status === 'pending') cssClass = 'grid-status-unfulfilled'; /* legacy */
                 return `<span class="grid-status-badge ${cssClass}">${escapeHtml(status)}</span>`;
             }
         },
@@ -709,11 +758,13 @@ function initOrdersGrid() {
             headerName: 'Status',
             field: 'final_status',
             width: 110,
-            filter: 'agSetColumnFilter',
-            floatingFilter: true,
+            filter: 'agTextColumnFilter',
             filterParams: {
-                values: ['OK', 'Warning', 'None']
+                filterOptions: ['equals'],
+                defaultOption: 'equals',
+                maxNumConditions: 1
             },
+            floatingFilterComponent: FinalStatusFloatingFilter,
             sortable: true,
             valueGetter: (params) => {
                 const order = params.data;
@@ -750,7 +801,7 @@ function initOrdersGrid() {
                 } else if (value === 'None') {
                     return '<span style="color: var(--text-muted);">-</span>';
                 } else {
-                    return '<span style="font-size: 18px;">🟡</span>';
+                    return '<span style="font-size: 18px;">🔴</span>';
                 }
             }
         }
@@ -1209,7 +1260,7 @@ function getSampleOrders() {
     return [
         { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
         { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', piece_received: 'Pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '3', order_number: 2721, courier: '1287', order_status: 'unfulfilled', piece_received: 'Pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
         { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
         { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', piece_received: 'Received', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
     ];
@@ -1415,7 +1466,7 @@ function initForms() {
     });
     if (window.electronAPI && window.electronAPI.onFullScreenChange) {
         window.electronAPI.onFullScreenChange((isFullScreen) => {
-            if (!isFullScreen) exitOrdersFullScreen();
+            if (!isFullScreen) syncOrdersFullScreenExit();
         });
     }
 }
@@ -1434,6 +1485,15 @@ function toggleOrdersFullScreen() {
     }
 }
 
+/** Sync UI when fullscreen was exited by ESC or native leave-full-screen. Do not call setFullScreen(false). */
+function syncOrdersFullScreenExit() {
+    document.body.classList.remove('orders-table-fullscreen');
+    setTimeout(() => {
+        if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+    }, 100);
+}
+
+/** Exit fullscreen when user clicks the fullscreen button (we tell Electron to leave fullscreen). */
 function exitOrdersFullScreen() {
     document.body.classList.remove('orders-table-fullscreen');
     if (window.electronAPI && window.electronAPI.setFullScreen) {

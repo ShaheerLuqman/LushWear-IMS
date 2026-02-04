@@ -219,7 +219,7 @@ async def sync_shopify_orders():
             fulfillment_status = order.get("fulfillment_status")
             if fulfillment_status == "fulfilled":
                 return "fulfilled"
-            return "pending"
+            return "unfulfilled"
         
         def extract_delivery_status(order):
             fulfillment_status = order.get("fulfillment_status")
@@ -442,8 +442,8 @@ async def sync_shopify_orders():
                 if existing_status in ("delivered", "returned"):
                     orders_to_skip.append(order_number)
                     continue
-                # Only update order_status if it was previously cancelled or pending
-                if existing_status not in ("cancelled", "pending"):
+                # Only update order_status if it was previously cancelled or unfulfilled
+                if existing_status not in ("cancelled", "unfulfilled"):
                     order_data["order_status"] = existing_order.get("order_status")
                 # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
                 order_data["advance_amount"] = advance_amount

@@ -1424,7 +1424,8 @@ body {
     color: #16a34a;
 }
 
-.grid-status-pending {
+.grid-status-pending,
+.grid-status-unfulfilled {
     background: rgba(139, 92, 246, 0.15);
     color: #7c3aed;
 }
