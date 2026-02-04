@@ -80,24 +80,23 @@
                         <button type="button" id="ordersMonthNext" class="month-nav-btn" title="Next period">›</button>
                     </div>
                     <button id="editCostPricesBtn" class="btn btn-primary" style="display: none;">
-                        <span style="margin-right: 8px;">✏️</span>
                         Edit Cost Prices
                     </button>
                     <button id="syncShopifyBtn" class="btn btn-primary" style="display: none;">
-                        <span style="margin-right: 8px;">🔄</span>
                         Sync from Shopify
                     </button>
                     <button id="syncOrdersBtn" class="btn btn-primary" style="display: none;">
-                        <span style="margin-right: 8px;">🔄</span>
                         Sync from Shopify
                     </button>
+                    <button id="bulkUpdateOrderBtn" class="btn btn-secondary" style="display: none;" title="Bulk update order status">
+                        Bulk update order
+                    </button>
                     <button id="uploadPostExCsvBtn" class="btn btn-secondary" style="display: none;">
-                        <span style="margin-right: 8px;">📄</span>
                         Upload PostEx CSV
                     </button>
                     <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
-                        <span style="margin-right: 8px;">📍</span>
-                        Refresh Delivery Status
+                        <span style="margin-right: 8px;">🔄</span>
+                        Delivery Status
                     </button>
                     <button id="ordersFullScreenBtn" class="btn btn-secondary btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
                         <span aria-hidden="true">⛶</span>
@@ -159,6 +158,42 @@
 
     <!-- Toast Notification -->
     <div id="toast" class="toast"></div>
+
+    <!-- Bulk Update Order Modal -->
+    <div id="bulkUpdateOrderModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Bulk update order status</h2>
+                <button type="button" class="modal-close" id="closeBulkUpdateOrderModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div id="bulkUpdateOrderForm">
+                    <p class="modal-description">Enter order numbers, one per line:</p>
+                    <textarea id="bulkUpdateOrderNumbers" class="bulk-update-textarea" rows="10" placeholder="e.g. 2721&#10;2722&#10;2723"></textarea>
+                    <div class="bulk-update-actions">
+                        <button type="button" id="bulkUpdateSetDelivered" class="btn btn-primary">Set order status Delivered</button>
+                        <button type="button" id="bulkUpdateSetReturned" class="btn btn-secondary">Set order status Returned</button>
+                    </div>
+                </div>
+                <div id="bulkUpdateOrderResults" class="bulk-update-results" style="display: none;">
+                    <p class="bulk-update-results-title">Results</p>
+                    <div class="bulk-update-result-section">
+                        <strong>Updated successfully:</strong>
+                        <ul id="bulkUpdateSuccessList" class="bulk-update-list"></ul>
+                        <p id="bulkUpdateSuccessEmpty" class="bulk-update-empty" style="display: none;">None</p>
+                    </div>
+                    <div class="bulk-update-result-section">
+                        <strong>Not found / failed:</strong>
+                        <ul id="bulkUpdateFailedList" class="bulk-update-list"></ul>
+                        <p id="bulkUpdateFailedEmpty" class="bulk-update-empty" style="display: none;">None</p>
+                    </div>
+                    <div class="bulk-update-actions">
+                        <button type="button" id="bulkUpdateResultsClose" class="btn btn-primary">Close</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- Edit Modal -->
     <div id="editModal" class="modal">

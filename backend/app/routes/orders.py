@@ -1,5 +1,6 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
 from typing import List, Dict, Any
+from pydantic import BaseModel
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
@@ -307,6 +308,29 @@ async def sync_shopify_orders():
                 if name:
                     item_names.append(name)
             return item_names
+
+        def subtotal_line_items_excluding_removed(order):
+            """Sum line item totals excluding removed items. Uses current_quantity (Shopify's quantity after removals) when present, else quantity. Removed lines have current_quantity=0."""
+            if "line_items" not in order or not order["line_items"]:
+                return None
+            total = 0.0
+            for item in order["line_items"]:
+                # current_quantity is the quantity after edits/removals; when a line is removed it is 0
+                qty = item.get("current_quantity")
+                if qty is None:
+                    qty = item.get("quantity") or 0
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty <= 0:
+                    continue
+                try:
+                    price = float(item.get("price") or 0)
+                    total += price * qty
+                except (TypeError, ValueError):
+                    pass
+            return total if total > 0 else None
         
         def normalize_value(val):
             if val is None:
@@ -367,12 +391,13 @@ async def sync_shopify_orders():
             tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
             
-            # Calculate total amount without discounts
-            # total_line_items_price = sum of line items before any discounts (both per-item and order-level)
-            total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
-            tax_amount = extract_tax_amount(sp_order) or 0.0
-            
-            # Get shipping price
+            # Calculate total amount: use only non-removed line items (exclude quantity 0 / removed products)
+            total_line_items_price = subtotal_line_items_excluding_removed(sp_order)
+            if total_line_items_price is None:
+                total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
+            shopify_tax = extract_tax_amount(sp_order) or 0.0  # Used only for total_amount calc; we never store tax from Shopify
+
+            # Get shipping price (used only for total_amount calc; we never store delivery_charge from Shopify)
             shipping_price = 0.0
             if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
                 shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
@@ -380,9 +405,9 @@ async def sync_shopify_orders():
                     shipping_price = float(shop_money.get("amount", "0.00"))
             elif "total_shipping_price" in sp_order:
                 shipping_price = float(sp_order.get("total_shipping_price") or 0)
-            
-            # Total without discounts = line items (before discounts) + tax + shipping
-            total_amount = total_line_items_price + tax_amount + shipping_price
+
+            # Total = line items (excluding removed) + tax + shipping
+            total_amount = total_line_items_price + shopify_tax + shipping_price
             
             # Sum of all discounts (custom order-level + per-item discounts)
             total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
@@ -394,8 +419,9 @@ async def sync_shopify_orders():
             else:
                 advance_amount = total_discounts
             
-            # Delivery charge is not filled from Shopify; add manually in the app
+            # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
             delivery_charge = 0.0
+            tax_amount = 0.0
             cost_price = extract_cost_price(sp_order) or 0.0
             
             # Set fixed delivery charge for SCS courier
@@ -437,18 +463,21 @@ async def sync_shopify_orders():
             
             if order_number in existing_orders_map:
                 existing_order = existing_orders_map[order_number]
-                # Skip orders that are delivered or returned (do not overwrite from Shopify)
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
                 if existing_status in ("delivered", "returned"):
-                    orders_to_skip.append(order_number)
+                    # Do not overwrite status/courier/delivery/tax etc., but still update
+                    # advance_amount and total_amount from Shopify so "paid" state stays in sync.
+                    financial_only = {**existing_order, "advance_amount": advance_amount, "total_amount": total_amount, "updated_at": current_time}
+                    orders_to_update.append(financial_only)
                     continue
                 # Only update order_status if it was previously cancelled or unfulfilled
                 if existing_status not in ("cancelled", "unfulfilled"):
                     order_data["order_status"] = existing_order.get("order_status")
                 # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
                 order_data["advance_amount"] = advance_amount
-                # Preserve delivery_charge (filled manually, not from Shopify)
+                # Preserve delivery_charge and tax_amount (never from Shopify; set manually or via CSV)
                 order_data["delivery_charge"] = existing_order.get("delivery_charge", 0)
+                order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                 # Preserve last fetched delivery status (from courier tracking)
                 order_data["delivery_status"] = existing_order.get("delivery_status")
                 # Preserve piece_received (set by delivery status or manually; default Pending)
@@ -458,15 +487,14 @@ async def sync_shopify_orders():
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
 
                 if courier_is_assigned:
-                    # Keep existing courier/tracking/cost etc; do not overwrite from Shopify
+                    # Keep existing courier/tracking/cost/delivery_charge/tax_amount; do not overwrite from Shopify
                     # Always update from Shopify: total_amount (without discounts), advance_amount (paid=total, not paid=discounts)
                     order_data["courier"] = existing_order.get("courier")
                     order_data["tracking_number"] = existing_order.get("tracking_number")
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
                     order_data["delivery_charge"] = existing_order.get("delivery_charge")
-                    # tax_amount is used in total_amount calculation, so keep it from Shopify
-                    order_data["tax_amount"] = tax_amount
+                    order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
@@ -533,11 +561,12 @@ async def sync_shopify_orders():
 
 
 def _parse_float(val: Any, default: float = 0.0) -> float:
-    """Parse a CSV cell to float; return default if invalid."""
+    """Parse a CSV cell to float; return default if invalid. Strips commas and trailing %."""
     if val is None or (isinstance(val, str) and val.strip() == ""):
         return default
     try:
-        return float(str(val).strip().replace(",", ""))
+        s = str(val).strip().replace(",", "").rstrip("%").strip()
+        return float(s) if s else default
     except (ValueError, TypeError):
         return default
 
@@ -564,16 +593,25 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         col_map = {}
         for i, name in enumerate(reader.fieldnames):
             key_upper = name.upper().strip()  # Compare against stripped uppercase
+            key_norm = key_upper.replace(" ", "_")  # "WH INCOME TAX (2%)" -> "WH_INCOME_TAX_(2%)"
             # Check each pattern independently (not elif) to handle multiple columns
             # Store the ORIGINAL fieldname (with spaces if any) for use with row.get()
             if "SHIPPING_CHARGES" in key_upper and "shipping_charges" not in col_map:
                 col_map["shipping_charges"] = name  # Use original name
             if "GST" in key_upper and "TAX" not in key_upper and "gst" not in col_map:
                 col_map["gst"] = name  # Use original name
-            if ("WH_INCOME_TAX" in key_upper or "INCOME_TAX" in key_upper) and "wh_income_tax" not in col_map:
-                col_map["wh_income_tax"] = name  # Use original name
-            if ("WH_SALES_TAX" in key_upper or "SALES_TAX" in key_upper) and "wh_sales_tax" not in col_map:
-                col_map["wh_sales_tax"] = name  # Use original name
+            # WH_INCOME_TAX (2%) or WH INCOME TAX (2%) or INCOME_TAX
+            if ("wh_income_tax" not in col_map and (
+                "WH_INCOME_TAX" in key_norm or "INCOME_TAX" in key_norm
+                or ("WH" in key_upper and "INCOME" in key_upper and "TAX" in key_upper and "SALES" not in key_upper)
+            )):
+                col_map["wh_income_tax"] = name
+            # WH_SALES_TAX (2%) or WH SALES TAX (2%) or SALES_TAX
+            if ("wh_sales_tax" not in col_map and (
+                "WH_SALES_TAX" in key_norm or "SALES_TAX" in key_norm
+                or ("WH" in key_upper and "SALES" in key_upper and "TAX" in key_upper)
+            )):
+                col_map["wh_sales_tax"] = name
             if ("ORDER_REF_NUMBER" in key_upper or "ORDER_NUMBER" in key_upper or "ORDER_ID" in key_upper) and "order_ref_number" not in col_map:
                 col_map["order_ref_number"] = name  # Use original name
         if "order_ref_number" not in col_map:
@@ -674,6 +712,7 @@ async def upload_postex_csv(file: UploadFile = File(...)):
             "updated": updated_count,
             "message": message,
             "updated_order_ids": updated_order_ids,
+            "matched_order_numbers": matched_order_numbers,
             "csv_rows_processed": len(rows),
             "csv_order_numbers_count": len(csv_order_numbers),
             "db_order_numbers_count": len(set(db_order_numbers)),
@@ -783,6 +822,46 @@ async def create_order(order: OrderCreate):
         return response.data[0]
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+class BulkUpdateStatusBody(BaseModel):
+    order_numbers: List[int]
+    order_status: str  # "delivered" or "returned"
+
+
+@router.post("/bulk-update-status")
+async def bulk_update_order_status(body: BulkUpdateStatusBody):
+    """Update order_status for multiple orders by order_number."""
+    if body.order_status not in ("delivered", "returned"):
+        raise HTTPException(status_code=400, detail="order_status must be 'delivered' or 'returned'")
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    try:
+        supabase = get_supabase()
+        update_data = {
+            "order_status": body.order_status,
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        response = (
+            supabase.table("orders")
+            .update(update_data)
+            .in_("order_number", body.order_numbers)
+            .execute()
+        )
+        updated_rows = response.data or []
+        updated_order_numbers = [int(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
+        requested_set = set(body.order_numbers)
+        updated_set = set(updated_order_numbers)
+        not_found_order_numbers = sorted(requested_set - updated_set)
+        return {
+            "updated_count": len(updated_order_numbers),
+            "order_status": body.order_status,
+            "requested_count": len(body.order_numbers),
+            "updated_order_numbers": sorted(updated_order_numbers),
+            "not_found_order_numbers": not_found_order_numbers,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.put("/{order_id}")
 async def update_order(order_id: str, order: OrderUpdate):

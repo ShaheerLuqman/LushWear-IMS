@@ -531,6 +531,7 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return params.data.cod;
                 const status = (params.data.order_status || '').toLowerCase();
                 if (status === 'returned') return 0;
                 const total = parseFloat(params.data.total_amount) || 0;
@@ -598,6 +599,7 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return params.data.receivable;
                 const status = (params.data.order_status || '').toLowerCase();
                 const total = parseFloat(params.data.total_amount) || 0;
                 const advance = parseFloat(params.data.advance_amount) || 0;
@@ -620,9 +622,22 @@ function initOrdersGrid() {
             width: 110,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
+            filterValueGetter: numberFilterValueGetter,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            valueSetter: (params) => {
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.cost_price = newValue;
+                    saveOrderField(params.data.id, 'cost_price', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
             }
         },
         {
@@ -633,6 +648,7 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return params.data.net_profit;
                 const status = (params.data.order_status || '').toLowerCase();
                 if (status === 'cancelled') return 0;
                 const total = parseFloat(params.data.total_amount) || 0;
@@ -656,6 +672,7 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return params.data.profit_percent;
                 const status = (params.data.order_status || '').toLowerCase();
                 const total = parseFloat(params.data.total_amount) || 0;
                 const delivery = parseFloat(params.data.delivery_charge) || 0;
@@ -811,12 +828,15 @@ function initOrdersGrid() {
         }
     ];
 
-    // Function to calculate sums for selected rows
+    // Function to calculate sums for selected rows (cancelled rows are excluded from sums)
     function calculateSelectedSums() {
         if (!ordersGridApi) return {};
         
         const selectedRows = ordersGridApi.getSelectedRows();
-        if (selectedRows.length === 0) {
+        const rowsForSum = selectedRows.filter(
+            (row) => (row.order_status || '').toLowerCase() !== 'cancelled'
+        );
+        if (rowsForSum.length === 0) {
             return {
                 count: 0,
                 total_amount: 0,
@@ -839,7 +859,7 @@ function initOrdersGrid() {
         let receivable = 0;
         let net_profit = 0;
         
-        selectedRows.forEach(row => {
+        rowsForSum.forEach(row => {
             const status = (row.order_status || '').toLowerCase();
             const rowTotal = parseFloat(row.total_amount) || 0;
             const rowAdvance = parseFloat(row.advance_amount) || 0;
@@ -876,7 +896,7 @@ function initOrdersGrid() {
         });
         
         return {
-            count: selectedRows.length,
+            count: rowsForSum.length,
             total_amount,
             advance_amount,
             cod,
@@ -1098,11 +1118,14 @@ function switchView(viewName) {
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
-    
+    const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
+
     if (editCostPricesBtn) {
         editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
     }
-    
+
+    if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
+
     const ordersMonthNav = document.getElementById('ordersMonthNav');
     const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
     if (syncProductsBtn && syncOrdersBtn) {
@@ -1117,6 +1140,7 @@ function switchView(viewName) {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
+            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersMonthNav) ordersMonthNav.style.display = 'flex';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -1127,6 +1151,7 @@ function switchView(viewName) {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (ordersMonthNav) ordersMonthNav.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             exitOrdersFullScreen();
@@ -1275,7 +1300,7 @@ async function syncShopifyProducts() {
     const originalText = btn.innerHTML;
 
     btn.disabled = true;
-    btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Syncing...';
+    btn.innerHTML = 'Syncing...';
 
     try {
         const response = await fetch(`${API_BASE}/products/sync-shopify`, {
@@ -1313,7 +1338,7 @@ async function syncShopifyOrders() {
     const originalText = btn.innerHTML;
 
     btn.disabled = true;
-    btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Syncing...';
+    btn.innerHTML = 'Syncing...';
 
     try {
         const response = await fetch(`${API_BASE}/orders/sync-shopify`, {
@@ -1359,7 +1384,7 @@ async function uploadPostExCsv(file) {
     const originalText = btn?.innerHTML;
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span style="margin-right: 8px;">⏳</span>Uploading...';
+        btn.innerHTML = 'Uploading...';
     }
     try {
         const formData = new FormData();
@@ -1375,31 +1400,29 @@ async function uploadPostExCsv(file) {
         }
         showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
         
-        // Store updated order IDs to select them after reload
+        // CSV may contain orders from multiple months; we only have current month in the grid.
+        // Select all rows in the current view that were updated by the CSV (ok if other months not visible).
         const updatedOrderIds = data.updated_order_ids || [];
+        const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(Number));
         
         await loadOrders();
         
-        // Select the updated rows in the grid
-        if (ordersGridApi && updatedOrderIds.length > 0) {
-            // Wait a bit for the grid to finish rendering
+        if (ordersGridApi && (updatedOrderIds.length > 0 || matchedOrderNumbers.size > 0)) {
             setTimeout(() => {
                 if (ordersGridApi) {
-                    // Clear existing selection
                     ordersGridApi.deselectAll();
-                    
-                    // Select rows by their IDs
                     ordersGridApi.forEachNode(node => {
-                        if (updatedOrderIds.includes(node.data.id)) {
+                        const data = node.data;
+                        if (!data || data.id === '__footer__') return;
+                        if (updatedOrderIds.includes(data.id) || matchedOrderNumbers.has(Number(data.order_number))) {
                             node.setSelected(true);
                         }
                     });
-                    
-                    // Scroll to first selected row if any
                     const selectedRows = ordersGridApi.getSelectedRows();
                     if (selectedRows.length > 0) {
                         ordersGridApi.ensureNodeVisible(selectedRows[0], 'middle');
                     }
+                    if (typeof updateFooterRow === 'function') updateFooterRow();
                 }
             }, 100);
         }
@@ -1451,6 +1474,15 @@ function initForms() {
             scheduleOrdersAutoSync();
         });
     }
+
+    // Bulk update order button
+    const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
+    if (bulkUpdateOrderBtn) {
+        bulkUpdateOrderBtn.addEventListener('click', openBulkUpdateOrderModal);
+    }
+
+    document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
+    document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
 
     // Upload PostEx CSV Button
     const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
@@ -1535,6 +1567,116 @@ document.getElementById('editModal')?.addEventListener('click', (e) => {
         closeModal();
     }
 });
+
+// Bulk Update Order modal
+function openBulkUpdateOrderModal() {
+    const formEl = document.getElementById('bulkUpdateOrderForm');
+    const resultsEl = document.getElementById('bulkUpdateOrderResults');
+    const textarea = document.getElementById('bulkUpdateOrderNumbers');
+    if (formEl) formEl.style.display = '';
+    if (resultsEl) resultsEl.style.display = 'none';
+    if (textarea) {
+        textarea.value = '';
+        textarea.focus();
+    }
+    document.getElementById('bulkUpdateOrderModal')?.classList.add('active');
+}
+
+function showBulkUpdateResults(result) {
+    const formEl = document.getElementById('bulkUpdateOrderForm');
+    const resultsEl = document.getElementById('bulkUpdateOrderResults');
+    const successList = document.getElementById('bulkUpdateSuccessList');
+    const successEmpty = document.getElementById('bulkUpdateSuccessEmpty');
+    const failedList = document.getElementById('bulkUpdateFailedList');
+    const failedEmpty = document.getElementById('bulkUpdateFailedEmpty');
+    if (!resultsEl || !successList || !failedList) return;
+
+    successList.innerHTML = '';
+    failedList.innerHTML = '';
+    const updated = result.updated_order_numbers || [];
+    const notFound = result.not_found_order_numbers || [];
+
+    if (updated.length === 0) {
+        successEmpty.style.display = 'block';
+    } else {
+        successEmpty.style.display = 'none';
+        updated.forEach((num) => {
+            const li = document.createElement('li');
+            li.textContent = String(num);
+            successList.appendChild(li);
+        });
+    }
+
+    if (notFound.length === 0) {
+        failedEmpty.style.display = 'block';
+    } else {
+        failedEmpty.style.display = 'none';
+        notFound.forEach((num) => {
+            const li = document.createElement('li');
+            li.textContent = String(num);
+            failedList.appendChild(li);
+        });
+    }
+
+    if (formEl) formEl.style.display = 'none';
+    resultsEl.style.display = 'block';
+}
+
+function closeBulkUpdateOrderModal() {
+    document.getElementById('bulkUpdateOrderModal')?.classList.remove('active');
+}
+
+document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'bulkUpdateOrderModal') closeBulkUpdateOrderModal();
+});
+
+document.getElementById('closeBulkUpdateOrderModal')?.addEventListener('click', closeBulkUpdateOrderModal);
+
+document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
+    closeBulkUpdateOrderModal();
+});
+
+function parseOrderNumbersFromTextarea() {
+    const textarea = document.getElementById('bulkUpdateOrderNumbers');
+    if (!textarea) return [];
+    const lines = textarea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const numbers = [];
+    for (const line of lines) {
+        const n = parseInt(line, 10);
+        if (!Number.isNaN(n) && n > 0) numbers.push(n);
+    }
+    return [...new Set(numbers)];
+}
+
+async function bulkUpdateOrderStatus(orderStatus) {
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
+    const btnReturned = document.getElementById('bulkUpdateSetReturned');
+    const buttons = [btnDelivered, btnReturned];
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    try {
+        const response = await fetch(`${API_BASE}/orders/bulk-update-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_numbers: orderNumbers, order_status: orderStatus }),
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Bulk update failed');
+        }
+        const result = await response.json();
+        showBulkUpdateResults(result);
+        loadOrders();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        buttons.forEach((b) => { if (b) b.disabled = false; });
+    }
+}
 
 // ============================================
 // Toast
