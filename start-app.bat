@@ -25,7 +25,9 @@ start /min "" "%~f0" hidden
 exit
 
 :visible
-cd /d "%~dp0frontend"
+cd /d "%~dp0"
+git pull
+cd frontend
 
 REM Check if node_modules exists
 if not exist "node_modules" (
@@ -44,7 +46,9 @@ npm start
 exit
 
 :hidden
-cd /d "%~dp0frontend"
+cd /d "%~dp0"
+git pull
+cd frontend
 
 REM Check if node_modules exists
 if not exist "node_modules" (

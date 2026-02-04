@@ -99,6 +99,9 @@
                         <span style="margin-right: 8px;">📍</span>
                         Refresh Delivery Status
                     </button>
+                    <button id="ordersFullScreenBtn" class="btn btn-secondary btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
+                        <span aria-hidden="true">⛶</span>
+                    </button>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
                     <input type="file" id="postExCsvInput" accept=".csv" style="display: none;">
                 </div>
@@ -143,6 +146,7 @@
                 <!-- Orders View -->
                 <div id="ordersView" class="view active">
                     <div id="ordersGrid" class="ag-theme-alpine grid-container"></div>
+                    <div id="ordersSelectedCount" class="orders-selected-count" style="display: none;">0 row(s) selected</div>
                 </div>
 
                 <!-- Products View -->

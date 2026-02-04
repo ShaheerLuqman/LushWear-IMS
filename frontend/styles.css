@@ -1415,6 +1415,11 @@ body {
 }
 
 .grid-status-fulfilled {
+    background: rgba(234, 179, 8, 0.15);
+    color: #ca8a04;
+}
+
+.grid-status-delivered {
     background: rgba(34, 197, 94, 0.15);
     color: #16a34a;
 }
@@ -1424,10 +1429,33 @@ body {
     color: #7c3aed;
 }
 
-.grid-status-returned,
-.grid-status-cancelled {
+.grid-status-returned {
     background: rgba(239, 68, 68, 0.15);
     color: #dc2626;
+}
+
+/* Piece With column: Pending (Yellow), Done (Green), Received */
+.grid-piece-pending {
+    background: rgba(234, 179, 8, 0.2);
+    color: #ca8a04;
+}
+.grid-piece-done {
+    background: rgba(34, 197, 94, 0.2);
+    color: #16a34a;
+}
+.grid-piece-received {
+    background: rgba(139, 92, 246, 0.15);
+    color: #7c3aed;
+}
+
+.grid-status-cancelled {
+    background: rgba(0, 0, 0, 0.15);
+    color: #1a1a1a;
+}
+
+.grid-status-rfd {
+    background: rgba(59, 130, 246, 0.15);
+    color: #2563eb;
 }
 
 .grid-variants-container {
@@ -1546,5 +1574,73 @@ body {
     margin-top: 20px;
     padding-top: 16px;
     border-top: 1px solid var(--border-color);
+}
+
+/* Orders Selected Count - Bottom Right */
+.orders-selected-count {
+    position: absolute;
+    bottom: 8px;
+    right: 16px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    pointer-events: none;
+    z-index: 10;
+}
+
+#ordersView {
+    position: relative;
+}
+
+/* Order table full screen mode */
+body.orders-table-fullscreen .titlebar,
+body.orders-table-fullscreen .sidebar,
+body.orders-table-fullscreen .header {
+    display: none !important;
+}
+
+body.orders-table-fullscreen .app-container {
+    margin-top: 0;
+    height: 100vh;
+}
+
+body.orders-table-fullscreen .main-content {
+    padding: 0;
+}
+
+body.orders-table-fullscreen .content-area {
+    padding: 0;
+    height: 100%;
+}
+
+body.orders-table-fullscreen #ordersView {
+    height: 100%;
+    display: flex !important;
+    flex-direction: column;
+}
+
+body.orders-table-fullscreen #ordersView #ordersGrid {
+    flex: 1;
+    min-height: 0;
+}
+
+.btn-icon-only {
+    padding: 12px;
+    min-width: 44px;
+}
+
+.btn-icon-only span {
+    font-size: 1.1em;
+}
+
+/* AG Grid Footer Row Styles */
+.ag-theme-alpine .ag-pinned-bottom-row {
+    background-color: var(--bg-secondary) !important;
+    border-top: 2px solid var(--accent-primary) !important;
+    font-weight: bold;
+}
+
+.ag-theme-alpine .ag-pinned-bottom-row .ag-cell {
+    background-color: var(--bg-secondary) !important;
+    border-top: none !important;
 }
 

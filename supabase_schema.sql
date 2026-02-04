@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS orders (
     cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     order_receiving_date TIMESTAMP WITH TIME ZONE,
     items TEXT[],
-    piece_with TEXT NOT NULL DEFAULT 'Warehouse' CHECK (piece_with IN ('Customer', 'Rider', 'Warehouse')),
+    piece_received TEXT NOT NULL DEFAULT 'Pending' CHECK (piece_received IN ('Pending', 'Done', 'Received')),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -61,4 +61,4 @@ CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id ON variants(shopify_v
 CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
 CREATE INDEX IF NOT EXISTS idx_orders_order_status ON orders(order_status);
 CREATE INDEX IF NOT EXISTS idx_orders_delivery_status ON orders(delivery_status);
-CREATE INDEX IF NOT EXISTS idx_orders_piece_with ON orders(piece_with);
+CREATE INDEX IF NOT EXISTS idx_orders_piece_received ON orders(piece_received);

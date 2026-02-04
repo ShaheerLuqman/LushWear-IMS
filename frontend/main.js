@@ -41,10 +41,27 @@ function createWindow() {
     mainWindow.once('ready-to-show', () => {
         mainWindow.show();
         mainWindow.maximize();
+        setupFullScreenListeners();
     });
 
     mainWindow.on('closed', () => {
         mainWindow = null;
+    });
+}
+
+ipcMain.handle('set-fullscreen', (_, flag) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.setFullScreen(!!flag);
+    }
+});
+
+function setupFullScreenListeners() {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    mainWindow.on('enter-full-screen', () => {
+        mainWindow.webContents.send('fullscreen-changed', true);
+    });
+    mainWindow.on('leave-full-screen', () => {
+        mainWindow.webContents.send('fullscreen-changed', false);
     });
 }
 
@@ -67,8 +84,8 @@ function startBackend() {
         
         console.log('Starting backend in separate terminal window...');
         
-        // Start backend in a new visible terminal window with SHOW_TERMINALS=1
-        const cmd = `start "Backend Server" cmd /k "set SHOW_TERMINALS=1 && ${startBackendScript}"`;
+        // Start backend in a new visible terminal window with SHOW_TERMINALS=1; -y so BE terminal closes smoothly
+        const cmd = `start "Backend Server" cmd /k "set SHOW_TERMINALS=1 && ${startBackendScript} -y"`;
         exec(cmd, {
             cwd: path.join(__dirname, '..'),
             env: { ...process.env, SHOW_TERMINALS: '1' }
@@ -128,6 +145,7 @@ function startBackend() {
 
 /**
  * Terminate the backend and any process on port 8000.
+ * On Windows: try graceful close first (taskkill without /F, like -y/smooth), then force if needed.
  * @param {() => void} [callback] - Called when all kill operations are finished. If omitted, runs without waiting.
  */
 function killAllProcesses(callback) {
@@ -140,9 +158,13 @@ function killAllProcesses(callback) {
         try {
             if (process.platform === 'win32') {
                 try {
-                    execSync(`taskkill /PID ${backendProcess.pid} /T /F`, { stdio: 'ignore' });
+                    // Graceful first (no /F) so BE closes smoothly
+                    execSync(`taskkill /PID ${backendProcess.pid} /T`, { stdio: 'ignore' });
                 } catch (e) {
-                    // Process may already be gone
+                    // Process may already be gone or didn't exit; force if still running
+                    try {
+                        execSync(`taskkill /PID ${backendProcess.pid} /T /F`, { stdio: 'ignore' });
+                    } catch (e2) { /* ignore */ }
                 }
             } else {
                 backendProcess.kill('SIGTERM');
@@ -175,11 +197,40 @@ function killAllProcesses(callback) {
                 done();
                 return;
             }
+            // Graceful first (no /F) so BE terminal closes smoothly
             let completed = 0;
             arr.forEach(pid => {
-                exec(`taskkill /PID ${pid} /T /F`, () => {
+                exec(`taskkill /PID ${pid} /T`, () => {
                     completed++;
-                    if (completed === arr.length) done();
+                    if (completed === arr.length) {
+                        // After short delay, force any remaining on port 8000
+                        setTimeout(() => {
+                            exec('netstat -ano | findstr :8000', (err2, out2) => {
+                                if (err2 || !out2 || !out2.trim()) {
+                                    done();
+                                    return;
+                                }
+                                const pids2 = new Set();
+                                out2.trim().split('\n').forEach(line => {
+                                    const parts = line.trim().split(/\s+/);
+                                    const p = parts[parts.length - 1];
+                                    if (p && /^\d+$/.test(p) && p !== '0') pids2.add(p);
+                                });
+                                const arr2 = [...pids2];
+                                if (arr2.length === 0) {
+                                    done();
+                                    return;
+                                }
+                                let doneCount = 0;
+                                arr2.forEach(p => {
+                                    exec(`taskkill /PID ${p} /T /F`, () => {
+                                        doneCount++;
+                                        if (doneCount === arr2.length) done();
+                                    });
+                                });
+                            });
+                        }, 2000);
+                    }
                 });
             });
         });

@@ -7,6 +7,7 @@ let orders = [];
 let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
+let updateFooterRow = null; // Will be set in initOrdersGrid
 // Month-based pagination: period is month's 22 to next month's 21
 let ordersPeriodMonth = null;
 let ordersPeriodYear = null;
@@ -150,7 +151,10 @@ function initProductsGrid() {
             field: 'price',
             width: 120,
             filter: 'agNumberColumnFilter',
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
         },
         {
             headerName: 'Variants',
@@ -191,7 +195,10 @@ function initProductsGrid() {
             filter: 'agNumberColumnFilter',
             editable: true,
             cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
             valueSetter: (params) => {
                 const newValue = parseFloat(params.newValue);
                 if (!isNaN(newValue) && newValue >= 0) {
@@ -231,6 +238,103 @@ function initProductsGrid() {
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
+// Custom floating filter for Order Status: shows a <select> dropdown in the filter row
+const ORDER_STATUS_VALUES = ['pending', 'fulfilled', 'delivered', 'RFD', 'returned', 'CNA', 'ICA'];
+function OrderStatusFloatingFilter() {}
+OrderStatusFloatingFilter.prototype.init = function (params) {
+    this.params = params;
+    this.eGui = document.createElement('div');
+    this.eGui.style.width = '100%';
+    const select = document.createElement('select');
+    select.style.width = '100%';
+    select.style.padding = '4px 6px';
+    select.style.fontSize = '12px';
+    const allOption = document.createElement('option');
+    allOption.value = '__all__';
+    allOption.textContent = 'All';
+    select.appendChild(allOption);
+    ORDER_STATUS_VALUES.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        const display = (v === 'RFD' || v === 'CNA' || v === 'ICA') ? v : (v.charAt(0).toUpperCase() + v.slice(1));
+        opt.textContent = display;
+        select.appendChild(opt);
+    });
+    const api = params.api;
+    const columnId = params.column.getColId();
+    select.addEventListener('change', function () {
+        const val = select.value;
+        const currentModel = api.getFilterModel() || {};
+        const newModel = Object.assign({}, currentModel);
+        if (val === '__all__') {
+            delete newModel[columnId];
+        } else {
+            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
+        }
+        api.setFilterModel(newModel);
+    });
+    this.eGui.appendChild(select);
+    this.select = select;
+};
+OrderStatusFloatingFilter.prototype.getGui = function () { return this.eGui; };
+OrderStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
+    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
+        this.select.value = '__all__';
+    } else if (ORDER_STATUS_VALUES.indexOf(parentModel.filter) !== -1) {
+        this.select.value = parentModel.filter;
+    } else {
+        this.select.value = '__all__';
+    }
+};
+
+// Custom floating filter for Piece Received: dropdown in the filter row
+const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];
+function PieceReceivedFloatingFilter() {}
+PieceReceivedFloatingFilter.prototype.init = function (params) {
+    this.params = params;
+    this.eGui = document.createElement('div');
+    this.eGui.style.width = '100%';
+    const select = document.createElement('select');
+    select.style.width = '100%';
+    select.style.padding = '4px 6px';
+    select.style.fontSize = '12px';
+    const allOption = document.createElement('option');
+    allOption.value = '__all__';
+    allOption.textContent = 'All';
+    select.appendChild(allOption);
+    PIECE_RECEIVED_VALUES.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        select.appendChild(opt);
+    });
+    const api = params.api;
+    const columnId = params.column.getColId();
+    select.addEventListener('change', function () {
+        const val = select.value;
+        const currentModel = api.getFilterModel() || {};
+        const newModel = Object.assign({}, currentModel);
+        if (val === '__all__') {
+            delete newModel[columnId];
+        } else {
+            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
+        }
+        api.setFilterModel(newModel);
+    });
+    this.eGui.appendChild(select);
+    this.select = select;
+};
+PieceReceivedFloatingFilter.prototype.getGui = function () { return this.eGui; };
+PieceReceivedFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
+    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
+        this.select.value = '__all__';
+    } else if (PIECE_RECEIVED_VALUES.indexOf(parentModel.filter) !== -1) {
+        this.select.value = parentModel.filter;
+    } else {
+        this.select.value = '__all__';
+    }
+};
+
 function initOrdersGrid() {
     const gridDiv = document.getElementById('ordersGrid');
     if (!gridDiv) return;
@@ -249,6 +353,7 @@ function initOrdersGrid() {
             maxWidth: 48,
             checkboxSelection: true,
             headerCheckboxSelection: true,
+            headerCheckboxSelectionFilteredOnly: true,
             filter: false,
             sortable: false,
             floatingFilter: false,
@@ -285,12 +390,22 @@ function initOrdersGrid() {
             field: 'order_status',
             width: 130,
             filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
+            filterParams: {
+                filterOptions: ['equals'],
+                defaultOption: 'equals',
+                maxNumConditions: 1
+            },
+            floatingFilterComponent: OrderStatusFloatingFilter,
             cellRenderer: (params) => {
                 const status = params.value || '';
                 let cssClass = 'grid-status-pending';
-                if (status === 'fulfilled' || status === 'delivered') cssClass = 'grid-status-fulfilled';
-                else if (status === 'returned' || status === 'cancelled') cssClass = 'grid-status-returned';
+                if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
+                else if (status === 'delivered') cssClass = 'grid-status-delivered';
+                else if (status === 'returned') cssClass = 'grid-status-returned';
+                else if (status === 'cancelled') cssClass = 'grid-status-cancelled';
+                else if (status === 'RFD') cssClass = 'grid-status-rfd';
+                else if (status === 'ICA') cssClass = 'grid-status-rfd';
+                else if (status === 'CNA') cssClass = 'grid-status-rfd';
                 return `<span class="grid-status-badge ${cssClass}">${escapeHtml(status)}</span>`;
             }
         },
@@ -336,27 +451,23 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
         },
         {
-            headerName: 'Received',
+            headerName: 'Advance',
             field: 'advance_amount',
             width: 100,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: true,
-            cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
-            valueSetter: (params) => {
-                const newValue = parseFloat(params.newValue);
-                if (!isNaN(newValue) && newValue >= 0) {
-                    params.data.advance_amount = newValue;
-                    saveOrderField(params.data.id, 'advance_amount', newValue);
-                    params.api.refreshCells({ rowNodes: [params.node], force: true });
-                    return true;
-                }
-                return false;
+            editable: false,
+            cellStyle: { cursor: 'default' },
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             }
         },
         {
@@ -367,11 +478,16 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
+                const status = (params.data.order_status || '').toLowerCase();
+                if (status === 'returned') return 0;
                 const total = parseFloat(params.data.total_amount) || 0;
                 const advance = parseFloat(params.data.advance_amount) || 0;
                 return total - advance;
             },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
         },
         {
             headerName: 'D. Charge',
@@ -382,7 +498,10 @@ function initOrdersGrid() {
             filterValueGetter: numberFilterValueGetter,
             editable: true,
             cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
             valueSetter: (params) => {
                 const newValue = parseFloat(params.newValue);
                 if (!isNaN(newValue) && newValue >= 0) {
@@ -403,7 +522,10 @@ function initOrdersGrid() {
             filterValueGetter: numberFilterValueGetter,
             editable: true,
             cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
             valueSetter: (params) => {
                 const newValue = parseFloat(params.newValue);
                 if (!isNaN(newValue) && newValue >= 0) {
@@ -431,7 +553,10 @@ function initOrdersGrid() {
                 if (status === 'returned') return -delivery;
                 return total - (advance + delivery + tax);
             },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
             cellStyle: (params) => ({
                 color: params.value >= 0 ? 'var(--text-primary)' : 'var(--danger)'
             })
@@ -442,8 +567,10 @@ function initOrdersGrid() {
             width: 110,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString()
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            }
         },
         {
             headerName: 'Net Profit',
@@ -454,6 +581,7 @@ function initOrdersGrid() {
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
                 const status = (params.data.order_status || '').toLowerCase();
+                if (status === 'cancelled') return 0;
                 const total = parseFloat(params.data.total_amount) || 0;
                 const delivery = parseFloat(params.data.delivery_charge) || 0;
                 const tax = parseFloat(params.data.tax_amount) || 0;
@@ -461,7 +589,10 @@ function initOrdersGrid() {
                 if (status === 'returned') return -delivery;
                 return total - (delivery + tax + cost);
             },
-            valueFormatter: (params) => Math.round(params.value || 0).toLocaleString(),
+            valueFormatter: (params) => {
+                const val = parseFloat(params.value) || 0;
+                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
             cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
         },
         {
@@ -485,37 +616,43 @@ function initOrdersGrid() {
             cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
         },
         {
-            headerName: 'Piece With',
-            field: 'piece_with',
+            headerName: 'Piece Received',
+            field: 'piece_received',
             width: 120,
             filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
+            filterParams: {
+                filterOptions: ['equals'],
+                defaultOption: 'equals',
+                maxNumConditions: 1
+            },
+            floatingFilterComponent: PieceReceivedFloatingFilter,
             editable: true,
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agSelectCellEditor',
             cellEditorParams: {
-                values: ['Customer', 'Rider', 'Warehouse']
+                values: ['Pending', 'Done', 'Received']
             },
             valueGetter: (params) => {
                 const order = params.data;
-                const fromStatus = pieceWithFromLastStatus(order.delivery_status);
-                if (fromStatus) return fromStatus;
-                return (order.piece_with || '').trim() || null;
+                const status = (order.order_status || '').toLowerCase();
+                if (status === 'delivered') return 'Done';
+                const stored = (order.piece_received || '').trim();
+                return ['Pending', 'Done', 'Received'].includes(stored) ? stored : 'Pending';
             },
             valueFormatter: (params) => params.value || '-',
             cellRenderer: (params) => {
                 const v = (params.value || '').trim();
                 if (!v) return '<span style="color: var(--text-muted);">-</span>';
-                let cssClass = 'grid-status-pending';
-                if (v === 'Customer') cssClass = 'grid-status-fulfilled';
-                else if (v === 'Rider') cssClass = 'grid-status-returned';
+                let cssClass = 'grid-piece-pending';
+                if (v === 'Done') cssClass = 'grid-piece-done';
+                else if (v === 'Received') cssClass = 'grid-piece-received';
                 return `<span class="grid-status-badge ${cssClass}">${escapeHtml(v)}</span>`;
             },
             valueSetter: (params) => {
                 const newValue = (params.newValue || '').trim();
-                if (['Customer', 'Rider', 'Warehouse'].includes(newValue)) {
-                    params.data.piece_with = newValue;
-                    saveOrderField(params.data.id, 'piece_with', newValue);
+                if (['Pending', 'Done', 'Received'].includes(newValue)) {
+                    params.data.piece_received = newValue;
+                    saveOrderField(params.data.id, 'piece_received', newValue);
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
                     return true;
                 }
@@ -569,70 +706,206 @@ function initOrdersGrid() {
             }
         },
         {
-            headerName: 'Final Status',
+            headerName: 'Status',
             field: 'final_status',
             width: 110,
             filter: 'agSetColumnFilter',
             floatingFilter: true,
             filterParams: {
-                values: ['OK', 'Warning', 'Alert', 'None']
+                values: ['OK', 'Warning', 'None']
             },
             sortable: true,
             valueGetter: (params) => {
                 const order = params.data;
                 const status = (order.order_status || '').toLowerCase();
-                const pieceWith = (order.piece_with || '').trim();
+                const pieceReceived = (order.piece_received || '').trim();
                 
-                // Calculate receivable amount (same logic as Receivable column)
-                const total = parseFloat(order.total_amount) || 0;
-                const advance = parseFloat(order.advance_amount) || 0;
-                const delivery = parseFloat(order.delivery_charge) || 0;
-                const tax = parseFloat(order.tax_amount) || 0;
-                let receivable = 0;
-                
-                if (status === 'returned') {
-                    receivable = -delivery;
-                } else {
-                    receivable = total - (advance + delivery + tax);
+                // None for cancelled orders
+                if (status === 'cancelled') {
+                    return 'None';
                 }
                 
-                // Apply status rules
-                if (status === 'fulfilled' || status === 'delivered') {
-                    if (receivable === 0) {
+                const delivery = parseFloat(order.delivery_charge) || 0;
+                
+                // Green (OK) only in 2 scenarios (no receivable condition):
+                // 1. Order is delivered AND delivery_charge is non-zero
+                // 2. Order is returned AND delivery_charge is non-zero AND piece_received is "Received"
+                if (status === 'delivered') {
+                    if (delivery > 0) {
                         return 'OK';
-                    } else {
-                        return 'Warning';
                     }
                 } else if (status === 'returned') {
-                    if (pieceWith === 'Warehouse') {
+                    if (delivery > 0 && pieceReceived === 'Received') {
                         return 'OK';
-                    } else {
-                        return 'Alert';
                     }
                 }
                 
-                // Default: no indicator for other cases
-                return 'None';
+                // Default: all orders are yellow (Warning)
+                return 'Warning';
             },
             cellRenderer: (params) => {
-                const value = params.value || 'None';
+                const value = params.value || 'Warning';
                 if (value === 'OK') {
                     return '<span style="font-size: 18px;">🟢</span>';
-                } else if (value === 'Warning') {
+                } else if (value === 'None') {
+                    return '<span style="color: var(--text-muted);">-</span>';
+                } else {
                     return '<span style="font-size: 18px;">🟡</span>';
-                } else if (value === 'Alert') {
-                    return '<span style="font-size: 18px;">🔴</span>';
                 }
-                return '<span style="color: var(--text-muted);">-</span>';
             }
         }
     ];
+
+    // Function to calculate sums for selected rows
+    function calculateSelectedSums() {
+        if (!ordersGridApi) return {};
+        
+        const selectedRows = ordersGridApi.getSelectedRows();
+        if (selectedRows.length === 0) {
+            return {
+                count: 0,
+                total_amount: 0,
+                advance_amount: 0,
+                cod: 0,
+                delivery_charge: 0,
+                tax_amount: 0,
+                receivable: 0,
+                cost_price: 0,
+                net_profit: 0
+            };
+        }
+        
+        let total_amount = 0;
+        let advance_amount = 0;
+        let delivery_charge = 0;
+        let tax_amount = 0;
+        let cost_price = 0;
+        let cod = 0;
+        let receivable = 0;
+        let net_profit = 0;
+        
+        selectedRows.forEach(row => {
+            const status = (row.order_status || '').toLowerCase();
+            const rowTotal = parseFloat(row.total_amount) || 0;
+            const rowAdvance = parseFloat(row.advance_amount) || 0;
+            const rowDelivery = parseFloat(row.delivery_charge) || 0;
+            const rowTax = parseFloat(row.tax_amount) || 0;
+            const rowCost = parseFloat(row.cost_price) || 0;
+            
+            total_amount += rowTotal;
+            advance_amount += rowAdvance;
+            delivery_charge += rowDelivery;
+            tax_amount += rowTax;
+            cost_price += rowCost;
+            
+            // Calculate cod per row (0 for returned orders)
+            if (status !== 'returned') {
+                cod += rowTotal - rowAdvance;
+            }
+            
+            // Calculate receivable per row
+            if (status === 'returned') {
+                receivable += -rowDelivery;
+            } else {
+                receivable += rowTotal - (rowAdvance + rowDelivery + rowTax);
+            }
+            
+            // Calculate net profit per row
+            if (status === 'cancelled') {
+                // Net profit is 0 for cancelled orders
+            } else if (status === 'returned') {
+                net_profit += -rowDelivery;
+            } else {
+                net_profit += rowTotal - (rowDelivery + rowTax + rowCost);
+            }
+        });
+        
+        return {
+            count: selectedRows.length,
+            total_amount,
+            advance_amount,
+            cod,
+            delivery_charge,
+            tax_amount,
+            receivable,
+            cost_price,
+            net_profit
+        };
+    }
+    
+    // Function to update footer row (make it accessible globally)
+    updateFooterRow = function() {
+        if (!ordersGridApi) return;
+        
+        const sums = calculateSelectedSums();
+        const selectedCount = sums.count;
+        
+        // Update selected count text at bottom right
+        const selectedCountEl = document.getElementById('ordersSelectedCount');
+        if (selectedCountEl) {
+            selectedCountEl.textContent = `${selectedCount} row(s) selected`;
+            selectedCountEl.style.display = selectedCount > 0 ? 'block' : 'none';
+        }
+        
+        const footerData = {
+            id: '__footer__',
+            // order_number omitted - not numeric, do not show in footer
+            courier: '',
+            tracking_number: '',
+            order_status: '',
+            delivery_status: '',
+            total_amount: sums.total_amount,
+            advance_amount: sums.advance_amount,
+            cod: sums.cod,
+            delivery_charge: sums.delivery_charge,
+            tax_amount: sums.tax_amount,
+            receivable: sums.receivable,
+            cost_price: sums.cost_price,
+            net_profit: sums.net_profit,
+            profit_percent: sums.total_amount > 0 ? (sums.net_profit / sums.total_amount) * 100 : 0,
+            piece_received: '',
+            items: '',
+            order_receiving_date: '',
+            final_status: ''
+        };
+        
+        ordersGridApi.setGridOption('pinnedBottomRowData', selectedCount > 0 ? [footerData] : []);
+    }
+    
+    // Update column definitions to add footer cell renderers
+    columnDefs.forEach(col => {
+        // Skip checkbox column
+        if (col.checkboxSelection) {
+            col.pinnedRowCellRenderer = () => '';
+            return;
+        }
+        
+        if (col.field === 'order_number') {
+            // Order number is not numeric - show nothing in footer
+            col.pinnedRowCellRenderer = () => '<span></span>';
+        } else if (['total_amount', 'advance_amount', 'cod', 'delivery_charge', 'tax_amount', 'receivable', 'cost_price', 'net_profit'].includes(col.field)) {
+            col.pinnedRowCellRenderer = (params) => {
+                const val = parseFloat(params.value) || 0;
+                const formatted = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                return `<div style="font-weight: bold; padding: 8px; text-align: right;">${formatted}</div>`;
+            };
+        } else if (col.field === 'profit_percent') {
+            col.pinnedRowCellRenderer = (params) => {
+                const val = parseFloat(params.value) || 0;
+                const formatted = val.toFixed(1) + '%';
+                return `<div style="font-weight: bold; padding: 8px; text-align: right;">${formatted}</div>`;
+            };
+        } else {
+            col.pinnedRowCellRenderer = () => '';
+        }
+    });
 
     const gridOptions = {
         columnDefs: columnDefs,
         rowData: [],
         rowSelection: 'multiple',
         suppressRowClickSelection: true,
+        pinnedBottomRowData: [],
         defaultColDef: {
             sortable: true,
             resizable: true,
@@ -651,6 +924,13 @@ function initOrdersGrid() {
         stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
         getRowStyle: (params) => {
+            if (params.data.id === '__footer__') {
+                return { 
+                    backgroundColor: 'var(--bg-secondary, #f5f5f5)', 
+                    borderTop: '2px solid var(--primary, #007bff)',
+                    fontWeight: 'bold'
+                };
+            }
             const status = (params.data.order_status || '').toLowerCase();
             if (status === 'cancelled') {
                 return { opacity: '0.5', textDecoration: 'line-through' };
@@ -659,6 +939,14 @@ function initOrdersGrid() {
         },
         onGridReady: (params) => {
             ordersGridApi = params.api;
+            updateFooterRow();
+        },
+        onSelectionChanged: () => {
+            updateFooterRow();
+        },
+        onCellValueChanged: () => {
+            // Update footer when cell values change (e.g., after editing)
+            setTimeout(() => updateFooterRow(), 0);
         }
     };
 
@@ -761,17 +1049,21 @@ function switchView(viewName) {
     }
     
     const ordersMonthNav = document.getElementById('ordersMonthNav');
+    const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
             if (ordersMonthNav) ordersMonthNav.style.display = 'none';
+            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            exitOrdersFullScreen();
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
             if (ordersMonthNav) ordersMonthNav.style.display = 'flex';
+            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
@@ -781,6 +1073,8 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
             if (ordersMonthNav) ordersMonthNav.style.display = 'none';
+            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
@@ -872,6 +1166,8 @@ async function loadOrders() {
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
+            // Update footer after data is loaded
+            setTimeout(() => updateFooterRow(), 0);
         }
     } catch (error) {
         console.error('Error loading orders:', error);
@@ -880,6 +1176,8 @@ async function loadOrders() {
             orders = getSampleOrders();
             if (ordersGridApi) {
                 ordersGridApi.setGridOption('rowData', orders);
+                // Update footer after data is loaded
+                setTimeout(() => updateFooterRow(), 0);
             }
         }
     } finally {
@@ -909,11 +1207,11 @@ function ordersMonthNext() {
 
 function getSampleOrders() {
     return [
-        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', piece_with: 'Warehouse', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', piece_with: 'Customer', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
-        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', piece_with: 'Rider', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
+        { id: '1', order_number: 2719, courier: '1289', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 4247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '2', order_number: 2720, courier: 'RIDER', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 7697, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '3', order_number: 2721, courier: '1287', order_status: 'pending', piece_received: 'Pending', delivery_status: 'not_delivered', total_amount: 3248, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
+        { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', piece_received: 'Received', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
     ];
 }
 
@@ -1009,7 +1307,35 @@ async function uploadPostExCsv(file) {
             throw new Error(detail || response.statusText || 'Upload failed');
         }
         showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
+        
+        // Store updated order IDs to select them after reload
+        const updatedOrderIds = data.updated_order_ids || [];
+        
         await loadOrders();
+        
+        // Select the updated rows in the grid
+        if (ordersGridApi && updatedOrderIds.length > 0) {
+            // Wait a bit for the grid to finish rendering
+            setTimeout(() => {
+                if (ordersGridApi) {
+                    // Clear existing selection
+                    ordersGridApi.deselectAll();
+                    
+                    // Select rows by their IDs
+                    ordersGridApi.forEachNode(node => {
+                        if (updatedOrderIds.includes(node.data.id)) {
+                            node.setSelected(true);
+                        }
+                    });
+                    
+                    // Scroll to first selected row if any
+                    const selectedRows = ordersGridApi.getSelectedRows();
+                    if (selectedRows.length > 0) {
+                        ordersGridApi.ensureNodeVisible(selectedRows[0], 'middle');
+                    }
+                }
+            }, 100);
+        }
     } catch (error) {
         console.error('Error uploading PostEx CSV', error);
         showToast(error.message || 'Failed to upload PostEx CSV', 'error');
@@ -1076,6 +1402,46 @@ function initForms() {
     if (refreshDeliveryStatusSelectedBtn) {
         refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
     }
+
+    // Order table full screen toggle (icon only; Esc to exit)
+    const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
+    if (ordersFullScreenBtn) {
+        ordersFullScreenBtn.addEventListener('click', toggleOrdersFullScreen);
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.body.classList.contains('orders-table-fullscreen')) {
+            exitOrdersFullScreen();
+        }
+    });
+    if (window.electronAPI && window.electronAPI.onFullScreenChange) {
+        window.electronAPI.onFullScreenChange((isFullScreen) => {
+            if (!isFullScreen) exitOrdersFullScreen();
+        });
+    }
+}
+
+function toggleOrdersFullScreen() {
+    if (document.body.classList.contains('orders-table-fullscreen')) {
+        exitOrdersFullScreen();
+    } else {
+        document.body.classList.add('orders-table-fullscreen');
+        if (window.electronAPI && window.electronAPI.setFullScreen) {
+            window.electronAPI.setFullScreen(true);
+        }
+        setTimeout(() => {
+            if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+        }, 100);
+    }
+}
+
+function exitOrdersFullScreen() {
+    document.body.classList.remove('orders-table-fullscreen');
+    if (window.electronAPI && window.electronAPI.setFullScreen) {
+        window.electronAPI.setFullScreen(false);
+    }
+    setTimeout(() => {
+        if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+    }, 100);
 }
 
 // ============================================
@@ -1144,22 +1510,10 @@ function debounce(func, wait) {
 // Delivery Status Functions
 // ============================================
 
-/** Derive piece_with from last delivery status. */
-function pieceWithFromLastStatus(deliveryStatus) {
-    if (!deliveryStatus) return null;
-    const last = (deliveryStatus.latest_status || '').trim() ||
-        (deliveryStatus.status_history && deliveryStatus.status_history[0] && (deliveryStatus.status_history[0].status || '').trim()) || '';
-    if (!last) return null;
-    if (/at lushwear warehouse/i.test(last)) return 'Warehouse';
-    if (/returned at merchant warehouse/i.test(last)) return 'Warehouse';
-    if (/delivered to customer/i.test(last)) return 'Customer';
-    return 'Rider';
-}
-
-/** True if delivery status contains "Return Process Initiated" anywhere (latest_status or status_history). */
+/** True if delivery status contains "Return to KARACHI" anywhere (latest_status or status_history). */
 function deliveryStatusIndicatesReturned(data) {
     if (!data) return false;
-    const needle = 'Return Process Initiated';
+    const needle = 'Return to KARACHI';
     if ((data.latest_status || '').includes(needle)) return true;
     const history = data.status_history || [];
     for (const item of history) {
@@ -1172,6 +1526,42 @@ function deliveryStatusIndicatesReturned(data) {
 function deliveryStatusIndicatesDelivered(data) {
     if (!data) return false;
     const needle = 'Delivered to Customer';
+    if ((data.latest_status || '').includes(needle)) return true;
+    const history = data.status_history || [];
+    for (const item of history) {
+        if ((item.status || '').includes(needle)) return true;
+    }
+    return false;
+}
+
+/** True if delivery status contains "Attempt Made: RFD" anywhere (latest_status or status_history). */
+function deliveryStatusIndicatesRFD(data) {
+    if (!data) return false;
+    const needle = 'Attempt Made: RFD';
+    if ((data.latest_status || '').includes(needle)) return true;
+    const history = data.status_history || [];
+    for (const item of history) {
+        if ((item.status || '').includes(needle)) return true;
+    }
+    return false;
+}
+
+/** True if delivery status contains "Attempt Made: ICA" anywhere (latest_status or status_history). */
+function deliveryStatusIndicatesICA(data) {
+    if (!data) return false;
+    const needle = 'Attempt Made: ICA';
+    if ((data.latest_status || '').includes(needle)) return true;
+    const history = data.status_history || [];
+    for (const item of history) {
+        if ((item.status || '').includes(needle)) return true;
+    }
+    return false;
+}
+
+/** True if delivery status contains "Attempt Made: CNA" anywhere (latest_status or status_history). */
+function deliveryStatusIndicatesCNA(data) {
+    if (!data) return false;
+    const needle = 'Attempt Made: CNA';
     if ((data.latest_status || '').includes(needle)) return true;
     const history = data.status_history || [];
     for (const item of history) {
@@ -1218,15 +1608,22 @@ async function refreshDeliveryStatusSelected() {
     for (const order of toFetch) {
         try {
             const data = await fetchDeliveryStatusForOrder(order.id, order.courier, order.tracking_number);
-            const derivedPieceWith = pieceWithFromLastStatus(data);
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === order.id) {
                     const updated = { ...node.data, delivery_status: data };
-                    if (derivedPieceWith) updated.piece_with = derivedPieceWith;
-                    const currentStatus = (node.data.order_status || '').toLowerCase();
-                    if (currentStatus !== 'returned') {
-                        if (deliveryStatusIndicatesReturned(data)) updated.order_status = 'returned';
-                        else if (deliveryStatusIndicatesDelivered(data)) updated.order_status = 'delivered';
+                    // Check delivery status and update order_status accordingly
+                    // Priority: Return > Delivered > RFD > ICA > CNA
+                    if (deliveryStatusIndicatesReturned(data)) {
+                        updated.order_status = 'returned';
+                    } else if (deliveryStatusIndicatesDelivered(data)) {
+                        updated.order_status = 'delivered';
+                        updated.piece_received = 'Done';
+                    } else if (deliveryStatusIndicatesRFD(data)) {
+                        updated.order_status = 'RFD';
+                    } else if (deliveryStatusIndicatesICA(data)) {
+                        updated.order_status = 'ICA';
+                    } else if (deliveryStatusIndicatesCNA(data)) {
+                        updated.order_status = 'CNA';
                     }
                     node.setData(updated);
                 }
@@ -1291,17 +1688,24 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         const data = await response.json();
         console.log('Received data:', data);
         displayDeliveryStatus(data, orderId);
-        // Update order in grid: Delivery, Piece With, order_status=returned or delivered (backend already saved when save=true)
-        const derivedPieceWith = pieceWithFromLastStatus(data);
+        // Update order in grid: Delivery, Piece With, order_status (backend already saved when save=true)
         if (ordersGridApi) {
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === orderId) {
                     const updated = { ...node.data, delivery_status: data };
-                    if (derivedPieceWith) updated.piece_with = derivedPieceWith;
-                    const currentStatus = (node.data.order_status || '').toLowerCase();
-                    if (currentStatus !== 'returned') {
-                        if (deliveryStatusIndicatesReturned(data)) updated.order_status = 'returned';
-                        else if (deliveryStatusIndicatesDelivered(data)) updated.order_status = 'delivered';
+                    // Check delivery status and update order_status accordingly
+                    // Priority: Return > Delivered > RFD > ICA > CNA
+                    if (deliveryStatusIndicatesReturned(data)) {
+                        updated.order_status = 'returned';
+                    } else if (deliveryStatusIndicatesDelivered(data)) {
+                        updated.order_status = 'delivered';
+                        updated.piece_received = 'Done';
+                    } else if (deliveryStatusIndicatesRFD(data)) {
+                        updated.order_status = 'RFD';
+                    } else if (deliveryStatusIndicatesICA(data)) {
+                        updated.order_status = 'ICA';
+                    } else if (deliveryStatusIndicatesCNA(data)) {
+                        updated.order_status = 'CNA';
                     }
                     node.setData(updated);
                 }

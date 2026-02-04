@@ -50,7 +50,12 @@ echo Starting FastAPI server on http://127.0.0.1:8000
 echo Press Ctrl+C to stop the server
 echo.
 
-python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+REM -y: run with stdin from nul so terminal closes smoothly when process is killed
+if "%1"=="-y" (
+    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload < nul
+) else (
+    python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
+)
 exit
 
 :hidden

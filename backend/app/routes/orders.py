@@ -322,7 +322,7 @@ async def sync_shopify_orders():
             """
             fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price", "items"]
             if skip_assigned_courier_fields:
-                fields_to_compare = ["order_status", "piece_with", "advance_amount"]
+                fields_to_compare = ["order_status", "piece_received", "advance_amount"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
@@ -366,12 +366,36 @@ async def sync_shopify_orders():
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
-            # Use current_total_price (reflects edits/refunds; avoids double-counting when e.g. shipping is updated)
-            total_amount = float(sp_order.get("current_total_price") or sp_order.get("total_price") or 0)
-            advance_amount = extract_advance_amount(sp_order) or 0.0
+            
+            # Calculate total amount without discounts
+            # total_line_items_price = sum of line items before any discounts (both per-item and order-level)
+            total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
+            tax_amount = extract_tax_amount(sp_order) or 0.0
+            
+            # Get shipping price
+            shipping_price = 0.0
+            if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
+                shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
+                if shop_money:
+                    shipping_price = float(shop_money.get("amount", "0.00"))
+            elif "total_shipping_price" in sp_order:
+                shipping_price = float(sp_order.get("total_shipping_price") or 0)
+            
+            # Total without discounts = line items (before discounts) + tax + shipping
+            total_amount = total_line_items_price + tax_amount + shipping_price
+            
+            # Sum of all discounts (custom order-level + per-item discounts)
+            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+            
+            # Advance: if paid = full order price; if not paid = sum of discounts
+            financial_status = (sp_order.get("financial_status") or "").strip().lower()
+            if financial_status == "paid":
+                advance_amount = total_amount
+            else:
+                advance_amount = total_discounts
+            
             # Delivery charge is not filled from Shopify; add manually in the app
             delivery_charge = 0.0
-            tax_amount = extract_tax_amount(sp_order) or 0.0
             cost_price = extract_cost_price(sp_order) or 0.0
             
             # Set fixed delivery charge for SCS courier
@@ -400,7 +424,7 @@ async def sync_shopify_orders():
                 "courier": courier,
                 "tracking_number": tracking_number,
                 "order_status": order_status,
-                "piece_with": "Warehouse",
+                "piece_received": "Pending",
                 "total_amount": total_amount,
                 "advance_amount": advance_amount,
                 "delivery_charge": delivery_charge,
@@ -418,30 +442,31 @@ async def sync_shopify_orders():
                 if existing_status in ("delivered", "returned"):
                     orders_to_skip.append(order_number)
                     continue
-                # Preserve advance_amount if it has been set to a non-zero value
-                try:
-                    existing_adv = float(existing_order.get("advance_amount") or 0)
-                except (TypeError, ValueError):
-                    existing_adv = 0
-                if existing_adv != 0:
-                    order_data["advance_amount"] = existing_order.get("advance_amount")
+                # Only update order_status if it was previously cancelled or pending
+                if existing_status not in ("cancelled", "pending"):
+                    order_data["order_status"] = existing_order.get("order_status")
+                # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
+                order_data["advance_amount"] = advance_amount
                 # Preserve delivery_charge (filled manually, not from Shopify)
                 order_data["delivery_charge"] = existing_order.get("delivery_charge", 0)
                 # Preserve last fetched delivery status (from courier tracking)
                 order_data["delivery_status"] = existing_order.get("delivery_status")
-                # Preserve piece_with (set by delivery status or manually; default Warehouse)
-                order_data["piece_with"] = existing_order.get("piece_with") or "Warehouse"
+                # Preserve piece_received (set by delivery status or manually; default Pending)
+                order_data["piece_received"] = existing_order.get("piece_received") or "Pending"
 
                 existing_courier = (existing_order.get("courier") or "").strip()
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
 
                 if courier_is_assigned:
-                    # Keep existing values; do not overwrite from Shopify
+                    # Keep existing courier/tracking/cost etc; do not overwrite from Shopify
+                    # Always update from Shopify: total_amount (without discounts), advance_amount (paid=total, not paid=discounts)
                     order_data["courier"] = existing_order.get("courier")
                     order_data["tracking_number"] = existing_order.get("tracking_number")
-                    order_data["total_amount"] = existing_order.get("total_amount")
+                    order_data["total_amount"] = total_amount
+                    order_data["advance_amount"] = advance_amount
                     order_data["delivery_charge"] = existing_order.get("delivery_charge")
-                    order_data["tax_amount"] = existing_order.get("tax_amount")
+                    # tax_amount is used in total_amount calculation, so keep it from Shopify
+                    order_data["tax_amount"] = tax_amount
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
@@ -520,7 +545,7 @@ def _parse_float(val: Any, default: float = 0.0) -> float:
 @router.post("/upload-postex-csv")
 async def upload_postex_csv(file: UploadFile = File(...)):
     """
-    Upload a PostEx CSV file. Matches rows by TRACKING_NUMBER to orders and updates
+    Upload a PostEx CSV file. Matches rows by ORDER_REF_NUMBER to orders and updates
     delivery_charge (from SHIPPING_CHARGES) and tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX).
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
@@ -534,72 +559,127 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         reader = csv.DictReader(io.StringIO(text))
         if not reader.fieldnames:
             raise HTTPException(status_code=400, detail="CSV has no header row.")
-        # Normalize header names (strip spaces)
-        fieldnames = [f.strip() for f in reader.fieldnames]
         # Map possible column names to canonical keys
+        # Use original fieldnames (not stripped) because DictReader uses original fieldnames as keys
         col_map = {}
-        for i, name in enumerate(fieldnames):
-            key = name.strip()
-            if "SHIPPING_CHARGES" in key.upper():
-                col_map["shipping_charges"] = key
-            elif "GST" in key.upper() and "TAX" not in key.upper():
-                col_map["gst"] = key
-            elif "WH_INCOME_TAX" in key.upper() or "INCOME_TAX" in key.upper():
-                col_map["wh_income_tax"] = key
-            elif "WH_SALES_TAX" in key.upper() or "SALES_TAX" in key.upper():
-                col_map["wh_sales_tax"] = key
-            elif "TRACKING_NUMBER" in key.upper():
-                col_map["tracking_number"] = key
-        if "tracking_number" not in col_map:
-            raise HTTPException(status_code=400, detail="CSV must contain a TRACKING_NUMBER column.")
+        for i, name in enumerate(reader.fieldnames):
+            key_upper = name.upper().strip()  # Compare against stripped uppercase
+            # Check each pattern independently (not elif) to handle multiple columns
+            # Store the ORIGINAL fieldname (with spaces if any) for use with row.get()
+            if "SHIPPING_CHARGES" in key_upper and "shipping_charges" not in col_map:
+                col_map["shipping_charges"] = name  # Use original name
+            if "GST" in key_upper and "TAX" not in key_upper and "gst" not in col_map:
+                col_map["gst"] = name  # Use original name
+            if ("WH_INCOME_TAX" in key_upper or "INCOME_TAX" in key_upper) and "wh_income_tax" not in col_map:
+                col_map["wh_income_tax"] = name  # Use original name
+            if ("WH_SALES_TAX" in key_upper or "SALES_TAX" in key_upper) and "wh_sales_tax" not in col_map:
+                col_map["wh_sales_tax"] = name  # Use original name
+            if ("ORDER_REF_NUMBER" in key_upper or "ORDER_NUMBER" in key_upper or "ORDER_ID" in key_upper) and "order_ref_number" not in col_map:
+                col_map["order_ref_number"] = name  # Use original name
+        if "order_ref_number" not in col_map:
+            raise HTTPException(status_code=400, detail="CSV must contain an ORDER_REF_NUMBER, ORDER_NUMBER, or ORDER_ID column.")
         if "shipping_charges" not in col_map:
             raise HTTPException(status_code=400, detail="CSV must contain SHIPPING_CHARGES column.")
+        
+        def normalize_order_number(order_ref):
+            """Extract order number from formats like #4807 or 4446-R using regex (first run of digits)."""
+            if order_ref is None:
+                return None
+            if isinstance(order_ref, (int, float)):
+                return int(order_ref)
+            order_str = str(order_ref).strip()
+            if not order_str:
+                return None
+            match = re.search(r"\d+", order_str)
+            if not match:
+                return None
+            try:
+                return int(match.group(0))
+            except (ValueError, TypeError):
+                return None
+        
         rows = []
+        csv_order_numbers = []
         for row in reader:
-            # Rebuild dict with stripped keys for lookup
-            raw = {f.strip(): row.get(f, "") for f in reader.fieldnames}
-            tracking = (raw.get(col_map["tracking_number"]) or "").strip()
-            if not tracking:
+            # Get values using the actual fieldnames from col_map
+            order_ref_raw = row.get(col_map["order_ref_number"], "")
+            order_number = normalize_order_number(order_ref_raw)
+            if not order_number:
                 continue
-            shipping = _parse_float(raw.get(col_map["shipping_charges"], 0))
-            gst = _parse_float(raw.get(col_map.get("gst", ""), 0))
-            income_tax = _parse_float(raw.get(col_map.get("wh_income_tax", ""), 0))
-            sales_tax = _parse_float(raw.get(col_map.get("wh_sales_tax", ""), 0))
-            tax_total = gst + income_tax + sales_tax
-            rows.append({"tracking_number": tracking, "delivery_charge": shipping, "tax_amount": tax_total})
+            shipping = _parse_float(row.get(col_map["shipping_charges"], ""), 0)
+            gst = _parse_float(row.get(col_map.get("gst", ""), ""), 0)
+            income_tax = _parse_float(row.get(col_map.get("wh_income_tax", ""), ""), 0)
+            sales_tax = _parse_float(row.get(col_map.get("wh_sales_tax", ""), ""), 0)
+            shipping_total = shipping + gst
+            tax_total = income_tax + sales_tax
+            rows.append({"order_number": order_number, "delivery_charge": shipping_total, "tax_amount": tax_total})
+            csv_order_numbers.append(order_number)
         if not rows:
-            return {"updated": 0, "message": "No valid rows with TRACKING_NUMBER in CSV."}
+            return {"updated": 0, "message": "No valid rows with ORDER_REF_NUMBER in CSV."}
         supabase = get_supabase()
-        # Fetch all orders (we need to match by tracking_number)
+        # Fetch all orders (we need to match by order_number)
         all_orders = []
         limit = 1000
         offset = 0
         while True:
-            resp = supabase.table("orders").select("id, tracking_number").range(offset, offset + limit - 1).execute()
+            resp = supabase.table("orders").select("id, order_number").range(offset, offset + limit - 1).execute()
             if not resp.data:
                 break
             all_orders.extend(resp.data)
             if len(resp.data) < limit:
                 break
             offset += limit
-        tracking_to_order = {}
+        order_number_to_order = {}
+        db_order_numbers = []
         for o in all_orders:
-            tn = (o.get("tracking_number") or "").strip()
-            if tn:
-                tracking_to_order[tn] = o
+            on = o.get("order_number")
+            if on is not None:
+                try:
+                    order_num = int(on)
+                    order_number_to_order[order_num] = o
+                    db_order_numbers.append(order_num)
+                except (ValueError, TypeError):
+                    continue
+        
+        # Find matches
+        matched_order_numbers = []
         updated_count = 0
+        unmatched_order_numbers = []
+        updated_order_ids = []
+        
         for r in rows:
-            order = tracking_to_order.get(r["tracking_number"])
+            order_num = r["order_number"]
+            order = order_number_to_order.get(order_num)
             if not order:
+                unmatched_order_numbers.append(order_num)
                 continue
+            matched_order_numbers.append(order_num)
             update_data = {
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
                 "updated_at": datetime.utcnow().isoformat(),
             }
             supabase.table("orders").update(update_data).eq("id", order["id"]).execute()
+            updated_order_ids.append(order["id"])
             updated_count += 1
-        return {"updated": updated_count, "message": f"Updated delivery charges and tax for {updated_count} order(s)."}
+        
+        # Build response message with debugging info
+        message = f"Updated delivery charges and tax for {updated_count} order(s)."
+        if unmatched_order_numbers:
+            message += f" {len(unmatched_order_numbers)} order number(s) from CSV did not match any orders."
+            if len(unmatched_order_numbers) <= 10:
+                message += f" Unmatched: {', '.join(map(str, unmatched_order_numbers[:10]))}"
+        
+        return {
+            "updated": updated_count,
+            "message": message,
+            "updated_order_ids": updated_order_ids,
+            "csv_rows_processed": len(rows),
+            "csv_order_numbers_count": len(csv_order_numbers),
+            "db_order_numbers_count": len(set(db_order_numbers)),
+            "matched_count": len(matched_order_numbers),
+            "unmatched_count": len(unmatched_order_numbers)
+        }
     except HTTPException:
         raise
     except Exception as e:
@@ -620,29 +700,11 @@ async def get_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _piece_with_from_delivery_status(delivery_status_data: dict) -> str:
-    """Derive piece_with from last delivery status text."""
-    last_status = (delivery_status_data or {}).get("latest_status") or ""
-    if not last_status and delivery_status_data:
-        history = (delivery_status_data.get("status_history") or [])
-        if history:
-            last_status = (history[0].get("status") or "").strip()
-    last_status = (last_status or "").strip()
-    lower = last_status.lower()
-    if "at lushwear warehouse" in lower:
-        return "Warehouse"
-    if "returned at merchant warehouse" in lower:
-        return "Warehouse"
-    if "delivered to customer" in lower:
-        return "Customer"
-    return "Rider"
-
-
 def _delivery_status_indicates_returned(delivery_status_data: dict) -> bool:
-    """True if delivery status contains 'Return Process Initiated' (e.g. in latest_status or status_history)."""
+    """True if delivery status contains 'Return to KARACHI' (e.g. in latest_status or status_history)."""
     if not delivery_status_data:
         return False
-    needle = "Return Process Initiated"
+    needle = "Return to KARACHI"
     latest = (delivery_status_data.get("latest_status") or "").strip()
     if needle in latest:
         return True
@@ -666,13 +728,55 @@ def _delivery_status_indicates_delivered(delivery_status_data: dict) -> bool:
     return False
 
 
+def _delivery_status_indicates_rfd(delivery_status_data: dict) -> bool:
+    """True if delivery status contains 'Attempt Made: RFD' (e.g. in latest_status or status_history)."""
+    if not delivery_status_data:
+        return False
+    needle = "Attempt Made: RFD"
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if needle in latest:
+        return True
+    for item in delivery_status_data.get("status_history") or []:
+        if needle in (item.get("status") or ""):
+            return True
+    return False
+
+
+def _delivery_status_indicates_ica(delivery_status_data: dict) -> bool:
+    """True if delivery status contains 'Attempt Made: ICA' (e.g. in latest_status or status_history)."""
+    if not delivery_status_data:
+        return False
+    needle = "Attempt Made: ICA"
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if needle in latest:
+        return True
+    for item in delivery_status_data.get("status_history") or []:
+        if needle in (item.get("status") or ""):
+            return True
+    return False
+
+
+def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
+    """True if delivery status contains 'Attempt Made: CNA' (e.g. in latest_status or status_history)."""
+    if not delivery_status_data:
+        return False
+    needle = "Attempt Made: CNA"
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if needle in latest:
+        return True
+    for item in delivery_status_data.get("status_history") or []:
+        if needle in (item.get("status") or ""):
+            return True
+    return False
+
+
 @router.post("/", response_model=dict)
 async def create_order(order: OrderCreate):
     """Create a new order"""
     try:
         supabase = get_supabase()
         order_data = order.model_dump()
-        order_data["piece_with"] = "Warehouse"
+        order_data["piece_received"] = "Pending"
         order_data["created_at"] = datetime.utcnow().isoformat()
         order_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").insert(order_data).execute()
@@ -686,7 +790,7 @@ async def update_order(order_id: str, order: OrderUpdate):
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in order.model_dump().items() if v is not None}
-        # Do not set piece_with from order_status; it defaults to Warehouse and is updated from delivery status
+        # piece_received defaults to Pending; set to Done when order is delivered (e.g. from delivery-status save)
         update_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
@@ -823,19 +927,23 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
         if save:
-            piece_with = _piece_with_from_delivery_status(delivery_status_data)
             update_payload = {
                 "delivery_status": delivery_status_data,
-                "piece_with": piece_with,
                 "updated_at": datetime.utcnow().isoformat()
             }
-            # Do not overwrite order_status if it is already "returned"
-            current_status = (order.get("order_status") or "").strip().lower()
-            if current_status != "returned":
-                if _delivery_status_indicates_returned(delivery_status_data):
-                    update_payload["order_status"] = "returned"
-                elif _delivery_status_indicates_delivered(delivery_status_data):
-                    update_payload["order_status"] = "delivered"
+            # Check delivery status and update order_status accordingly
+            # Priority: Return > Delivered > RFD > ICA > CNA
+            if _delivery_status_indicates_returned(delivery_status_data):
+                update_payload["order_status"] = "returned"
+            elif _delivery_status_indicates_delivered(delivery_status_data):
+                update_payload["order_status"] = "delivered"
+                update_payload["piece_received"] = "Done"
+            elif _delivery_status_indicates_rfd(delivery_status_data):
+                update_payload["order_status"] = "RFD"
+            elif _delivery_status_indicates_ica(delivery_status_data):
+                update_payload["order_status"] = "ICA"
+            elif _delivery_status_indicates_cna(delivery_status_data):
+                update_payload["order_status"] = "CNA"
             supabase.table("orders").update(update_payload).eq("id", order_id).execute()
 
         return delivery_status_data
