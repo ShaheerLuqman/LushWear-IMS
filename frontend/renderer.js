@@ -11,6 +11,9 @@ let updateFooterRow = null; // Will be set in initOrdersGrid
 // Month-based pagination: period is month's 22 to next month's 21
 let ordersPeriodMonth = null;
 let ordersPeriodYear = null;
+// Auto-sync orders every 15 minutes; timer is reset when user clicks sync
+const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+let ordersAutoSyncTimerId = null;
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
@@ -81,6 +84,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         syncShopifyProducts();
         syncShopifyOrders();
+        scheduleOrdersAutoSync();
     }
 });
 
@@ -1338,6 +1342,18 @@ async function syncShopifyOrders() {
     }
 }
 
+function scheduleOrdersAutoSync() {
+    if (ordersAutoSyncTimerId != null) {
+        clearTimeout(ordersAutoSyncTimerId);
+        ordersAutoSyncTimerId = null;
+    }
+    ordersAutoSyncTimerId = setTimeout(async () => {
+        ordersAutoSyncTimerId = null;
+        await syncShopifyOrders();
+        scheduleOrdersAutoSync();
+    }, ORDERS_AUTO_SYNC_INTERVAL_MS);
+}
+
 async function uploadPostExCsv(file) {
     const btn = document.getElementById('uploadPostExCsvBtn');
     const originalText = btn?.innerHTML;
@@ -1427,11 +1443,12 @@ function initForms() {
         });
     }
 
-    // Sync Shopify Orders Button
+    // Sync Shopify Orders Button (manual sync resets the 15-min auto-sync timer)
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     if (syncOrdersBtn) {
         syncOrdersBtn.addEventListener('click', async () => {
             await syncShopifyOrders();
+            scheduleOrdersAutoSync();
         });
     }
 
