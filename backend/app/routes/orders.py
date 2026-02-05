@@ -1,5 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
@@ -823,6 +823,55 @@ async def create_order(order: OrderCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], order_status: str) -> Dict[str, Any]:
+    """Build delivery_status JSONB with latest_status set for bulk 'delivered' or 'returned'.
+    Preserves existing keys and uses only JSON-serializable values (str, list, dict).
+    """
+    if order_status == "delivered":
+        latest_status = "Delivered to Customer"
+    elif order_status == "returned":
+        latest_status = "Return to KARACHI"
+    else:
+        latest_status = ""
+    now_iso = datetime.utcnow().isoformat()
+    # Start from existing JSONB, keeping only JSON-serializable values
+    data: Dict[str, Any] = {}
+    if existing:
+        for k, v in existing.items():
+            if k in ("status_history",):
+                continue  # we rebuild below
+            if v is None or isinstance(v, (str, int, float, bool)):
+                data[k] = v
+            elif isinstance(v, dict):
+                data[k] = {str(a): b for a, b in v.items() if isinstance(b, (str, int, float, bool, type(None)))}
+            else:
+                data[k] = v
+    data["latest_status"] = latest_status
+    # status_history: list of { "status": str, "datetime": str } (and optional status_code, is_active)
+    history_raw = (existing or {}).get("status_history")
+    history: List[Dict[str, Any]] = []
+    if isinstance(history_raw, list):
+        for item in history_raw:
+            if isinstance(item, dict):
+                entry = {
+                    "status": str(item.get("status", "")),
+                    "datetime": str(item.get("datetime", "")),
+                }
+                if "status_code" in item and isinstance(item["status_code"], str):
+                    entry["status_code"] = item["status_code"]
+                if "is_active" in item:
+                    entry["is_active"] = bool(item["is_active"])
+                history.append(entry)
+    new_entry: Dict[str, Any] = {"status": latest_status, "datetime": now_iso}
+    if history and history[0].get("status") == latest_status:
+        pass  # already at front
+    else:
+        history.insert(0, new_entry)
+    data["status_history"] = history
+    data["fetched_at"] = now_iso
+    return data
+
+
 class BulkUpdateStatusBody(BaseModel):
     order_numbers: List[int]
     order_status: str  # "delivered" or "returned"
@@ -830,15 +879,65 @@ class BulkUpdateStatusBody(BaseModel):
 
 @router.post("/bulk-update-status")
 async def bulk_update_order_status(body: BulkUpdateStatusBody):
-    """Update order_status for multiple orders by order_number."""
+    """Update order_status and delivery_status.latest_status for multiple orders by order_number."""
     if body.order_status not in ("delivered", "returned"):
         raise HTTPException(status_code=400, detail="order_status must be 'delivered' or 'returned'")
     if not body.order_numbers:
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
     try:
         supabase = get_supabase()
-        update_data = {
+        # Fetch orders so we can merge delivery_status per order
+        response = (
+            supabase.table("orders")
+            .select("id, order_number, delivery_status")
+            .in_("order_number", body.order_numbers)
+            .execute()
+        )
+        orders = response.data or []
+        updated_at = datetime.utcnow().isoformat()
+        updated_order_numbers = []
+        for order in orders:
+            order_id = order.get("id")
+            if not order_id:
+                continue
+            new_delivery_status = _delivery_status_with_latest_status(
+                order.get("delivery_status"), body.order_status
+            )
+            supabase.table("orders").update({
+                "order_status": body.order_status,
+                "delivery_status": new_delivery_status,
+                "updated_at": updated_at,
+            }).eq("id", order_id).execute()
+            onum = order.get("order_number")
+            if onum is not None:
+                updated_order_numbers.append(int(onum))
+        requested_set = set(body.order_numbers)
+        updated_set = set(updated_order_numbers)
+        not_found_order_numbers = sorted(requested_set - updated_set)
+        return {
+            "updated_count": len(updated_order_numbers),
             "order_status": body.order_status,
+            "requested_count": len(body.order_numbers),
+            "updated_order_numbers": sorted(updated_order_numbers),
+            "not_found_order_numbers": not_found_order_numbers,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+class BulkUpdatePieceReceivedBody(BaseModel):
+    order_numbers: List[int]
+
+
+@router.post("/bulk-update-piece-received")
+async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
+    """Set piece_received to 'Received' for multiple orders by order_number."""
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    try:
+        supabase = get_supabase()
+        update_data = {
+            "piece_received": "Received",
             "updated_at": datetime.utcnow().isoformat(),
         }
         response = (
@@ -854,7 +953,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
         not_found_order_numbers = sorted(requested_set - updated_set)
         return {
             "updated_count": len(updated_order_numbers),
-            "order_status": body.order_status,
+            "piece_received": "Received",
             "requested_count": len(body.order_numbers),
             "updated_order_numbers": sorted(updated_order_numbers),
             "not_found_order_numbers": not_found_order_numbers,

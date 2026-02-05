@@ -1483,6 +1483,7 @@ function initForms() {
 
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
+    document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
 
     // Upload PostEx CSV Button
     const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
@@ -1656,13 +1657,45 @@ async function bulkUpdateOrderStatus(orderStatus) {
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
-    const buttons = [btnDelivered, btnReturned];
+    const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
+    const buttons = [btnDelivered, btnReturned, btnPieceReceived];
     buttons.forEach((b) => { if (b) b.disabled = true; });
     try {
         const response = await fetch(`${API_BASE}/orders/bulk-update-status`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ order_numbers: orderNumbers, order_status: orderStatus }),
+        });
+        if (!response.ok) {
+            const err = await response.json();
+            throw new Error(err.detail || 'Bulk update failed');
+        }
+        const result = await response.json();
+        showBulkUpdateResults(result);
+        loadOrders();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        buttons.forEach((b) => { if (b) b.disabled = false; });
+    }
+}
+
+async function bulkUpdatePieceReceived() {
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
+    const btnReturned = document.getElementById('bulkUpdateSetReturned');
+    const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
+    const buttons = [btnDelivered, btnReturned, btnPieceReceived];
+    buttons.forEach((b) => { if (b) b.disabled = true; });
+    try {
+        const response = await fetch(`${API_BASE}/orders/bulk-update-piece-received`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_numbers: orderNumbers }),
         });
         if (!response.ok) {
             const err = await response.json();
