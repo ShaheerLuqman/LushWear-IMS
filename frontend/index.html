@@ -74,10 +74,11 @@
                     <p class="header-subtitle" id="viewSubtitle">View and manage orders</p>
                 </div>
                 <div class="header-actions">
-                    <div id="ordersMonthNav" class="orders-month-nav header-inline" style="display: none;">
-                        <button type="button" id="ordersMonthPrev" class="month-nav-btn" title="Previous period">‹</button>
-                        <span class="orders-month-label" id="ordersMonthLabel">Jan 22 – Feb 21, 2025</span>
-                        <button type="button" id="ordersMonthNext" class="month-nav-btn" title="Next period">›</button>
+                    <div id="ordersPeriodFilterWrap" class="orders-period-filter-wrap header-inline" style="display: none;">
+                        <label for="ordersPeriodFilter" class="orders-period-filter-label">Period:</label>
+                        <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by period (month 22 – next 21)">
+                            <option value="__all__">All orders</option>
+                        </select>
                     </div>
                     <button id="editCostPricesBtn" class="btn btn-primary" style="display: none;">
                         Edit Cost Prices
@@ -192,6 +193,35 @@
                     <div class="bulk-update-actions">
                         <button type="button" id="bulkUpdateResultsClose" class="btn btn-primary">Close</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- PostEx amount mismatches modal (shown after CSV upload when receivable != CSV NET_AMOUNT) -->
+    <div id="postExAmountMismatchesModal" class="modal" style="display: none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Receivable vs CSV net amount mismatch</h2>
+                <button type="button" class="modal-close" id="closePostExAmountMismatchesModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">The following orders have a different receivable amount (total − advance − delivery − tax) than the NET_AMOUNT in the CSV.</p>
+                <div class="postex-mismatches-table-wrap">
+                    <table class="postex-mismatches-table">
+                        <thead>
+                            <tr>
+                                <th>Order #</th>
+                                <th>Receivable (ours)</th>
+                                <th>NET_AMOUNT (CSV)</th>
+                                <th>Difference</th>
+                            </tr>
+                        </thead>
+                        <tbody id="postExAmountMismatchesBody"></tbody>
+                    </table>
+                </div>
+                <div class="modal-actions" style="margin-top: 1rem;">
+                    <button type="button" id="closePostExAmountMismatchesBtn" class="btn btn-primary">Close</button>
                 </div>
             </div>
         </div>

@@ -8,9 +8,6 @@ let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
 let updateFooterRow = null; // Will be set in initOrdersGrid
-// Month-based pagination: period is month's 22 to next month's 21
-let ordersPeriodMonth = null;
-let ordersPeriodYear = null;
 // Auto-sync orders every 15 minutes; timer is reset when user clicks sync
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
@@ -38,7 +35,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     
     initNavigation();
-    initOrdersMonthNav();
+    initOrdersPeriodFilter();
     initForms();
     initGrids();
     
@@ -1083,11 +1080,19 @@ function initNavigation() {
     });
 }
 
-function initOrdersMonthNav() {
-    const prevBtn = document.getElementById('ordersMonthPrev');
-    const nextBtn = document.getElementById('ordersMonthNext');
-    if (prevBtn) prevBtn.addEventListener('click', ordersMonthPrev);
-    if (nextBtn) nextBtn.addEventListener('click', ordersMonthNext);
+function initOrdersPeriodFilter() {
+    const selectEl = document.getElementById('ordersPeriodFilter');
+    if (selectEl) {
+        selectEl.addEventListener('change', () => {
+            const val = selectEl.value;
+            if (val === '__all__') {
+                loadOrders();
+            } else {
+                const [month, year] = val.split('-').map(Number);
+                loadOrdersForPeriod(month, year);
+            }
+        });
+    }
 }
 
 function switchView(viewName) {
@@ -1126,14 +1131,14 @@ function switchView(viewName) {
 
     if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
 
-    const ordersMonthNav = document.getElementById('ordersMonthNav');
+    const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
     const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
-            if (ordersMonthNav) ordersMonthNav.style.display = 'none';
+            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             exitOrdersFullScreen();
         } else if (viewName === 'orders') {
@@ -1141,7 +1146,7 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'inline-flex';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
-            if (ordersMonthNav) ordersMonthNav.style.display = 'flex';
+            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
@@ -1152,7 +1157,7 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'none';
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
-            if (ordersMonthNav) ordersMonthNav.style.display = 'none';
+            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -1206,14 +1211,36 @@ async function loadProducts() {
     }
 }
 
-function getOrdersPeriodForToday() {
-    const d = new Date();
+// Period = month's 22 to next month's 21 (same as backend)
+function getOrderDateForPeriod(order) {
+    const raw = order.order_receiving_date || order.created_at;
+    return raw ? new Date(raw) : null;
+}
+
+function getPeriodForDate(date) {
+    if (!date || !(date instanceof Date) || isNaN(date.getTime())) return null;
+    const d = date;
     const day = d.getDate();
     const month = d.getMonth() + 1;
     const year = d.getFullYear();
     if (day >= 22) return { month, year };
     if (month === 1) return { month: 12, year: year - 1 };
     return { month: month - 1, year };
+}
+
+function ordersPeriodStartEnd(month, year) {
+    const start = new Date(year, month - 1, 22, 0, 0, 0);
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    const end = new Date(nextYear, nextMonth - 1, 21, 23, 59, 59);
+    return { start, end };
+}
+
+function isOrderInPeriod(order, month, year) {
+    const date = getOrderDateForPeriod(order);
+    if (!date) return false;
+    const { start, end } = ordersPeriodStartEnd(month, year);
+    return date >= start && date <= end;
 }
 
 function formatOrdersPeriodLabel(month, year) {
@@ -1223,30 +1250,58 @@ function formatOrdersPeriodLabel(month, year) {
     return `${monthNames[month - 1]} 22 – ${monthNames[nextMonth - 1]} 21, ${nextMonth === 1 ? nextYear : year}`;
 }
 
-function updateOrdersMonthLabel() {
-    if (ordersPeriodMonth == null || ordersPeriodYear == null) return;
-    const el = document.getElementById('ordersMonthLabel');
-    if (el) el.textContent = formatOrdersPeriodLabel(ordersPeriodMonth, ordersPeriodYear);
+/** Current period (month 22 – next 21) that contains today */
+function getCurrentOrdersPeriod() {
+    return getPeriodForDate(new Date());
+}
+
+/** Oldest period in dropdown: Oct 22 – Nov 21, 2024 */
+const ORDERS_PERIOD_OLDEST_MONTH = 10;
+const ORDERS_PERIOD_OLDEST_YEAR = 2024;
+
+/** Build dropdown options: "All orders" + periods from current down to Oct 22 – Nov 21, 2024 */
+function buildStaticPeriodOptions() {
+    const options = [{ value: '__all__', label: 'All orders (recent)' }];
+    let { month, year } = getCurrentOrdersPeriod();
+    while (year > ORDERS_PERIOD_OLDEST_YEAR || (year === ORDERS_PERIOD_OLDEST_YEAR && month >= ORDERS_PERIOD_OLDEST_MONTH)) {
+        options.push({ value: `${month}-${year}`, label: formatOrdersPeriodLabel(month, year) });
+        if (month === 1) {
+            month = 12;
+            year -= 1;
+        } else {
+            month -= 1;
+        }
+    }
+    return options;
+}
+
+function populateOrdersPeriodFilterDropdown() {
+    const selectEl = document.getElementById('ordersPeriodFilter');
+    if (!selectEl) return;
+    const currentVal = selectEl.value;
+    const options = buildStaticPeriodOptions();
+    selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
+    if (currentVal && options.some((o) => o.value === currentVal)) {
+        selectEl.value = currentVal;
+    } else {
+        selectEl.value = '__all__';
+    }
 }
 
 async function loadOrders() {
-    if (ordersPeriodMonth == null || ordersPeriodYear == null) {
-        const { month, year } = getOrdersPeriodForToday();
-        ordersPeriodMonth = month;
-        ordersPeriodYear = year;
-    }
-    updateOrdersMonthLabel();
     if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
-        const url = `${API_BASE}/orders/?month=${ordersPeriodMonth}&year=${ordersPeriodYear}`;
-        const response = await fetch(url);
+        const response = await fetch(`${API_BASE}/orders/`);
         if (!response.ok) throw new Error('Failed to fetch orders');
 
         orders = await response.json();
 
+        populateOrdersPeriodFilterDropdown();
+        const selectEl = document.getElementById('ordersPeriodFilter');
+        if (selectEl) selectEl.value = '__all__';
+
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
-            // Update footer after data is loaded
             setTimeout(() => updateFooterRow(), 0);
         }
     } catch (error) {
@@ -1254,9 +1309,11 @@ async function loadOrders() {
         showToast('Failed to load orders', 'error');
         if (error.message.includes('relation "orders" does not exist')) {
             orders = getSampleOrders();
+            populateOrdersPeriodFilterDropdown();
+            const sel = document.getElementById('ordersPeriodFilter');
+            if (sel) sel.value = '__all__';
             if (ordersGridApi) {
                 ordersGridApi.setGridOption('rowData', orders);
-                // Update footer after data is loaded
                 setTimeout(() => updateFooterRow(), 0);
             }
         }
@@ -1265,24 +1322,26 @@ async function loadOrders() {
     }
 }
 
-function ordersMonthPrev() {
-    if (ordersPeriodMonth === 1) {
-        ordersPeriodMonth = 12;
-        ordersPeriodYear -= 1;
-    } else {
-        ordersPeriodMonth -= 1;
-    }
-    loadOrders();
-}
+/** Load orders for a specific period from API (for older months beyond the initial 1000) */
+async function loadOrdersForPeriod(month, year) {
+    if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+    try {
+        const response = await fetch(`${API_BASE}/orders/?month=${month}&year=${year}`);
+        if (!response.ok) throw new Error('Failed to fetch orders for period');
 
-function ordersMonthNext() {
-    if (ordersPeriodMonth === 12) {
-        ordersPeriodMonth = 1;
-        ordersPeriodYear += 1;
-    } else {
-        ordersPeriodMonth += 1;
+        orders = await response.json();
+
+        if (ordersGridApi) {
+            ordersGridApi.setGridOption('rowData', orders);
+            setTimeout(() => updateFooterRow(), 0);
+        }
+    } catch (error) {
+        console.error('Error loading orders for period:', error);
+        showToast('Failed to load orders for period', 'error');
+        if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
+    } finally {
+        if (ordersGridApi) ordersGridApi.hideOverlay();
     }
-    loadOrders();
 }
 
 function getSampleOrders() {
@@ -1399,9 +1458,15 @@ async function uploadPostExCsv(file) {
             throw new Error(detail || response.statusText || 'Upload failed');
         }
         showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
+
+        // Show popup if any orders have receivable != CSV NET_AMOUNT
+        const mismatches = data.amount_mismatches || [];
+        if (mismatches.length > 0) {
+            showPostExAmountMismatchesModal(mismatches);
+        }
         
-        // CSV may contain orders from multiple months; we only have current month in the grid.
-        // Select all rows in the current view that were updated by the CSV (ok if other months not visible).
+        // CSV may contain orders from multiple periods; we have all orders in the grid (period filter may hide some).
+        // Select all rows in the current view that were updated by the CSV.
         const updatedOrderIds = data.updated_order_ids || [];
         const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(Number));
         
@@ -2028,6 +2093,22 @@ function closeDeliveryStatusModal() {
     }
 }
 
+function showPostExAmountMismatchesModal(mismatches) {
+    const modal = document.getElementById('postExAmountMismatchesModal');
+    const tbody = document.getElementById('postExAmountMismatchesBody');
+    if (!modal || !tbody) return;
+    tbody.innerHTML = mismatches.map(m => {
+        const diff = (m.receivable - m.csv_net_amount).toFixed(2);
+        return `<tr><td>${m.order_number}</td><td>${m.receivable.toFixed(2)}</td><td>${m.csv_net_amount.toFixed(2)}</td><td>${diff}</td></tr>`;
+    }).join('');
+    modal.style.display = 'flex';
+}
+
+function closePostExAmountMismatchesModal() {
+    const modal = document.getElementById('postExAmountMismatchesModal');
+    if (modal) modal.style.display = 'none';
+}
+
 // Close modal when clicking outside or on close button
 document.addEventListener('DOMContentLoaded', () => {
     const modal = document.getElementById('deliveryStatusModal');
@@ -2048,6 +2129,18 @@ document.addEventListener('DOMContentLoaded', () => {
             closeDeliveryStatusModal();
         });
     }
+
+    // PostEx amount mismatches modal
+    const mismatchesModal = document.getElementById('postExAmountMismatchesModal');
+    const closeMismatchesBtn = document.getElementById('closePostExAmountMismatchesModal');
+    const closeMismatchesBtn2 = document.getElementById('closePostExAmountMismatchesBtn');
+    if (mismatchesModal) {
+        mismatchesModal.addEventListener('click', (e) => {
+            if (e.target === mismatchesModal) closePostExAmountMismatchesModal();
+        });
+    }
+    if (closeMismatchesBtn) closeMismatchesBtn.addEventListener('click', closePostExAmountMismatchesModal);
+    if (closeMismatchesBtn2) closeMismatchesBtn2.addEventListener('click', closePostExAmountMismatchesModal);
 });
 
 // Make functions globally accessible

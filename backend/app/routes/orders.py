@@ -575,7 +575,9 @@ def _parse_float(val: Any, default: float = 0.0) -> float:
 async def upload_postex_csv(file: UploadFile = File(...)):
     """
     Upload a PostEx CSV file. Matches rows by ORDER_REF_NUMBER to orders and updates
-    delivery_charge (from SHIPPING_CHARGES) and tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX).
+    delivery_charge (from SHIPPING_CHARGES), tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX),
+    courier (set to PostEx), and tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
+    including exponential notation e.g. 2.63E+13).
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
@@ -614,10 +616,15 @@ async def upload_postex_csv(file: UploadFile = File(...)):
                 col_map["wh_sales_tax"] = name
             if ("ORDER_REF_NUMBER" in key_upper or "ORDER_NUMBER" in key_upper or "ORDER_ID" in key_upper) and "order_ref_number" not in col_map:
                 col_map["order_ref_number"] = name  # Use original name
+            if ("TRACKING_NUMBER" in key_upper or "TRACKING" in key_upper) and "tracking_number" not in col_map:
+                col_map["tracking_number"] = name
+            if "NET_AMOUNT" in key_upper and "net_amount" not in col_map:
+                col_map["net_amount"] = name
         if "order_ref_number" not in col_map:
             raise HTTPException(status_code=400, detail="CSV must contain an ORDER_REF_NUMBER, ORDER_NUMBER, or ORDER_ID column.")
         if "shipping_charges" not in col_map:
             raise HTTPException(status_code=400, detail="CSV must contain SHIPPING_CHARGES column.")
+        tracking_col = col_map.get("tracking_number")
         
         def normalize_order_number(order_ref):
             """Extract order number from formats like #4807 or 4446-R using regex (first run of digits)."""
@@ -635,7 +642,25 @@ async def upload_postex_csv(file: UploadFile = File(...)):
                 return int(match.group(0))
             except (ValueError, TypeError):
                 return None
-        
+
+        def parse_tracking_number_14(val):
+            """Parse 14-digit tracking number; CSV may show it as exponential (e.g. 2.63E+13)."""
+            if val is None:
+                return None
+            s = str(val).strip()
+            if not s:
+                return None
+            try:
+                # Handle exponential notation (e.g. 2.63E+13 -> 26300000000000)
+                if "e" in s.lower():
+                    n = int(float(s))
+                else:
+                    n = int(s)
+                # Return as 14-digit string (zero-pad if needed)
+                return str(n).zfill(14) if 0 <= n < 10**14 else str(n)
+            except (ValueError, TypeError):
+                return None
+
         rows = []
         csv_order_numbers = []
         for row in reader:
@@ -650,7 +675,17 @@ async def upload_postex_csv(file: UploadFile = File(...)):
             sales_tax = _parse_float(row.get(col_map.get("wh_sales_tax", ""), ""), 0)
             shipping_total = shipping + gst
             tax_total = income_tax + sales_tax
-            rows.append({"order_number": order_number, "delivery_charge": shipping_total, "tax_amount": tax_total})
+            tracking_raw = row.get(tracking_col, "") if tracking_col else ""
+            tracking_str = parse_tracking_number_14(tracking_raw)
+            net_amount_raw = row.get(col_map.get("net_amount", ""), "") if col_map.get("net_amount") else None
+            net_amount_val = _parse_float(net_amount_raw, None) if net_amount_raw is not None and str(net_amount_raw).strip() != "" else None
+            rows.append({
+                "order_number": order_number,
+                "delivery_charge": shipping_total,
+                "tax_amount": tax_total,
+                "tracking_number": tracking_str,
+                "csv_net_amount": net_amount_val,
+            })
             csv_order_numbers.append(order_number)
         if not rows:
             return {"updated": 0, "message": "No valid rows with ORDER_REF_NUMBER in CSV."}
@@ -660,7 +695,7 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         limit = 1000
         offset = 0
         while True:
-            resp = supabase.table("orders").select("id, order_number").range(offset, offset + limit - 1).execute()
+            resp = supabase.table("orders").select("id, order_number, total_amount, advance_amount, order_status").range(offset, offset + limit - 1).execute()
             if not resp.data:
                 break
             all_orders.extend(resp.data)
@@ -679,12 +714,13 @@ async def upload_postex_csv(file: UploadFile = File(...)):
                 except (ValueError, TypeError):
                     continue
         
-        # Find matches
+        # Find matches and detect receivable vs CSV net amount mismatches
         matched_order_numbers = []
         updated_count = 0
         unmatched_order_numbers = []
         updated_order_ids = []
-        
+        amount_mismatches = []  # { order_number, receivable, csv_net_amount, total_amount, advance_amount, delivery_charge, tax_amount }
+
         for r in rows:
             order_num = r["order_number"]
             order = order_number_to_order.get(order_num)
@@ -695,19 +731,46 @@ async def upload_postex_csv(file: UploadFile = File(...)):
             update_data = {
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
+                "courier": "PostEx",
                 "updated_at": datetime.utcnow().isoformat(),
             }
+            if r.get("tracking_number"):
+                update_data["tracking_number"] = r["tracking_number"]
             supabase.table("orders").update(update_data).eq("id", order["id"]).execute()
             updated_order_ids.append(order["id"])
             updated_count += 1
-        
+
+            # Receivable must match grid formula: returned -> -delivery_charge; else -> total - advance - delivery - tax
+            total_amount = float(order.get("total_amount") or 0)
+            advance_amount = float(order.get("advance_amount") or 0)
+            delivery_charge = float(r["delivery_charge"])
+            tax_amount = float(r["tax_amount"])
+            order_status = (order.get("order_status") or "").strip().lower()
+            if order_status == "returned":
+                receivable = -delivery_charge
+            else:
+                receivable = total_amount - advance_amount - delivery_charge - tax_amount
+            csv_net = r.get("csv_net_amount")
+            if csv_net is not None:
+                if round(receivable, 2) != round(float(csv_net), 2):
+                    amount_mismatches.append({
+                        "order_number": order_num,
+                        "receivable": round(receivable, 2),
+                        "csv_net_amount": round(float(csv_net), 2),
+                        "total_amount": total_amount,
+                        "advance_amount": advance_amount,
+                        "delivery_charge": delivery_charge,
+                        "tax_amount": tax_amount,
+                        "order_status": order_status or None,
+                    })
+
         # Build response message with debugging info
-        message = f"Updated delivery charges and tax for {updated_count} order(s)."
+        message = f"Updated delivery charges, tax, courier (PostEx), and tracking for {updated_count} order(s)."
         if unmatched_order_numbers:
             message += f" {len(unmatched_order_numbers)} order number(s) from CSV did not match any orders."
             if len(unmatched_order_numbers) <= 10:
                 message += f" Unmatched: {', '.join(map(str, unmatched_order_numbers[:10]))}"
-        
+
         return {
             "updated": updated_count,
             "message": message,
@@ -717,7 +780,8 @@ async def upload_postex_csv(file: UploadFile = File(...)):
             "csv_order_numbers_count": len(csv_order_numbers),
             "db_order_numbers_count": len(set(db_order_numbers)),
             "matched_count": len(matched_order_numbers),
-            "unmatched_count": len(unmatched_order_numbers)
+            "unmatched_count": len(unmatched_order_numbers),
+            "amount_mismatches": amount_mismatches,
         }
     except HTTPException:
         raise
@@ -738,6 +802,20 @@ async def get_order(order_id: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+def _delivery_status_is_final(delivery_status_data: dict) -> bool:
+    """True if latest status is final (Delivered to Customer or Returned at Merchant Warehouse). No need to fetch from PostEx again."""
+    if not delivery_status_data:
+        return False
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if not latest:
+        return False
+    if "Delivered to Customer" in latest:
+        return True
+    if "Returned at Merchant Warehouse" in latest:
+        return True
+    return False
+
 
 def _delivery_status_indicates_returned(delivery_status_data: dict) -> bool:
     """True if delivery status contains 'Return to KARACHI' (e.g. in latest_status or status_history)."""
@@ -1001,34 +1079,37 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             raise HTTPException(status_code=400, detail="Courier not assigned")
         
         delivery_status_data = None
-        
+        existing_delivery = order.get("delivery_status")
+
         if courier.upper() == "POSTEX":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
-                response = await client.get(api_url)
-                response.raise_for_status()
-                data = response.json()
-                
-                if data.get("statusCode") == "200" and "dist" in data:
-                    dist = data["dist"]
-                    status_history = dist.get("transactionStatusHistory", [])
-                    
-                    delivery_status_data = {
-                        "courier": "PostEx",
-                        "tracking_number": dist.get("trackingNumber", tracking_number),
-                        "customer_name": dist.get("customerName", ""),
-                        "order_pickup_date": dist.get("orderPickupDate", ""),
-                        "status_history": [
-                            {
-                                "status": item.get("transactionStatusMessage", ""),
-                                "status_code": item.get("transactionStatusMessageCode", ""),
-                                "datetime": item.get("modifiedDatetime", "")
-                            }
-                            for item in status_history
-                        ],
-                        "latest_status": status_history[0].get("transactionStatusMessage", "") if status_history else "",
-                        "fetched_at": datetime.utcnow().isoformat()
-                    }
+            # If last status is final, no need to call PostEx; return stored details
+            if existing_delivery and _delivery_status_is_final(existing_delivery):
+                delivery_status_data = existing_delivery
+            else:
+                async with httpx.AsyncClient(timeout=30.0) as client:
+                    api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
+                    response = await client.get(api_url)
+                    response.raise_for_status()
+                    data = response.json()
+                    if data.get("statusCode") == "200" and "dist" in data:
+                        dist = data["dist"]
+                        status_history = dist.get("transactionStatusHistory", [])
+                        delivery_status_data = {
+                            "courier": "PostEx",
+                            "tracking_number": dist.get("trackingNumber", tracking_number),
+                            "customer_name": dist.get("customerName", ""),
+                            "order_pickup_date": dist.get("orderPickupDate", ""),
+                            "status_history": [
+                                {
+                                    "status": item.get("transactionStatusMessage", ""),
+                                    "status_code": item.get("transactionStatusMessageCode", ""),
+                                    "datetime": item.get("modifiedDatetime", "")
+                                }
+                                for item in status_history
+                            ],
+                            "latest_status": status_history[0].get("transactionStatusMessage", "") if status_history else "",
+                            "fetched_at": datetime.utcnow().isoformat()
+                        }
         
         elif courier.upper() == "SCS":
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -1104,7 +1185,8 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
-        if save:
+        # Only persist when we fetched new data (not when we returned stored final status)
+        if save and (existing_delivery is None or delivery_status_data is not existing_delivery):
             update_payload = {
                 "delivery_status": delivery_status_data,
                 "updated_at": datetime.utcnow().isoformat()

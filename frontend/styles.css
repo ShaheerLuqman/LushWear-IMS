@@ -890,6 +890,29 @@ body {
     flex: 1;
 }
 
+.postex-mismatches-table-wrap {
+    overflow-x: auto;
+    margin: 1rem 0;
+}
+.postex-mismatches-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+}
+.postex-mismatches-table th,
+.postex-mismatches-table td {
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 1px solid var(--border-color);
+}
+.postex-mismatches-table th {
+    font-weight: 600;
+    color: var(--text-secondary);
+}
+.postex-mismatches-table tbody tr:hover {
+    background: var(--bg-tertiary);
+}
+
 .delivery-status-info {
     margin-bottom: 24px;
 }
@@ -1067,58 +1090,40 @@ body {
     }
 }
 
-/* Orders month-based pagination */
-.orders-month-nav {
+/* Orders period filter (month 22 – next 21) */
+.orders-period-filter-wrap {
     display: flex;
     align-items: center;
-    justify-content: center;
-    gap: 16px;
-    padding: 12px 0 16px;
+    gap: 8px;
+    margin-right: 8px;
     flex-shrink: 0;
 }
-.orders-month-nav.header-inline {
+.orders-period-filter-wrap.header-inline {
     padding: 0;
-    margin-right: 8px;
-    gap: 10px;
 }
-.orders-month-nav.header-inline .orders-month-label {
-    min-width: 180px;
+.orders-period-filter-label {
     font-size: 14px;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
-.orders-month-nav.header-inline .month-nav-btn {
-    width: 36px;
-    height: 36px;
-    font-size: 20px;
-}
-.orders-month-label {
-    font-size: 15px;
-    font-weight: 600;
+.orders-period-filter {
+    min-width: 200px;
+    padding: 8px 12px;
+    font-size: 14px;
     color: var(--text-primary);
-    min-width: 220px;
-    text-align: center;
-}
-.month-nav-btn {
-    width: 40px;
-    height: 40px;
+    background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    background: var(--bg-card);
-    color: var(--text-primary);
-    font-size: 22px;
-    line-height: 1;
     cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    transition: var(--transition);
+    appearance: auto;
 }
-.month-nav-btn:hover {
-    background: var(--bg-tertiary);
+.orders-period-filter:hover {
     border-color: var(--accent-primary);
-    color: var(--accent-primary);
 }
-.month-nav-btn:active {
-    transform: scale(0.96);
+.orders-period-filter:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
 }
 
 /* AG Grid Container */
