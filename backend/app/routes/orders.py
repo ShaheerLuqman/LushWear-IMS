@@ -10,7 +10,6 @@ import re
 import csv
 import io
 from urllib.parse import unquote, urlparse, parse_qs
-from bs4 import BeautifulSoup
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -156,8 +155,18 @@ async def sync_shopify_orders():
         existing_orders_all = []
         offset = 0
         limit = 1000
+        existing_orders_select = (
+            "id, order_number, order_status, delivery_charge, tax_amount, "
+            "delivery_status, piece_received, courier, tracking_number, "
+            "cost_price, items, total_amount, advance_amount"
+        )
         while True:
-            existing_orders_response = supabase.table("orders").select("*").range(offset, offset + limit - 1).execute()
+            existing_orders_response = (
+                supabase.table("orders")
+                .select(existing_orders_select)
+                .range(offset, offset + limit - 1)
+                .execute()
+            )
             if not existing_orders_response.data:
                 break
             existing_orders_all.extend(existing_orders_response.data)
@@ -379,7 +388,7 @@ async def sync_shopify_orders():
         orders_to_update = []
         orders_to_skip = []
         current_time = datetime.utcnow().isoformat()
-        
+
         for sp_order in all_orders:
             order_number = sp_order.get("order_number")
             if not order_number:
@@ -467,8 +476,15 @@ async def sync_shopify_orders():
                 if existing_status in ("delivered", "returned"):
                     # Do not overwrite status/courier/delivery/tax etc., but still update
                     # advance_amount and total_amount from Shopify so "paid" state stays in sync.
-                    financial_only = {**existing_order, "advance_amount": advance_amount, "total_amount": total_amount, "updated_at": current_time}
-                    orders_to_update.append(financial_only)
+                    existing_adv = float(existing_order.get("advance_amount") or 0)
+                    existing_tot = float(existing_order.get("total_amount") or 0)
+                    adv_changed = abs(existing_adv - advance_amount) > 0.01
+                    tot_changed = abs(existing_tot - total_amount) > 0.01
+                    if adv_changed or tot_changed:
+                        financial_only = {**existing_order, "advance_amount": advance_amount, "total_amount": total_amount, "updated_at": current_time}
+                        orders_to_update.append(financial_only)
+                    else:
+                        orders_to_skip.append(order_number)
                     continue
                 # Only update order_status if it was previously cancelled or unfulfilled
                 if existing_status not in ("cancelled", "unfulfilled"):
@@ -529,7 +545,7 @@ async def sync_shopify_orders():
         
         synced_count = created_count + updated_count
         skipped_count = len(orders_to_skip)
-        
+
         return {
             "message": "Orders synced successfully",
             "synced": synced_count,
@@ -1110,77 +1126,8 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                             "latest_status": status_history[0].get("transactionStatusMessage", "") if status_history else "",
                             "fetched_at": datetime.utcnow().isoformat()
                         }
-        
-        elif courier.upper() == "SCS":
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                api_url = f"https://portal.scscourier.com/track?code={tracking_number}"
-                response = await client.get(api_url)
-                response.raise_for_status()
-                html_content = response.text
-
-                try:
-                    soup = BeautifulSoup(html_content, 'html.parser')
-
-                    recipient_name = ""
-                    recipient_contact = ""
-                    tracking_id = tracking_number
-
-                    def _safe_text(elem, default=""):
-                        if elem is None or not hasattr(elem, "get_text"):
-                            return default
-                        try:
-                            return elem.get_text(strip=True)
-                        except Exception:
-                            return default
-
-                    detail_items = soup.find_all("div", class_="detail-item")
-                    for item in detail_items:
-                        strong = item.find("strong")
-                        span = item.find("span")
-                        if strong and span:
-                            label = _safe_text(strong)
-                            value = _safe_text(span)
-                            if "Receipient Name" in label or "Recipient Name" in label:
-                                recipient_name = value
-                            elif "Receipient Contact" in label or "Recipient Contact" in label:
-                                recipient_contact = value
-                            elif "Tracking ID" in label:
-                                tracking_id = value
-
-                    status_history = []
-                    timeline_items = soup.find_all("div", class_="timeline-item")
-                    for item in timeline_items:
-                        date_elem = item.find("div", class_="timeline-date")
-                        status_elem = item.find("div", class_="status-text")
-                        if date_elem and status_elem:
-                            classes = getattr(item, "get", lambda k, d=None: d)("class", None) or []
-                            if not isinstance(classes, list):
-                                classes = [classes] if classes else []
-                            is_active = "active" in classes
-                            status_history.append({
-                                "status": _safe_text(status_elem),
-                                "datetime": _safe_text(date_elem),
-                                "is_active": is_active
-                            })
-
-                    delivery_status_data = {
-                        "courier": "SCS",
-                        "tracking_number": tracking_id,
-                        "recipient_name": recipient_name,
-                        "recipient_contact": recipient_contact,
-                        "status_history": status_history,
-                        "latest_status": status_history[0].get("status", "") if status_history else "",
-                        "fetched_at": datetime.utcnow().isoformat()
-                    }
-                except HTTPException:
-                    raise
-                except Exception as e:
-                    raise HTTPException(
-                        status_code=500,
-                        detail=f"SCS delivery status error: {type(e).__name__}: {str(e)}"
-                    )
         else:
-            raise HTTPException(status_code=400, detail=f"Courier '{courier}' not supported for delivery status tracking")
+            raise HTTPException(status_code=400, detail="Only PostEx is supported for delivery status tracking")
         
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
