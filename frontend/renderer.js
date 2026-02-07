@@ -4,9 +4,14 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 // State
 let products = [];
 let orders = [];
+let cashbookEntries = [];
+let cashbookSettings = { opening_balance: 0 };
+let cashbookSelectedDate = null;
 let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
+let cashbookIncomingGridApi = null;
+let cashbookOutgoingGridApi = null;
 let updateFooterRow = null; // Will be set in initOrdersGrid
 // Auto-sync orders every 15 minutes; timer is reset when user clicks sync
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
@@ -92,6 +97,8 @@ document.addEventListener('DOMContentLoaded', async () => {
 function initGrids() {
     initProductsGrid();
     initOrdersGrid();
+    initCashbookIncomingGrid();
+    initCashbookOutgoingGrid();
 }
 
 // Size order mapping for variant sorting
@@ -117,6 +124,30 @@ function sortVariantsBySize(variants) {
         }
         return titleA.localeCompare(titleB);
     });
+}
+
+function formatAmount(value) {
+    const val = parseFloat(value);
+    const safeVal = Number.isNaN(val) ? 0 : val;
+    return safeVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function parseCashbookAmount(value) {
+    if (value === null || value === undefined) return null;
+    const raw = String(value).replace(/,/g, '').trim();
+    if (raw === '') return null;
+    const parsed = parseFloat(raw);
+    if (Number.isNaN(parsed)) return null;
+    return parsed;
+}
+
+function formatCashbookCell(value) {
+    if (value === null || value === undefined || value === '') return '';
+    return formatAmount(value);
+}
+
+function getTodayDateString() {
+    return new Date().toISOString().split('T')[0];
 }
 
 function initProductsGrid() {
@@ -1025,6 +1056,168 @@ function initOrdersGrid() {
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
+function isCashbookSystemOrFooterRow(data) {
+    if (!data || !data.id) return false;
+    const id = String(data.id);
+    return id === '__opening__' || id === '__closing__' || id === '__total_in__' || id === '__total_out__' || data._isSystemRow || data._isFooter;
+}
+
+function buildCashbookGridColumns(side) {
+    return [
+        {
+            headerName: 'Description',
+            field: 'description',
+            flex: 2,
+            editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
+            valueFormatter: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
+            pinnedRowCellRenderer: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
+            valueSetter: (params) => {
+                if (isCashbookSystemOrFooterRow(params.data) || params.node.rowPinned === 'bottom') return false;
+                const val = String(params.newValue ?? '').trim();
+                if ((params.data.description || '') === val) return false;
+                params.data.description = val;
+                if (!params.node.rowPinned && params.data.id !== '__new__') {
+                    updateCashbookEntry(params.data.id, { description: val });
+                }
+                return true;
+            }
+        },
+        {
+            headerName: side === 'inflow' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
+            field: 'amount',
+            width: 160,
+            filter: 'agNumberColumnFilter',
+            editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
+            valueFormatter: (params) => formatCashbookCell(params.value),
+            pinnedRowCellRenderer: (params) => {
+                const val = params.value;
+                if (val == null || val === '') return '';
+                return formatCashbookCell(val);
+            },
+            valueSetter: (params) => {
+                if (params.node.rowPinned === 'bottom') return false;
+                if (params.node.rowPinned === 'top' || (params.data && params.data.id === '__new__')) {
+                    params.data.amount = parseCashbookAmount(params.newValue);
+                    return true;
+                }
+                if (isCashbookSystemOrFooterRow(params.data)) return false;
+                const next = parseCashbookAmount(params.newValue);
+                if (next === null || next <= 0) return false;
+                params.data.amount = next;
+                updateCashbookEntry(params.data.id, { entry_type: side, amount: next });
+                return true;
+            }
+        },
+        {
+            headerName: 'Actions',
+            field: 'actions',
+            width: 110,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => {
+                if (params.node.rowPinned) return '';
+                if (isCashbookSystemOrFooterRow(params.data)) return '';
+                if (params.data && params.data.id === '__new__') return '';
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-danger btn-sm';
+                btn.textContent = 'Delete';
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteCashbookEntry(params.data.id);
+                });
+                return btn;
+            },
+            pinnedRowCellRenderer: () => ''
+        }
+    ];
+}
+
+function initCashbookIncomingGrid() {
+    const gridDiv = document.getElementById('cashbookIncomingGrid');
+    if (!gridDiv) return;
+
+    const gridOptions = {
+        columnDefs: buildCashbookGridColumns('inflow'),
+        rowData: [],
+        pinnedBottomRowData: [],
+        defaultColDef: {
+            sortable: true,
+            resizable: true,
+            filter: true,
+            floatingFilter: true,
+            minWidth: 80
+        },
+        animateRows: true,
+        pagination: false,
+        domLayout: 'normal',
+        stopEditingWhenCellsLoseFocus: true,
+        getRowId: (params) => params.data.id,
+        getRowStyle: (params) => {
+            if (params.node.rowPinned === 'bottom') {
+                return { fontWeight: 'bold', borderTop: '2px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' };
+            }
+            if (params.data && params.data.id === '__opening__') {
+                return { fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.03)' };
+            }
+            return null;
+        },
+        onGridReady: (params) => {
+            cashbookIncomingGridApi = params.api;
+        },
+        onCellValueChanged: (params) => {
+            if (params.data && params.data.id === '__new__') {
+                tryCreateCashbookEntryFromPinnedRow(params.data, 'inflow');
+            }
+        }
+    };
+
+    agGrid.createGrid(gridDiv, gridOptions);
+}
+
+function initCashbookOutgoingGrid() {
+    const gridDiv = document.getElementById('cashbookOutgoingGrid');
+    if (!gridDiv) return;
+
+    const gridOptions = {
+        columnDefs: buildCashbookGridColumns('outflow'),
+        rowData: [],
+        pinnedBottomRowData: [],
+        defaultColDef: {
+            sortable: true,
+            resizable: true,
+            filter: true,
+            floatingFilter: true,
+            minWidth: 80
+        },
+        animateRows: true,
+        pagination: false,
+        domLayout: 'normal',
+        stopEditingWhenCellsLoseFocus: true,
+        getRowId: (params) => params.data.id,
+        getRowStyle: (params) => {
+            if (params.node.rowPinned === 'bottom') {
+                return { fontWeight: 'bold', borderTop: '2px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' };
+            }
+            if (params.data && params.data.id === '__closing__') {
+                return { fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.03)' };
+            }
+            return null;
+        },
+        onGridReady: (params) => {
+            cashbookOutgoingGridApi = params.api;
+        },
+        onCellValueChanged: (params) => {
+            if (params.data && params.data.id === '__new__') {
+                tryCreateCashbookEntryFromPinnedRow(params.data, 'outflow');
+            }
+        }
+    };
+
+    agGrid.createGrid(gridDiv, gridOptions);
+}
+
 // ============================================
 // Save Functions for Editable Cells
 // ============================================
@@ -1112,6 +1305,7 @@ function switchView(viewName) {
     const titles = {
         'dashboard': { title: 'Dashboard', subtitle: 'Overview of your inventory' },
         'orders': { title: 'Orders', subtitle: 'View and manage orders' },
+        'cashbook': { title: 'Cashbook', subtitle: 'Track daily cash inflows and outflows' },
         'products': { title: 'Products', subtitle: 'Manage your product catalog' }
     };
 
@@ -1124,6 +1318,7 @@ function switchView(viewName) {
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
+    const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
 
     if (editCostPricesBtn) {
         editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
@@ -1140,6 +1335,7 @@ function switchView(viewName) {
             if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             exitOrdersFullScreen();
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
@@ -1148,9 +1344,23 @@ function switchView(viewName) {
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
+            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
+            if (deliveryProgress) deliveryProgress.style.display = 'none';
+        } else if (viewName === 'cashbook') {
+            syncProductsBtn.style.display = 'none';
+            syncOrdersBtn.style.display = 'none';
+            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
+            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
+            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
+            exitOrdersFullScreen();
+            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
         } else {
             syncProductsBtn.style.display = 'none';
@@ -1159,6 +1369,7 @@ function switchView(viewName) {
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
@@ -1177,6 +1388,12 @@ function switchView(viewName) {
         loadOrders();
         setTimeout(() => {
             if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+        }, 100);
+    } else if (viewName === 'cashbook') {
+        loadCashbook();
+        setTimeout(() => {
+            if (cashbookIncomingGridApi) cashbookIncomingGridApi.sizeColumnsToFit();
+            if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.sizeColumnsToFit();
         }, 100);
     } else if (viewName === 'dashboard') {
         loadProducts();
@@ -1352,6 +1569,380 @@ function getSampleOrders() {
         { id: '4', order_number: 2722, courier: 'RIDER', order_status: 'fulfilled', piece_received: 'Done', delivery_status: 'delivered', total_amount: 8247, advance_amount: 0, delivery_charge: 247, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() },
         { id: '5', order_number: 2724, courier: '1293', order_status: 'returned', piece_received: 'Received', delivery_status: 'not_delivered', total_amount: 3247, advance_amount: 0, delivery_charge: 211, tax_amount: 0, cost_price: 0, created_at: new Date().toISOString() }
     ];
+}
+
+// ============================================
+// Cashbook
+// ============================================
+
+function normalizeCashbookEntries(entries) {
+    return (entries || []).map((entry) => ({
+        ...entry,
+        entry_date: entry.entry_date ? String(entry.entry_date).slice(0, 10) : ''
+    }));
+}
+
+function getEmptyCashbookRow(entryDate = '') {
+    return {
+        id: '__new__',
+        entry_date: entryDate,
+        description: '',
+        amount: null,
+        running_total: null
+    };
+}
+
+function buildCashbookRows(entries, openingBalance) {
+    const sorted = [...entries].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+
+    let running = parseFloat(openingBalance) || 0;
+    let totalInflow = 0;
+    let totalOutflow = 0;
+    const dailySummary = [];
+    let currentDate = null;
+    let dayOpening = running;
+    let dayInflow = 0;
+    let dayOutflow = 0;
+
+    const rows = sorted.map((entry) => {
+        const entryDate = entry.entry_date || '';
+        if (currentDate !== null && entryDate !== currentDate) {
+            dailySummary.push({
+                date: currentDate,
+                opening: dayOpening,
+                inflow: dayInflow,
+                outflow: dayOutflow,
+                closing: running
+            });
+            dayOpening = running;
+            dayInflow = 0;
+            dayOutflow = 0;
+        }
+
+        if (currentDate !== entryDate) {
+            currentDate = entryDate;
+        }
+
+        const amount = parseFloat(entry.amount) || 0;
+        const inflow = entry.entry_type === 'inflow' ? amount : 0;
+        const outflow = entry.entry_type === 'outflow' ? amount : 0;
+        totalInflow += inflow;
+        totalOutflow += outflow;
+        running += inflow - outflow;
+        dayInflow += inflow;
+        dayOutflow += outflow;
+
+        return {
+            ...entry,
+            inflow,
+            outflow,
+            running_balance: running
+        };
+    });
+
+    if (currentDate !== null) {
+        dailySummary.push({
+            date: currentDate,
+            opening: dayOpening,
+            inflow: dayInflow,
+            outflow: dayOutflow,
+            closing: running
+        });
+    }
+
+    return {
+        rows,
+        dailySummary,
+        totals: {
+            totalInflow,
+            totalOutflow,
+            closingBalance: running
+        }
+    };
+}
+
+function getOpeningBalanceForDate(entries, openingBalance, selectedDate) {
+    if (!selectedDate) return openingBalance;
+    const sorted = [...entries].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    let running = parseFloat(openingBalance) || 0;
+    for (const entry of sorted) {
+        const entryDate = entry.entry_date || '';
+        if (entryDate >= selectedDate) break;
+        const amount = parseFloat(entry.amount) || 0;
+        if (entry.entry_type === 'inflow') {
+            running += amount;
+        } else if (entry.entry_type === 'outflow') {
+            running -= amount;
+        }
+    }
+    return running;
+}
+
+function buildCashbookSideRows(entries, side) {
+    const filtered = (entries || []).filter((entry) => entry.entry_type === side);
+    const sorted = [...filtered].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    return sorted.map((entry) => ({
+        ...entry,
+        amount: parseFloat(entry.amount) || 0
+    }));
+}
+
+function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
+    const opening = parseFloat(carryForward) || 0;
+    const rows = buildCashbookSideRows(entries, 'inflow');
+    const totalInflow = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    const openingRow = {
+        id: '__opening__',
+        description: "Opening Balance",
+        amount: opening,
+        _isSystemRow: true
+    };
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '');
+    const totalRow = {
+        id: '__total_in__',
+        description: 'Total',
+        amount: opening + totalInflow,
+        _isFooter: true
+    };
+    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalInflow };
+}
+
+function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
+    const inflowEntries = (entries || []).filter((e) => e.entry_type === 'inflow');
+    const outflowEntries = (entries || []).filter((e) => e.entry_type === 'outflow');
+    const totalInflow = inflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const totalOutflow = outflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const opening = parseFloat(carryForward) || 0;
+    const closingBalance = opening + totalInflow - totalOutflow;
+    const rows = buildCashbookSideRows(entries, 'outflow');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '');
+    const closingRow = {
+        id: '__closing__',
+        description: 'Closing Balance',
+        amount: closingBalance,
+        _isSystemRow: true
+    };
+    const totalRow = {
+        id: '__total_out__',
+        description: 'Total',
+        amount: totalOutflow + closingBalance,
+        _isFooter: true
+    };
+    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalOutflow };
+}
+
+function renderCashbookDailySummary() {}
+function updateCashbookStats() {}
+
+async function loadCashbookSettings() {
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/settings`);
+        if (!response.ok) throw new Error('Failed to load cashbook settings');
+        cashbookSettings = await response.json();
+        const input = document.getElementById('cashbookOpeningBalance');
+        if (input) {
+            const opening = parseFloat(cashbookSettings.opening_balance) || 0;
+            input.value = opening.toFixed(2);
+        }
+    } catch (error) {
+        console.error('Error loading cashbook settings:', error);
+        showToast('Failed to load cashbook settings', 'error');
+    }
+}
+
+async function loadCashbookEntries() {
+    if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
+    if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/entries`);
+        if (!response.ok) throw new Error('Failed to load cashbook entries');
+        cashbookEntries = normalizeCashbookEntries(await response.json());
+    } catch (error) {
+        console.error('Error loading cashbook entries:', error);
+        showToast('Failed to load cashbook entries', 'error');
+        cashbookEntries = [];
+    } finally {
+        if (cashbookIncomingGridApi) cashbookIncomingGridApi.hideOverlay();
+        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.hideOverlay();
+    }
+}
+
+function renderCashbook() {
+    const selectedDate = cashbookSelectedDate || getTodayDateString();
+    const openingBalance = parseFloat(cashbookSettings.opening_balance) || 0;
+    const carryForward = getOpeningBalanceForDate(cashbookEntries, openingBalance, selectedDate);
+    const filteredEntries = cashbookEntries.filter((entry) => entry.entry_date === selectedDate);
+
+    const { rowData: incomingRowData, pinnedBottomRowData: incomingPinnedBottom } = buildCashbookIncomingWithOpening(filteredEntries, carryForward, selectedDate);
+    const { rowData: outgoingRowData, pinnedBottomRowData: outgoingPinnedBottom } = buildCashbookOutgoingWithClosing(filteredEntries, carryForward, selectedDate);
+
+    if (cashbookIncomingGridApi) {
+        cashbookIncomingGridApi.setGridOption('rowData', incomingRowData);
+        cashbookIncomingGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookIncomingGridApi.setGridOption('pinnedBottomRowData', incomingPinnedBottom);
+        cashbookIncomingGridApi.setGridOption('pagination', false);
+    }
+    if (cashbookOutgoingGridApi) {
+        cashbookOutgoingGridApi.setGridOption('rowData', outgoingRowData);
+        cashbookOutgoingGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookOutgoingGridApi.setGridOption('pinnedBottomRowData', outgoingPinnedBottom);
+        cashbookOutgoingGridApi.setGridOption('pagination', false);
+    }
+}
+
+async function loadCashbook() {
+    await Promise.all([loadCashbookSettings(), loadCashbookEntries()]);
+    const dateFilter = document.getElementById('cashbookDateFilter');
+    if (!cashbookSelectedDate) {
+        cashbookSelectedDate = getTodayDateString();
+    }
+    if (dateFilter) dateFilter.value = cashbookSelectedDate;
+    renderCashbook();
+}
+
+async function saveCashbookOpeningBalance() {
+    const input = document.getElementById('cashbookOpeningBalance');
+    if (!input) return;
+    const value = parseFloat(String(input.value).replace(/,/g, ''));
+    if (Number.isNaN(value)) {
+        showToast('Enter a valid opening balance', 'error');
+        return;
+    }
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/settings`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ opening_balance: value })
+        });
+        if (!response.ok) throw new Error('Failed to save opening balance');
+        cashbookSettings = await response.json();
+        const opening = parseFloat(cashbookSettings.opening_balance) || 0;
+        input.value = opening.toFixed(2);
+        renderCashbook();
+        showToast('Opening balance saved', 'success');
+    } catch (error) {
+        console.error('Error saving opening balance:', error);
+        showToast('Failed to save opening balance', 'error');
+    }
+}
+
+async function addCashbookEntry() {
+    const dateInput = document.getElementById('cashbookEntryDate');
+    const typeInput = document.getElementById('cashbookEntryType');
+    const amountInput = document.getElementById('cashbookEntryAmount');
+    const descInput = document.getElementById('cashbookEntryDescription');
+    if (!dateInput || !typeInput || !amountInput) return;
+
+    const entryDate = String(dateInput.value || '').trim();
+    const entryType = String(typeInput.value || '').trim();
+    const amount = parseFloat(amountInput.value);
+    const description = descInput ? String(descInput.value || '').trim() : '';
+
+    if (!entryDate) {
+        showToast('Select an entry date', 'error');
+        return;
+    }
+    if (!entryType || (entryType !== 'inflow' && entryType !== 'outflow')) {
+        showToast('Select a valid entry type', 'error');
+        return;
+    }
+    if (Number.isNaN(amount) || amount <= 0) {
+        showToast('Enter a valid amount', 'error');
+        return;
+    }
+
+    await createCashbookEntry({
+        entry_date: entryDate,
+        entry_type: entryType,
+        amount,
+        description
+    });
+    if (amountInput) amountInput.value = '';
+    if (descInput) descInput.value = '';
+}
+
+async function createCashbookEntry(payload) {
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/entries`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('Failed to add cashbook entry');
+        await loadCashbookEntries();
+        renderCashbook();
+        showToast('Cashbook entry added', 'success');
+    } catch (error) {
+        console.error('Error adding cashbook entry:', error);
+        showToast('Failed to add cashbook entry', 'error');
+    }
+}
+
+function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
+    const entryDate = String(row.entry_date || '').trim();
+    const amount = parseCashbookAmount(row.amount);
+    if (amount === null || amount <= 0) return;
+    if (!entryDate) {
+        showToast('Select an entry date for this row.', 'error');
+        return;
+    }
+    const description = String(row.description || '').trim();
+
+    createCashbookEntry({
+        entry_date: entryDate,
+        entry_type: entryType,
+        amount,
+        description
+    });
+}
+
+async function updateCashbookEntry(entryId, updates) {
+    if (!entryId || !updates || Object.keys(updates).length === 0) return;
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+        });
+        if (!response.ok) throw new Error('Failed to update cashbook entry');
+        await loadCashbookEntries();
+        renderCashbook();
+        showToast('Cashbook entry updated', 'success');
+    } catch (error) {
+        console.error('Error updating cashbook entry:', error);
+        showToast('Failed to update cashbook entry', 'error');
+    }
+}
+
+async function deleteCashbookEntry(entryId) {
+    if (!entryId) return;
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete cashbook entry');
+        await loadCashbookEntries();
+        renderCashbook();
+        showToast('Cashbook entry deleted', 'success');
+    } catch (error) {
+        console.error('Error deleting cashbook entry:', error);
+        showToast('Failed to delete cashbook entry', 'error');
+    }
 }
 
 async function syncShopifyProducts() {
@@ -1567,6 +2158,24 @@ function initForms() {
     const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
     if (refreshDeliveryStatusSelectedBtn) {
         refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
+    }
+
+    // Cashbook actions
+    const cashbookDateFilter = document.getElementById('cashbookDateFilter');
+    if (cashbookDateFilter) {
+        cashbookDateFilter.addEventListener('change', () => {
+            cashbookSelectedDate = cashbookDateFilter.value || getTodayDateString();
+            renderCashbook();
+        });
+    }
+    const cashbookTodayBtn = document.getElementById('cashbookTodayBtn');
+    if (cashbookTodayBtn) {
+        cashbookTodayBtn.addEventListener('click', () => {
+            const today = getTodayDateString();
+            cashbookSelectedDate = today;
+            if (cashbookDateFilter) cashbookDateFilter.value = today;
+            renderCashbook();
+        });
     }
 
     // Order table full screen toggle (icon only; Esc to exit)

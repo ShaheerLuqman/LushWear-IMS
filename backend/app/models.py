@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 
 # ==================== VARIANT MODELS ====================
 
@@ -106,3 +106,34 @@ class Order(OrderBase):
     
     class Config:
         from_attributes = True
+
+# ==================== CASHBOOK MODELS ====================
+
+class CashbookEntryBase(BaseModel):
+    entry_date: date
+    entry_type: str  # inflow | outflow
+    amount: float
+    description: Optional[str] = None
+
+class CashbookEntryCreate(CashbookEntryBase):
+    pass
+
+class CashbookEntryUpdate(BaseModel):
+    entry_date: Optional[date] = None
+    entry_type: Optional[str] = None
+    amount: Optional[float] = None
+    description: Optional[str] = None
+
+class CashbookEntry(CashbookEntryBase):
+    id: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class CashbookSettings(BaseModel):
+    opening_balance: float = 0.0
+
+class CashbookSettingsUpdate(BaseModel):
+    opening_balance: float
