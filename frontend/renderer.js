@@ -1219,6 +1219,15 @@ function buildCashbookGridColumns(side) {
             field: 'description',
             flex: 2,
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            cellClass: (params) => {
+                if (params.data && params.data.id === '__new__') {
+                    // Highlight if amount is filled but description is empty
+                    const hasAmount = params.data.amount != null && params.data.amount > 0;
+                    const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                    if (hasAmount && !hasDescription) return 'cashbook-required-field';
+                }
+                return '';
+            },
             cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
             valueFormatter: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
             pinnedRowCellRenderer: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
@@ -1229,6 +1238,9 @@ function buildCashbookGridColumns(side) {
                 params.data.description = val;
                 if (!params.node.rowPinned && params.data.id !== '__new__') {
                     updateCashbookEntry(params.data.id, { description: val });
+                } else if (params.data.id === '__new__' && params.api) {
+                    // Refresh cells to update highlighting
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
                 }
                 return true;
             }
@@ -1249,6 +1261,15 @@ function buildCashbookGridColumns(side) {
             width: 160,
             filter: 'agNumberColumnFilter',
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            cellClass: (params) => {
+                if (params.data && params.data.id === '__new__') {
+                    // Highlight if description is filled but amount is empty
+                    const hasAmount = params.data.amount != null && params.data.amount > 0;
+                    const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                    if (hasDescription && !hasAmount) return 'cashbook-required-field';
+                }
+                return '';
+            },
             cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
             valueFormatter: (params) => formatCashbookCell(params.value),
             pinnedRowCellRenderer: (params) => {
@@ -1260,6 +1281,10 @@ function buildCashbookGridColumns(side) {
                 if (params.node.rowPinned === 'bottom') return false;
                 if (params.node.rowPinned === 'top' || (params.data && params.data.id === '__new__')) {
                     params.data.amount = parseCashbookAmount(params.newValue);
+                    // Refresh cells to update highlighting
+                    if (params.api) {
+                        params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    }
                     return true;
                 }
                 if (isCashbookSystemOrFooterRow(params.data)) return false;
@@ -1271,9 +1296,9 @@ function buildCashbookGridColumns(side) {
             }
         },
         {
-            headerName: 'Actions',
+            headerName: '',
             field: 'actions',
-            width: 110,
+            width: 60,
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
@@ -1281,8 +1306,9 @@ function buildCashbookGridColumns(side) {
                 if (isCashbookSystemOrFooterRow(params.data)) return '';
                 if (params.data && params.data.id === '__new__') return '';
                 const btn = document.createElement('button');
-                btn.className = 'btn btn-danger btn-sm';
-                btn.textContent = 'Delete';
+                btn.className = 'cashbook-delete-btn';
+                btn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+                btn.title = 'Delete entry';
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
                     deleteCashbookEntry(params.data.id);
@@ -1328,7 +1354,15 @@ function initCashbookIncomingGrid() {
         },
         onCellValueChanged: (params) => {
             if (params.data && params.data.id === '__new__') {
-                tryCreateCashbookEntryFromPinnedRow(params.data, 'inflow');
+                // Auto-save when all required fields are filled
+                const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                const hasAmount = params.data.amount != null && params.data.amount > 0;
+                if (hasDescription && hasAmount) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'inflow');
+                } else if (params.api) {
+                    // Refresh the row to update required field highlighting
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                }
             }
         }
     };
@@ -1370,7 +1404,15 @@ function initCashbookOutgoingGrid() {
         },
         onCellValueChanged: (params) => {
             if (params.data && params.data.id === '__new__') {
-                tryCreateCashbookEntryFromPinnedRow(params.data, 'outflow');
+                // Auto-save when all required fields are filled
+                const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                const hasAmount = params.data.amount != null && params.data.amount > 0;
+                if (hasDescription && hasAmount) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'outflow');
+                } else if (params.api) {
+                    // Refresh the row to update required field highlighting
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                }
             }
         }
     };
