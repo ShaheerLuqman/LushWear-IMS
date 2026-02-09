@@ -134,11 +134,18 @@ class CashbookEntry(CashbookEntryBase):
     class Config:
         from_attributes = True
 
-class CashbookSettings(BaseModel):
+class CashbookDailyBalance(BaseModel):
+    id: Optional[str] = None
+    balance_date: date
     opening_balance: float = 0.0
+    total_inflow: float = 0.0
+    total_outflow: float = 0.0
+    closing_balance: float = 0.0
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
-class CashbookSettingsUpdate(BaseModel):
-    opening_balance: float
+    class Config:
+        from_attributes = True
 
 # ==================== LEDGER MODELS ====================
 

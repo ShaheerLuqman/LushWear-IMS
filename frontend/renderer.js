@@ -5,7 +5,7 @@ const API_BASE = 'http://127.0.0.1:8000/api';
 let products = [];
 let orders = [];
 let cashbookEntries = [];
-let cashbookSettings = { opening_balance: 0 };
+let cashbookDailyBalance = null; // Current day's balance from API
 let cashbookSelectedDate = null;
 let currentView = 'orders';
 let productsGridApi = null;
@@ -1879,28 +1879,6 @@ function buildCashbookRows(entries, openingBalance) {
     };
 }
 
-function getOpeningBalanceForDate(entries, openingBalance, selectedDate) {
-    if (!selectedDate) return openingBalance;
-    const sorted = [...entries].sort((a, b) => {
-        const dateA = a.entry_date || '';
-        const dateB = b.entry_date || '';
-        if (dateA !== dateB) return dateA.localeCompare(dateB);
-        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
-    });
-    let running = parseFloat(openingBalance) || 0;
-    for (const entry of sorted) {
-        const entryDate = entry.entry_date || '';
-        if (entryDate >= selectedDate) break;
-        const amount = parseFloat(entry.amount) || 0;
-        if (entry.entry_type === 'inflow') {
-            running += amount;
-        } else if (entry.entry_type === 'outflow') {
-            running -= amount;
-        }
-    }
-    return running;
-}
-
 function buildCashbookSideRows(entries, side) {
     const filtered = (entries || []).filter((entry) => entry.entry_type === side);
     const sorted = [...filtered].sort((a, b) => {
@@ -1959,30 +1937,29 @@ function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
     return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalOutflow };
 }
 
-function renderCashbookDailySummary() {}
-function updateCashbookStats() {}
-
-async function loadCashbookSettings() {
+async function loadDailyBalance(targetDate) {
     try {
-        const response = await fetch(`${API_BASE}/cashbook/settings`);
-        if (!response.ok) throw new Error('Failed to load cashbook settings');
-        cashbookSettings = await response.json();
-        const input = document.getElementById('cashbookOpeningBalance');
-        if (input) {
-            const opening = parseFloat(cashbookSettings.opening_balance) || 0;
-            input.value = opening.toFixed(2);
-        }
+        const response = await fetch(`${API_BASE}/cashbook/daily-balance/${targetDate}`);
+        if (!response.ok) throw new Error('Failed to load daily balance');
+        cashbookDailyBalance = await response.json();
     } catch (error) {
-        console.error('Error loading cashbook settings:', error);
-        showToast('Failed to load cashbook settings', 'error');
+        console.error('Error loading daily balance:', error);
+        // Default to zero if balance can't be loaded
+        cashbookDailyBalance = {
+            balance_date: targetDate,
+            opening_balance: 0,
+            total_inflow: 0,
+            total_outflow: 0,
+            closing_balance: 0
+        };
     }
 }
 
-async function loadCashbookEntries() {
+async function loadCashbookEntriesForDate(targetDate) {
     if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
     if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
     try {
-        const response = await fetch(`${API_BASE}/cashbook/entries`);
+        const response = await fetch(`${API_BASE}/cashbook/entries?start_date=${targetDate}&end_date=${targetDate}`);
         if (!response.ok) throw new Error('Failed to load cashbook entries');
         cashbookEntries = normalizeCashbookEntries(await response.json());
     } catch (error) {
@@ -1997,12 +1974,11 @@ async function loadCashbookEntries() {
 
 function renderCashbook() {
     const selectedDate = cashbookSelectedDate || getTodayDateString();
-    const openingBalance = parseFloat(cashbookSettings.opening_balance) || 0;
-    const carryForward = getOpeningBalanceForDate(cashbookEntries, openingBalance, selectedDate);
+    const openingBalance = cashbookDailyBalance ? parseFloat(cashbookDailyBalance.opening_balance) || 0 : 0;
     const filteredEntries = cashbookEntries.filter((entry) => entry.entry_date === selectedDate);
 
-    const { rowData: incomingRowData, pinnedBottomRowData: incomingPinnedBottom } = buildCashbookIncomingWithOpening(filteredEntries, carryForward, selectedDate);
-    const { rowData: outgoingRowData, pinnedBottomRowData: outgoingPinnedBottom } = buildCashbookOutgoingWithClosing(filteredEntries, carryForward, selectedDate);
+    const { rowData: incomingRowData, pinnedBottomRowData: incomingPinnedBottom } = buildCashbookIncomingWithOpening(filteredEntries, openingBalance, selectedDate);
+    const { rowData: outgoingRowData, pinnedBottomRowData: outgoingPinnedBottom } = buildCashbookOutgoingWithClosing(filteredEntries, openingBalance, selectedDate);
 
     if (cashbookIncomingGridApi) {
         cashbookIncomingGridApi.setGridOption('rowData', incomingRowData);
@@ -2019,39 +1995,27 @@ function renderCashbook() {
 }
 
 async function loadCashbook() {
-    await Promise.all([loadCashbookSettings(), loadCashbookEntries(), loadLedgersList()]);
     const dateFilter = document.getElementById('cashbookDateFilter');
     if (!cashbookSelectedDate) {
         cashbookSelectedDate = getTodayDateString();
     }
     if (dateFilter) dateFilter.value = cashbookSelectedDate;
+    
+    await Promise.all([
+        loadDailyBalance(cashbookSelectedDate),
+        loadCashbookEntriesForDate(cashbookSelectedDate),
+        loadLedgersList()
+    ]);
     renderCashbook();
 }
 
-async function saveCashbookOpeningBalance() {
-    const input = document.getElementById('cashbookOpeningBalance');
-    if (!input) return;
-    const value = parseFloat(String(input.value).replace(/,/g, ''));
-    if (Number.isNaN(value)) {
-        showToast('Enter a valid opening balance', 'error');
-        return;
-    }
-    try {
-        const response = await fetch(`${API_BASE}/cashbook/settings`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ opening_balance: value })
-        });
-        if (!response.ok) throw new Error('Failed to save opening balance');
-        cashbookSettings = await response.json();
-        const opening = parseFloat(cashbookSettings.opening_balance) || 0;
-        input.value = opening.toFixed(2);
-        renderCashbook();
-        showToast('Opening balance saved', 'success');
-    } catch (error) {
-        console.error('Error saving opening balance:', error);
-        showToast('Failed to save opening balance', 'error');
-    }
+async function reloadCashbookForCurrentDate() {
+    const selectedDate = cashbookSelectedDate || getTodayDateString();
+    await Promise.all([
+        loadDailyBalance(selectedDate),
+        loadCashbookEntriesForDate(selectedDate)
+    ]);
+    renderCashbook();
 }
 
 async function addCashbookEntry() {
@@ -2097,8 +2061,7 @@ async function createCashbookEntry(payload) {
             body: JSON.stringify(payload)
         });
         if (!response.ok) throw new Error('Failed to add cashbook entry');
-        await loadCashbookEntries();
-        renderCashbook();
+        await reloadCashbookForCurrentDate();
         showToast('Cashbook entry added', 'success');
     } catch (error) {
         console.error('Error adding cashbook entry:', error);
@@ -2135,8 +2098,7 @@ async function updateCashbookEntry(entryId, updates) {
             body: JSON.stringify(updates)
         });
         if (!response.ok) throw new Error('Failed to update cashbook entry');
-        await loadCashbookEntries();
-        renderCashbook();
+        await reloadCashbookForCurrentDate();
         showToast('Cashbook entry updated', 'success');
     } catch (error) {
         console.error('Error updating cashbook entry:', error);
@@ -2151,8 +2113,7 @@ async function deleteCashbookEntry(entryId) {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete cashbook entry');
-        await loadCashbookEntries();
-        renderCashbook();
+        await reloadCashbookForCurrentDate();
         showToast('Cashbook entry deleted', 'success');
     } catch (error) {
         console.error('Error deleting cashbook entry:', error);
@@ -2778,7 +2739,7 @@ function initForms() {
     if (cashbookDateFilter) {
         cashbookDateFilter.addEventListener('change', () => {
             cashbookSelectedDate = cashbookDateFilter.value || getTodayDateString();
-            renderCashbook();
+            reloadCashbookForCurrentDate();
         });
     }
     const cashbookTodayBtn = document.getElementById('cashbookTodayBtn');
@@ -2787,7 +2748,7 @@ function initForms() {
             const today = getTodayDateString();
             cashbookSelectedDate = today;
             if (cashbookDateFilter) cashbookDateFilter.value = today;
-            renderCashbook();
+            reloadCashbookForCurrentDate();
         });
     }
     const cashbookPrevDayBtn = document.getElementById('cashbookPrevDayBtn');
@@ -2800,7 +2761,7 @@ function initForms() {
             const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             cashbookSelectedDate = newDate;
             if (cashbookDateFilter) cashbookDateFilter.value = newDate;
-            renderCashbook();
+            reloadCashbookForCurrentDate();
         });
     }
     const cashbookNextDayBtn = document.getElementById('cashbookNextDayBtn');
@@ -2813,7 +2774,7 @@ function initForms() {
             const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             cashbookSelectedDate = newDate;
             if (cashbookDateFilter) cashbookDateFilter.value = newDate;
-            renderCashbook();
+            reloadCashbookForCurrentDate();
         });
     }
 
