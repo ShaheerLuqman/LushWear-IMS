@@ -12,6 +12,10 @@ let productsGridApi = null;
 let ordersGridApi = null;
 let cashbookIncomingGridApi = null;
 let cashbookOutgoingGridApi = null;
+let ledgers = [];
+let ledgerEntries = [];
+let currentLedger = null;
+let ledgerDetailGridApi = null;
 let updateFooterRow = null; // Will be set in initOrdersGrid
 // Auto-sync orders every 15 minutes; timer is reset when user clicks sync
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
@@ -99,6 +103,7 @@ function initGrids() {
     initOrdersGrid();
     initCashbookIncomingGrid();
     initCashbookOutgoingGrid();
+    initLedgerDetailGrid();
 }
 
 // Size order mapping for variant sorting
@@ -1062,6 +1067,151 @@ function isCashbookSystemOrFooterRow(data) {
     return id === '__opening__' || id === '__closing__' || id === '__total_in__' || id === '__total_out__' || data._isSystemRow || data._isFooter;
 }
 
+function getLedgerNameById(id) {
+    if (!id) return '';
+    const ledger = ledgers.find(l => l.id === id);
+    return ledger ? ledger.name : '';
+}
+
+/**
+ * Folio cell renderer using custom searchable dropdown.
+ * Creates a clean, native-feeling dropdown with search functionality.
+ */
+function createFolioCellRenderer(params) {
+    if (!params || !params.data) return document.createElement('span');
+    if (params.node && params.node.rowPinned === 'bottom') return document.createElement('span');
+    if (isCashbookSystemOrFooterRow(params.data)) return document.createElement('span');
+
+    const wrapper = document.createElement('div');
+    wrapper.className = 'folio-dropdown';
+
+    const currentFolio = params.data.folio || '';
+    const currentLedger = ledgers.find(l => l.id === currentFolio);
+    const displayText = currentLedger ? currentLedger.name : 'Select ledger...';
+
+    // Main button that shows current selection
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'folio-dropdown-btn';
+    button.innerHTML = `<span class="folio-dropdown-text">${escapeHtml(displayText)}</span><span class="folio-dropdown-arrow">▼</span>`;
+
+    // Dropdown panel (will be appended to body when opened)
+    let dropdownPanel = null;
+    let isOpen = false;
+
+    function closeDropdown() {
+        if (dropdownPanel && dropdownPanel.parentNode) {
+            dropdownPanel.parentNode.removeChild(dropdownPanel);
+        }
+        dropdownPanel = null;
+        isOpen = false;
+        button.classList.remove('open');
+    }
+
+    function openDropdown() {
+        if (isOpen) return;
+        isOpen = true;
+        button.classList.add('open');
+
+        dropdownPanel = document.createElement('div');
+        dropdownPanel.className = 'folio-dropdown-panel';
+
+        // Search input
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'folio-dropdown-search';
+        searchInput.placeholder = 'Search ledgers...';
+        dropdownPanel.appendChild(searchInput);
+
+        // Options list
+        const optionsList = document.createElement('div');
+        optionsList.className = 'folio-dropdown-options';
+        dropdownPanel.appendChild(optionsList);
+
+        function renderOptions(filter = '') {
+            const filterLower = filter.toLowerCase();
+            const filtered = ledgers.filter(l => l.name.toLowerCase().includes(filterLower));
+            
+            optionsList.innerHTML = '';
+            
+            // Add "None" option first
+            const noneOption = document.createElement('div');
+            noneOption.className = 'folio-dropdown-option' + (!currentFolio ? ' selected' : '');
+            noneOption.textContent = '— None —';
+            noneOption.addEventListener('click', () => selectOption('', '— None —'));
+            optionsList.appendChild(noneOption);
+
+            // Add ledger options
+            filtered.forEach(l => {
+                const option = document.createElement('div');
+                option.className = 'folio-dropdown-option' + (l.id === currentFolio ? ' selected' : '');
+                option.textContent = l.name;
+                option.addEventListener('click', () => selectOption(l.id, l.name));
+                optionsList.appendChild(option);
+            });
+
+            if (filtered.length === 0 && filter) {
+                const noResults = document.createElement('div');
+                noResults.className = 'folio-dropdown-empty';
+                noResults.textContent = 'No ledgers found';
+                optionsList.appendChild(noResults);
+            }
+        }
+
+        function selectOption(id, name) {
+            params.data.folio = id || null;
+            button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger...';
+            if (params.data.id && params.data.id !== '__new__') {
+                updateCashbookEntry(params.data.id, { folio: id || null });
+            }
+            closeDropdown();
+        }
+
+        searchInput.addEventListener('input', (e) => {
+            renderOptions(e.target.value);
+        });
+
+        searchInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeDropdown();
+            }
+        });
+
+        renderOptions();
+
+        // Position dropdown below button
+        document.body.appendChild(dropdownPanel);
+        const rect = button.getBoundingClientRect();
+        dropdownPanel.style.top = (rect.bottom + 2) + 'px';
+        dropdownPanel.style.left = rect.left + 'px';
+        dropdownPanel.style.minWidth = Math.max(rect.width, 200) + 'px';
+
+        // Focus search input
+        setTimeout(() => searchInput.focus(), 0);
+
+        // Close on outside click
+        const closeHandler = (e) => {
+            if (!dropdownPanel.contains(e.target) && e.target !== button && !button.contains(e.target)) {
+                closeDropdown();
+                document.removeEventListener('mousedown', closeHandler);
+            }
+        };
+        document.addEventListener('mousedown', closeHandler);
+    }
+
+    button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isOpen) {
+            closeDropdown();
+        } else {
+            openDropdown();
+        }
+    });
+
+    wrapper.appendChild(button);
+    return wrapper;
+}
+
 function buildCashbookGridColumns(side) {
     return [
         {
@@ -1082,6 +1232,16 @@ function buildCashbookGridColumns(side) {
                 }
                 return true;
             }
+        },
+        {
+            headerName: 'Folio',
+            field: 'folio',
+            width: 180,
+            minWidth: 150,
+            filter: false,
+            sortable: false,
+            cellRenderer: createFolioCellRenderer,
+            pinnedRowCellRenderer: () => ''
         },
         {
             headerName: side === 'inflow' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
@@ -1291,9 +1451,10 @@ function initOrdersPeriodFilter() {
 function switchView(viewName) {
     currentView = viewName;
 
-    // Update nav
+    // Update nav (ledgerDetail keeps the ledgers nav active)
+    const navView = viewName === 'ledgerDetail' ? 'ledgers' : viewName;
     navItems.forEach(item => {
-        item.classList.toggle('active', item.dataset.view === viewName);
+        item.classList.toggle('active', item.dataset.view === navView);
     });
 
     // Update views
@@ -1306,6 +1467,8 @@ function switchView(viewName) {
         'dashboard': { title: 'Dashboard', subtitle: 'Overview of your inventory' },
         'orders': { title: 'Orders', subtitle: 'View and manage orders' },
         'cashbook': { title: 'Cashbook', subtitle: 'Track daily cash inflows and outflows' },
+        'ledgers': { title: 'Ledgers', subtitle: 'Manage individual account ledgers' },
+        'ledgerDetail': { title: 'Ledger', subtitle: 'View ledger entries' },
         'products': { title: 'Products', subtitle: 'Manage your product catalog' }
     };
 
@@ -1394,6 +1557,13 @@ function switchView(viewName) {
         setTimeout(() => {
             if (cashbookIncomingGridApi) cashbookIncomingGridApi.sizeColumnsToFit();
             if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.sizeColumnsToFit();
+        }, 100);
+    } else if (viewName === 'ledgers') {
+        loadLedgers();
+    } else if (viewName === 'ledgerDetail') {
+        // Handled by openLedgerDetail
+        setTimeout(() => {
+            if (ledgerDetailGridApi) ledgerDetailGridApi.sizeColumnsToFit();
         }, 100);
     } else if (viewName === 'dashboard') {
         loadProducts();
@@ -1587,6 +1757,7 @@ function getEmptyCashbookRow(entryDate = '') {
         id: '__new__',
         entry_date: entryDate,
         description: '',
+        folio: null,
         amount: null,
         running_total: null
     };
@@ -1806,7 +1977,7 @@ function renderCashbook() {
 }
 
 async function loadCashbook() {
-    await Promise.all([loadCashbookSettings(), loadCashbookEntries()]);
+    await Promise.all([loadCashbookSettings(), loadCashbookEntries(), loadLedgersList()]);
     const dateFilter = document.getElementById('cashbookDateFilter');
     if (!cashbookSelectedDate) {
         cashbookSelectedDate = getTodayDateString();
@@ -1902,12 +2073,14 @@ function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
         return;
     }
     const description = String(row.description || '').trim();
+    const folio = row.folio || null;
 
     createCashbookEntry({
         entry_date: entryDate,
         entry_type: entryType,
         amount,
-        description
+        description,
+        folio
     });
 }
 
@@ -1942,6 +2115,404 @@ async function deleteCashbookEntry(entryId) {
     } catch (error) {
         console.error('Error deleting cashbook entry:', error);
         showToast('Failed to delete cashbook entry', 'error');
+    }
+}
+
+// ============================================
+// Ledger Functions
+// ============================================
+
+async function loadLedgersList() {
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/`);
+        if (!response.ok) throw new Error('Failed to load ledgers');
+        ledgers = await response.json();
+    } catch (error) {
+        console.error('Error loading ledgers:', error);
+        ledgers = [];
+    }
+}
+
+async function loadLedgers() {
+    await loadLedgersList();
+    renderLedgerCards();
+}
+
+function renderLedgerCards() {
+    const container = document.getElementById('ledgerCards');
+    if (!container) return;
+
+    if (ledgers.length === 0) {
+        container.innerHTML = '<p style="color: var(--text-muted); padding: 20px;">No ledgers yet. Click "Create Ledger" to add one.</p>';
+        return;
+    }
+
+    container.innerHTML = ledgers.map(l => `
+        <div class="ledger-card" data-id="${l.id}">
+            <div class="ledger-card-info">
+                <span class="ledger-card-name">${escapeHtml(l.name)}</span>
+                <span class="ledger-card-section">${escapeHtml(l.section || '')}</span>
+            </div>
+            <div class="ledger-card-actions">
+                <button class="btn btn-danger btn-sm ledger-delete-btn" data-id="${l.id}" title="Delete ledger">Delete</button>
+            </div>
+        </div>
+    `).join('');
+
+    // Click on card (not the delete button) opens detail
+    container.querySelectorAll('.ledger-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (e.target.closest('.ledger-delete-btn')) return;
+            const id = card.dataset.id;
+            openLedgerDetail(id);
+        });
+    });
+
+    // Delete buttons
+    container.querySelectorAll('.ledger-delete-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const id = btn.dataset.id;
+            deleteLedger(id);
+        });
+    });
+}
+
+async function createLedger(name, section) {
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, section })
+        });
+        if (!response.ok) throw new Error('Failed to create ledger');
+        showToast('Ledger created', 'success');
+        closeCreateLedgerModal();
+        await loadLedgers();
+    } catch (error) {
+        console.error('Error creating ledger:', error);
+        showToast('Failed to create ledger', 'error');
+    }
+}
+
+function openCreateLedgerModal() {
+    document.getElementById('createLedgerName').value = '';
+    document.getElementById('createLedgerSection').value = '';
+    document.getElementById('createLedgerModal').classList.add('active');
+}
+
+function closeCreateLedgerModal() {
+    document.getElementById('createLedgerModal').classList.remove('active');
+}
+
+async function deleteLedger(ledgerId) {
+    if (!ledgerId) return;
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete ledger');
+        showToast('Ledger deleted', 'success');
+        await loadLedgers();
+    } catch (error) {
+        console.error('Error deleting ledger:', error);
+        showToast('Failed to delete ledger', 'error');
+    }
+}
+
+async function openLedgerDetail(ledgerId) {
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}`);
+        if (!response.ok) throw new Error('Failed to load ledger');
+        currentLedger = await response.json();
+    } catch (error) {
+        console.error('Error loading ledger:', error);
+        showToast('Failed to load ledger', 'error');
+        return;
+    }
+
+    document.getElementById('ledgerDetailName').textContent = currentLedger.name;
+    switchView('ledgerDetail');
+    await loadLedgerEntries(ledgerId);
+}
+
+async function loadLedgerEntries(ledgerId) {
+    if (!ledgerId) ledgerId = currentLedger?.id;
+    if (!ledgerId) return;
+
+    if (ledgerDetailGridApi) ledgerDetailGridApi.showLoadingOverlay();
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries`);
+        if (!response.ok) throw new Error('Failed to load ledger entries');
+        ledgerEntries = (await response.json()).map(e => ({
+            ...e,
+            entry_date: e.entry_date ? String(e.entry_date).slice(0, 10) : ''
+        }));
+    } catch (error) {
+        console.error('Error loading ledger entries:', error);
+        showToast('Failed to load ledger entries', 'error');
+        ledgerEntries = [];
+    } finally {
+        if (ledgerDetailGridApi) ledgerDetailGridApi.hideOverlay();
+    }
+
+    renderLedgerDetailGrid();
+}
+
+function renderLedgerDetailGrid() {
+    if (!ledgerDetailGridApi) return;
+
+    // Compute running balance
+    const sorted = [...ledgerEntries].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+
+    let running = 0;
+    const rowsWithBalance = sorted.map(entry => {
+        const incoming = parseFloat(entry.incoming) || 0;
+        const outgoing = parseFloat(entry.outgoing) || 0;
+        running += incoming - outgoing;
+        return { ...entry, balance: running };
+    });
+
+    // Add "new entry" row at the end
+    const newRow = {
+        id: '__new__',
+        ledger_id: currentLedger?.id || '',
+        entry_date: getTodayDateString(),
+        particulars: '',
+        folio: '',
+        incoming: null,
+        outgoing: null,
+        balance: null
+    };
+
+    ledgerDetailGridApi.setGridOption('rowData', [...rowsWithBalance, newRow]);
+}
+
+function initLedgerDetailGrid() {
+    const gridDiv = document.getElementById('ledgerDetailGrid');
+    if (!gridDiv) return;
+
+    const columnDefs = [
+        {
+            headerName: 'Date',
+            field: 'entry_date',
+            width: 130,
+            editable: (params) => params.data.id === '__new__',
+            cellEditor: 'agTextCellEditor',
+            valueFormatter: (params) => params.value || '',
+        },
+        {
+            headerName: 'Particulars',
+            field: 'particulars',
+            flex: 2,
+            editable: (params) => params.data.id !== '__footer__',
+            valueSetter: (params) => {
+                const val = String(params.newValue ?? '').trim();
+                if ((params.data.particulars || '') === val) return false;
+                params.data.particulars = val;
+                if (params.data.id && params.data.id !== '__new__') {
+                    updateLedgerEntry(params.data.id, { particulars: val });
+                }
+                return true;
+            }
+        },
+        {
+            headerName: 'Folio',
+            field: 'folio',
+            width: 130,
+            editable: (params) => params.data.id !== '__footer__',
+            valueSetter: (params) => {
+                const val = String(params.newValue ?? '').trim();
+                if ((params.data.folio || '') === val) return false;
+                params.data.folio = val;
+                if (params.data.id && params.data.id !== '__new__') {
+                    updateLedgerEntry(params.data.id, { folio: val });
+                }
+                return true;
+            }
+        },
+        {
+            headerName: 'Incoming (Rs)',
+            field: 'incoming',
+            width: 140,
+            editable: (params) => params.data.id !== '__footer__',
+            valueFormatter: (params) => formatCashbookCell(params.value),
+            valueSetter: (params) => {
+                const next = parseCashbookAmount(params.newValue);
+                if (params.data.id === '__new__') {
+                    params.data.incoming = next;
+                    return true;
+                }
+                if (next === null) return false;
+                params.data.incoming = next;
+                updateLedgerEntry(params.data.id, { incoming: next });
+                return true;
+            }
+        },
+        {
+            headerName: 'Outgoing (Rs)',
+            field: 'outgoing',
+            width: 140,
+            editable: (params) => params.data.id !== '__footer__',
+            valueFormatter: (params) => formatCashbookCell(params.value),
+            valueSetter: (params) => {
+                const next = parseCashbookAmount(params.newValue);
+                if (params.data.id === '__new__') {
+                    params.data.outgoing = next;
+                    return true;
+                }
+                if (next === null) return false;
+                params.data.outgoing = next;
+                updateLedgerEntry(params.data.id, { outgoing: next });
+                return true;
+            }
+        },
+        {
+            headerName: 'Balance (Rs)',
+            field: 'balance',
+            width: 140,
+            editable: false,
+            valueFormatter: (params) => {
+                if (params.data.id === '__new__') return '';
+                return formatCashbookCell(params.value);
+            },
+            cellStyle: (params) => {
+                if (params.data.id === '__new__') return {};
+                const val = parseFloat(params.value);
+                if (Number.isNaN(val)) return {};
+                if (val < 0) return { color: 'var(--danger)' };
+                return {};
+            }
+        },
+        {
+            headerName: 'Actions',
+            field: 'actions',
+            width: 110,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => {
+                if (params.data.id === '__new__') return '';
+                const btn = document.createElement('button');
+                btn.className = 'btn btn-danger btn-sm';
+                btn.textContent = 'Delete';
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteLedgerEntry(params.data.id);
+                });
+                return btn;
+            }
+        }
+    ];
+
+    const gridOptions = {
+        columnDefs,
+        rowData: [],
+        defaultColDef: {
+            sortable: true,
+            resizable: true,
+            filter: true,
+            floatingFilter: true,
+            minWidth: 80
+        },
+        animateRows: true,
+        pagination: false,
+        domLayout: 'normal',
+        stopEditingWhenCellsLoseFocus: true,
+        getRowId: (params) => params.data.id,
+        getRowStyle: (params) => {
+            if (params.data && params.data.id === '__new__') {
+                return { backgroundColor: 'rgba(139, 92, 246, 0.04)', fontStyle: 'italic' };
+            }
+            return null;
+        },
+        onGridReady: (params) => {
+            ledgerDetailGridApi = params.api;
+        },
+        onCellValueChanged: (params) => {
+            if (params.data && params.data.id === '__new__') {
+                tryCreateLedgerEntryFromRow(params.data);
+            }
+        }
+    };
+
+    agGrid.createGrid(gridDiv, gridOptions);
+}
+
+function tryCreateLedgerEntryFromRow(row) {
+    const incoming = parseCashbookAmount(row.incoming);
+    const outgoing = parseCashbookAmount(row.outgoing);
+    if ((incoming === null || incoming === 0) && (outgoing === null || outgoing === 0)) return;
+    const entryDate = String(row.entry_date || '').trim();
+    if (!entryDate) {
+        showToast('Enter a date for the entry.', 'error');
+        return;
+    }
+    createLedgerEntry({
+        ledger_id: currentLedger?.id,
+        entry_date: entryDate,
+        particulars: String(row.particulars || '').trim(),
+        folio: String(row.folio || '').trim(),
+        incoming: incoming || 0,
+        outgoing: outgoing || 0
+    });
+}
+
+async function createLedgerEntry(payload) {
+    try {
+        const ledgerId = payload.ledger_id || currentLedger?.id;
+        if (!ledgerId) return;
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        if (!response.ok) throw new Error('Failed to create ledger entry');
+        showToast('Ledger entry added', 'success');
+        await loadLedgerEntries(ledgerId);
+    } catch (error) {
+        console.error('Error creating ledger entry:', error);
+        showToast('Failed to add ledger entry', 'error');
+    }
+}
+
+async function updateLedgerEntry(entryId, updates) {
+    if (!entryId || !updates || Object.keys(updates).length === 0) return;
+    const ledgerId = currentLedger?.id;
+    if (!ledgerId) return;
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries/${entryId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(updates)
+        });
+        if (!response.ok) throw new Error('Failed to update ledger entry');
+        showToast('Ledger entry updated', 'success');
+        await loadLedgerEntries(ledgerId);
+    } catch (error) {
+        console.error('Error updating ledger entry:', error);
+        showToast('Failed to update ledger entry', 'error');
+    }
+}
+
+async function deleteLedgerEntry(entryId) {
+    if (!entryId) return;
+    const ledgerId = currentLedger?.id;
+    if (!ledgerId) return;
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries/${entryId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete ledger entry');
+        showToast('Ledger entry deleted', 'success');
+        await loadLedgerEntries(ledgerId);
+    } catch (error) {
+        console.error('Error deleting ledger entry:', error);
+        showToast('Failed to delete ledger entry', 'error');
     }
 }
 
@@ -2175,6 +2746,69 @@ function initForms() {
             cashbookSelectedDate = today;
             if (cashbookDateFilter) cashbookDateFilter.value = today;
             renderCashbook();
+        });
+    }
+    const cashbookPrevDayBtn = document.getElementById('cashbookPrevDayBtn');
+    if (cashbookPrevDayBtn) {
+        cashbookPrevDayBtn.addEventListener('click', () => {
+            const current = cashbookSelectedDate || getTodayDateString();
+            const [year, month, day] = current.split('-').map(Number);
+            const date = new Date(year, month - 1, day);
+            date.setDate(date.getDate() - 1);
+            const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            cashbookSelectedDate = newDate;
+            if (cashbookDateFilter) cashbookDateFilter.value = newDate;
+            renderCashbook();
+        });
+    }
+    const cashbookNextDayBtn = document.getElementById('cashbookNextDayBtn');
+    if (cashbookNextDayBtn) {
+        cashbookNextDayBtn.addEventListener('click', () => {
+            const current = cashbookSelectedDate || getTodayDateString();
+            const [year, month, day] = current.split('-').map(Number);
+            const date = new Date(year, month - 1, day);
+            date.setDate(date.getDate() + 1);
+            const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+            cashbookSelectedDate = newDate;
+            if (cashbookDateFilter) cashbookDateFilter.value = newDate;
+            renderCashbook();
+        });
+    }
+
+    // Ledger: create button opens modal
+    const createLedgerBtn = document.getElementById('createLedgerBtn');
+    if (createLedgerBtn) {
+        createLedgerBtn.addEventListener('click', openCreateLedgerModal);
+    }
+    // Create Ledger modal: form submit and close
+    const createLedgerForm = document.getElementById('createLedgerForm');
+    if (createLedgerForm) {
+        createLedgerForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('createLedgerName').value.trim();
+            const section = document.getElementById('createLedgerSection').value;
+            if (!name) {
+                showToast('Enter a ledger name', 'error');
+                return;
+            }
+            if (!section) {
+                showToast('Select a section', 'error');
+                return;
+            }
+            createLedger(name, section);
+        });
+    }
+    document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);
+    document.getElementById('createLedgerCancelBtn')?.addEventListener('click', closeCreateLedgerModal);
+    document.getElementById('createLedgerModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'createLedgerModal') closeCreateLedgerModal();
+    });
+
+    // Ledger: back button
+    const ledgerBackBtn = document.getElementById('ledgerBackBtn');
+    if (ledgerBackBtn) {
+        ledgerBackBtn.addEventListener('click', () => {
+            switchView('ledgers');
         });
     }
 

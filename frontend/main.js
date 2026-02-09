@@ -16,11 +16,13 @@ const SHOW_TERMINALS = SHOW_TERMINALS_ENV === '1' || SHOW_TERMINALS_ENV === 'tru
 const HIDE_BACKEND_WINDOW = !SHOW_TERMINALS;
 
 function createWindow() {
+    const iconPath = path.join(__dirname, 'assets', 'Logo.png');
     mainWindow = new BrowserWindow({
         width: 1400,
         height: 900,
         minWidth: 1000,
         minHeight: 700,
+        icon: iconPath,
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,

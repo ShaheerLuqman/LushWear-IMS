@@ -19,6 +19,9 @@ def _normalize_entry_payload(payload: dict) -> dict:
             payload["entry_date"] = payload["entry_date"].isoformat()
     if "entry_type" in payload and payload["entry_type"] is not None:
         payload["entry_type"] = str(payload["entry_type"]).strip().lower()
+    # Allow folio to be explicitly set to None (unlink ledger)
+    if "folio" in payload and payload["folio"] is not None:
+        payload["folio"] = str(payload["folio"]).strip() or None
     return payload
 
 

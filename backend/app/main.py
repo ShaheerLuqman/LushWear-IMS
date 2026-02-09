@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import products, orders, cashbook
+from app.routes import products, orders, cashbook, ledger
 
 app = FastAPI(
     title="Inventory Management System",
@@ -21,6 +21,7 @@ app.add_middleware(
 app.include_router(products.router, prefix="/api")
 app.include_router(orders.router, prefix="/api")
 app.include_router(cashbook.router, prefix="/api")
+app.include_router(ledger.router, prefix="/api")
 
 @app.get("/")
 async def root():

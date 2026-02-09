@@ -114,6 +114,7 @@ class CashbookEntryBase(BaseModel):
     entry_type: str  # inflow | outflow
     amount: float
     description: Optional[str] = None
+    folio: Optional[str] = None  # UUID of linked ledger
 
 class CashbookEntryCreate(CashbookEntryBase):
     pass
@@ -123,6 +124,7 @@ class CashbookEntryUpdate(BaseModel):
     entry_type: Optional[str] = None
     amount: Optional[float] = None
     description: Optional[str] = None
+    folio: Optional[str] = None
 
 class CashbookEntry(CashbookEntryBase):
     id: str
@@ -137,3 +139,50 @@ class CashbookSettings(BaseModel):
 
 class CashbookSettingsUpdate(BaseModel):
     opening_balance: float
+
+# ==================== LEDGER MODELS ====================
+
+class LedgerBase(BaseModel):
+    name: str
+    section: str  # free text, e.g. Cash/Bank, Expense, Vendors, Sales
+
+class LedgerCreate(LedgerBase):
+    pass
+
+class LedgerUpdate(BaseModel):
+    name: Optional[str] = None
+    section: Optional[str] = None
+
+class Ledger(LedgerBase):
+    id: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class LedgerEntryBase(BaseModel):
+    ledger_id: str
+    entry_date: date
+    particulars: Optional[str] = None
+    folio: Optional[str] = None  # text field for personal reference
+    incoming: float = 0.0
+    outgoing: float = 0.0
+
+class LedgerEntryCreate(LedgerEntryBase):
+    pass
+
+class LedgerEntryUpdate(BaseModel):
+    entry_date: Optional[date] = None
+    particulars: Optional[str] = None
+    folio: Optional[str] = None
+    incoming: Optional[float] = None
+    outgoing: Optional[float] = None
+
+class LedgerEntry(LedgerEntryBase):
+    id: str
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True

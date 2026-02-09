@@ -20,8 +20,8 @@
     <!-- Loading Screen -->
     <div id="loadingScreen" class="loading-screen">
         <div class="loading-content">
+            <img src="assets/Logo_Large.png" alt="LUSHWEAR" class="loading-logo">
             <div class="loading-spinner"></div>
-            <h2>Inventory Manager</h2>
             <p>Loading your data...</p>
         </div>
     </div>
@@ -47,7 +47,7 @@
         <!-- Sidebar -->
         <aside class="sidebar" id="sidebar">
             <div class="logo">
-                <div class="logo-icon">📊</div>
+                <img src="assets/Logo.png" alt="Inventory Manager" class="logo-img">
             </div>
             <nav class="nav-menu">
                 <button class="nav-item" data-view="dashboard" title="Dashboard">
@@ -61,6 +61,10 @@
                 <button class="nav-item" data-view="cashbook" title="Cashbook">
                     <span class="nav-icon">💰</span>
                     <span class="nav-tooltip">Cashbook</span>
+                </button>
+                <button class="nav-item" data-view="ledgers" title="Ledgers">
+                    <span class="nav-icon">📒</span>
+                    <span class="nav-tooltip">Ledgers</span>
                 </button>
                 <button class="nav-item" data-view="products" title="Products">
                     <span class="nav-icon">📋</span>
@@ -109,7 +113,9 @@
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
                     <input type="file" id="postExCsvInput" accept=".csv" style="display: none;">
                     <div id="cashbookDateFilterWrap" class="header-inline" style="display: none;">
+                        <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day">◀</button>
                         <input id="cashbookDateFilter" type="date" class="cashbook-date-filter">
+                        <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
                     </div>
                 </div>
@@ -169,6 +175,59 @@
                             <div id="cashbookOutgoingGrid" class="ag-theme-alpine grid-container"></div>
                         </div>
                     </div>
+                </div>
+
+                <!-- Ledgers List View -->
+                <div id="ledgersView" class="view">
+                    <div class="ledger-list-container">
+                        <div class="ledger-create-bar">
+                            <button id="createLedgerBtn" class="btn btn-primary">Create Ledger</button>
+                        </div>
+                        <div class="ledger-cards" id="ledgerCards">
+                            <!-- Ledger cards rendered by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Ledger Modal -->
+                <div id="createLedgerModal" class="modal">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h2>Create Ledger</h2>
+                            <button type="button" class="modal-close" id="closeCreateLedgerModal" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="createLedgerForm" class="ledger-form">
+                                <div class="form-group">
+                                    <label for="createLedgerName">Ledger name *</label>
+                                    <input type="text" id="createLedgerName" class="form-input" placeholder="e.g. Main Bank Account" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="createLedgerSection">Section *</label>
+                                    <select id="createLedgerSection" class="form-input" required>
+                                        <option value="">Select section...</option>
+                                        <option value="Cash/Bank">Cash/Bank</option>
+                                        <option value="Expense">Expense</option>
+                                        <option value="Vendors">Vendors</option>
+                                        <option value="Sales">Sales</option>
+                                    </select>
+                                </div>
+                                <div class="modal-actions form-actions">
+                                    <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
+                                    <button type="submit" class="btn btn-primary">Create</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Ledger Detail View -->
+                <div id="ledgerDetailView" class="view">
+                    <div class="ledger-detail-header">
+                        <button id="ledgerBackBtn" class="btn btn-secondary btn-sm">← Back to Ledgers</button>
+                        <h2 id="ledgerDetailName" class="ledger-detail-title"></h2>
+                    </div>
+                    <div id="ledgerDetailGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Products View -->
