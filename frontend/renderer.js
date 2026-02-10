@@ -151,8 +151,30 @@ function formatCashbookCell(value) {
     return formatAmount(value);
 }
 
+function getPKTDate() {
+    // Pakistan Standard Time is UTC+5
+    const now = new Date();
+    const pktOffset = 5 * 60; // PKT is UTC+5 in minutes
+    const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+    const pkt = new Date(utc + (pktOffset * 60000));
+    return pkt;
+}
+
+function getPKTDateString() {
+    const pkt = getPKTDate();
+    const year = pkt.getFullYear();
+    const month = String(pkt.getMonth() + 1).padStart(2, '0');
+    const day = String(pkt.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function getPKTISOString() {
+    const pkt = getPKTDate();
+    return pkt.toISOString();
+}
+
 function getTodayDateString() {
-    return new Date().toISOString().split('T')[0];
+    return getPKTDateString();
 }
 
 function initProductsGrid() {
@@ -1073,11 +1095,15 @@ function getLedgerNameById(id) {
     return ledger ? ledger.name : '';
 }
 
+function isCashbookNewRow(data) {
+    return data && data.id && String(data.id).startsWith('__new_');
+}
+
 /**
  * Folio cell renderer using custom searchable dropdown.
  * Creates a clean, native-feeling dropdown with search functionality.
  */
-function createFolioCellRenderer(params) {
+function createFolioCellRenderer(params, entryType) {
     if (!params || !params.data) return document.createElement('span');
     if (params.node && params.node.rowPinned === 'bottom') return document.createElement('span');
     if (isCashbookSystemOrFooterRow(params.data)) return document.createElement('span');
@@ -1087,12 +1113,19 @@ function createFolioCellRenderer(params) {
 
     const currentFolio = params.data.folio || '';
     const currentLedger = ledgers.find(l => l.id === currentFolio);
-    const displayText = currentLedger ? currentLedger.name : 'Select ledger...';
+    const displayText = currentLedger ? currentLedger.name : 'Select ledger... *';
+
+    // Check if this is a new row with other fields filled but no folio - highlight as required
+    const isNewRow = isCashbookNewRow(params.data);
+    const hasFolio = !!currentFolio;
+    const hasOtherData = (params.data.description && String(params.data.description).trim() !== '') || 
+                         (params.data.amount != null && params.data.amount > 0);
+    const needsHighlight = isNewRow && !hasFolio && hasOtherData;
 
     // Main button that shows current selection
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'folio-dropdown-btn';
+    button.className = 'folio-dropdown-btn' + (needsHighlight ? ' folio-required' : '');
     button.innerHTML = `<span class="folio-dropdown-text">${escapeHtml(displayText)}</span><span class="folio-dropdown-arrow">▼</span>`;
 
     // Dropdown panel (will be appended to body when opened)
@@ -1134,12 +1167,7 @@ function createFolioCellRenderer(params) {
             
             optionsList.innerHTML = '';
             
-            // Add "None" option first
-            const noneOption = document.createElement('div');
-            noneOption.className = 'folio-dropdown-option' + (!currentFolio ? ' selected' : '');
-            noneOption.textContent = '— None —';
-            noneOption.addEventListener('click', () => selectOption('', '— None —'));
-            optionsList.appendChild(noneOption);
+            // Folio is now required - no "None" option
 
             // Add ledger options
             filtered.forEach(l => {
@@ -1150,19 +1178,27 @@ function createFolioCellRenderer(params) {
                 optionsList.appendChild(option);
             });
 
-            if (filtered.length === 0 && filter) {
+            if (filtered.length === 0) {
                 const noResults = document.createElement('div');
                 noResults.className = 'folio-dropdown-empty';
-                noResults.textContent = 'No ledgers found';
+                noResults.textContent = filter ? 'No ledgers found' : 'No ledgers available. Create one first.';
                 optionsList.appendChild(noResults);
             }
         }
 
         function selectOption(id, name) {
             params.data.folio = id || null;
-            button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger...';
-            if (params.data.id && params.data.id !== '__new__') {
+            button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger... *';
+            if (params.data.id && !isCashbookNewRow(params.data)) {
+                // Update existing entry
                 updateCashbookEntry(params.data.id, { folio: id || null });
+            } else if (isCashbookNewRow(params.data) && id) {
+                // For new entries, check if all required fields are filled and trigger auto-save
+                const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                const hasAmount = params.data.amount != null && params.data.amount > 0;
+                if (hasDescription && hasAmount && entryType) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, entryType);
+                }
             }
             closeDropdown();
         }
@@ -1220,7 +1256,7 @@ function buildCashbookGridColumns(side) {
             flex: 2,
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
-                if (params.data && params.data.id === '__new__') {
+                if (isCashbookNewRow(params.data)) {
                     // Highlight if amount is filled but description is empty
                     const hasAmount = params.data.amount != null && params.data.amount > 0;
                     const hasDescription = params.data.description && String(params.data.description).trim() !== '';
@@ -1236,9 +1272,9 @@ function buildCashbookGridColumns(side) {
                 const val = String(params.newValue ?? '').trim();
                 if ((params.data.description || '') === val) return false;
                 params.data.description = val;
-                if (!params.node.rowPinned && params.data.id !== '__new__') {
+                if (!params.node.rowPinned && !isCashbookNewRow(params.data)) {
                     updateCashbookEntry(params.data.id, { description: val });
-                } else if (params.data.id === '__new__' && params.api) {
+                } else if (isCashbookNewRow(params.data) && params.api) {
                     // Refresh cells to update highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
                 }
@@ -1252,7 +1288,7 @@ function buildCashbookGridColumns(side) {
             minWidth: 150,
             filter: false,
             sortable: false,
-            cellRenderer: createFolioCellRenderer,
+            cellRenderer: (params) => createFolioCellRenderer(params, side),
             pinnedRowCellRenderer: () => ''
         },
         {
@@ -1262,7 +1298,7 @@ function buildCashbookGridColumns(side) {
             filter: 'agNumberColumnFilter',
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
-                if (params.data && params.data.id === '__new__') {
+                if (isCashbookNewRow(params.data)) {
                     // Highlight if description is filled but amount is empty
                     const hasAmount = params.data.amount != null && params.data.amount > 0;
                     const hasDescription = params.data.description && String(params.data.description).trim() !== '';
@@ -1279,7 +1315,7 @@ function buildCashbookGridColumns(side) {
             },
             valueSetter: (params) => {
                 if (params.node.rowPinned === 'bottom') return false;
-                if (params.node.rowPinned === 'top' || (params.data && params.data.id === '__new__')) {
+                if (params.node.rowPinned === 'top' || isCashbookNewRow(params.data)) {
                     params.data.amount = parseCashbookAmount(params.newValue);
                     // Refresh cells to update highlighting
                     if (params.api) {
@@ -1304,7 +1340,7 @@ function buildCashbookGridColumns(side) {
             cellRenderer: (params) => {
                 if (params.node.rowPinned) return '';
                 if (isCashbookSystemOrFooterRow(params.data)) return '';
-                if (params.data && params.data.id === '__new__') return '';
+                if (isCashbookNewRow(params.data)) return '';
                 const btn = document.createElement('button');
                 btn.className = 'cashbook-delete-btn';
                 btn.innerHTML = '<i class="fa-solid fa-trash"></i>';
@@ -1353,11 +1389,12 @@ function initCashbookIncomingGrid() {
             cashbookIncomingGridApi = params.api;
         },
         onCellValueChanged: (params) => {
-            if (params.data && params.data.id === '__new__') {
-                // Auto-save when all required fields are filled
+            if (isCashbookNewRow(params.data)) {
+                // Auto-save when all required fields are filled (description, amount, and folio)
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                if (hasDescription && hasAmount) {
+                const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
+                if (hasDescription && hasAmount && hasFolio) {
                     tryCreateCashbookEntryFromPinnedRow(params.data, 'inflow');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
@@ -1403,11 +1440,12 @@ function initCashbookOutgoingGrid() {
             cashbookOutgoingGridApi = params.api;
         },
         onCellValueChanged: (params) => {
-            if (params.data && params.data.id === '__new__') {
-                // Auto-save when all required fields are filled
+            if (isCashbookNewRow(params.data)) {
+                // Auto-save when all required fields are filled (description, amount, and folio)
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                if (hasDescription && hasAmount) {
+                const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
+                if (hasDescription && hasAmount && hasFolio) {
                     tryCreateCashbookEntryFromPinnedRow(params.data, 'outflow');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
@@ -1679,9 +1717,9 @@ function formatOrdersPeriodLabel(month, year) {
     return `${monthNames[month - 1]} 22 – ${monthNames[nextMonth - 1]} 21, ${nextMonth === 1 ? nextYear : year}`;
 }
 
-/** Current period (month 22 – next 21) that contains today */
+/** Current period (month 22 – next 21) that contains today in PKT */
 function getCurrentOrdersPeriod() {
-    return getPeriodForDate(new Date());
+    return getPeriodForDate(getPKTDate());
 }
 
 /** Oldest period in dropdown: Oct 22 – Nov 21, 2024 */
@@ -1794,9 +1832,10 @@ function normalizeCashbookEntries(entries) {
     }));
 }
 
-function getEmptyCashbookRow(entryDate = '') {
+function getEmptyCashbookRow(entryDate = '', side = '') {
+    // Use a unique ID each time to ensure AG Grid creates a fresh row
     return {
-        id: '__new__',
+        id: '__new_' + side + '_' + Date.now() + '__',
         entry_date: entryDate,
         description: '',
         folio: null,
@@ -1903,7 +1942,7 @@ function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
         amount: opening,
         _isSystemRow: true
     };
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'inflow');
     const totalRow = {
         id: '__total_in__',
         description: 'Total',
@@ -1921,7 +1960,7 @@ function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
     const opening = parseFloat(carryForward) || 0;
     const closingBalance = opening + totalInflow - totalOutflow;
     const rows = buildCashbookSideRows(entries, 'outflow');
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'outflow');
     const closingRow = {
         id: '__closing__',
         description: 'Closing Balance',
@@ -1955,9 +1994,11 @@ async function loadDailyBalance(targetDate) {
     }
 }
 
-async function loadCashbookEntriesForDate(targetDate) {
-    if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
-    if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
+async function loadCashbookEntriesForDate(targetDate, showLoading = true) {
+    if (showLoading) {
+        if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
+        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
+    }
     try {
         const response = await fetch(`${API_BASE}/cashbook/entries?start_date=${targetDate}&end_date=${targetDate}`);
         if (!response.ok) throw new Error('Failed to load cashbook entries');
@@ -1967,8 +2008,10 @@ async function loadCashbookEntriesForDate(targetDate) {
         showToast('Failed to load cashbook entries', 'error');
         cashbookEntries = [];
     } finally {
-        if (cashbookIncomingGridApi) cashbookIncomingGridApi.hideOverlay();
-        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.hideOverlay();
+        if (showLoading) {
+            if (cashbookIncomingGridApi) cashbookIncomingGridApi.hideOverlay();
+            if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.hideOverlay();
+        }
     }
 }
 
@@ -2009,11 +2052,11 @@ async function loadCashbook() {
     renderCashbook();
 }
 
-async function reloadCashbookForCurrentDate() {
+async function reloadCashbookForCurrentDate(showLoading = true) {
     const selectedDate = cashbookSelectedDate || getTodayDateString();
     await Promise.all([
         loadDailyBalance(selectedDate),
-        loadCashbookEntriesForDate(selectedDate)
+        loadCashbookEntriesForDate(selectedDate, showLoading)
     ]);
     renderCashbook();
 }
@@ -2054,6 +2097,18 @@ async function addCashbookEntry() {
 }
 
 async function createCashbookEntry(payload) {
+    // Optimistic update: add entry to local array immediately
+    const tempId = '__temp_' + Date.now();
+    const tempEntry = {
+        ...payload,
+        id: tempId,
+        entry_date: String(payload.entry_date || '').slice(0, 10),
+        created_at: getPKTISOString(),
+        updated_at: getPKTISOString()
+    };
+    cashbookEntries.push(tempEntry);
+    renderCashbook();
+
     try {
         const response = await fetch(`${API_BASE}/cashbook/entries`, {
             method: 'POST',
@@ -2061,11 +2116,16 @@ async function createCashbookEntry(payload) {
             body: JSON.stringify(payload)
         });
         if (!response.ok) throw new Error('Failed to add cashbook entry');
-        await reloadCashbookForCurrentDate();
-        showToast('Cashbook entry added', 'success');
+        
+        // Silently refresh in background to get real ID and updated balance
+        await reloadCashbookForCurrentDate(false);
+        showToast('Entry added', 'success');
     } catch (error) {
         console.error('Error adding cashbook entry:', error);
-        showToast('Failed to add cashbook entry', 'error');
+        // Remove the temp entry on failure
+        cashbookEntries = cashbookEntries.filter(e => e.id !== tempId);
+        renderCashbook();
+        showToast('Failed to add entry', 'error');
     }
 }
 
@@ -2079,6 +2139,12 @@ function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
     }
     const description = String(row.description || '').trim();
     const folio = row.folio || null;
+    
+    // Folio is now required
+    if (!folio) {
+        showToast('Please select a ledger (folio) for this entry.', 'error');
+        return;
+    }
 
     createCashbookEntry({
         entry_date: entryDate,
@@ -2091,6 +2157,15 @@ function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
 
 async function updateCashbookEntry(entryId, updates) {
     if (!entryId || !updates || Object.keys(updates).length === 0) return;
+    
+    // Optimistic update: apply changes immediately
+    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
+    const originalEntry = entryIndex >= 0 ? { ...cashbookEntries[entryIndex] } : null;
+    if (entryIndex >= 0) {
+        cashbookEntries[entryIndex] = { ...cashbookEntries[entryIndex], ...updates };
+        renderCashbook();
+    }
+
     try {
         const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
             method: 'PUT',
@@ -2098,26 +2173,49 @@ async function updateCashbookEntry(entryId, updates) {
             body: JSON.stringify(updates)
         });
         if (!response.ok) throw new Error('Failed to update cashbook entry');
-        await reloadCashbookForCurrentDate();
-        showToast('Cashbook entry updated', 'success');
+        
+        // Silently refresh in background to get updated balance
+        await reloadCashbookForCurrentDate(false);
+        showToast('Entry updated', 'success');
     } catch (error) {
         console.error('Error updating cashbook entry:', error);
-        showToast('Failed to update cashbook entry', 'error');
+        // Revert on failure
+        if (originalEntry && entryIndex >= 0) {
+            cashbookEntries[entryIndex] = originalEntry;
+            renderCashbook();
+        }
+        showToast('Failed to update entry', 'error');
     }
 }
 
 async function deleteCashbookEntry(entryId) {
     if (!entryId) return;
+    
+    // Optimistic update: remove immediately
+    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
+    const removedEntry = entryIndex >= 0 ? cashbookEntries[entryIndex] : null;
+    if (entryIndex >= 0) {
+        cashbookEntries.splice(entryIndex, 1);
+        renderCashbook();
+    }
+
     try {
         const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete cashbook entry');
-        await reloadCashbookForCurrentDate();
-        showToast('Cashbook entry deleted', 'success');
+        
+        // Silently refresh in background to get updated balance
+        await reloadCashbookForCurrentDate(false);
+        showToast('Entry deleted', 'success');
     } catch (error) {
         console.error('Error deleting cashbook entry:', error);
-        showToast('Failed to delete cashbook entry', 'error');
+        // Restore on failure
+        if (removedEntry) {
+            cashbookEntries.push(removedEntry);
+            renderCashbook();
+        }
+        showToast('Failed to delete entry', 'error');
     }
 }
 
@@ -2281,133 +2379,54 @@ function renderLedgerDetailGrid() {
         return { ...entry, balance: running };
     });
 
-    // Add "new entry" row at the end
-    const newRow = {
-        id: '__new__',
-        ledger_id: currentLedger?.id || '',
-        entry_date: getTodayDateString(),
-        particulars: '',
-        folio: '',
-        incoming: null,
-        outgoing: null,
-        balance: null
-    };
-
-    ledgerDetailGridApi.setGridOption('rowData', [...rowsWithBalance, newRow]);
+    // Ledger entries are now read-only (derived from cashbook entries)
+    ledgerDetailGridApi.setGridOption('rowData', rowsWithBalance);
 }
 
 function initLedgerDetailGrid() {
     const gridDiv = document.getElementById('ledgerDetailGrid');
     if (!gridDiv) return;
 
+    // Ledger detail grid is now read-only - entries come from cashbook
     const columnDefs = [
         {
             headerName: 'Date',
             field: 'entry_date',
             width: 130,
-            editable: (params) => params.data.id === '__new__',
-            cellEditor: 'agTextCellEditor',
+            editable: false,
             valueFormatter: (params) => params.value || '',
         },
         {
             headerName: 'Particulars',
             field: 'particulars',
             flex: 2,
-            editable: (params) => params.data.id !== '__footer__',
-            valueSetter: (params) => {
-                const val = String(params.newValue ?? '').trim();
-                if ((params.data.particulars || '') === val) return false;
-                params.data.particulars = val;
-                if (params.data.id && params.data.id !== '__new__') {
-                    updateLedgerEntry(params.data.id, { particulars: val });
-                }
-                return true;
-            }
-        },
-        {
-            headerName: 'Folio',
-            field: 'folio',
-            width: 130,
-            editable: (params) => params.data.id !== '__footer__',
-            valueSetter: (params) => {
-                const val = String(params.newValue ?? '').trim();
-                if ((params.data.folio || '') === val) return false;
-                params.data.folio = val;
-                if (params.data.id && params.data.id !== '__new__') {
-                    updateLedgerEntry(params.data.id, { folio: val });
-                }
-                return true;
-            }
+            editable: false,
         },
         {
             headerName: 'Incoming (Rs)',
             field: 'incoming',
             width: 140,
-            editable: (params) => params.data.id !== '__footer__',
+            editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
-            valueSetter: (params) => {
-                const next = parseCashbookAmount(params.newValue);
-                if (params.data.id === '__new__') {
-                    params.data.incoming = next;
-                    return true;
-                }
-                if (next === null) return false;
-                params.data.incoming = next;
-                updateLedgerEntry(params.data.id, { incoming: next });
-                return true;
-            }
         },
         {
             headerName: 'Outgoing (Rs)',
             field: 'outgoing',
             width: 140,
-            editable: (params) => params.data.id !== '__footer__',
+            editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
-            valueSetter: (params) => {
-                const next = parseCashbookAmount(params.newValue);
-                if (params.data.id === '__new__') {
-                    params.data.outgoing = next;
-                    return true;
-                }
-                if (next === null) return false;
-                params.data.outgoing = next;
-                updateLedgerEntry(params.data.id, { outgoing: next });
-                return true;
-            }
         },
         {
             headerName: 'Balance (Rs)',
             field: 'balance',
             width: 140,
             editable: false,
-            valueFormatter: (params) => {
-                if (params.data.id === '__new__') return '';
-                return formatCashbookCell(params.value);
-            },
+            valueFormatter: (params) => formatCashbookCell(params.value),
             cellStyle: (params) => {
-                if (params.data.id === '__new__') return {};
                 const val = parseFloat(params.value);
                 if (Number.isNaN(val)) return {};
                 if (val < 0) return { color: 'var(--danger)' };
                 return {};
-            }
-        },
-        {
-            headerName: 'Actions',
-            field: 'actions',
-            width: 110,
-            filter: false,
-            sortable: false,
-            cellRenderer: (params) => {
-                if (params.data.id === '__new__') return '';
-                const btn = document.createElement('button');
-                btn.className = 'btn btn-danger btn-sm';
-                btn.textContent = 'Delete';
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    deleteLedgerEntry(params.data.id);
-                });
-                return btn;
             }
         }
     ];
@@ -2425,99 +2444,18 @@ function initLedgerDetailGrid() {
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
-        stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
-        getRowStyle: (params) => {
-            if (params.data && params.data.id === '__new__') {
-                return { backgroundColor: 'rgba(139, 92, 246, 0.04)', fontStyle: 'italic' };
-            }
-            return null;
-        },
         onGridReady: (params) => {
             ledgerDetailGridApi = params.api;
-        },
-        onCellValueChanged: (params) => {
-            if (params.data && params.data.id === '__new__') {
-                tryCreateLedgerEntryFromRow(params.data);
-            }
         }
     };
 
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
-function tryCreateLedgerEntryFromRow(row) {
-    const incoming = parseCashbookAmount(row.incoming);
-    const outgoing = parseCashbookAmount(row.outgoing);
-    if ((incoming === null || incoming === 0) && (outgoing === null || outgoing === 0)) return;
-    const entryDate = String(row.entry_date || '').trim();
-    if (!entryDate) {
-        showToast('Enter a date for the entry.', 'error');
-        return;
-    }
-    createLedgerEntry({
-        ledger_id: currentLedger?.id,
-        entry_date: entryDate,
-        particulars: String(row.particulars || '').trim(),
-        folio: String(row.folio || '').trim(),
-        incoming: incoming || 0,
-        outgoing: outgoing || 0
-    });
-}
-
-async function createLedgerEntry(payload) {
-    try {
-        const ledgerId = payload.ledger_id || currentLedger?.id;
-        if (!ledgerId) return;
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-        if (!response.ok) throw new Error('Failed to create ledger entry');
-        showToast('Ledger entry added', 'success');
-        await loadLedgerEntries(ledgerId);
-    } catch (error) {
-        console.error('Error creating ledger entry:', error);
-        showToast('Failed to add ledger entry', 'error');
-    }
-}
-
-async function updateLedgerEntry(entryId, updates) {
-    if (!entryId || !updates || Object.keys(updates).length === 0) return;
-    const ledgerId = currentLedger?.id;
-    if (!ledgerId) return;
-    try {
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries/${entryId}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updates)
-        });
-        if (!response.ok) throw new Error('Failed to update ledger entry');
-        showToast('Ledger entry updated', 'success');
-        await loadLedgerEntries(ledgerId);
-    } catch (error) {
-        console.error('Error updating ledger entry:', error);
-        showToast('Failed to update ledger entry', 'error');
-    }
-}
-
-async function deleteLedgerEntry(entryId) {
-    if (!entryId) return;
-    const ledgerId = currentLedger?.id;
-    if (!ledgerId) return;
-    try {
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries/${entryId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete ledger entry');
-        showToast('Ledger entry deleted', 'success');
-        await loadLedgerEntries(ledgerId);
-    } catch (error) {
-        console.error('Error deleting ledger entry:', error);
-        showToast('Failed to delete ledger entry', 'error');
-    }
-}
+// NOTE: Ledger entries are now read-only and derived from cashbook entries.
+// The CRUD operations for ledger entries have been removed.
+// To add/edit/delete ledger entries, use the Cashbook with the appropriate folio.
 
 async function syncShopifyProducts() {
     const btn = document.getElementById('syncShopifyBtn');

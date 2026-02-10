@@ -114,7 +114,7 @@ class CashbookEntryBase(BaseModel):
     entry_type: str  # inflow | outflow
     amount: float
     description: Optional[str] = None
-    folio: Optional[str] = None  # UUID of linked ledger
+    folio: str  # UUID of linked ledger - REQUIRED
 
 class CashbookEntryCreate(CashbookEntryBase):
     pass
@@ -124,7 +124,7 @@ class CashbookEntryUpdate(BaseModel):
     entry_type: Optional[str] = None
     amount: Optional[float] = None
     description: Optional[str] = None
-    folio: Optional[str] = None
+    folio: Optional[str] = None  # Can update folio, but not set to null
 
 class CashbookEntry(CashbookEntryBase):
     id: str
@@ -148,6 +148,8 @@ class CashbookDailyBalance(BaseModel):
         from_attributes = True
 
 # ==================== LEDGER MODELS ====================
+# Note: Ledger entries are no longer stored separately.
+# Ledgers now show summaries derived from cashbook_entries where folio = ledger.id
 
 class LedgerBase(BaseModel):
     name: str
@@ -161,32 +163,6 @@ class LedgerUpdate(BaseModel):
     section: Optional[str] = None
 
 class Ledger(LedgerBase):
-    id: str
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-    class Config:
-        from_attributes = True
-
-class LedgerEntryBase(BaseModel):
-    ledger_id: str
-    entry_date: date
-    particulars: Optional[str] = None
-    folio: Optional[str] = None  # text field for personal reference
-    incoming: float = 0.0
-    outgoing: float = 0.0
-
-class LedgerEntryCreate(LedgerEntryBase):
-    pass
-
-class LedgerEntryUpdate(BaseModel):
-    entry_date: Optional[date] = None
-    particulars: Optional[str] = None
-    folio: Optional[str] = None
-    incoming: Optional[float] = None
-    outgoing: Optional[float] = None
-
-class LedgerEntry(LedgerEntryBase):
     id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

@@ -12,15 +12,19 @@ router = APIRouter(prefix="/cashbook", tags=["cashbook"])
 ENTRY_TYPES = {"inflow", "outflow"}
 
 
-def _normalize_entry_payload(payload: dict) -> dict:
+def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
     if "entry_date" in payload and payload["entry_date"] is not None:
         if isinstance(payload["entry_date"], date):
             payload["entry_date"] = payload["entry_date"].isoformat()
     if "entry_type" in payload and payload["entry_type"] is not None:
         payload["entry_type"] = str(payload["entry_type"]).strip().lower()
-    # Allow folio to be explicitly set to None (unlink ledger)
-    if "folio" in payload and payload["folio"] is not None:
-        payload["folio"] = str(payload["folio"]).strip() or None
+    # Folio is required - normalize to string UUID
+    if "folio" in payload:
+        if payload["folio"] is not None:
+            payload["folio"] = str(payload["folio"]).strip() or None
+        # On create, folio cannot be null/empty
+        if is_create and not payload.get("folio"):
+            raise ValueError("folio is required")
     return payload
 
 
@@ -122,12 +126,14 @@ async def get_cashbook_entries(
 @router.post("/entries", response_model=dict)
 async def create_cashbook_entry(entry: CashbookEntryCreate):
     try:
-        payload = _normalize_entry_payload(entry.model_dump())
+        payload = _normalize_entry_payload(entry.model_dump(), is_create=True)
         entry_type = payload.get("entry_type")
         if entry_type not in ENTRY_TYPES:
             raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
         if payload.get("amount") is None or float(payload["amount"]) <= 0:
             raise HTTPException(status_code=400, detail="amount must be greater than 0")
+        if not payload.get("folio"):
+            raise HTTPException(status_code=400, detail="folio (ledger) is required")
 
         supabase = get_supabase()
         response = supabase.table("cashbook_entries").insert(payload).execute()
@@ -140,6 +146,8 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
             await _recalculate_balances_from_date(supabase, entry_date)
         
         return response.data[0]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except HTTPException:
         raise
     except Exception as e:

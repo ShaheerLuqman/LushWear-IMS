@@ -1997,6 +1997,16 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border: 1px solid rgba(245, 158, 11, 0.5) !important;
 }
 
+/* Folio dropdown required highlighting */
+.folio-dropdown-btn.folio-required {
+    border-color: rgba(245, 158, 11, 0.7) !important;
+    background-color: rgba(245, 158, 11, 0.1) !important;
+}
+
+.folio-dropdown-btn.folio-required:hover {
+    border-color: rgba(245, 158, 11, 0.9) !important;
+}
+
 /* Cashbook delete button */
 .cashbook-delete-btn {
     display: inline-flex;

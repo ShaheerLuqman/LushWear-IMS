@@ -1,22 +1,12 @@
 from fastapi import APIRouter, HTTPException
 from typing import List
-from datetime import date
 from app.database import get_supabase
 from app.models import (
     LedgerCreate,
     LedgerUpdate,
-    LedgerEntryCreate,
-    LedgerEntryUpdate,
 )
 
 router = APIRouter(prefix="/ledgers", tags=["ledgers"])
-
-
-def _normalize_entry_payload(payload: dict) -> dict:
-    if "entry_date" in payload and payload["entry_date"] is not None:
-        if isinstance(payload["entry_date"], date):
-            payload["entry_date"] = payload["entry_date"].isoformat()
-    return payload
 
 
 # ==================== LEDGER CRUD ====================
@@ -112,6 +102,20 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
 async def delete_ledger(ledger_id: str):
     try:
         supabase = get_supabase()
+        # Check if any cashbook entries reference this ledger
+        entries_resp = (
+            supabase.table("cashbook_entries")
+            .select("id")
+            .eq("folio", ledger_id)
+            .limit(1)
+            .execute()
+        )
+        if entries_resp.data:
+            raise HTTPException(
+                status_code=400, 
+                detail="Cannot delete ledger: it has cashbook entries linked to it"
+            )
+        
         response = (
             supabase.table("ledgers")
             .delete()
@@ -127,89 +131,44 @@ async def delete_ledger(ledger_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ==================== LEDGER ENTRIES CRUD ====================
+# ==================== LEDGER ENTRIES (derived from cashbook) ====================
+# Ledger entries are now derived from cashbook_entries where folio = ledger_id
+# This endpoint returns cashbook entries linked to this ledger
 
 
 @router.get("/{ledger_id}/entries", response_model=List[dict])
 async def list_ledger_entries(ledger_id: str):
+    """
+    Get all cashbook entries linked to this ledger (via folio).
+    Returns entries with incoming/outgoing calculated from entry_type.
+    """
     try:
         supabase = get_supabase()
         response = (
-            supabase.table("ledger_entries")
+            supabase.table("cashbook_entries")
             .select("*")
-            .eq("ledger_id", ledger_id)
+            .eq("folio", ledger_id)
             .order("entry_date", desc=False)
             .order("created_at", desc=False)
             .execute()
         )
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.post("/{ledger_id}/entries", response_model=dict)
-async def create_ledger_entry(ledger_id: str, entry: LedgerEntryCreate):
-    try:
-        payload = _normalize_entry_payload(entry.model_dump())
-        payload["ledger_id"] = ledger_id
-
-        incoming = float(payload.get("incoming") or 0)
-        outgoing = float(payload.get("outgoing") or 0)
-        if incoming < 0 or outgoing < 0:
-            raise HTTPException(status_code=400, detail="Amounts cannot be negative")
-        if incoming == 0 and outgoing == 0:
-            raise HTTPException(status_code=400, detail="At least one of incoming or outgoing must be greater than 0")
-
-        supabase = get_supabase()
-        response = supabase.table("ledger_entries").insert(payload).execute()
-        if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to create ledger entry")
-        return response.data[0]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.put("/{ledger_id}/entries/{entry_id}", response_model=dict)
-async def update_ledger_entry(ledger_id: str, entry_id: str, entry: LedgerEntryUpdate):
-    try:
-        payload = _normalize_entry_payload(entry.model_dump(exclude_unset=True))
-        if not payload:
-            raise HTTPException(status_code=400, detail="No fields to update")
-
-        supabase = get_supabase()
-        response = (
-            supabase.table("ledger_entries")
-            .update(payload)
-            .eq("id", entry_id)
-            .eq("ledger_id", ledger_id)
-            .execute()
-        )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Ledger entry not found")
-        return response.data[0]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.delete("/{ledger_id}/entries/{entry_id}", response_model=dict)
-async def delete_ledger_entry(ledger_id: str, entry_id: str):
-    try:
-        supabase = get_supabase()
-        response = (
-            supabase.table("ledger_entries")
-            .delete()
-            .eq("id", entry_id)
-            .eq("ledger_id", ledger_id)
-            .execute()
-        )
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Ledger entry not found")
-        return {"status": "deleted", "id": entry_id}
-    except HTTPException:
-        raise
+        
+        # Transform cashbook entries to ledger entry format
+        entries = []
+        for entry in response.data or []:
+            amount = float(entry.get("amount") or 0)
+            entry_type = entry.get("entry_type", "")
+            entries.append({
+                "id": entry["id"],
+                "ledger_id": ledger_id,
+                "entry_date": entry["entry_date"],
+                "particulars": entry.get("description") or "",
+                "incoming": amount if entry_type == "inflow" else 0,
+                "outgoing": amount if entry_type == "outflow" else 0,
+                "created_at": entry.get("created_at"),
+                "updated_at": entry.get("updated_at"),
+            })
+        
+        return entries
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
