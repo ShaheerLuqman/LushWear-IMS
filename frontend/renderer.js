@@ -1590,8 +1590,10 @@ function switchView(viewName) {
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
+            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'inline-flex';
         } else if (viewName === 'cashbook') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
@@ -1603,8 +1605,10 @@ function switchView(viewName) {
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
+            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'none';
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
@@ -1616,8 +1620,10 @@ function switchView(viewName) {
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
+            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'none';
         }
     }
 
@@ -2670,6 +2676,61 @@ function initForms() {
     const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
     if (refreshDeliveryStatusSelectedBtn) {
         refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
+    }
+
+    // Generate invoice button
+    const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
+    if (generateInvoiceBtn) {
+        generateInvoiceBtn.addEventListener('click', async () => {
+            if (!ordersGridApi) {
+                showToast('Orders grid not initialized', 'error');
+                return;
+            }
+            
+            const selectedRows = ordersGridApi.getSelectedRows();
+            if (selectedRows.length === 0) {
+                showToast('Please select at least one order', 'error');
+                return;
+            }
+            
+            const orderIds = selectedRows.map(row => row.id);
+            
+            generateInvoiceBtn.disabled = true;
+            const originalText = generateInvoiceBtn.textContent;
+            generateInvoiceBtn.textContent = 'Generating...';
+            
+            try {
+                const response = await fetch(`${API_BASE}/orders/generate-invoice`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderIds)
+                });
+                
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.detail || 'Failed to generate invoice');
+                }
+                
+                // Get the blob and create download link
+                const blob = await response.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'invoice.pdf';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                
+                showToast(`Invoice generated for ${selectedRows.length} order(s)`, 'success');
+            } catch (error) {
+                console.error('Error generating invoice:', error);
+                showToast(error.message || 'Failed to generate invoice', 'error');
+            } finally {
+                generateInvoiceBtn.disabled = false;
+                generateInvoiceBtn.textContent = originalText;
+            }
+        });
     }
 
     // Cashbook actions

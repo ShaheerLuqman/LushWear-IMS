@@ -1,4 +1,5 @@
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi.responses import Response
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
 from app.models import Order, OrderCreate, OrderUpdate
@@ -9,7 +10,12 @@ import httpx
 import re
 import csv
 import io
+import os
+from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs
+from openpyxl import load_workbook
+from openpyxl.styles import Font
+from copy import copy
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -1178,4 +1184,212 @@ async def delete_order(order_id: str):
         return {"message": "Order deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/generate-invoice")
+async def generate_invoice(order_ids: List[str]):
+    """Generate an Excel invoice from template for selected orders"""
+    try:
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="No orders selected")
+        
+        # Get orders from database
+        supabase = get_supabase()
+        orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
+        orders = orders_response.data
+        
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found")
+        
+        # Load template
+        template_path = Path(__file__).parent.parent / "invoice_template.xlsx"
+        if not template_path.exists():
+            raise HTTPException(status_code=404, detail="Invoice template not found")
+        
+        # Load workbook with images preserved
+        # keep_links=True preserves external links and images
+        wb = load_workbook(template_path, keep_links=True)
+        ws = wb.active
+        
+        # Add date to E2 (preserve style)
+        from datetime import datetime
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        cell_e2 = ws.cell(row=2, column=5)
+        if cell_e2.has_style:
+            original_style = copy(cell_e2._style)
+            cell_e2.value = current_date
+            cell_e2._style = original_style
+        else:
+            cell_e2.value = current_date
+        
+        # Start filling data from row 7
+        start_row = 7
+        current_row = start_row
+        net_amount_sum = 0
+        
+        # Store template row styles (row 7) to copy to data rows
+        template_row = start_row
+        template_styles = {}
+        for col in range(1, 6):  # Columns A to E
+            template_cell = ws.cell(row=template_row, column=col)
+            if template_cell.has_style:
+                template_styles[col] = copy(template_cell._style)
+        
+        # Sort orders by order_number for consistent output
+        orders.sort(key=lambda x: x.get("order_number", 0))
+        
+        for order in orders:
+            order_number = order.get("order_number", "")
+            tracking_number = order.get("tracking_number", "") or ""
+            total_amount = float(order.get("total_amount", 0) or 0)
+            advance_amount = float(order.get("advance_amount", 0) or 0)
+            delivery_charge = float(order.get("delivery_charge", 0) or 0)
+            tax_amount = float(order.get("tax_amount", 0) or 0)
+            
+            # Calculate COD (total_amount - advance_amount)
+            cod = total_amount - advance_amount
+            
+            # Calculate Net Amount (receivable = total_amount - advance_amount - delivery_charge - tax_amount)
+            net_amount = total_amount - advance_amount - delivery_charge - tax_amount
+            
+            # Fill row data while preserving styles
+            values = [order_number, tracking_number, cod, delivery_charge, net_amount]
+            for col_idx, value in enumerate(values, start=1):
+                cell = ws.cell(row=current_row, column=col_idx)
+                # Preserve existing style or use template style
+                if cell.has_style:
+                    original_style = copy(cell._style)
+                    cell.value = value
+                    cell._style = original_style
+                elif col_idx in template_styles:
+                    cell.value = value
+                    cell._style = copy(template_styles[col_idx])
+                else:
+                    cell.value = value
+            
+            net_amount_sum += net_amount
+            current_row += 1
+        
+        # Add final balance row (preserve styles)
+        final_row = current_row
+        cell_d = ws.cell(row=final_row, column=4)
+        if cell_d.has_style:
+            original_style_d = copy(cell_d._style)
+            cell_d.value = "Final Balance"
+            cell_d._style = original_style_d
+            # Make it bold
+            if cell_d.font:
+                cell_d.font = Font(bold=True, name=cell_d.font.name, size=cell_d.font.size)
+            else:
+                cell_d.font = Font(bold=True)
+        else:
+            cell_d.value = "Final Balance"
+            cell_d.font = Font(bold=True)
+        
+        cell_e = ws.cell(row=final_row, column=5)
+        if cell_e.has_style:
+            original_style_e = copy(cell_e._style)
+            cell_e.value = net_amount_sum
+            cell_e._style = original_style_e
+        else:
+            cell_e.value = net_amount_sum
+        
+        # Configure page setup for printing (first page only)
+        ws.page_setup.orientation = 'portrait'
+        ws.page_setup.paperSize = 9  # A4 paper size (9 is the constant for A4)
+        ws.page_setup.fitToWidth = 1
+        ws.page_setup.fitToHeight = 1
+        ws.page_setup.scale = 100
+        
+        # Save to BytesIO buffer for Excel
+        from io import BytesIO
+        import tempfile
+        import os
+        
+        excel_buffer = BytesIO()
+        wb.save(excel_buffer)
+        excel_buffer.seek(0)
+        
+        # Convert to PDF using win32com (Windows only, requires Excel installed)
+        pdf_buffer = BytesIO()
+        try:
+            import win32com.client
+            import pythoncom
+            
+            # Create temporary Excel file
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+                temp_excel.write(excel_buffer.getvalue())
+                temp_excel_path = temp_excel.name
+            
+            # Create temporary PDF file path
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+                temp_pdf_path = temp_pdf.name
+            
+            # Initialize COM
+            pythoncom.CoInitialize()
+            excel = win32com.client.Dispatch("Excel.Application")
+            excel.Visible = False
+            excel.DisplayAlerts = False
+            
+            try:
+                # Open the Excel file
+                workbook = excel.Workbooks.Open(temp_excel_path)
+                worksheet = workbook.Worksheets(1)  # First worksheet
+                
+                # Set print area to first page only
+                worksheet.PageSetup.PrintArea = ""
+                worksheet.PageSetup.FitToPagesWide = 1
+                worksheet.PageSetup.FitToPagesTall = 1
+                
+                # Export to PDF (print first page)
+                worksheet.ExportAsFixedFormat(
+                    Type=0,  # xlTypePDF
+                    Filename=temp_pdf_path,
+                    Quality=0,  # xlQualityStandard
+                    IncludeDocProperties=True,
+                    IgnorePrintAreas=False,
+                    OpenAfterPublish=False
+                )
+                
+                workbook.Close(SaveChanges=False)
+                
+                # Read PDF into buffer
+                with open(temp_pdf_path, 'rb') as pdf_file:
+                    pdf_buffer.write(pdf_file.read())
+                pdf_buffer.seek(0)
+                
+            finally:
+                excel.Quit()
+                pythoncom.CoUninitialize()
+                # Clean up temp files
+                try:
+                    os.unlink(temp_excel_path)
+                    os.unlink(temp_pdf_path)
+                except:
+                    pass
+            
+            # Return PDF file as download
+            return Response(
+                content=pdf_buffer.getvalue(),
+                media_type="application/pdf",
+                headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
+            )
+            
+        except ImportError:
+            # Fallback: return Excel file if win32com is not available
+            return Response(
+                content=excel_buffer.getvalue(),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+            )
+        except Exception as e:
+            # If PDF conversion fails, return Excel file
+            return Response(
+                content=excel_buffer.getvalue(),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+            )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
 
