@@ -2947,8 +2947,17 @@ function openBulkUpdateOrderModal() {
         }
         textarea.value = orderNumbersText;
         textarea.focus();
+        updateBulkUpdateOrderCount();
     }
     document.getElementById('bulkUpdateOrderModal')?.classList.add('active');
+}
+
+function updateBulkUpdateOrderCount() {
+    const count = parseOrderNumbersFromTextarea().length;
+    const countEl = document.getElementById('bulkUpdateOrderCount');
+    if (countEl) {
+        countEl.textContent = count === 1 ? '1 order' : `${count} orders`;
+    }
 }
 
 function showBulkUpdateResults(result) {
@@ -3000,6 +3009,8 @@ document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) =
 });
 
 document.getElementById('closeBulkUpdateOrderModal')?.addEventListener('click', closeBulkUpdateOrderModal);
+
+document.getElementById('bulkUpdateOrderNumbers')?.addEventListener('input', updateBulkUpdateOrderCount);
 
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();

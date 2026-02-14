@@ -717,6 +717,13 @@ body {
     font-size: 14px;
 }
 
+.bulk-update-order-count {
+    margin: 0 0 8px;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+}
+
 .bulk-update-textarea {
     width: 100%;
     min-height: 160px;
