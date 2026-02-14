@@ -297,6 +297,41 @@ function initProductsGrid() {
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
+// No-op filter for first column so floating filter cell is rendered (AG Grid only shows floating filter when column has a filter)
+function OrdersClearFiltersPassThroughFilter() {}
+OrdersClearFiltersPassThroughFilter.prototype.init = function () {};
+OrdersClearFiltersPassThroughFilter.prototype.getGui = function () { return document.createElement('div'); };
+OrdersClearFiltersPassThroughFilter.prototype.doesRowPassFilter = function () { return true; }; // never filter out rows
+OrdersClearFiltersPassThroughFilter.prototype.getModel = function () { return null; };
+OrdersClearFiltersPassThroughFilter.prototype.setModel = function () {};
+
+// Custom floating filter for first column: "Clear all filters" button
+function ClearFiltersFloatingFilter() {}
+ClearFiltersFloatingFilter.prototype.init = function (params) {
+    this.eGui = document.createElement('div');
+    this.eGui.style.width = '100%';
+    this.eGui.style.display = 'flex';
+    this.eGui.style.alignItems = 'center';
+    this.eGui.style.justifyContent = 'center';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary btn-sm orders-clear-filters-btn';
+    btn.textContent = 'Clear';
+    btn.title = 'Clear all filters (column filters and period)';
+    btn.addEventListener('click', function () {
+        const api = params.api;
+        if (api) api.setFilterModel(null);
+        const periodEl = document.getElementById('ordersPeriodFilter');
+        if (periodEl && periodEl.value !== '__all__') {
+            periodEl.value = '__all__';
+            if (typeof loadOrders === 'function') loadOrders();
+        }
+    });
+    this.eGui.appendChild(btn);
+};
+ClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
+ClearFiltersFloatingFilter.prototype.onParentModelChanged = function () {};
+
 // Custom floating filter for Order Status: shows a <select> dropdown in the filter row
 const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'cancelled', 'CNA', 'ICA'];
 function OrderStatusFloatingFilter() {}
@@ -455,15 +490,17 @@ function initOrdersGrid() {
     const columnDefs = [
         {
             headerName: '',
-            width: 48,
-            minWidth: 48,
-            maxWidth: 48,
+            colId: 'select',
+            width: 72,
+            minWidth: 72,
+            maxWidth: 72,
             checkboxSelection: true,
             headerCheckboxSelection: true,
             headerCheckboxSelectionFilteredOnly: true,
-            filter: false,
+            filter: OrdersClearFiltersPassThroughFilter,
             sortable: false,
-            floatingFilter: false,
+            floatingFilter: true,
+            floatingFilterComponent: ClearFiltersFloatingFilter,
             suppressSizeToFit: true
         },
         {

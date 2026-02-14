@@ -1236,6 +1236,13 @@ body {
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
 }
 
+/* Orders grid: clear filters button in filter row */
+.orders-clear-filters-btn {
+    padding: 4px 8px;
+    font-size: 11px;
+    white-space: nowrap;
+}
+
 /* AG Grid Container */
 .grid-container {
     width: 100%;
