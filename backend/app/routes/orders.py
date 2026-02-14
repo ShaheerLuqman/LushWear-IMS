@@ -1040,13 +1040,15 @@ async def create_order(order: OrderCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], order_status: str) -> Dict[str, Any]:
-    """Build delivery_status JSONB with latest_status set for bulk 'delivered' or 'returned'.
+    """Build delivery_status JSONB with latest_status set for bulk 'delivered', 'returned', or 'cancelled'.
     Preserves existing keys and uses only JSON-serializable values (str, list, dict).
     """
     if order_status == "delivered":
         latest_status = "Delivered to Customer"
     elif order_status == "returned":
         latest_status = "Return to KARACHI"
+    elif order_status == "cancelled":
+        latest_status = "Cancelled"
     else:
         latest_status = ""
     now_iso = datetime.utcnow().isoformat()
@@ -1090,14 +1092,14 @@ def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], orde
 
 class BulkUpdateStatusBody(BaseModel):
     order_numbers: List[int]
-    order_status: str  # "delivered" or "returned"
+    order_status: str  # "delivered", "returned", or "cancelled"
 
 
 @router.post("/bulk-update-status")
 async def bulk_update_order_status(body: BulkUpdateStatusBody):
     """Update order_status and delivery_status.latest_status for multiple orders by order_number."""
-    if body.order_status not in ("delivered", "returned"):
-        raise HTTPException(status_code=400, detail="order_status must be 'delivered' or 'returned'")
+    if body.order_status not in ("delivered", "returned", "cancelled"):
+        raise HTTPException(status_code=400, detail="order_status must be 'delivered', 'returned', or 'cancelled'")
     if not body.order_numbers:
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
     try:

@@ -298,7 +298,7 @@ function initProductsGrid() {
 }
 
 // Custom floating filter for Order Status: shows a <select> dropdown in the filter row
-const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'CNA', 'ICA'];
+const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'cancelled', 'CNA', 'ICA'];
 function OrderStatusFloatingFilter() {}
 OrderStatusFloatingFilter.prototype.init = function (params) {
     this.params = params;
@@ -2690,6 +2690,7 @@ function initForms() {
 
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
+    document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
 
     // Upload PostEx CSV Button
@@ -3024,6 +3025,7 @@ async function bulkUpdateOrderStatus(orderStatus) {
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
+    const btnCancelled = document.getElementById('bulkUpdateSetCancelled');
     const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
     
     // Determine which button was clicked based on orderStatus
@@ -3032,9 +3034,11 @@ async function bulkUpdateOrderStatus(orderStatus) {
         activeButton = btnDelivered;
     } else if (orderStatus === 'returned') {
         activeButton = btnReturned;
+    } else if (orderStatus === 'cancelled') {
+        activeButton = btnCancelled;
     }
     
-    const buttons = [btnDelivered, btnReturned, btnPieceReceived];
+    const buttons = [btnDelivered, btnReturned, btnCancelled, btnPieceReceived];
     const originalTexts = buttons.map(b => {
         if (!b) return '';
         // Get text content, preserving structure but trimming whitespace
@@ -3086,8 +3090,9 @@ async function bulkUpdatePieceReceived() {
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
+    const btnCancelled = document.getElementById('bulkUpdateSetCancelled');
     const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
-    const buttons = [btnDelivered, btnReturned, btnPieceReceived];
+    const buttons = [btnDelivered, btnReturned, btnCancelled, btnPieceReceived];
     const originalTexts = buttons.map(b => {
         if (!b) return '';
         // Get text content, preserving structure but trimming whitespace
