@@ -5,7 +5,7 @@ from pydantic import BaseModel
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import httpx
 import re
 import csv
@@ -19,14 +19,32 @@ from copy import copy
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
+# Pakistan Time (PKT) is UTC+5
+PKT_TIMEZONE = timezone(timedelta(hours=5))
+
 def _period_start_end(month: int, year: int):
-    """Return (start_iso, end_iso) for period: month's 22 00:00 to next month's 21 23:59:59."""
-    from datetime import datetime as dt
-    start = dt(year, month, 22, 0, 0, 0)
+    """Return (start_iso, end_iso) for period: month's 22 00:00:00 PKT to next month's 22 00:00:00 PKT (exclusive).
+    Returns dates in UTC for database comparison.
+    PKT (Pakistan Time) is UTC+5, so 00:00 PKT = 19:00 UTC (previous day).
+    Example: December period = Dec 22 00:00 PKT (inclusive) to Jan 22 00:00 PKT (exclusive).
+    This ensures all of Jan 21 up to 23:59:59.999999 PKT is included."""
+    # Create start date: month's 22 at 00:00:00 PKT
+    start_pkt = datetime(year, month, 22, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
+    
+    # Calculate next month and year
     next_month = month % 12 + 1
     next_year = year if month != 12 else year + 1
-    end = dt(next_year, next_month, 21, 23, 59, 59)
-    return start.isoformat(), end.isoformat()
+    
+    # Create end date: next month's 22 at 00:00:00 PKT (exclusive boundary)
+    # This ensures we include everything up to but not including the next period start
+    end_pkt = datetime(next_year, next_month, 22, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
+    
+    # Convert to UTC for database comparison
+    start_utc = start_pkt.astimezone(timezone.utc)
+    end_utc = end_pkt.astimezone(timezone.utc)
+    
+    # Return ISO format strings with timezone info (Z suffix for UTC)
+    return start_utc.isoformat().replace('+00:00', 'Z'), end_utc.isoformat().replace('+00:00', 'Z')
 
 
 @router.get("/", response_model=List[dict])
@@ -40,9 +58,10 @@ async def get_all_orders(
         if month is not None and year is not None:
             start_iso, end_iso = _period_start_end(month, year)
             # Orders with order_receiving_date in range
-            r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lte("order_receiving_date", end_iso).order("order_number", desc=True).execute()
+            # Start is inclusive (>=), end is exclusive (<) to include all of the last day
+            r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lt("order_receiving_date", end_iso).order("order_number", desc=True).execute()
             # Orders with null order_receiving_date but created_at in range
-            r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lte("created_at", end_iso).order("order_number", desc=True).execute()
+            r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lt("created_at", end_iso).order("order_number", desc=True).execute()
             seen_ids = {o["id"] for o in r1.data}
             merged = list(r1.data)
             for o in r2.data:
@@ -189,21 +208,83 @@ async def sync_shopify_orders():
                     continue
         
         def extract_courier(order):
-            if "fulfillments" in order and len(order["fulfillments"]) > 0:
-                tracking_company = order["fulfillments"][0].get("tracking_company")
+            """Extract courier from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
+            if "fulfillments" not in order or len(order["fulfillments"]) == 0:
+                return "Unassigned"
+            
+            fulfillments = order["fulfillments"]
+            
+            # Filter out cancelled fulfillments first, but keep them as fallback
+            active_fulfillments = [f for f in fulfillments if f.get("status") != "cancelled"]
+            fulfillments_to_check = active_fulfillments if active_fulfillments else fulfillments
+            
+            if not fulfillments_to_check:
+                return "Unassigned"
+            
+            # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
+            latest_fulfillment = None
+            latest_timestamp = None
+            
+            for fulfillment in fulfillments_to_check:
+                # Prefer updated_at as it reflects the latest change
+                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+                if not timestamp_str:
+                    continue
+                
+                timestamp = _parse_iso(timestamp_str)
+                if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
+                    latest_timestamp = timestamp
+                    latest_fulfillment = fulfillment
+            
+            # If we couldn't find by timestamp, use the last one in the list
+            if not latest_fulfillment:
+                latest_fulfillment = fulfillments_to_check[-1]
+            
+            tracking_company = latest_fulfillment.get("tracking_company")
+            if tracking_company:
+                tracking_company = str(tracking_company).strip()
                 if tracking_company:
-                    tracking_company = str(tracking_company).strip()
-                    if tracking_company:
-                        return tracking_company
+                    return tracking_company
             return "Unassigned"
         
         def extract_tracking_number(order):
-            if "fulfillments" in order and len(order["fulfillments"]) > 0:
-                tracking_number = order["fulfillments"][0].get("tracking_number")
+            """Extract tracking number from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
+            if "fulfillments" not in order or len(order["fulfillments"]) == 0:
+                return None
+            
+            fulfillments = order["fulfillments"]
+            
+            # Filter out cancelled fulfillments first, but keep them as fallback
+            active_fulfillments = [f for f in fulfillments if f.get("status") != "cancelled"]
+            fulfillments_to_check = active_fulfillments if active_fulfillments else fulfillments
+            
+            if not fulfillments_to_check:
+                return None
+            
+            # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
+            latest_fulfillment = None
+            latest_timestamp = None
+            
+            for fulfillment in fulfillments_to_check:
+                # Prefer updated_at as it reflects the latest change
+                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+                if not timestamp_str:
+                    continue
+                
+                timestamp = _parse_iso(timestamp_str)
+                if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
+                    latest_timestamp = timestamp
+                    latest_fulfillment = fulfillment
+            
+            # If we couldn't find by timestamp, use the last one in the list
+            if not latest_fulfillment:
+                latest_fulfillment = fulfillments_to_check[-1]
+            
+            tracking_number = latest_fulfillment.get("tracking_number")
+            if tracking_number:
+                tracking_number = str(tracking_number).strip()
                 if tracking_number:
-                    tracking_number = str(tracking_number).strip()
-                    if tracking_number:
-                        return tracking_number
+                    return tracking_number
             return None
         
         def _parse_iso(s):
@@ -481,13 +562,21 @@ async def sync_shopify_orders():
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
                 if existing_status in ("delivered", "returned"):
                     # Do not overwrite status/courier/delivery/tax etc., but still update
-                    # advance_amount and total_amount from Shopify so "paid" state stays in sync.
+                    # advance_amount, total_amount, and order_receiving_date from Shopify
                     existing_adv = float(existing_order.get("advance_amount") or 0)
                     existing_tot = float(existing_order.get("total_amount") or 0)
+                    existing_receiving_date = existing_order.get("order_receiving_date")
                     adv_changed = abs(existing_adv - advance_amount) > 0.01
                     tot_changed = abs(existing_tot - total_amount) > 0.01
-                    if adv_changed or tot_changed:
-                        financial_only = {**existing_order, "advance_amount": advance_amount, "total_amount": total_amount, "updated_at": current_time}
+                    receiving_date_changed = existing_receiving_date != order_received_date
+                    if adv_changed or tot_changed or receiving_date_changed:
+                        financial_only = {
+                            **existing_order, 
+                            "advance_amount": advance_amount, 
+                            "total_amount": total_amount,
+                            "order_receiving_date": order_received_date,
+                            "updated_at": current_time
+                        }
                         orders_to_update.append(financial_only)
                     else:
                         orders_to_skip.append(order_number)
@@ -506,24 +595,50 @@ async def sync_shopify_orders():
                 order_data["piece_received"] = existing_order.get("piece_received") or "Pending"
 
                 existing_courier = (existing_order.get("courier") or "").strip()
+                existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
 
-                if courier_is_assigned:
-                    # Keep existing courier/tracking/cost/delivery_charge/tax_amount; do not overwrite from Shopify
-                    # Always update from Shopify: total_amount (without discounts), advance_amount (paid=total, not paid=discounts)
+                # Compare and update courier and tracking_number from Shopify if they differ
+                shopify_courier = (courier or "").strip()
+                shopify_tracking = (tracking_number or "").strip() if tracking_number else None
+                
+                # Normalize for comparison (handle "Unassigned" vs empty)
+                existing_courier_normalized = existing_courier.lower() if existing_courier else "unassigned"
+                shopify_courier_normalized = shopify_courier.lower() if shopify_courier else "unassigned"
+                
+                # Update courier and tracking_number from Shopify if they differ
+                courier_changed = existing_courier_normalized != shopify_courier_normalized
+                tracking_changed = existing_tracking != shopify_tracking
+                
+                if courier_changed or tracking_changed:
+                    # Update courier and tracking_number from Shopify
+                    order_data["courier"] = courier
+                    order_data["tracking_number"] = tracking_number
+                else:
+                    # Keep existing values if they match
                     order_data["courier"] = existing_order.get("courier")
                     order_data["tracking_number"] = existing_order.get("tracking_number")
+
+                if courier_is_assigned:
+                    # Preserve cost/delivery_charge/tax_amount/items when courier was previously assigned
+                    # (unless courier/tracking changed, which we already handled above)
+                    # Always update from Shopify: total_amount (without discounts), advance_amount (paid=total, not paid=discounts)
+                    # Always update order_receiving_date from Shopify (source of truth)
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
+                    order_data["order_receiving_date"] = order_received_date
                     order_data["delivery_charge"] = existing_order.get("delivery_charge")
                     order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
                 else:
+                    # Always update order_receiving_date from Shopify (source of truth)
+                    order_data["order_receiving_date"] = order_received_date
                     skip_fields = False
 
-                if has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+                # Always update if courier or tracking_number changed, otherwise check other fields
+                if courier_changed or tracking_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:
@@ -918,6 +1033,7 @@ async def create_order(order: OrderCreate):
         order_data["piece_received"] = "Pending"
         order_data["created_at"] = datetime.utcnow().isoformat()
         order_data["updated_at"] = datetime.utcnow().isoformat()
+        # order_receiving_date should only be set from Shopify orders, not manually created ones
         response = supabase.table("orders").insert(order_data).execute()
         return response.data[0]
     except Exception as e:
@@ -1309,85 +1425,93 @@ async def generate_invoice(order_ids: List[str]):
         wb.save(excel_buffer)
         excel_buffer.seek(0)
         
+        # PDF conversion disabled for now - return Excel file directly
         # Convert to PDF using win32com (Windows only, requires Excel installed)
-        pdf_buffer = BytesIO()
-        try:
-            import win32com.client
-            import pythoncom
-            
-            # Create temporary Excel file
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
-                temp_excel.write(excel_buffer.getvalue())
-                temp_excel_path = temp_excel.name
-            
-            # Create temporary PDF file path
-            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
-                temp_pdf_path = temp_pdf.name
-            
-            # Initialize COM
-            pythoncom.CoInitialize()
-            excel = win32com.client.Dispatch("Excel.Application")
-            excel.Visible = False
-            excel.DisplayAlerts = False
-            
-            try:
-                # Open the Excel file
-                workbook = excel.Workbooks.Open(temp_excel_path)
-                worksheet = workbook.Worksheets(1)  # First worksheet
-                
-                # Set print area to first page only
-                worksheet.PageSetup.PrintArea = ""
-                worksheet.PageSetup.FitToPagesWide = 1
-                worksheet.PageSetup.FitToPagesTall = 1
-                
-                # Export to PDF (print first page)
-                worksheet.ExportAsFixedFormat(
-                    Type=0,  # xlTypePDF
-                    Filename=temp_pdf_path,
-                    Quality=0,  # xlQualityStandard
-                    IncludeDocProperties=True,
-                    IgnorePrintAreas=False,
-                    OpenAfterPublish=False
-                )
-                
-                workbook.Close(SaveChanges=False)
-                
-                # Read PDF into buffer
-                with open(temp_pdf_path, 'rb') as pdf_file:
-                    pdf_buffer.write(pdf_file.read())
-                pdf_buffer.seek(0)
-                
-            finally:
-                excel.Quit()
-                pythoncom.CoUninitialize()
-                # Clean up temp files
-                try:
-                    os.unlink(temp_excel_path)
-                    os.unlink(temp_pdf_path)
-                except:
-                    pass
-            
-            # Return PDF file as download
-            return Response(
-                content=pdf_buffer.getvalue(),
-                media_type="application/pdf",
-                headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
-            )
-            
-        except ImportError:
-            # Fallback: return Excel file if win32com is not available
-            return Response(
-                content=excel_buffer.getvalue(),
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
-            )
-        except Exception as e:
-            # If PDF conversion fails, return Excel file
-            return Response(
-                content=excel_buffer.getvalue(),
-                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
-            )
+        # pdf_buffer = BytesIO()
+        # try:
+        #     import win32com.client
+        #     import pythoncom
+        #     
+        #     # Create temporary Excel file
+        #     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
+        #         temp_excel.write(excel_buffer.getvalue())
+        #         temp_excel_path = temp_excel.name
+        #     
+        #     # Create temporary PDF file path
+        #     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
+        #         temp_pdf_path = temp_pdf.name
+        #     
+        #     # Initialize COM
+        #     pythoncom.CoInitialize()
+        #     excel = win32com.client.Dispatch("Excel.Application")
+        #     excel.Visible = False
+        #     excel.DisplayAlerts = False
+        #     
+        #     try:
+        #         # Open the Excel file
+        #         workbook = excel.Workbooks.Open(temp_excel_path)
+        #         worksheet = workbook.Worksheets(1)  # First worksheet
+        #         
+        #         # Set print area to first page only
+        #         worksheet.PageSetup.PrintArea = ""
+        #         worksheet.PageSetup.FitToPagesWide = 1
+        #         worksheet.PageSetup.FitToPagesTall = 1
+        #         
+        #         # Export to PDF (print first page)
+        #         worksheet.ExportAsFixedFormat(
+        #             Type=0,  # xlTypePDF
+        #             Filename=temp_pdf_path,
+        #             Quality=0,  # xlQualityStandard
+        #             IncludeDocProperties=True,
+        #             IgnorePrintAreas=False,
+        #             OpenAfterPublish=False
+        #         )
+        #         
+        #         workbook.Close(SaveChanges=False)
+        #         
+        #         # Read PDF into buffer
+        #         with open(temp_pdf_path, 'rb') as pdf_file:
+        #             pdf_buffer.write(pdf_file.read())
+        #         pdf_buffer.seek(0)
+        #         
+        #     finally:
+        #         excel.Quit()
+        #         pythoncom.CoUninitialize()
+        #         # Clean up temp files
+        #         try:
+        #             os.unlink(temp_excel_path)
+        #             os.unlink(temp_pdf_path)
+        #         except:
+        #             pass
+        #     
+        #     # Return PDF file as download
+        #     return Response(
+        #         content=pdf_buffer.getvalue(),
+        #         media_type="application/pdf",
+        #         headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
+        #     )
+        #     
+        # except ImportError:
+        #     # Fallback: return Excel file if win32com is not available
+        #     return Response(
+        #         content=excel_buffer.getvalue(),
+        #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        #         headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+        #     )
+        # except Exception as e:
+        #     # If PDF conversion fails, return Excel file
+        #     return Response(
+        #         content=excel_buffer.getvalue(),
+        #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        #         headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+        #     )
+        
+        # Return Excel file directly
+        return Response(
+            content=excel_buffer.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+        )
     except HTTPException:
         raise
     except Exception as e:

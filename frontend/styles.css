@@ -1153,6 +1153,35 @@ body {
     }
 }
 
+/* Button loading spinner */
+.btn-loading-spinner {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border: 2px solid transparent;
+    border-top-color: currentColor;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+    margin-right: 8px;
+    vertical-align: middle;
+    flex-shrink: 0;
+}
+
+.btn-primary .btn-loading-spinner {
+    border-color: rgba(255, 255, 255, 0.3);
+    border-top-color: white;
+}
+
+.btn-secondary .btn-loading-spinner {
+    border-color: rgba(0, 0, 0, 0.2);
+    border-top-color: currentColor;
+}
+
+.btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
 @media (max-width: 900px) {
     .content-area {
         padding: 24px;

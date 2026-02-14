@@ -1071,7 +1071,40 @@ function initOrdersGrid() {
             ordersGridApi = params.api;
             updateFooterRow();
         },
-        onSelectionChanged: () => {
+        onSelectionChanged: (params) => {
+            // Ensure only filtered rows are selected - deselect any non-filtered rows
+            if (!params.api) {
+                updateFooterRow();
+                return;
+            }
+            
+            const selectedNodes = params.api.getSelectedNodes();
+            if (selectedNodes.length === 0) {
+                updateFooterRow();
+                return;
+            }
+            
+            const filteredNodeIds = new Set();
+            
+            // Build a set of all node IDs that pass the current filter
+            params.api.forEachNodeAfterFilter((node) => {
+                if (node.data && node.data.id !== '__footer__') {
+                    filteredNodeIds.add(node.id);
+                }
+            });
+            
+            // Deselect any selected node that doesn't pass the filter
+            let hasNonFilteredSelected = false;
+            selectedNodes.forEach(node => {
+                if (node.data && node.data.id !== '__footer__') {
+                    if (!filteredNodeIds.has(node.id)) {
+                        hasNonFilteredSelected = true;
+                        node.setSelected(false);
+                    }
+                }
+            });
+            
+            // Update footer (will be called again if selection changed due to deselection, but that's fine)
             updateFooterRow();
         },
         onCellValueChanged: () => {
@@ -2409,15 +2442,15 @@ function initLedgerDetailGrid() {
             editable: false,
         },
         {
-            headerName: 'Incoming (Rs)',
-            field: 'incoming',
+            headerName: 'Debit (Rs)',
+            field: 'outgoing',
             width: 140,
             editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
         },
         {
-            headerName: 'Outgoing (Rs)',
-            field: 'outgoing',
+            headerName: 'Credit (Rs)',
+            field: 'incoming',
             width: 140,
             editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
@@ -2716,7 +2749,7 @@ function initForms() {
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
-                a.download = 'invoice.pdf';
+                a.download = 'invoice.xlsx';
                 document.body.appendChild(a);
                 a.click();
                 document.body.removeChild(a);
@@ -2887,7 +2920,31 @@ function openBulkUpdateOrderModal() {
     if (formEl) formEl.style.display = '';
     if (resultsEl) resultsEl.style.display = 'none';
     if (textarea) {
-        textarea.value = '';
+        // Get selected orders and fill textarea with their order numbers
+        let orderNumbersText = '';
+        if (ordersGridApi) {
+            const selectedRows = ordersGridApi.getSelectedRows();
+            if (selectedRows.length > 0) {
+                // Extract order numbers from selected rows, filter out footer row
+                const orderNumbers = selectedRows
+                    .filter(row => row && row.id !== '__footer__' && row.order_number)
+                    .map(row => row.order_number)
+                    .filter(Boolean);
+                
+                // Remove duplicates and sort
+                const uniqueOrderNumbers = [...new Set(orderNumbers)].sort((a, b) => {
+                    const numA = parseInt(a, 10);
+                    const numB = parseInt(b, 10);
+                    if (!isNaN(numA) && !isNaN(numB)) {
+                        return numA - numB;
+                    }
+                    return String(a).localeCompare(String(b));
+                });
+                
+                orderNumbersText = uniqueOrderNumbers.join('\n');
+            }
+        }
+        textarea.value = orderNumbersText;
         textarea.focus();
     }
     document.getElementById('bulkUpdateOrderModal')?.classList.add('active');
@@ -2968,8 +3025,33 @@ async function bulkUpdateOrderStatus(orderStatus) {
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
     const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
+    
+    // Determine which button was clicked based on orderStatus
+    let activeButton = null;
+    if (orderStatus === 'delivered') {
+        activeButton = btnDelivered;
+    } else if (orderStatus === 'returned') {
+        activeButton = btnReturned;
+    }
+    
     const buttons = [btnDelivered, btnReturned, btnPieceReceived];
-    buttons.forEach((b) => { if (b) b.disabled = true; });
+    const originalTexts = buttons.map(b => {
+        if (!b) return '';
+        // Get text content, preserving structure but trimming whitespace
+        return b.textContent.trim();
+    });
+    
+    // Disable all buttons and show loading on active button
+    buttons.forEach((b, index) => {
+        if (b) {
+            b.disabled = true;
+            if (b === activeButton) {
+                // Add loading spinner to the active button
+                b.innerHTML = '<span class="btn-loading-spinner"></span>' + originalTexts[index];
+            }
+        }
+    });
+    
     try {
         const response = await fetch(`${API_BASE}/orders/bulk-update-status`, {
             method: 'POST',
@@ -2986,7 +3068,13 @@ async function bulkUpdateOrderStatus(orderStatus) {
     } catch (error) {
         showToast(error.message || 'Bulk update failed', 'error');
     } finally {
-        buttons.forEach((b) => { if (b) b.disabled = false; });
+        // Restore original button texts
+        buttons.forEach((b, index) => {
+            if (b) {
+                b.disabled = false;
+                b.innerHTML = originalTexts[index];
+            }
+        });
     }
 }
 
@@ -3000,24 +3088,75 @@ async function bulkUpdatePieceReceived() {
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
     const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
     const buttons = [btnDelivered, btnReturned, btnPieceReceived];
-    buttons.forEach((b) => { if (b) b.disabled = true; });
+    const originalTexts = buttons.map(b => {
+        if (!b) return '';
+        // Get text content, preserving structure but trimming whitespace
+        return b.textContent.trim();
+    });
+    
+    // Disable all buttons and show loading on the active button
+    buttons.forEach((b, index) => {
+        if (b) {
+            b.disabled = true;
+            if (b === btnPieceReceived) {
+                // Add loading spinner to the active button
+                b.innerHTML = '<span class="btn-loading-spinner"></span>' + originalTexts[index];
+            }
+        }
+    });
+    
     try {
-        const response = await fetch(`${API_BASE}/orders/bulk-update-piece-received`, {
+        // First, update piece_received to "Received"
+        const pieceReceivedResponse = await fetch(`${API_BASE}/orders/bulk-update-piece-received`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ order_numbers: orderNumbers }),
         });
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'Bulk update failed');
+        if (!pieceReceivedResponse.ok) {
+            const err = await pieceReceivedResponse.json();
+            throw new Error(err.detail || 'Failed to update piece received');
         }
-        const result = await response.json();
-        showBulkUpdateResults(result);
+        const pieceReceivedResult = await pieceReceivedResponse.json();
+        
+        // Then, automatically set order status to "returned"
+        let statusUpdateResult = null;
+        let statusUpdateError = null;
+        try {
+            const statusResponse = await fetch(`${API_BASE}/orders/bulk-update-status`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ order_numbers: orderNumbers, order_status: 'returned' }),
+            });
+            if (!statusResponse.ok) {
+                const err = await statusResponse.json();
+                statusUpdateError = err.detail || 'Failed to update order status';
+            } else {
+                statusUpdateResult = await statusResponse.json();
+            }
+        } catch (error) {
+            statusUpdateError = error.message || 'Failed to update order status';
+        }
+        
+        // Show results - prioritize piece received result, but mention status update
+        if (statusUpdateError) {
+            showToast(`Piece received updated, but failed to set status to Returned: ${statusUpdateError}`, 'warning');
+        } else {
+            showToast(`Piece received updated and order status set to Returned for ${orderNumbers.length} order(s)`, 'success');
+        }
+        
+        // Show the piece received results (this is the primary operation)
+        showBulkUpdateResults(pieceReceivedResult);
         loadOrders();
     } catch (error) {
         showToast(error.message || 'Bulk update failed', 'error');
     } finally {
-        buttons.forEach((b) => { if (b) b.disabled = false; });
+        // Restore original button texts
+        buttons.forEach((b, index) => {
+            if (b) {
+                b.disabled = false;
+                b.innerHTML = originalTexts[index];
+            }
+        });
     }
 }
 
