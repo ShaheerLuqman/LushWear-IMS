@@ -177,6 +177,48 @@ function getTodayDateString() {
     return getPKTDateString();
 }
 
+/** Format a date for display as DD/MM/YYYY. Accepts Date, ISO string, or YYYY-MM-DD string. */
+function formatDateDDMMYYYY(value) {
+    if (value == null || value === '') return '';
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return String(value || '').slice(0, 10);
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+}
+
+/** Format a date-time for display as DD/MM/YYYY, HH:MM. Accepts Date or ISO string. */
+function formatDateTimeDDMMYYYY(value) {
+    if (value == null || value === '') return '';
+    const d = value instanceof Date ? value : new Date(value);
+    if (isNaN(d.getTime())) return String(value || '');
+    const datePart = formatDateDDMMYYYY(d);
+    const hours = String(d.getHours()).padStart(2, '0');
+    const minutes = String(d.getMinutes()).padStart(2, '0');
+    return `${datePart}, ${hours}:${minutes}`;
+}
+
+/** Parse DD/MM/YYYY or D/M/YYYY string to YYYY-MM-DD. Returns null if invalid. */
+function parseDDMMYYYYToYYYYMMDD(str) {
+    if (str == null || typeof str !== 'string') return null;
+    const trimmed = str.trim();
+    if (!trimmed) return null;
+    const parts = trimmed.split(/[/\-.]/);
+    if (parts.length !== 3) return null;
+    const day = parseInt(parts[0], 10);
+    const month = parseInt(parts[1], 10);
+    const year = parseInt(parts[2], 10);
+    if (isNaN(day) || isNaN(month) || isNaN(year)) return null;
+    if (year < 1900 || year > 2100 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const d = new Date(year, month - 1, day);
+    if (d.getFullYear() !== year || d.getMonth() !== month - 1 || d.getDate() !== day) return null;
+    const yy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yy}-${mm}-${dd}`;
+}
+
 function initProductsGrid() {
     const gridDiv = document.getElementById('productsGrid');
     if (!gridDiv) return;
@@ -574,7 +616,7 @@ function initOrdersGrid() {
                     : '';
                 const displayStatus = statusText || '';
                 const fetchedAt = hasStoredStatus && lastStatus.fetched_at
-                    ? new Date(lastStatus.fetched_at).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
+                    ? formatDateTimeDDMMYYYY(lastStatus.fetched_at)
                     : '';
                 const isPostEx = (courier || '').trim().toUpperCase() === 'POSTEX';
                 const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
@@ -881,7 +923,7 @@ function initOrdersGrid() {
             },
             valueFormatter: (params) => {
                 if (params.value) {
-                    return params.value.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+                    return formatDateDDMMYYYY(params.value);
                 }
                 return '';
             }
@@ -1284,6 +1326,21 @@ function createFolioCellRenderer(params, entryType) {
         function selectOption(id, name) {
             params.data.folio = id || null;
             button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger... *';
+            
+            // Update "Go to Ledger" button state
+            const goToBtn = wrapper._goToLedgerBtn;
+            if (goToBtn) {
+                if (id) {
+                    goToBtn.style.opacity = '1';
+                    goToBtn.style.cursor = 'pointer';
+                    goToBtn.title = `Go to ${name}`;
+                } else {
+                    goToBtn.style.opacity = '0.4';
+                    goToBtn.style.cursor = 'not-allowed';
+                    goToBtn.title = 'Select a ledger first';
+                }
+            }
+            
             if (params.data.id && !isCashbookNewRow(params.data)) {
                 // Update existing entry
                 updateCashbookEntry(params.data.id, { folio: id || null });
@@ -1340,6 +1397,29 @@ function createFolioCellRenderer(params, entryType) {
     });
 
     wrapper.appendChild(button);
+
+    // Add "Go to Ledger" button next to dropdown
+    const goToLedgerBtn = document.createElement('button');
+    goToLedgerBtn.type = 'button';
+    goToLedgerBtn.className = 'folio-goto-btn';
+    goToLedgerBtn.innerHTML = '→';
+    goToLedgerBtn.title = currentFolio ? `Go to ${displayText}` : 'Select a ledger first';
+    if (!currentFolio) {
+        goToLedgerBtn.style.opacity = '0.4';
+        goToLedgerBtn.style.cursor = 'not-allowed';
+    }
+    goToLedgerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const folioId = params.data.folio;
+        if (folioId) {
+            openLedgerDetail(folioId);
+        }
+    });
+    
+    // Store button reference on wrapper for access inside openDropdown
+    wrapper._goToLedgerBtn = goToLedgerBtn;
+    
+    wrapper.appendChild(goToLedgerBtn);
     return wrapper;
 }
 
@@ -2143,7 +2223,7 @@ async function loadCashbook() {
     if (!cashbookSelectedDate) {
         cashbookSelectedDate = getTodayDateString();
     }
-    if (dateFilter) dateFilter.value = cashbookSelectedDate;
+    if (dateFilter) dateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate);
     
     await Promise.all([
         loadDailyBalance(cashbookSelectedDate),
@@ -2495,7 +2575,7 @@ function initLedgerDetailGrid() {
             field: 'entry_date',
             width: 130,
             editable: false,
-            valueFormatter: (params) => params.value || '',
+            valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
         },
         {
             headerName: 'Particulars',
@@ -2832,9 +2912,36 @@ function initForms() {
     // Cashbook actions
     const cashbookDateFilter = document.getElementById('cashbookDateFilter');
     if (cashbookDateFilter) {
-        cashbookDateFilter.addEventListener('change', () => {
-            cashbookSelectedDate = cashbookDateFilter.value || getTodayDateString();
-            reloadCashbookForCurrentDate();
+        const applyDateFromInput = () => {
+            const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+            if (parsed) {
+                cashbookSelectedDate = parsed;
+                cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
+                reloadCashbookForCurrentDate();
+            } else if (cashbookDateFilter.value.trim() !== '') {
+                showToast('Enter date as DD/MM/YYYY', 'error');
+                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+            }
+        };
+        cashbookDateFilter.addEventListener('change', applyDateFromInput);
+        cashbookDateFilter.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                applyDateFromInput();
+            }
+        });
+        cashbookDateFilter.addEventListener('blur', () => {
+            if (cashbookDateFilter.value.trim() !== '') {
+                const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+                if (parsed) {
+                    cashbookSelectedDate = parsed;
+                    cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
+                } else {
+                    cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+                }
+            } else {
+                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+            }
         });
     }
     const cashbookTodayBtn = document.getElementById('cashbookTodayBtn');
@@ -2842,7 +2949,7 @@ function initForms() {
         cashbookTodayBtn.addEventListener('click', () => {
             const today = getTodayDateString();
             cashbookSelectedDate = today;
-            if (cashbookDateFilter) cashbookDateFilter.value = today;
+            if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(today);
             reloadCashbookForCurrentDate();
         });
     }
@@ -2855,7 +2962,7 @@ function initForms() {
             date.setDate(date.getDate() - 1);
             const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             cashbookSelectedDate = newDate;
-            if (cashbookDateFilter) cashbookDateFilter.value = newDate;
+            if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
             reloadCashbookForCurrentDate();
         });
     }
@@ -2868,7 +2975,7 @@ function initForms() {
             date.setDate(date.getDate() + 1);
             const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
             cashbookSelectedDate = newDate;
-            if (cashbookDateFilter) cashbookDateFilter.value = newDate;
+            if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
             reloadCashbookForCurrentDate();
         });
     }
@@ -3423,7 +3530,7 @@ function displayDeliveryStatus(data, orderId) {
         html += `<div class="info-row"><strong>Recipient Contact:</strong> ${escapeHtml(data.recipient_contact)}</div>`;
     }
     if (data.order_pickup_date) {
-        html += `<div class="info-row"><strong>Pickup Date:</strong> ${escapeHtml(data.order_pickup_date)}</div>`;
+        html += `<div class="info-row"><strong>Pickup Date:</strong> ${escapeHtml(formatDateDDMMYYYY(data.order_pickup_date))}</div>`;
     }
     
     html += `</div><h3 style="margin-top: 20px; margin-bottom: 10px;">Status History</h3><div class="status-timeline">`;
@@ -3431,11 +3538,12 @@ function displayDeliveryStatus(data, orderId) {
     if (data.status_history && data.status_history.length > 0) {
         data.status_history.forEach((status, index) => {
             const isActive = status.is_active || index === 0;
+            const dateDisplay = status.datetime ? formatDateTimeDDMMYYYY(status.datetime) : '';
             html += `
                 <div class="timeline-item ${isActive ? 'active' : ''}">
                     <div class="timeline-dot"></div>
                     <div class="timeline-content">
-                        <div class="timeline-date">${escapeHtml(status.datetime || '')}</div>
+                        <div class="timeline-date">${escapeHtml(dateDisplay)}</div>
                         <div class="timeline-status">${escapeHtml(status.status || '')}</div>
                     </div>
                 </div>

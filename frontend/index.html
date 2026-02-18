@@ -53,23 +53,23 @@
             </div>
             <nav class="nav-menu">
                 <button class="nav-item" data-view="dashboard" title="Dashboard">
-                    <span class="nav-icon">D</span>
+                    <span class="nav-icon">📊</span>
                     <span class="nav-tooltip">Dashboard</span>
                 </button>
                 <button class="nav-item active" data-view="orders" title="Orders">
-                    <span class="nav-icon">O</span>
+                    <span class="nav-icon">📦</span>
                     <span class="nav-tooltip">Orders</span>
                 </button>
                 <button class="nav-item" data-view="cashbook" title="Cashbook">
-                    <span class="nav-icon">CB</span>
+                    <span class="nav-icon">💰</span>
                     <span class="nav-tooltip">Cashbook</span>
                 </button>
                 <button class="nav-item" data-view="ledgers" title="Ledgers">
-                    <span class="nav-icon">L</span>
+                    <span class="nav-icon">📚</span>
                     <span class="nav-tooltip">Ledgers</span>
                 </button>
                 <button class="nav-item" data-view="products" title="Products">
-                    <span class="nav-icon">P</span>
+                    <span class="nav-icon">🛍️</span>
                     <span class="nav-tooltip">Products</span>
                 </button>
             </nav>
@@ -119,7 +119,7 @@
                     <input type="file" id="postExCsvInput" accept=".csv" style="display: none;">
                     <div id="cashbookDateFilterWrap" class="header-inline" style="display: none;">
                         <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day">◀</button>
-                        <input id="cashbookDateFilter" type="date" class="cashbook-date-filter">
+                        <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
                         <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
                     </div>

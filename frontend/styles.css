@@ -151,10 +151,11 @@ body {
 }
 
 .nav-icon {
-    font-size: 18px;
-    width: 24px;
+    font-size: 20px;
+    width: 28px;
     text-align: center;
     flex-shrink: 0;
+    line-height: 1;
 }
 
 /* Tooltip on hover */
@@ -313,6 +314,8 @@ body {
 /* Cashbook */
 .cashbook-date-filter {
     padding: 10px 12px;
+    min-width: 100px;
+    width: 110px;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
@@ -1931,13 +1934,15 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     align-items: center;
     height: 100%;
     width: 100%;
+    gap: 4px;
 }
 
 .folio-dropdown-btn {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     padding: 6px 10px;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
@@ -1949,6 +1954,31 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     transition: var(--transition);
     text-align: left;
     gap: 8px;
+}
+
+.folio-goto-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    min-width: 24px;
+    padding: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-primary);
+    font-size: 14px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+    flex-shrink: 0;
+}
+
+.folio-goto-btn:hover {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: white;
 }
 
 .folio-dropdown-btn:hover {

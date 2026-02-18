@@ -1335,9 +1335,10 @@ async def generate_invoice(order_ids: List[str]):
         wb = load_workbook(template_path, keep_links=True)
         ws = wb.active
         
-        # Add date to E2 (preserve style)
+        # Add date to E2 (preserve style) - display format DD/MM/YYYY
         from datetime import datetime
-        current_date = datetime.now().strftime("%Y-%m-%d")
+        now = datetime.now()
+        current_date = now.strftime("%d/%m/%Y")
         cell_e2 = ws.cell(row=2, column=5)
         if cell_e2.has_style:
             original_style = copy(cell_e2._style)
