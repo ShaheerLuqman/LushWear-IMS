@@ -576,8 +576,12 @@ async def sync_shopify_orders():
                     else:
                         orders_to_skip.append(order_number)
                     continue
-                # Only update order_status if it was previously cancelled or unfulfilled
-                if existing_status not in ("cancelled", "unfulfilled"):
+                shopify_order_status = (order_data.get("order_status") or "").strip().lower()
+                if shopify_order_status == "cancelled":
+                    order_data["order_status"] = shopify_order_status
+                elif shopify_order_status == "fulfilled" and existing_status == "unfulfilled":
+                    order_data["order_status"] = shopify_order_status
+                else:
                     order_data["order_status"] = existing_order.get("order_status")
                 # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
                 order_data["advance_amount"] = advance_amount
@@ -1250,7 +1254,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
         # Only persist when we fetched new data (not when we returned stored final status)
-        if save and (existing_delivery is None or delivery_status_data is not existing_delivery):
+        if save:
             update_payload = {
                 "delivery_status": delivery_status_data,
                 "updated_at": datetime.utcnow().isoformat()
