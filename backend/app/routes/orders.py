@@ -183,7 +183,7 @@ async def sync_shopify_orders():
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
-            "cost_price, items, total_amount, advance_amount"
+            "cost_price, items, total_amount, advance_amount, order_receiving_date"
         )
         while True:
             existing_orders_response = (
@@ -561,20 +561,15 @@ async def sync_shopify_orders():
                 existing_order = existing_orders_map[order_number]
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
                 if existing_status in ("delivered", "returned"):
-                    # Do not overwrite status/courier/delivery/tax etc., but still update
-                    # advance_amount, total_amount, and order_receiving_date from Shopify
                     existing_adv = float(existing_order.get("advance_amount") or 0)
                     existing_tot = float(existing_order.get("total_amount") or 0)
-                    existing_receiving_date = existing_order.get("order_receiving_date")
                     adv_changed = abs(existing_adv - advance_amount) > 0.01
                     tot_changed = abs(existing_tot - total_amount) > 0.01
-                    receiving_date_changed = existing_receiving_date != order_received_date
-                    if adv_changed or tot_changed or receiving_date_changed:
+                    if adv_changed or tot_changed:
                         financial_only = {
                             **existing_order, 
                             "advance_amount": advance_amount, 
                             "total_amount": total_amount,
-                            "order_receiving_date": order_received_date,
                             "updated_at": current_time
                         }
                         orders_to_update.append(financial_only)
@@ -619,22 +614,18 @@ async def sync_shopify_orders():
                     order_data["courier"] = existing_order.get("courier")
                     order_data["tracking_number"] = existing_order.get("tracking_number")
 
+                # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
+                order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
+
                 if courier_is_assigned:
-                    # Preserve cost/delivery_charge/tax_amount/items when courier was previously assigned
-                    # (unless courier/tracking changed, which we already handled above)
-                    # Always update from Shopify: total_amount (without discounts), advance_amount (paid=total, not paid=discounts)
-                    # Always update order_receiving_date from Shopify (source of truth)
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
-                    order_data["order_receiving_date"] = order_received_date
                     order_data["delivery_charge"] = existing_order.get("delivery_charge")
                     order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
                 else:
-                    # Always update order_receiving_date from Shopify (source of truth)
-                    order_data["order_receiving_date"] = order_received_date
                     skip_fields = False
 
                 # Always update if courier or tracking_number changed, otherwise check other fields
@@ -1031,9 +1022,11 @@ async def create_order(order: OrderCreate):
         supabase = get_supabase()
         order_data = order.model_dump()
         order_data["piece_received"] = "Pending"
-        order_data["created_at"] = datetime.utcnow().isoformat()
-        order_data["updated_at"] = datetime.utcnow().isoformat()
-        # order_receiving_date should only be set from Shopify orders, not manually created ones
+        now = datetime.utcnow().isoformat()
+        order_data["created_at"] = now
+        order_data["updated_at"] = now
+        if not order_data.get("order_receiving_date"):
+            order_data["order_receiving_date"] = now
         response = supabase.table("orders").insert(order_data).execute()
         return response.data[0]
     except Exception as e:
