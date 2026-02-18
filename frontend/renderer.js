@@ -693,20 +693,26 @@ function initOrdersGrid() {
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.receivable;
                 const status = (params.data.order_status || '').toLowerCase();
+                const delivery = parseFloat(params.data.delivery_charge) || 0;
+                // Only show receivable for delivered or returned orders with delivery_charge set
+                if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
                 const total = parseFloat(params.data.total_amount) || 0;
                 const advance = parseFloat(params.data.advance_amount) || 0;
-                const delivery = parseFloat(params.data.delivery_charge) || 0;
                 const tax = parseFloat(params.data.tax_amount) || 0;
                 if (status === 'returned') return -delivery;
                 return total - (advance + delivery + tax);
             },
             valueFormatter: (params) => {
+                if (params.value == null) return '-';
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             },
-            cellStyle: (params) => ({
-                color: params.value >= 0 ? 'var(--text-primary)' : 'var(--danger)'
-            })
+            cellStyle: (params) => {
+                if (params.value == null) return {};
+                return {
+                    color: params.value >= 0 ? 'var(--text-primary)' : 'var(--danger)'
+                };
+            }
         },
         {
             headerName: 'Cost Price',
@@ -742,19 +748,24 @@ function initOrdersGrid() {
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.net_profit;
                 const status = (params.data.order_status || '').toLowerCase();
-                if (status === 'cancelled') return 0;
-                const total = parseFloat(params.data.total_amount) || 0;
                 const delivery = parseFloat(params.data.delivery_charge) || 0;
+                // Only show net profit for delivered or returned orders with delivery_charge set
+                if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
+                const total = parseFloat(params.data.total_amount) || 0;
                 const tax = parseFloat(params.data.tax_amount) || 0;
                 const cost = parseFloat(params.data.cost_price) || 0;
                 if (status === 'returned') return -delivery;
                 return total - (delivery + tax + cost);
             },
             valueFormatter: (params) => {
+                if (params.value == null) return '-';
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
             },
-            cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
+            cellClass: (params) => {
+                if (params.value == null) return '';
+                return params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative';
+            }
         },
         {
             headerName: 'Profit %',
@@ -766,16 +777,24 @@ function initOrdersGrid() {
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.profit_percent;
                 const status = (params.data.order_status || '').toLowerCase();
-                const total = parseFloat(params.data.total_amount) || 0;
                 const delivery = parseFloat(params.data.delivery_charge) || 0;
+                // Only show profit % for delivered or returned orders with delivery_charge set
+                if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
+                const total = parseFloat(params.data.total_amount) || 0;
                 const tax = parseFloat(params.data.tax_amount) || 0;
                 const cost = parseFloat(params.data.cost_price) || 0;
                 let netProfit = status === 'returned' ? -delivery : total - (delivery + tax + cost);
                 if (total > 0) return (netProfit / total) * 100;
                 return 0;
             },
-            valueFormatter: (params) => (params.value || 0).toFixed(1) + '%',
-            cellClass: (params) => params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative'
+            valueFormatter: (params) => {
+                if (params.value == null) return '-';
+                return (params.value || 0).toFixed(1) + '%';
+            },
+            cellClass: (params) => {
+                if (params.value == null) return '';
+                return params.value >= 0 ? 'grid-profit-positive' : 'grid-profit-negative';
+            }
         },
         {
             headerName: 'Piece Received',
@@ -938,7 +957,8 @@ function initOrdersGrid() {
                 tax_amount: 0,
                 receivable: 0,
                 cost_price: 0,
-                net_profit: 0
+                net_profit: 0,
+                total_amount_for_profit: 0
             };
         }
         
@@ -950,6 +970,7 @@ function initOrdersGrid() {
         let cod = 0;
         let receivable = 0;
         let net_profit = 0;
+        let total_amount_for_profit = 0; // Total amount for delivered/returned orders only (for profit % calculation)
         
         rowsForSum.forEach(row => {
             const status = (row.order_status || '').toLowerCase();
@@ -970,20 +991,23 @@ function initOrdersGrid() {
                 cod += rowTotal - rowAdvance;
             }
             
-            // Calculate receivable per row
-            if (status === 'returned') {
-                receivable += -rowDelivery;
-            } else {
-                receivable += rowTotal - (rowAdvance + rowDelivery + rowTax);
+            // Calculate receivable per row (only for delivered or returned orders with delivery_charge set)
+            if ((status === 'delivered' || status === 'returned') && rowDelivery > 0) {
+                total_amount_for_profit += rowTotal; // Track total for profit % calculation
+                if (status === 'returned') {
+                    receivable += -rowDelivery;
+                } else {
+                    receivable += rowTotal - (rowAdvance + rowDelivery + rowTax);
+                }
             }
             
-            // Calculate net profit per row
-            if (status === 'cancelled') {
-                // Net profit is 0 for cancelled orders
-            } else if (status === 'returned') {
-                net_profit += -rowDelivery;
-            } else {
-                net_profit += rowTotal - (rowDelivery + rowTax + rowCost);
+            // Calculate net profit per row (only for delivered or returned orders with delivery_charge set)
+            if ((status === 'delivered' || status === 'returned') && rowDelivery > 0) {
+                if (status === 'returned') {
+                    net_profit += -rowDelivery;
+                } else {
+                    net_profit += rowTotal - (rowDelivery + rowTax + rowCost);
+                }
             }
         });
         
@@ -996,7 +1020,8 @@ function initOrdersGrid() {
             tax_amount,
             receivable,
             cost_price,
-            net_profit
+            net_profit,
+            total_amount_for_profit
         };
     }
     
@@ -1029,7 +1054,7 @@ function initOrdersGrid() {
             receivable: sums.receivable,
             cost_price: sums.cost_price,
             net_profit: sums.net_profit,
-            profit_percent: sums.total_amount > 0 ? (sums.net_profit / sums.total_amount) * 100 : 0,
+            profit_percent: sums.total_amount_for_profit > 0 ? (sums.net_profit / sums.total_amount_for_profit) * 100 : null,
             piece_received: '',
             items: '',
             order_receiving_date: '',

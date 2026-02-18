@@ -585,8 +585,7 @@ async def sync_shopify_orders():
                     order_data["order_status"] = existing_order.get("order_status")
                 # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
                 order_data["advance_amount"] = advance_amount
-                # Preserve delivery_charge and tax_amount (never from Shopify; set manually or via CSV)
-                order_data["delivery_charge"] = existing_order.get("delivery_charge", 0)
+                # Preserve tax_amount (never from Shopify; set manually or via CSV)
                 order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                 # Preserve last fetched delivery status (from courier tracking)
                 order_data["delivery_status"] = existing_order.get("delivery_status")
@@ -617,6 +616,17 @@ async def sync_shopify_orders():
                     # Keep existing values if they match
                     order_data["courier"] = existing_order.get("courier")
                     order_data["tracking_number"] = existing_order.get("tracking_number")
+                
+                # Set delivery_charge: 180 for SCS courier only if not already set to a non-zero value
+                # Preserve any manually set delivery_charge (never from Shopify; set manually or via CSV)
+                final_courier = (order_data.get("courier") or "").strip().upper()
+                existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
+                if final_courier == "SCS" and existing_delivery_charge == 0:
+                    # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
+                    order_data["delivery_charge"] = 180.0
+                else:
+                    # Preserve existing delivery_charge (including any non-zero values)
+                    order_data["delivery_charge"] = existing_delivery_charge
 
                 # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
                 order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
@@ -624,7 +634,7 @@ async def sync_shopify_orders():
                 if courier_is_assigned:
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
-                    order_data["delivery_charge"] = existing_order.get("delivery_charge")
+                    # delivery_charge already set above (180 for SCS, otherwise existing)
                     order_data["tax_amount"] = existing_order.get("tax_amount", 0)
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
