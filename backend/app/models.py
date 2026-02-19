@@ -66,7 +66,7 @@ class ProductBatchCostPriceUpdate(BaseModel):
 # ==================== ORDER MODELS ====================
 
 class OrderBase(BaseModel):
-    order_number: int
+    order_number: str
     courier: str
     tracking_number: Optional[str] = None
     order_status: str
@@ -84,7 +84,7 @@ class OrderCreate(OrderBase):
     pass
 
 class OrderUpdate(BaseModel):
-    order_number: Optional[int] = None
+    order_number: Optional[str] = None
     courier: Optional[str] = None
     tracking_number: Optional[str] = None
     order_status: Optional[str] = None

@@ -2162,3 +2162,61 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: rgba(220, 38, 38, 0.1);
 }
 
+/* Replacement Order Modal */
+.replacement-modal-content {
+    max-width: 500px;
+}
+
+.replacement-order-form {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+}
+
+.repl-form-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.repl-form-grid .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.repl-form-grid .form-group label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+.repl-form-grid .form-group input,
+.repl-form-grid .form-group select {
+    width: 100%;
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 14px;
+    transition: var(--transition);
+    box-sizing: border-box;
+}
+
+.repl-form-grid .form-group input::placeholder {
+    color: var(--text-muted);
+}
+
+.repl-form-grid .form-group input:focus,
+.repl-form-grid .form-group select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.repl-form-grid .form-group select {
+    cursor: pointer;
+}
+

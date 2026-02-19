@@ -68,7 +68,7 @@ async def get_all_orders(
                 if o["id"] not in seen_ids:
                     merged.append(o)
                     seen_ids.add(o["id"])
-            merged.sort(key=lambda x: (x.get("order_number") or 0), reverse=True)
+            merged.sort(key=lambda x: (x.get("order_number") or ""), reverse=True)
             return merged
         response = supabase.table("orders").select("*").order("order_number", desc=True).execute()
         return response.data
@@ -202,10 +202,7 @@ async def sync_shopify_orders():
         for o in existing_orders_all:
             order_num = o.get("order_number")
             if order_num is not None:
-                try:
-                    existing_orders_map[int(order_num)] = o
-                except (ValueError, TypeError):
-                    continue
+                existing_orders_map[str(order_num)] = o
         
         def extract_courier(order):
             """Extract courier from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
@@ -481,7 +478,7 @@ async def sync_shopify_orders():
             if not order_number:
                 continue
             
-            order_number = int(order_number)
+            order_number = str(int(order_number))
             
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
@@ -769,21 +766,24 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         tracking_col = col_map.get("tracking_number")
         
         def normalize_order_number(order_ref):
-            """Extract order number from formats like #4807 or 4446-R using regex (first run of digits)."""
+            """Extract order number from formats like #4807 or 4446-R.
+            Returns string: '4807' for #4807, '4446-R' for 4446-R."""
             if order_ref is None:
                 return None
             if isinstance(order_ref, (int, float)):
-                return int(order_ref)
+                return str(int(order_ref))
             order_str = str(order_ref).strip()
             if not order_str:
                 return None
+            # Check for replacement order pattern: digits followed by -R (case insensitive)
+            replacement_match = re.match(r"#?(\d+)-R\b", order_str, re.IGNORECASE)
+            if replacement_match:
+                return f"{replacement_match.group(1)}-R"
+            # Regular order: #XXXX or just digits
             match = re.search(r"\d+", order_str)
             if not match:
                 return None
-            try:
-                return int(match.group(0))
-            except (ValueError, TypeError):
-                return None
+            return str(int(match.group(0)))
 
         def parse_tracking_number_14(val):
             """Parse 14-digit tracking number; CSV may show it as exponential (e.g. 2.63E+13)."""
@@ -849,12 +849,9 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         for o in all_orders:
             on = o.get("order_number")
             if on is not None:
-                try:
-                    order_num = int(on)
-                    order_number_to_order[order_num] = o
-                    db_order_numbers.append(order_num)
-                except (ValueError, TypeError):
-                    continue
+                order_key = str(on)
+                order_number_to_order[order_key] = o
+                db_order_numbers.append(order_key)
         
         # Find matches and detect receivable vs CSV net amount mismatches
         matched_order_numbers = []
@@ -929,6 +926,75 @@ async def upload_postex_csv(file: UploadFile = File(...)):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error processing CSV: {str(e)}")
+
+
+class ReplacementOrderCreate(BaseModel):
+    original_order_number: str
+    total_amount: float
+    advance_amount: float = 0.0
+    cost_price: float = 0.0
+    courier: str = "Unassigned"
+    tracking_number: Optional[str] = None
+
+
+@router.post("/create-replacement", response_model=dict)
+async def create_replacement_order(body: ReplacementOrderCreate):
+    """Create a replacement order (XXXX-R) based on an existing order's receiving date."""
+    try:
+        supabase = get_supabase()
+        original_num = str(body.original_order_number).strip()
+        if not original_num:
+            raise HTTPException(status_code=400, detail="Original order number is required")
+
+        replacement_order_number = f"{original_num}-R"
+
+        existing_check = (
+            supabase.table("orders")
+            .select("id")
+            .eq("order_number", replacement_order_number)
+            .execute()
+        )
+        if existing_check.data:
+            raise HTTPException(status_code=400, detail=f"Replacement order {replacement_order_number} already exists")
+
+        original_order = (
+            supabase.table("orders")
+            .select("id, order_receiving_date")
+            .eq("order_number", original_num)
+            .limit(1)
+            .execute()
+        )
+        order_receiving_date = None
+        if original_order.data:
+            order_receiving_date = original_order.data[0].get("order_receiving_date")
+
+        now = datetime.utcnow().isoformat()
+        courier = (body.courier or "Unassigned").strip()
+        delivery_charge = 180.0 if courier.upper() == "SCS" else 0.0
+
+        order_data = {
+            "order_number": replacement_order_number,
+            "courier": courier,
+            "tracking_number": (body.tracking_number or "").strip() or None,
+            "order_status": "fulfilled",
+            "piece_received": "Pending",
+            "total_amount": body.total_amount,
+            "advance_amount": body.advance_amount,
+            "delivery_charge": delivery_charge,
+            "tax_amount": 0.0,
+            "cost_price": body.cost_price,
+            "order_receiving_date": order_receiving_date or now,
+            "items": None,
+            "created_at": now,
+            "updated_at": now,
+        }
+
+        response = supabase.table("orders").insert(order_data).execute()
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/{order_id}")
@@ -1098,7 +1164,7 @@ def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], orde
 
 
 class BulkUpdateStatusBody(BaseModel):
-    order_numbers: List[int]
+    order_numbers: List[str]
     order_status: str  # "delivered", "returned", or "cancelled"
 
 
@@ -1135,7 +1201,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
             }).eq("id", order_id).execute()
             onum = order.get("order_number")
             if onum is not None:
-                updated_order_numbers.append(int(onum))
+                updated_order_numbers.append(str(onum))
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -1151,7 +1217,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
 
 
 class BulkUpdatePieceReceivedBody(BaseModel):
-    order_numbers: List[int]
+    order_numbers: List[str]
 
 
 @router.post("/bulk-update-piece-received")
@@ -1172,7 +1238,7 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
             .execute()
         )
         updated_rows = response.data or []
-        updated_order_numbers = [int(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
+        updated_order_numbers = [str(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -1361,7 +1427,7 @@ async def generate_invoice(order_ids: List[str]):
                 template_styles[col] = copy(template_cell._style)
         
         # Sort orders by order_number for consistent output
-        orders.sort(key=lambda x: x.get("order_number", 0))
+        orders.sort(key=lambda x: x.get("order_number", ""))
         
         for order in orders:
             order_number = order.get("order_number", "")

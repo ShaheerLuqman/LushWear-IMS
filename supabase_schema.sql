@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS variants (
 -- Orders Table
 CREATE TABLE IF NOT EXISTS orders (
     id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    order_number INTEGER NOT NULL UNIQUE,
+    order_number VARCHAR(20) NOT NULL UNIQUE,
     courier VARCHAR(100) NOT NULL,
     tracking_number VARCHAR(255),
     order_status VARCHAR(50) NOT NULL,

@@ -552,7 +552,19 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            cellStyle: { fontWeight: 'bold' }
+            cellStyle: { fontWeight: 'bold' },
+            comparator: (a, b) => {
+                // Sort numerically, with -R orders right after their parent
+                const parseON = (v) => {
+                    const s = String(v || '');
+                    const m = s.match(/^(\d+)(-R)?$/i);
+                    return m ? [parseInt(m[1], 10), m[2] ? 1 : 0] : [0, 0];
+                };
+                const [numA, suffA] = parseON(a);
+                const [numB, suffB] = parseON(b);
+                if (numA !== numB) return numA - numB;
+                return suffA - suffB;
+            }
         },
         {
             headerName: 'Courier',
@@ -2746,7 +2758,7 @@ async function uploadPostExCsv(file) {
         // CSV may contain orders from multiple periods; we have all orders in the grid (period filter may hide some).
         // Select all rows in the current view that were updated by the CSV.
         const updatedOrderIds = data.updated_order_ids || [];
-        const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(Number));
+        const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(String));
         
         await loadOrders();
         
@@ -2757,7 +2769,7 @@ async function uploadPostExCsv(file) {
                     ordersGridApi.forEachNode(node => {
                         const data = node.data;
                         if (!data || data.id === '__footer__') return;
-                        if (updatedOrderIds.includes(data.id) || matchedOrderNumbers.has(Number(data.order_number))) {
+                        if (updatedOrderIds.includes(data.id) || matchedOrderNumbers.has(String(data.order_number))) {
                             node.setSelected(true);
                         }
                     });
@@ -2908,6 +2920,77 @@ function initForms() {
             } finally {
                 ordersMoreActionGenerateInvoice.disabled = false;
                 ordersMoreActionGenerateInvoice.textContent = originalText;
+            }
+        });
+    }
+
+    // Create Replacement Order menu item
+    const ordersMoreActionCreateReplacement = document.getElementById('ordersMoreActionCreateReplacement');
+    if (ordersMoreActionCreateReplacement) {
+        ordersMoreActionCreateReplacement.addEventListener('click', () => {
+            ordersMoreActionsDropdown?.classList.remove('open');
+            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
+            openReplacementOrderModal();
+        });
+    }
+
+    // Replacement Order modal
+    const replacementOrderModal = document.getElementById('replacementOrderModal');
+    const closeReplacementOrderModalBtn = document.getElementById('closeReplacementOrderModal');
+    const cancelReplacementOrderBtn = document.getElementById('cancelReplacementOrder');
+    const replacementOrderForm = document.getElementById('replacementOrderForm');
+
+    const closeReplacementModal = () => replacementOrderModal?.classList.remove('active');
+    closeReplacementOrderModalBtn?.addEventListener('click', closeReplacementModal);
+    cancelReplacementOrderBtn?.addEventListener('click', closeReplacementModal);
+    replacementOrderModal?.addEventListener('click', (e) => {
+        if (e.target === replacementOrderModal) closeReplacementModal();
+    });
+
+    if (replacementOrderForm) {
+        replacementOrderForm.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = document.getElementById('submitReplacementOrder');
+            const originalNum = document.getElementById('replOrderNumber').value.trim();
+            const courier = document.getElementById('replCourier').value;
+            const total = parseFloat(document.getElementById('replTotal').value) || 0;
+            const advance = parseFloat(document.getElementById('replAdvance').value) || 0;
+            const costPrice = parseFloat(document.getElementById('replCostPrice').value) || 0;
+            const tracking = document.getElementById('replTracking').value.trim();
+
+            if (!originalNum) {
+                showToast('Please enter the original order number', 'error');
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.textContent = 'Creating...';
+            try {
+                const response = await fetch(`${API_BASE}/orders/create-replacement`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        original_order_number: originalNum,
+                        total_amount: total,
+                        advance_amount: advance,
+                        cost_price: costPrice,
+                        courier: courier,
+                        tracking_number: tracking || null,
+                    }),
+                });
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Failed to create replacement order');
+                }
+                const result = await response.json();
+                showToast(`Replacement order ${result.order_number} created`, 'success');
+                closeReplacementModal();
+                loadOrders();
+            } catch (error) {
+                showToast(error.message || 'Failed to create replacement order', 'error');
+            } finally {
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Create';
             }
         });
     }
@@ -3091,6 +3174,22 @@ document.getElementById('editModal')?.addEventListener('click', (e) => {
     }
 });
 
+// Replacement Order modal
+function openReplacementOrderModal() {
+    const form = document.getElementById('replacementOrderForm');
+    if (form) form.reset();
+    // Pre-fill order number from selected row if exactly one is selected
+    if (ordersGridApi) {
+        const selected = ordersGridApi.getSelectedRows().filter(r => r && r.id !== '__footer__');
+        if (selected.length === 1) {
+            const orderNum = String(selected[0].order_number || '').replace(/-R$/i, '');
+            document.getElementById('replOrderNumber').value = orderNum;
+        }
+    }
+    document.getElementById('replacementOrderModal')?.classList.add('active');
+    document.getElementById('replOrderNumber')?.focus();
+}
+
 // Bulk Update Order modal
 function openBulkUpdateOrderModal() {
     const formEl = document.getElementById('bulkUpdateOrderForm');
@@ -3198,12 +3297,18 @@ function parseOrderNumbersFromTextarea() {
     const textarea = document.getElementById('bulkUpdateOrderNumbers');
     if (!textarea) return [];
     const lines = textarea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
-    const numbers = [];
+    const results = [];
     for (const line of lines) {
+        // Support both numeric order numbers and replacement orders like "4807-R"
+        const replMatch = line.match(/^(\d+)-R$/i);
+        if (replMatch) {
+            results.push(`${replMatch[1]}-R`);
+            continue;
+        }
         const n = parseInt(line, 10);
-        if (!Number.isNaN(n) && n > 0) numbers.push(n);
+        if (!Number.isNaN(n) && n > 0) results.push(String(n));
     }
-    return [...new Set(numbers)];
+    return [...new Set(results)];
 }
 
 async function bulkUpdateOrderStatus(orderStatus) {
