@@ -1495,7 +1495,7 @@ function buildCashbookGridColumns(side) {
         {
             headerName: 'Description',
             field: 'description',
-            flex: 2,
+            flex: 1,
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
                 if (isCashbookNewRow(params.data)) {
@@ -1526,7 +1526,7 @@ function buildCashbookGridColumns(side) {
         {
             headerName: 'Folio',
             field: 'folio',
-            width: 180,
+            width: 200,
             minWidth: 150,
             filter: false,
             sortable: false,
@@ -1536,7 +1536,7 @@ function buildCashbookGridColumns(side) {
         {
             headerName: side === 'inflow' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
             field: 'amount',
-            width: 160,
+            width: 100,
             filter: 'agNumberColumnFilter',
             editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
@@ -1576,7 +1576,7 @@ function buildCashbookGridColumns(side) {
         {
             headerName: '',
             field: 'actions',
-            width: 60,
+            width: 20,
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
@@ -2364,6 +2364,7 @@ async function loadCashbook() {
         loadLedgersList()
     ]);
     renderCashbook();
+    updateCashInHand();
 }
 
 async function reloadCashbookForCurrentDate(showLoading = true) {
@@ -2373,6 +2374,7 @@ async function reloadCashbookForCurrentDate(showLoading = true) {
         loadCashbookEntriesForDate(selectedDate, showLoading)
     ]);
     renderCashbook();
+    updateCashInHand();
 }
 
 async function addCashbookEntry() {
@@ -2551,6 +2553,114 @@ async function loadLedgersList() {
 async function loadLedgers() {
     await loadLedgersList();
     renderLedgerCards();
+    updateCashInHand();
+}
+
+let bankLedgerBalances = []; // Store individual ledger balances for tooltip
+
+async function updateCashInHand() {
+    try {
+        // Get all Bank section ledgers
+        const bankLedgers = ledgers.filter(l => l.section === 'Bank');
+        
+        if (bankLedgers.length === 0) {
+            const amountEl = document.getElementById('cashInHandAmount');
+            if (amountEl) amountEl.textContent = 'Rs 0.00';
+            bankLedgerBalances = [];
+            updateCashInHandTooltip();
+            return;
+        }
+
+        // Fetch entries for all Bank ledgers and calculate balances
+        let totalBalance = 0;
+        bankLedgerBalances = [];
+        
+        for (const ledger of bankLedgers) {
+            try {
+                const response = await fetch(`${API_BASE}/ledgers/${ledger.id}/entries`);
+                if (!response.ok) continue;
+                
+                const entries = await response.json();
+                
+                // Calculate running balance for this ledger
+                const sorted = [...entries].sort((a, b) => {
+                    const dateA = a.entry_date || '';
+                    const dateB = b.entry_date || '';
+                    if (dateA !== dateB) return dateA.localeCompare(dateB);
+                    return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+                });
+                
+                let balance = 0;
+                sorted.forEach(entry => {
+                    const incoming = parseFloat(entry.incoming) || 0;
+                    const outgoing = parseFloat(entry.outgoing) || 0;
+                    balance += incoming - outgoing;
+                });
+                
+                bankLedgerBalances.push({
+                    name: ledger.name,
+                    balance: balance
+                });
+                
+                totalBalance += balance;
+            } catch (error) {
+                console.error(`Error loading entries for ledger ${ledger.id}:`, error);
+            }
+        }
+        
+        // Update display
+        const amountEl = document.getElementById('cashInHandAmount');
+        if (amountEl) {
+            const formatted = totalBalance.toLocaleString('en-US', { 
+                minimumFractionDigits: 2, 
+                maximumFractionDigits: 2 
+            });
+            amountEl.textContent = `Rs ${formatted}`;
+        }
+        
+        updateCashInHandTooltip();
+    } catch (error) {
+        console.error('Error updating Cash In Hand:', error);
+        const amountEl = document.getElementById('cashInHandAmount');
+        if (amountEl) amountEl.textContent = 'Rs 0.00';
+        bankLedgerBalances = [];
+        updateCashInHandTooltip();
+    }
+}
+
+function updateCashInHandTooltip() {
+    const tooltipEl = document.getElementById('cashInHandTooltip');
+    if (!tooltipEl) return;
+    
+    if (bankLedgerBalances.length === 0) {
+        tooltipEl.innerHTML = '<div class="cash-in-hand-tooltip-empty">No Bank ledgers</div>';
+        return;
+    }
+    
+    const itemsHtml = bankLedgerBalances.map(item => {
+        const formatted = item.balance.toLocaleString('en-US', { 
+            minimumFractionDigits: 2, 
+            maximumFractionDigits: 2 
+        });
+        return `
+            <div class="cash-in-hand-tooltip-item">
+                <span class="cash-in-hand-tooltip-name">${escapeHtml(item.name)}</span>
+                <span class="cash-in-hand-tooltip-balance">Rs ${formatted}</span>
+            </div>
+        `;
+    }).join('');
+    
+    const totalFormatted = bankLedgerBalances.reduce((sum, item) => sum + item.balance, 0)
+        .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    
+    tooltipEl.innerHTML = `
+        <div class="cash-in-hand-tooltip-header">Bank Ledgers</div>
+        ${itemsHtml}
+        <div class="cash-in-hand-tooltip-footer">
+            <span class="cash-in-hand-tooltip-total-label">Total:</span>
+            <span class="cash-in-hand-tooltip-total">Rs ${totalFormatted}</span>
+        </div>
+    `;
 }
 
 function renderLedgerCards() {

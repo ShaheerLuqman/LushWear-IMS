@@ -122,6 +122,11 @@
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
                     <input type="file" id="postExCsvInput" accept=".csv" style="display: none;">
                     <div id="cashbookDateFilterWrap" class="header-inline" style="display: none;">
+                        <div id="cashInHandDisplay" class="cash-in-hand-display">
+                            <span class="cash-in-hand-label">Cash In Hand:</span>
+                            <span id="cashInHandAmount" class="cash-in-hand-amount">Rs 0.00</span>
+                            <div id="cashInHandTooltip" class="cash-in-hand-tooltip"></div>
+                        </div>
                         <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day">◀</button>
                         <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
                         <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
@@ -176,11 +181,9 @@
                 <div id="cashbookView" class="view">
                     <div class="cashbook-grid-split">
                         <div class="cashbook-grid-panel">
-                            <div class="cashbook-grid-title">Incoming</div>
                             <div id="cashbookIncomingGrid" class="ag-theme-alpine grid-container"></div>
                         </div>
                         <div class="cashbook-grid-panel">
-                            <div class="cashbook-grid-title">Outgoing</div>
                             <div id="cashbookOutgoingGrid" class="ag-theme-alpine grid-container"></div>
                         </div>
                     </div>
