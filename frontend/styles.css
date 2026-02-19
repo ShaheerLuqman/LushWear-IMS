@@ -2253,3 +2253,64 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: #991b1b;
 }
 
+/* Delete Confirmation Modal */
+.delete-confirm-modal-content {
+    max-width: 420px;
+}
+
+.delete-confirm-content {
+    text-align: center;
+    padding: 8px 0;
+}
+
+.delete-confirm-icon {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    width: 64px;
+    height: 64px;
+    margin: 0 auto 20px;
+    border-radius: 50%;
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+}
+
+.delete-confirm-icon svg {
+    width: 32px;
+    height: 32px;
+}
+
+.delete-confirm-message {
+    font-size: 16px;
+    color: var(--text-primary);
+    margin: 0 0 12px;
+    line-height: 1.5;
+}
+
+.delete-confirm-message strong {
+    color: #dc2626;
+    font-weight: 600;
+}
+
+.delete-confirm-warning {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin: 0 0 24px;
+}
+
+.btn-danger {
+    background: #dc2626;
+    color: white;
+    border: 1px solid #dc2626;
+}
+
+.btn-danger:hover {
+    background: #b91c1c;
+    border-color: #b91c1c;
+}
+
+.btn-danger:active {
+    background: #991b1b;
+    border-color: #991b1b;
+}
+

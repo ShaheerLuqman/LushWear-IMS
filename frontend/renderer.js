@@ -1258,9 +1258,26 @@ function initOrdersGrid() {
         },
         onCellClicked: (params) => {
             // Handle delete button clicks for replacement orders
-            if (params.event && params.event.target && params.event.target.classList.contains('grid-delete-btn')) {
-                const orderId = params.event.target.getAttribute('data-order-id');
-                if (orderId) {
+            if (!params.event || !params.event.target) return;
+            
+            // Only process clicks in the delete column
+            if (params.colDef?.colId !== 'delete') return;
+            
+            // Find the delete button (could be clicked directly or on SVG inside)
+            const target = params.event.target;
+            let deleteBtn = null;
+            
+            if (target.classList && target.classList.contains('grid-delete-btn')) {
+                deleteBtn = target;
+            } else if (target.closest) {
+                deleteBtn = target.closest('.grid-delete-btn');
+            }
+            
+            if (deleteBtn) {
+                params.event.preventDefault();
+                params.event.stopPropagation();
+                const orderId = deleteBtn.getAttribute('data-order-id');
+                if (orderId && params.data) {
                     deleteReplacementOrder(orderId, params.data);
                 }
             }
@@ -1725,15 +1742,48 @@ async function saveOrderField(orderId, field, value) {
     }
 }
 
-async function deleteReplacementOrder(orderId, orderData) {
+let pendingDeleteOrderId = null;
+let pendingDeleteOrderData = null;
+
+function openDeleteConfirmModal(orderId, orderData) {
     const orderNumber = String(orderData?.order_number || '');
     if (!/-R$/i.test(orderNumber)) {
         showToast('Only replacement orders can be deleted', 'error');
         return;
     }
 
-    if (!confirm(`Are you sure you want to delete replacement order ${orderNumber}?`)) {
+    pendingDeleteOrderId = orderId;
+    pendingDeleteOrderData = orderData;
+    
+    const orderNumberEl = document.getElementById('deleteConfirmOrderNumber');
+    if (orderNumberEl) {
+        orderNumberEl.textContent = orderNumber;
+    }
+    
+    document.getElementById('deleteConfirmModal')?.classList.add('active');
+}
+
+function closeDeleteConfirmModal() {
+    document.getElementById('deleteConfirmModal')?.classList.remove('active');
+    pendingDeleteOrderId = null;
+    pendingDeleteOrderData = null;
+}
+
+async function confirmDeleteReplacementOrder() {
+    if (!pendingDeleteOrderId || !pendingDeleteOrderData) {
         return;
+    }
+
+    const orderId = pendingDeleteOrderId;
+    const orderData = pendingDeleteOrderData;
+    const orderNumber = String(orderData.order_number || '');
+
+    closeDeleteConfirmModal();
+
+    const confirmBtn = document.getElementById('confirmDeleteBtn');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Deleting...';
     }
 
     try {
@@ -1752,7 +1802,16 @@ async function deleteReplacementOrder(orderId, orderData) {
     } catch (error) {
         console.error('Error deleting replacement order:', error);
         showToast(error.message || 'Failed to delete replacement order', 'error');
+    } finally {
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Delete';
+        }
     }
+}
+
+function deleteReplacementOrder(orderId, orderData) {
+    openDeleteConfirmModal(orderId, orderData);
 }
 
 // ============================================
@@ -3062,6 +3121,19 @@ function initForms() {
             }
         });
     }
+
+    // Delete Confirmation Modal
+    const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+    const closeDeleteConfirmModalBtn = document.getElementById('closeDeleteConfirmModal');
+    const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
+    const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+
+    closeDeleteConfirmModalBtn?.addEventListener('click', closeDeleteConfirmModal);
+    cancelDeleteBtn?.addEventListener('click', closeDeleteConfirmModal);
+    confirmDeleteBtn?.addEventListener('click', confirmDeleteReplacementOrder);
+    deleteConfirmModal?.addEventListener('click', (e) => {
+        if (e.target === deleteConfirmModal) closeDeleteConfirmModal();
+    });
 
     // Refresh delivery status for selected orders
     const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
