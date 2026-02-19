@@ -102,16 +102,19 @@
                     <button id="bulkUpdateOrderBtn" class="btn btn-secondary" style="display: none;" title="Bulk update order">
                         Bulk update order
                     </button>
-                    <button id="uploadPostExCsvBtn" class="btn btn-secondary" style="display: none;">
-                        Upload PostEx CSV
-                    </button>
                     <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
                         <span style="margin-right: 8px;">🔄</span>
                         Delivery Status
                     </button>
-                    <button id="generateInvoiceBtn" class="btn btn-secondary" style="display: none;" title="Generate invoice for selected orders">
-                        Generate Invoice
-                    </button>
+                    <div id="ordersMoreActionsWrap" class="orders-more-actions-wrap" style="display: none;">
+                        <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary btn-icon-only orders-more-actions-btn" title="More actions">
+                            <span aria-hidden="true">⋮</span>
+                        </button>
+                        <div id="ordersMoreActionsDropdown" class="orders-more-actions-dropdown" aria-hidden="true">
+                            <button type="button" class="orders-more-actions-item" id="ordersMoreActionUploadPostEx">Upload PostEx CSV</button>
+                            <button type="button" class="orders-more-actions-item" id="ordersMoreActionGenerateInvoice">Generate Invoice</button>
+                        </div>
+                    </div>
                     <button id="ordersFullScreenBtn" class="btn btn-secondary btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
                         <span aria-hidden="true">⛶</span>
                     </button>

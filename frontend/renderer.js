@@ -1734,7 +1734,7 @@ function switchView(viewName) {
     const editCostPricesBtn = document.getElementById('editCostPricesBtn');
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
-    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
+    const ordersMoreActionsWrap = document.getElementById('ordersMoreActionsWrap');
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
     const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
 
@@ -1750,7 +1750,7 @@ function switchView(viewName) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
-            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
@@ -1758,21 +1758,19 @@ function switchView(viewName) {
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
-            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'inline-flex';
+            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'inline-flex';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
-            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'inline-flex';
         } else if (viewName === 'cashbook') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
-            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
@@ -1780,14 +1778,12 @@ function switchView(viewName) {
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
-            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'none';
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
-            if (uploadPostExCsvBtn) uploadPostExCsvBtn.style.display = 'none';
+            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
@@ -1795,10 +1791,8 @@ function switchView(viewName) {
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
             if (deliveryProgress) deliveryProgress.style.display = 'none';
-            if (generateInvoiceBtn) generateInvoiceBtn.style.display = 'none';
         }
     }
 
@@ -2723,11 +2717,11 @@ function scheduleOrdersAutoSync() {
 }
 
 async function uploadPostExCsv(file) {
-    const btn = document.getElementById('uploadPostExCsvBtn');
-    const originalText = btn?.innerHTML;
+    const btn = document.getElementById('ordersMoreActionUploadPostEx');
+    const originalText = btn?.textContent;
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = 'Uploading...';
+        btn.textContent = 'Uploading...';
     }
     try {
         const formData = new FormData();
@@ -2781,7 +2775,7 @@ async function uploadPostExCsv(file) {
     } finally {
         if (btn) {
             btn.disabled = false;
-            btn.innerHTML = originalText;
+            btn.textContent = originalText;
         }
     }
 }
@@ -2835,11 +2829,26 @@ function initForms() {
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
 
-    // Upload PostEx CSV Button
-    const uploadPostExCsvBtn = document.getElementById('uploadPostExCsvBtn');
+    // Orders more actions (3-dot menu): Upload PostEx CSV, Generate Invoice
+    const ordersMoreActionsBtn = document.getElementById('ordersMoreActionsBtn');
+    const ordersMoreActionsDropdown = document.getElementById('ordersMoreActionsDropdown');
     const postExCsvInput = document.getElementById('postExCsvInput');
-    if (uploadPostExCsvBtn && postExCsvInput) {
-        uploadPostExCsvBtn.addEventListener('click', () => postExCsvInput.click());
+    if (ordersMoreActionsBtn && ordersMoreActionsDropdown) {
+        ordersMoreActionsBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = ordersMoreActionsDropdown.classList.contains('open');
+            ordersMoreActionsDropdown.classList.toggle('open', !isOpen);
+            ordersMoreActionsDropdown.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+        });
+        document.addEventListener('click', (e) => {
+            const wrap = document.getElementById('ordersMoreActionsWrap');
+            if (wrap && !wrap.contains(e.target)) {
+                ordersMoreActionsDropdown.classList.remove('open');
+                ordersMoreActionsDropdown.setAttribute('aria-hidden', 'true');
+            }
+        });
+    }
+    if (postExCsvInput) {
         postExCsvInput.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
             if (!file) return;
@@ -2847,47 +2856,42 @@ function initForms() {
             await uploadPostExCsv(file);
         });
     }
-
-    // Refresh delivery status for selected orders
-    const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-    if (refreshDeliveryStatusSelectedBtn) {
-        refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
+    const ordersMoreActionUploadPostEx = document.getElementById('ordersMoreActionUploadPostEx');
+    if (ordersMoreActionUploadPostEx && postExCsvInput) {
+        ordersMoreActionUploadPostEx.addEventListener('click', () => {
+            ordersMoreActionsDropdown?.classList.remove('open');
+            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
+            postExCsvInput.click();
+        });
     }
-
-    // Generate invoice button
-    const generateInvoiceBtn = document.getElementById('generateInvoiceBtn');
-    if (generateInvoiceBtn) {
-        generateInvoiceBtn.addEventListener('click', async () => {
+    const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
+    if (ordersMoreActionGenerateInvoice) {
+        ordersMoreActionGenerateInvoice.addEventListener('click', async () => {
+            ordersMoreActionsDropdown?.classList.remove('open');
+            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
             if (!ordersGridApi) {
                 showToast('Orders grid not initialized', 'error');
                 return;
             }
-            
             const selectedRows = ordersGridApi.getSelectedRows();
             if (selectedRows.length === 0) {
                 showToast('Please select at least one order', 'error');
                 return;
             }
-            
             const orderIds = selectedRows.map(row => row.id);
-            
-            generateInvoiceBtn.disabled = true;
-            const originalText = generateInvoiceBtn.textContent;
-            generateInvoiceBtn.textContent = 'Generating...';
-            
+            ordersMoreActionGenerateInvoice.disabled = true;
+            const originalText = ordersMoreActionGenerateInvoice.textContent;
+            ordersMoreActionGenerateInvoice.textContent = 'Generating...';
             try {
                 const response = await fetch(`${API_BASE}/orders/generate-invoice`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(orderIds)
                 });
-                
                 if (!response.ok) {
                     const error = await response.json();
                     throw new Error(error.detail || 'Failed to generate invoice');
                 }
-                
-                // Get the blob and create download link
                 const blob = await response.blob();
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -2897,16 +2901,21 @@ function initForms() {
                 a.click();
                 document.body.removeChild(a);
                 window.URL.revokeObjectURL(url);
-                
                 showToast(`Invoice generated for ${selectedRows.length} order(s)`, 'success');
             } catch (error) {
                 console.error('Error generating invoice:', error);
                 showToast(error.message || 'Failed to generate invoice', 'error');
             } finally {
-                generateInvoiceBtn.disabled = false;
-                generateInvoiceBtn.textContent = originalText;
+                ordersMoreActionGenerateInvoice.disabled = false;
+                ordersMoreActionGenerateInvoice.textContent = originalText;
             }
         });
+    }
+
+    // Refresh delivery status for selected orders
+    const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+    if (refreshDeliveryStatusSelectedBtn) {
+        refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
     }
 
     // Cashbook actions

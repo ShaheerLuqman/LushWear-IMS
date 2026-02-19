@@ -1813,12 +1813,71 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .btn-icon-only {
-    padding: 12px;
+    padding: 0;
     min-width: 44px;
+    width: 44px;
+    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .btn-icon-only span {
     font-size: 1.1em;
+    line-height: 1;
+}
+
+/* Orders more actions (3-dot menu) - button uses .btn-icon-only for same size as fullscreen */
+.orders-more-actions-wrap {
+    position: relative;
+    display: inline-flex;
+}
+
+.orders-more-actions-dropdown {
+    position: absolute;
+    top: 100%;
+    right: 0;
+    margin-top: 4px;
+    min-width: 180px;
+    padding: 6px 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 1000;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px);
+    transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
+}
+
+.orders-more-actions-dropdown.open {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+}
+
+.orders-more-actions-item {
+    display: block;
+    width: 100%;
+    padding: 10px 14px;
+    border: none;
+    background: none;
+    font-family: var(--font-primary);
+    font-size: 13px;
+    color: var(--text-primary);
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s ease;
+}
+
+.orders-more-actions-item:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+}
+
+.orders-more-actions-item:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
 }
 
 /* AG Grid Footer Row Styles */
