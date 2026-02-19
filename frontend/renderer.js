@@ -990,6 +990,35 @@ function initOrdersGrid() {
                     return '<span style="font-size: 18px;">🔴</span>';
                 }
             }
+        },
+        {
+            headerName: '',
+            colId: 'delete',
+            width: 60,
+            minWidth: 60,
+            maxWidth: 60,
+            sortable: false,
+            filter: false,
+            suppressSizeToFit: true,
+            suppressMovable: true,
+            cellRenderer: (params) => {
+                const orderNumber = String(params.data?.order_number || '');
+                const isReplacement = /-R$/i.test(orderNumber);
+                if (!isReplacement) {
+                    return '';
+                }
+                const orderId = params.data?.id;
+                if (!orderId) return '';
+                return `<button class="grid-delete-btn" data-order-id="${escapeHtml(orderId)}" title="Delete replacement order" aria-label="Delete">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <polyline points="3 6 5 6 21 6"></polyline>
+                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        <line x1="10" y1="11" x2="10" y2="17"></line>
+                        <line x1="14" y1="11" x2="14" y2="17"></line>
+                    </svg>
+                </button>`;
+            },
+            pinnedRowCellRenderer: () => ''
         }
     ];
 
@@ -1226,6 +1255,15 @@ function initOrdersGrid() {
         onCellValueChanged: () => {
             // Update footer when cell values change (e.g., after editing)
             setTimeout(() => updateFooterRow(), 0);
+        },
+        onCellClicked: (params) => {
+            // Handle delete button clicks for replacement orders
+            if (params.event && params.event.target && params.event.target.classList.contains('grid-delete-btn')) {
+                const orderId = params.event.target.getAttribute('data-order-id');
+                if (orderId) {
+                    deleteReplacementOrder(orderId, params.data);
+                }
+            }
         }
     };
 
@@ -1684,6 +1722,36 @@ async function saveOrderField(orderId, field, value) {
     } catch (error) {
         console.error(`Error saving ${field}:`, error);
         showToast(`Failed to save ${field}`, 'error');
+    }
+}
+
+async function deleteReplacementOrder(orderId, orderData) {
+    const orderNumber = String(orderData?.order_number || '');
+    if (!/-R$/i.test(orderNumber)) {
+        showToast('Only replacement orders can be deleted', 'error');
+        return;
+    }
+
+    if (!confirm(`Are you sure you want to delete replacement order ${orderNumber}?`)) {
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_BASE}/orders/${orderId}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        });
+
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to delete order');
+        }
+
+        showToast(`Replacement order ${orderNumber} deleted`, 'success');
+        loadOrders();
+    } catch (error) {
+        console.error('Error deleting replacement order:', error);
+        showToast(error.message || 'Failed to delete replacement order', 'error');
     }
 }
 
