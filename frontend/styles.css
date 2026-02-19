@@ -2274,6 +2274,35 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     gap: 4px;
 }
 
+.folio-display-text {
+    flex: 1;
+    min-width: 0;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    transition: var(--transition);
+    font-size: 14px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 700;
+}
+
+.folio-display-text:hover {
+    background: var(--bg-tertiary);
+}
+
+.folio-display-text.folio-required {
+    background: rgba(220, 38, 38, 0.1);
+    color: #dc2626;
+    border: 1px solid rgba(220, 38, 38, 0.3);
+}
+
+.folio-display-text.folio-required:hover {
+    background: rgba(220, 38, 38, 0.15);
+}
+
 .folio-dropdown-btn {
     display: flex;
     align-items: center;

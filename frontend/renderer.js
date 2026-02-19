@@ -1326,11 +1326,30 @@ function createFolioCellRenderer(params, entryType) {
                          (params.data.amount != null && params.data.amount > 0);
     const needsHighlight = isNewRow && !hasFolio && hasOtherData;
 
-    // Main button that shows current selection
+    // Display text showing selected ledger (like piece_received shows status)
+    const displaySpan = document.createElement('span');
+    displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '');
+    if (currentLedger) {
+        displaySpan.textContent = currentLedger.name;
+        displaySpan.style.cursor = 'pointer';
+    } else {
+        displaySpan.textContent = 'Select ledger... *';
+        displaySpan.style.color = 'var(--text-muted)';
+        displaySpan.style.cursor = 'pointer';
+    }
+
+    // Main button that shows current selection (hidden, used for dropdown positioning)
     const button = document.createElement('button');
     button.type = 'button';
     button.className = 'folio-dropdown-btn' + (needsHighlight ? ' folio-required' : '');
+    button.style.display = 'none';
     button.innerHTML = `<span class="folio-dropdown-text">${escapeHtml(displayText)}</span><span class="folio-dropdown-arrow">▼</span>`;
+    
+    // Click on display text opens dropdown
+    displaySpan.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDropdown();
+    });
 
     // Dropdown panel (will be appended to body when opened)
     let dropdownPanel = null;
@@ -1394,6 +1413,15 @@ function createFolioCellRenderer(params, entryType) {
             params.data.folio = id || null;
             button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger... *';
             
+            // Update display text (like piece_received shows selected status)
+            if (id && name) {
+                displaySpan.textContent = name;
+                displaySpan.style.color = '';
+            } else {
+                displaySpan.textContent = 'Select ledger... *';
+                displaySpan.style.color = 'var(--text-muted)';
+            }
+            
             // Update "Go to Ledger" button state
             const goToBtn = wrapper._goToLedgerBtn;
             if (goToBtn) {
@@ -1434,9 +1462,9 @@ function createFolioCellRenderer(params, entryType) {
 
         renderOptions();
 
-        // Position dropdown below button
+        // Position dropdown below display text
         document.body.appendChild(dropdownPanel);
-        const rect = button.getBoundingClientRect();
+        const rect = displaySpan.getBoundingClientRect();
         dropdownPanel.style.top = (rect.bottom + 2) + 'px';
         dropdownPanel.style.left = rect.left + 'px';
         dropdownPanel.style.minWidth = Math.max(rect.width, 200) + 'px';
@@ -1446,7 +1474,7 @@ function createFolioCellRenderer(params, entryType) {
 
         // Close on outside click
         const closeHandler = (e) => {
-            if (!dropdownPanel.contains(e.target) && e.target !== button && !button.contains(e.target)) {
+            if (!dropdownPanel.contains(e.target) && e.target !== displaySpan && e.target !== button && !displaySpan.contains(e.target) && !button.contains(e.target)) {
                 closeDropdown();
                 document.removeEventListener('mousedown', closeHandler);
             }
@@ -1463,6 +1491,7 @@ function createFolioCellRenderer(params, entryType) {
         }
     });
 
+    wrapper.appendChild(displaySpan);
     wrapper.appendChild(button);
 
     // Add "Go to Ledger" button next to dropdown
