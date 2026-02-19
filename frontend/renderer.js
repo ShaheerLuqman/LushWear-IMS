@@ -2562,17 +2562,48 @@ function renderLedgerCards() {
         return;
     }
 
-    container.innerHTML = ledgers.map(l => `
-        <div class="ledger-card" data-id="${l.id}">
-            <div class="ledger-card-info">
-                <span class="ledger-card-name">${escapeHtml(l.name)}</span>
-                <span class="ledger-card-section">${escapeHtml(l.section || '')}</span>
+    // Group ledgers by section
+    const groupedLedgers = {};
+    ledgers.forEach(l => {
+        const section = l.section || 'Uncategorized';
+        if (!groupedLedgers[section]) {
+            groupedLedgers[section] = [];
+        }
+        groupedLedgers[section].push(l);
+    });
+
+    // Sort sections alphabetically
+    const sortedSections = Object.keys(groupedLedgers).sort((a, b) => {
+        if (a === 'Uncategorized') return 1;
+        if (b === 'Uncategorized') return -1;
+        return a.localeCompare(b);
+    });
+
+    // Build HTML with sections
+    let html = '';
+    sortedSections.forEach(section => {
+        const sectionLedgers = groupedLedgers[section];
+        html += `
+            <div class="ledger-section">
+                <h3 class="ledger-section-header">${escapeHtml(section)}</h3>
+                <div class="ledger-section-cards">
+                    ${sectionLedgers.map(l => `
+                        <div class="ledger-card" data-id="${l.id}">
+                            <div class="ledger-card-info">
+                                <span class="ledger-card-name">${escapeHtml(l.name)}</span>
+                                <span class="ledger-card-section">${escapeHtml(l.section || '')}</span>
+                            </div>
+                            <div class="ledger-card-actions">
+                                <button class="btn btn-danger btn-sm ledger-delete-btn" data-id="${l.id}" title="Delete ledger">Delete</button>
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
             </div>
-            <div class="ledger-card-actions">
-                <button class="btn btn-danger btn-sm ledger-delete-btn" data-id="${l.id}" title="Delete ledger">Delete</button>
-            </div>
-        </div>
-    `).join('');
+        `;
+    });
+
+    container.innerHTML = html;
 
     // Click on card (not the delete button) opens detail
     container.querySelectorAll('.ledger-card').forEach(card => {
@@ -2677,6 +2708,23 @@ async function loadLedgerEntries(ledgerId) {
 function renderLedgerDetailGrid() {
     if (!ledgerDetailGridApi) return;
 
+    // Check if this is a Bank section ledger (invert debit/credit)
+    const isBankSection = currentLedger?.section === 'Bank';
+
+    // Update column definitions to swap fields for Bank section
+    const columnDefs = ledgerDetailGridApi.getGridOption('columnDefs');
+    if (columnDefs && columnDefs.length >= 4) {
+        // Swap Debit and Credit column fields for Bank section
+        if (isBankSection) {
+            columnDefs[2].field = 'incoming'; // Debit shows incoming
+            columnDefs[3].field = 'outgoing'; // Credit shows outgoing
+        } else {
+            columnDefs[2].field = 'outgoing'; // Debit shows outgoing
+            columnDefs[3].field = 'incoming'; // Credit shows incoming
+        }
+        ledgerDetailGridApi.setGridOption('columnDefs', columnDefs);
+    }
+
     // Compute running balance
     const sorted = [...ledgerEntries].sort((a, b) => {
         const dateA = a.entry_date || '';
@@ -2689,8 +2737,16 @@ function renderLedgerDetailGrid() {
     const rowsWithBalance = sorted.map(entry => {
         const incoming = parseFloat(entry.incoming) || 0;
         const outgoing = parseFloat(entry.outgoing) || 0;
+        
+        // Balance calculation (always uses original values)
         running += incoming - outgoing;
-        return { ...entry, balance: running };
+        
+        return { 
+            ...entry, 
+            incoming: incoming,
+            outgoing: outgoing,
+            balance: running 
+        };
     });
 
     // Ledger entries are now read-only (derived from cashbook entries)
