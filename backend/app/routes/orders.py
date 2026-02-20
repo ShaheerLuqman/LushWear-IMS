@@ -10,12 +10,16 @@ import httpx
 import re
 import csv
 import io
+from io import BytesIO
 import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs
-from openpyxl import load_workbook
-from openpyxl.styles import Font
-from copy import copy
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -1376,9 +1380,204 @@ async def delete_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+def _generate_pdf_invoice(orders: List[dict], template_path: Optional[Path] = None) -> BytesIO:
+    """
+    Generate a PDF invoice from orders data.
+    
+    Args:
+        orders: List of order dictionaries
+        template_path: Optional path to a PDF template (for future use with PyPDF2/pdfrw)
+    
+    Returns:
+        BytesIO buffer containing the PDF
+    """
+    
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, 
+                           rightMargin=20*mm, leftMargin=20*mm,
+                           topMargin=20*mm, bottomMargin=20*mm)
+    
+    # Container for the 'Flowable' objects
+    elements = []
+    styles = getSampleStyleSheet()
+    
+    # Custom styles - Black and white theme
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=18,
+        textColor=colors.black,
+        spaceAfter=30,
+        alignment=TA_CENTER
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=12,
+        textColor=colors.black,
+        spaceAfter=12,
+        spaceBefore=12
+    )
+    
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        textColor=colors.black
+    )
+    
+    # Add logo image above the title
+    # Path: __file__ is backend/app/routes/orders.py, so we need to go up one level to backend/app/
+    logo_path = Path(__file__).parent.parent / "logo_invoice.png"
+    logo_absolute_path = logo_path.absolute()
+    
+    if logo_path.exists():
+        try:
+            # Load image using PIL/Pillow first to verify it can be loaded
+            from PIL import Image as PILImage
+            pil_img = PILImage.open(str(logo_absolute_path))
+            
+            # Calculate height maintaining aspect ratio (max width 80mm)
+            img_width_px, img_height_px = pil_img.size
+            max_width_mm = 80
+            width_mm = min(max_width_mm, (img_width_px / 96) * 25.4)  # Convert pixels to mm (assuming 96 DPI)
+            aspect_ratio = img_height_px / img_width_px
+            height_mm = width_mm * aspect_ratio
+            
+            # Create reportlab Image
+            logo = Image(str(logo_absolute_path), width=width_mm*mm, height=height_mm*mm)
+            
+            # Center the image using a table
+            logo_table = Table([[logo]], colWidths=[doc.width])
+            logo_table.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                ('LEFTPADDING', (0, 0), (-1, -1), 0),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+                ('TOPPADDING', (0, 0), (-1, -1), 0),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ]))
+            elements.append(logo_table)
+            elements.append(Spacer(1, 5*mm))
+        except Exception as e:
+            # If image loading fails, continue without logo
+            import traceback
+            print(f"Warning: Could not load logo image: {e}")
+            traceback.print_exc()
+    else:
+        print(f"Warning: Logo file not found at {logo_absolute_path}")
+    
+    # Title
+    elements.append(Paragraph("Invoice", title_style))
+    elements.append(Spacer(1, 10*mm))
+    
+    # Date
+    now = datetime.now()
+    current_date = now.strftime("%d/%m/%Y")
+    date_para = Paragraph(f"<b>Date:</b> {current_date}", normal_style)
+    elements.append(date_para)
+    elements.append(Spacer(1, 5*mm))
+    
+    # Sort orders by order_number
+    orders.sort(key=lambda x: x.get("order_number", ""))
+    
+    # Prepare table data
+    table_data = [
+        ['Order Number', 'Tracking Number', 'COD', 'Delivery Charge', 'Net Amount']
+    ]
+    
+    net_amount_sum = 0
+    
+    for order in orders:
+        order_number = order.get("order_number", "")
+        tracking_number = order.get("tracking_number", "") or ""
+        total_amount = float(order.get("total_amount", 0) or 0)
+        advance_amount = float(order.get("advance_amount", 0) or 0)
+        delivery_charge = float(order.get("delivery_charge", 0) or 0)
+        tax_amount = float(order.get("tax_amount", 0) or 0)
+        
+        # Calculate COD (total_amount - advance_amount)
+        cod = total_amount - advance_amount
+        
+        # Calculate Net Amount (receivable = total_amount - advance_amount - delivery_charge - tax_amount)
+        net_amount = total_amount - advance_amount - delivery_charge - tax_amount
+        net_amount_sum += net_amount
+        
+        # Format currency values
+        table_data.append([
+            order_number,
+            tracking_number,
+            f"{cod:.2f}",
+            f"{delivery_charge:.2f}",
+            f"{net_amount:.2f}"
+        ])
+    
+    # Add final balance row - use Paragraph objects for proper formatting
+    # Create styles with appropriate alignment
+    final_balance_label_style = ParagraphStyle(
+        'FinalBalanceLabel',
+        parent=normal_style,
+        alignment=TA_LEFT
+    )
+    final_balance_amount_style = ParagraphStyle(
+        'FinalBalanceAmount',
+        parent=normal_style,
+        alignment=TA_RIGHT
+    )
+    table_data.append([
+        '',
+        '',
+        '',
+        Paragraph('<b>Final Balance</b>', final_balance_label_style),
+        Paragraph(f'<b>{net_amount_sum:.2f}</b>', final_balance_amount_style)
+    ])
+    
+    # Create table
+    table = Table(table_data, colWidths=[40*mm, 50*mm, 30*mm, 35*mm, 35*mm])
+    
+    # Style the table - Black and white style
+    table.setStyle(TableStyle([
+        # Header row - black background with white text
+        ('BACKGROUND', (0, 0), (-1, 0), colors.black),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 11),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('TOPPADDING', (0, 0), (-1, 0), 12),
+        
+        # Data rows - white background with black text, alternating rows
+        ('BACKGROUND', (0, 1), (-1, -2), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -2), colors.black),
+        ('FONTNAME', (0, 1), (-1, -2), 'Helvetica'),
+        ('FONTSIZE', (0, 1), (-1, -2), 10),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -2), [colors.white, colors.HexColor('#F5F5F5')]),
+        
+        # Final balance row - light gray background with black text
+        ('BACKGROUND', (0, -1), (-1, -1), colors.HexColor('#E0E0E0')),
+        ('TEXTCOLOR', (0, -1), (-1, -1), colors.black),
+        ('FONTNAME', (0, -1), (-1, -1), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, -1), (-1, -1), 11),
+        ('TOPPADDING', (0, -1), (-1, -1), 12),
+        ('BOTTOMPADDING', (0, -1), (-1, -1), 12),
+        
+        # Alignment for numeric columns
+        ('ALIGN', (2, 1), (-1, -1), 'RIGHT'),
+    ]))
+    
+    elements.append(table)
+    
+    # Build PDF
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
 @router.post("/generate-invoice")
 async def generate_invoice(order_ids: List[str]):
-    """Generate an Excel invoice from template for selected orders"""
+    """Generate a PDF invoice from template for selected orders"""
     try:
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
@@ -1391,205 +1590,21 @@ async def generate_invoice(order_ids: List[str]):
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
         
-        # Load template
-        template_path = Path(__file__).parent.parent / "invoice_template.xlsx"
-        if not template_path.exists():
-            raise HTTPException(status_code=404, detail="Invoice template not found")
+        # Check if template exists (optional - for future use)
+        template_path = Path(__file__).parent.parent / "invoice_template.pdf"
+        template_path = template_path if template_path.exists() else None
         
-        # Load workbook with images preserved
-        # keep_links=True preserves external links and images
-        wb = load_workbook(template_path, keep_links=True)
-        ws = wb.active
+        # Generate PDF
+        pdf_buffer = _generate_pdf_invoice(orders, template_path)
         
-        # Add date to E2 (preserve style) - display format DD/MM/YYYY
-        from datetime import datetime
-        now = datetime.now()
-        current_date = now.strftime("%d/%m/%Y")
-        cell_e2 = ws.cell(row=2, column=5)
-        if cell_e2.has_style:
-            original_style = copy(cell_e2._style)
-            cell_e2.value = current_date
-            cell_e2._style = original_style
-        else:
-            cell_e2.value = current_date
-        
-        # Start filling data from row 7
-        start_row = 7
-        current_row = start_row
-        net_amount_sum = 0
-        
-        # Store template row styles (row 7) to copy to data rows
-        template_row = start_row
-        template_styles = {}
-        for col in range(1, 6):  # Columns A to E
-            template_cell = ws.cell(row=template_row, column=col)
-            if template_cell.has_style:
-                template_styles[col] = copy(template_cell._style)
-        
-        # Sort orders by order_number for consistent output
-        orders.sort(key=lambda x: x.get("order_number", ""))
-        
-        for order in orders:
-            order_number = order.get("order_number", "")
-            tracking_number = order.get("tracking_number", "") or ""
-            total_amount = float(order.get("total_amount", 0) or 0)
-            advance_amount = float(order.get("advance_amount", 0) or 0)
-            delivery_charge = float(order.get("delivery_charge", 0) or 0)
-            tax_amount = float(order.get("tax_amount", 0) or 0)
-            
-            # Calculate COD (total_amount - advance_amount)
-            cod = total_amount - advance_amount
-            
-            # Calculate Net Amount (receivable = total_amount - advance_amount - delivery_charge - tax_amount)
-            net_amount = total_amount - advance_amount - delivery_charge - tax_amount
-            
-            # Fill row data while preserving styles
-            values = [order_number, tracking_number, cod, delivery_charge, net_amount]
-            for col_idx, value in enumerate(values, start=1):
-                cell = ws.cell(row=current_row, column=col_idx)
-                # Preserve existing style or use template style
-                if cell.has_style:
-                    original_style = copy(cell._style)
-                    cell.value = value
-                    cell._style = original_style
-                elif col_idx in template_styles:
-                    cell.value = value
-                    cell._style = copy(template_styles[col_idx])
-                else:
-                    cell.value = value
-            
-            net_amount_sum += net_amount
-            current_row += 1
-        
-        # Add final balance row (preserve styles)
-        final_row = current_row
-        cell_d = ws.cell(row=final_row, column=4)
-        if cell_d.has_style:
-            original_style_d = copy(cell_d._style)
-            cell_d.value = "Final Balance"
-            cell_d._style = original_style_d
-            # Make it bold
-            if cell_d.font:
-                cell_d.font = Font(bold=True, name=cell_d.font.name, size=cell_d.font.size)
-            else:
-                cell_d.font = Font(bold=True)
-        else:
-            cell_d.value = "Final Balance"
-            cell_d.font = Font(bold=True)
-        
-        cell_e = ws.cell(row=final_row, column=5)
-        if cell_e.has_style:
-            original_style_e = copy(cell_e._style)
-            cell_e.value = net_amount_sum
-            cell_e._style = original_style_e
-        else:
-            cell_e.value = net_amount_sum
-        
-        # Configure page setup for printing (first page only)
-        ws.page_setup.orientation = 'portrait'
-        ws.page_setup.paperSize = 9  # A4 paper size (9 is the constant for A4)
-        ws.page_setup.fitToWidth = 1
-        ws.page_setup.fitToHeight = 1
-        ws.page_setup.scale = 100
-        
-        # Save to BytesIO buffer for Excel
-        from io import BytesIO
-        import tempfile
-        import os
-        
-        excel_buffer = BytesIO()
-        wb.save(excel_buffer)
-        excel_buffer.seek(0)
-        
-        # PDF conversion disabled for now - return Excel file directly
-        # Convert to PDF using win32com (Windows only, requires Excel installed)
-        # pdf_buffer = BytesIO()
-        # try:
-        #     import win32com.client
-        #     import pythoncom
-        #     
-        #     # Create temporary Excel file
-        #     with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as temp_excel:
-        #         temp_excel.write(excel_buffer.getvalue())
-        #         temp_excel_path = temp_excel.name
-        #     
-        #     # Create temporary PDF file path
-        #     with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_pdf:
-        #         temp_pdf_path = temp_pdf.name
-        #     
-        #     # Initialize COM
-        #     pythoncom.CoInitialize()
-        #     excel = win32com.client.Dispatch("Excel.Application")
-        #     excel.Visible = False
-        #     excel.DisplayAlerts = False
-        #     
-        #     try:
-        #         # Open the Excel file
-        #         workbook = excel.Workbooks.Open(temp_excel_path)
-        #         worksheet = workbook.Worksheets(1)  # First worksheet
-        #         
-        #         # Set print area to first page only
-        #         worksheet.PageSetup.PrintArea = ""
-        #         worksheet.PageSetup.FitToPagesWide = 1
-        #         worksheet.PageSetup.FitToPagesTall = 1
-        #         
-        #         # Export to PDF (print first page)
-        #         worksheet.ExportAsFixedFormat(
-        #             Type=0,  # xlTypePDF
-        #             Filename=temp_pdf_path,
-        #             Quality=0,  # xlQualityStandard
-        #             IncludeDocProperties=True,
-        #             IgnorePrintAreas=False,
-        #             OpenAfterPublish=False
-        #         )
-        #         
-        #         workbook.Close(SaveChanges=False)
-        #         
-        #         # Read PDF into buffer
-        #         with open(temp_pdf_path, 'rb') as pdf_file:
-        #             pdf_buffer.write(pdf_file.read())
-        #         pdf_buffer.seek(0)
-        #         
-        #     finally:
-        #         excel.Quit()
-        #         pythoncom.CoUninitialize()
-        #         # Clean up temp files
-        #         try:
-        #             os.unlink(temp_excel_path)
-        #             os.unlink(temp_pdf_path)
-        #         except:
-        #             pass
-        #     
-        #     # Return PDF file as download
-        #     return Response(
-        #         content=pdf_buffer.getvalue(),
-        #         media_type="application/pdf",
-        #         headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
-        #     )
-        #     
-        # except ImportError:
-        #     # Fallback: return Excel file if win32com is not available
-        #     return Response(
-        #         content=excel_buffer.getvalue(),
-        #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        #         headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
-        #     )
-        # except Exception as e:
-        #     # If PDF conversion fails, return Excel file
-        #     return Response(
-        #         content=excel_buffer.getvalue(),
-        #         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        #         headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
-        #     )
-        
-        # Return Excel file directly
+        # Return PDF file as download
         return Response(
-            content=excel_buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=invoice.xlsx"}
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
         )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating PDF invoice: {str(e)}")
 

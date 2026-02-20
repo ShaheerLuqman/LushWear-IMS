@@ -3227,15 +3227,54 @@ function initForms() {
                     throw new Error(error.detail || 'Failed to generate invoice');
                 }
                 const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'invoice.xlsx';
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-                showToast(`Invoice generated for ${selectedRows.length} order(s)`, 'success');
+                
+                // Generate filename with date and time
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = String(now.getMonth() + 1).padStart(2, '0');
+                const day = String(now.getDate()).padStart(2, '0');
+                const hours = String(now.getHours()).padStart(2, '0');
+                const minutes = String(now.getMinutes()).padStart(2, '0');
+                const seconds = String(now.getSeconds()).padStart(2, '0');
+                const filename = `invoice_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.pdf`;
+                
+                // Convert blob to base64 string for Electron API (more reliable than large arrays)
+                const arrayBuffer = await blob.arrayBuffer();
+                const uint8Array = new Uint8Array(arrayBuffer);
+                const base64String = btoa(String.fromCharCode(...uint8Array));
+                
+                // Use Electron API to save and open the PDF
+                if (window.electronAPI && window.electronAPI.saveAndOpenPDF) {
+                    const result = await window.electronAPI.saveAndOpenPDF(base64String, filename);
+                    if (result.success) {
+                        showToast(`PDF invoice generated and opened for ${selectedRows.length} order(s)`, 'success');
+                    } else {
+                        // Fallback to browser download
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                        showToast(`PDF invoice generated for ${selectedRows.length} order(s)`, 'success');
+                    }
+                } else {
+                    // Fallback for non-Electron environment
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    window.open(url, '_blank');
+                    setTimeout(() => {
+                        window.URL.revokeObjectURL(url);
+                    }, 1000);
+                    showToast(`PDF invoice generated for ${selectedRows.length} order(s)`, 'success');
+                }
             } catch (error) {
                 console.error('Error generating invoice:', error);
                 showToast(error.message || 'Failed to generate invoice', 'error');

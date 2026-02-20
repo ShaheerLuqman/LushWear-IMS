@@ -1,5 +1,6 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('path');
+const fs = require('fs');
 const { spawn, exec, execSync } = require('child_process');
 
 let mainWindow;
@@ -56,6 +57,58 @@ ipcMain.handle('set-fullscreen', (_, flag) => {
         mainWindow.setFullScreen(!!flag);
     }
 });
+
+ipcMain.handle('open-file', async (_, filePath) => {
+    try {
+        await shell.openPath(filePath);
+        return { success: true };
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
+
+// Register IPC handlers before app.whenReady()
+console.log('Registering IPC handlers...');
+
+ipcMain.handle('save-and-open-pdf', async (event, base64Data, filename) => {
+    try {
+        console.log('save-and-open-pdf handler called with filename:', filename);
+        
+        // Get Downloads folder path
+        const downloadsPath = app.getPath('downloads');
+        const filePath = path.join(downloadsPath, filename);
+        
+        // Convert base64 string back to Buffer
+        const buffer = Buffer.from(base64Data, 'base64');
+        
+        // Save the file asynchronously to ensure it's fully written
+        await fs.promises.writeFile(filePath, buffer);
+        
+        // Small delay to ensure file is fully flushed to disk
+        await new Promise(resolve => setTimeout(resolve, 100));
+        
+        // Verify file exists before opening
+        if (!fs.existsSync(filePath)) {
+            throw new Error('File was not created successfully');
+        }
+        
+        // Open the file in default PDF application
+        const result = await shell.openPath(filePath);
+        
+        // shell.openPath returns an empty string on success, or an error message on failure
+        if (result) {
+            throw new Error(result);
+        }
+        
+        console.log('PDF saved and opened successfully:', filePath);
+        return { success: true, path: filePath };
+    } catch (error) {
+        console.error('Error saving/opening PDF:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+console.log('IPC handler save-and-open-pdf registered');
 
 function setupFullScreenListeners() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
