@@ -2666,6 +2666,157 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     margin-top: 8px;
 }
 
+/* Month Summary Styles */
+.month-summary-container {
+    padding: 20px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.month-summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 20px;
+}
+
+.month-summary-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 24px;
+    cursor: pointer;
+    transition: var(--transition);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.month-summary-card:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 16px var(--accent-glow);
+    transform: translateY(-2px);
+}
+
+.month-summary-card-header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.month-summary-card-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.month-summary-card-period {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.month-summary-card-body {
+    flex: 1;
+}
+
+.month-summary-card-description {
+    font-size: 14px;
+    color: var(--text-secondary);
+    margin: 0;
+}
+
+.month-summary-card-footer {
+    display: flex;
+    justify-content: flex-end;
+}
+
+/* Month Detail Styles */
+.month-detail-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 24px;
+    padding: 0 4px;
+    flex-shrink: 0;
+}
+
+.month-detail-header h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.month-detail-content {
+    padding: 0 4px;
+    height: 100%;
+    overflow-y: auto;
+}
+
+.month-detail-stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.month-detail-stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 24px;
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    transition: var(--transition);
+}
+
+.month-detail-stat-card:hover {
+    border-color: var(--accent-primary);
+    box-shadow: 0 4px 16px var(--accent-glow);
+    transform: translateY(-2px);
+}
+
+.month-detail-stat-icon {
+    font-size: 32px;
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+    flex-shrink: 0;
+}
+
+.month-detail-stat-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    flex: 1;
+    min-width: 0;
+}
+
+.month-detail-stat-value {
+    font-size: 24px;
+    font-weight: 700;
+    color: var(--text-primary);
+    line-height: 1.2;
+}
+
+.month-detail-stat-label {
+    font-size: 14px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.no-data-message {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-muted);
+    font-size: 16px;
+}
+
 .delete-confirm-modal-content .btn-secondary {
     min-width: 100px;
 }

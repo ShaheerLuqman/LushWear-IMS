@@ -68,6 +68,10 @@
                     <span class="nav-icon">📚</span>
                     <span class="nav-tooltip">Ledgers</span>
                 </button>
+                <button class="nav-item" data-view="monthSummary" title="Month Summary">
+                    <span class="nav-icon">📅</span>
+                    <span class="nav-tooltip">Month Summary</span>
+                </button>
                 <button class="nav-item" data-view="products" title="Products">
                     <span class="nav-icon">🛍️</span>
                     <span class="nav-tooltip">Products</span>
@@ -241,6 +245,26 @@
                         <h2 id="ledgerDetailName" class="ledger-detail-title"></h2>
                     </div>
                     <div id="ledgerDetailGrid" class="ag-theme-alpine grid-container"></div>
+                </div>
+
+                <!-- Month Summary Cards View -->
+                <div id="monthSummaryView" class="view">
+                    <div class="month-summary-container">
+                        <div class="month-summary-cards" id="monthSummaryCards">
+                            <!-- Month cards rendered by JS -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Month Detail View -->
+                <div id="monthDetailView" class="view">
+                    <div class="month-detail-header">
+                        <button id="backToMonthSummaryBtn" class="btn btn-secondary">← Back to Month Summary</button>
+                        <h2 id="monthDetailTitle">Month Summary Details</h2>
+                    </div>
+                    <div class="month-detail-content" id="monthDetailContent">
+                        <!-- Month detail content rendered by JS -->
+                    </div>
                 </div>
 
                 <!-- Products View -->

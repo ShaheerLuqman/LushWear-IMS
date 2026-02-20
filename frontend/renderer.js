@@ -1892,6 +1892,8 @@ function switchView(viewName) {
         'cashbook': { title: 'Cashbook', subtitle: 'Track daily cash inflows and outflows' },
         'ledgers': { title: 'Ledgers', subtitle: 'Manage individual account ledgers' },
         'ledgerDetail': { title: 'Ledger', subtitle: 'View ledger entries' },
+        'monthSummary': { title: 'Month Summary', subtitle: 'View monthly order summaries' },
+        'monthDetail': { title: 'Month Details', subtitle: 'View detailed month statistics' },
         'products': { title: 'Products', subtitle: 'Manage your product catalog' }
     };
 
@@ -1988,6 +1990,10 @@ function switchView(viewName) {
         setTimeout(() => {
             if (ledgerDetailGridApi) ledgerDetailGridApi.sizeColumnsToFit();
         }, 100);
+    } else if (viewName === 'monthSummary') {
+        loadMonthSummaryList();
+    } else if (viewName === 'monthDetail') {
+        // Handled by openMonthDetail
     } else if (viewName === 'dashboard') {
         loadProducts();
     }
@@ -3134,6 +3140,159 @@ function updateDashboard() {
 // Forms
 // ============================================
 
+// ============================================
+// Month Summary Functions
+// ============================================
+
+let currentMonthDetail = null;
+
+async function loadMonthSummaryList() {
+    try {
+        const response = await fetch(`${API_BASE}/orders/month-summary/list`);
+        if (!response.ok) throw new Error('Failed to fetch month summary list');
+        
+        const months = await response.json();
+        displayMonthSummaryCards(months);
+    } catch (error) {
+        console.error('Error loading month summary list:', error);
+        showToast('Failed to load month summaries', 'error');
+    }
+}
+
+function displayMonthSummaryCards(months) {
+    const container = document.getElementById('monthSummaryCards');
+    if (!container) return;
+    
+    if (months.length === 0) {
+        container.innerHTML = '<div class="no-data-message">No month data available</div>';
+        return;
+    }
+    
+    container.innerHTML = months.map(month => {
+        const monthName = getMonthName(month.month);
+        const periodLabel = formatOrdersPeriodLabel(month.month, month.year);
+        return `
+            <div class="month-summary-card" data-month="${month.month}" data-year="${month.year}">
+                <div class="month-summary-card-header">
+                    <h3 class="month-summary-card-title">${monthName} ${month.year}</h3>
+                    <span class="month-summary-card-period">${periodLabel}</span>
+                </div>
+                <div class="month-summary-card-body">
+                    <p class="month-summary-card-description">Click to view detailed statistics</p>
+                </div>
+                <div class="month-summary-card-footer">
+                    <button class="btn btn-primary btn-sm view-month-detail-btn">View Details</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+    
+    // Add click handlers
+    container.querySelectorAll('.month-summary-card').forEach(card => {
+        card.addEventListener('click', (e) => {
+            if (!e.target.closest('.view-month-detail-btn')) return;
+            const month = parseInt(card.dataset.month);
+            const year = parseInt(card.dataset.year);
+            openMonthDetail(month, year);
+        });
+    });
+}
+
+function getMonthName(month) {
+    const months = ['January', 'February', 'March', 'April', 'May', 'June',
+                    'July', 'August', 'September', 'October', 'November', 'December'];
+    return months[month - 1];
+}
+
+async function openMonthDetail(month, year) {
+    currentMonthDetail = { month, year };
+    try {
+        const response = await fetch(`${API_BASE}/orders/month-summary/${month}/${year}`);
+        if (!response.ok) throw new Error('Failed to fetch month detail');
+        
+        const data = await response.json();
+        displayMonthDetail(data);
+        switchView('monthDetail');
+    } catch (error) {
+        console.error('Error loading month detail:', error);
+        showToast('Failed to load month details', 'error');
+    }
+}
+
+function displayMonthDetail(data) {
+    const container = document.getElementById('monthDetailContent');
+    const titleEl = document.getElementById('monthDetailTitle');
+    
+    if (!container) return;
+    
+    const monthName = getMonthName(data.month);
+    const periodLabel = formatOrdersPeriodLabel(data.month, data.year);
+    
+    if (titleEl) {
+        titleEl.textContent = `${monthName} ${data.year} - ${periodLabel}`;
+    }
+    
+    container.innerHTML = `
+        <div class="month-detail-stats">
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">📦</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">${data.total_orders}</span>
+                    <span class="month-detail-stat-label">Total Orders</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">💰</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">Rs ${data.total_gross_sale.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <span class="month-detail-stat-label">Total Gross Sale</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">↩️</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">Rs ${data.total_return_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <span class="month-detail-stat-label">Total Return Amount</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">📊</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">Rs ${data.net_sales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                    <span class="month-detail-stat-label">Net Sales</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">✅</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">${data.delivered_orders_count}</span>
+                    <span class="month-detail-stat-label">Delivered Orders</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">↩️</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">${data.return_orders_count}</span>
+                    <span class="month-detail-stat-label">Return Orders</span>
+                </div>
+            </div>
+            
+            <div class="month-detail-stat-card">
+                <div class="month-detail-stat-icon">✔️</div>
+                <div class="month-detail-stat-info">
+                    <span class="month-detail-stat-value">${data.fulfilled_orders_count}</span>
+                    <span class="month-detail-stat-label">Fulfilled Orders</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function initForms() {
     // Sync Shopify Products Button
     const syncBtn = document.getElementById('syncShopifyBtn');
@@ -3451,6 +3610,14 @@ function initForms() {
     if (createLedgerBtn) {
         createLedgerBtn.addEventListener('click', openCreateLedgerModal);
     }
+    // Back to Month Summary button
+    const backToMonthSummaryBtn = document.getElementById('backToMonthSummaryBtn');
+    if (backToMonthSummaryBtn) {
+        backToMonthSummaryBtn.addEventListener('click', () => {
+            switchView('monthSummary');
+        });
+    }
+
     // Create Ledger modal: form submit and close
     const createLedgerForm = document.getElementById('createLedgerForm');
     if (createLedgerForm) {

@@ -1608,3 +1608,120 @@ async def generate_invoice(order_ids: List[str]):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generating PDF invoice: {str(e)}")
 
+
+@router.get("/month-summary/list")
+async def get_month_summary_list():
+    """Get list of all available months with order data"""
+    try:
+        supabase = get_supabase()
+        
+        # Get all orders to determine which months have data
+        response = supabase.table("orders").select("order_receiving_date, created_at").execute()
+        orders = response.data
+        
+        # Extract unique months from orders
+        months_set = set()
+        for order in orders:
+            # Use order_receiving_date if available, otherwise created_at
+            date_str = order.get("order_receiving_date") or order.get("created_at")
+            if date_str:
+                try:
+                    # Parse ISO date string
+                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
+                    # Convert to PKT for period calculation
+                    if dt.tzinfo:
+                        dt_pkt = dt.astimezone(PKT_TIMEZONE)
+                    else:
+                        dt_pkt = dt.replace(tzinfo=timezone.utc).astimezone(PKT_TIMEZONE)
+                    
+                    # Determine which period this order belongs to
+                    # Period is month's 22 to next month's 21
+                    day = dt_pkt.day
+                    month = dt_pkt.month
+                    year = dt_pkt.year
+                    
+                    # If day < 22, it belongs to previous month's period
+                    if day < 22:
+                        if month == 1:
+                            period_month = 12
+                            period_year = year - 1
+                        else:
+                            period_month = month - 1
+                            period_year = year
+                    else:
+                        period_month = month
+                        period_year = year
+                    
+                    months_set.add((period_month, period_year))
+                except Exception:
+                    continue
+        
+        # Convert to list and sort (newest first)
+        months_list = sorted(months_set, key=lambda x: (x[1], x[0]), reverse=True)
+        
+        return [{"month": m, "year": y} for m, y in months_list]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/month-summary/{month}/{year}")
+async def get_month_summary_detail(month: int, year: int):
+    """Get detailed summary for a specific month period"""
+    try:
+        if month < 1 or month > 12:
+            raise HTTPException(status_code=400, detail="Invalid month")
+        if year < 2000 or year > 2100:
+            raise HTTPException(status_code=400, detail="Invalid year")
+        
+        # Get period start and end dates
+        start_iso, end_iso = _period_start_end(month, year)
+        
+        supabase = get_supabase()
+        
+        # Get orders for this period
+        # Orders with order_receiving_date in range
+        r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lt("order_receiving_date", end_iso).execute()
+        # Orders with null order_receiving_date but created_at in range
+        r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lt("created_at", end_iso).execute()
+        
+        seen_ids = {o["id"] for o in r1.data}
+        merged = list(r1.data)
+        for o in r2.data:
+            if o["id"] not in seen_ids:
+                merged.append(o)
+                seen_ids.add(o["id"])
+        
+        orders = merged
+        
+        # Calculate statistics
+        total_orders = len(orders)
+        total_gross_sale = sum(float(o.get("total_amount", 0) or 0) for o in orders)
+        
+        # Count orders by status
+        delivered_count = sum(1 for o in orders if o.get("order_status", "").lower() == "delivered")
+        returned_count = sum(1 for o in orders if o.get("order_status", "").lower() == "returned")
+        fulfilled_count = sum(1 for o in orders if o.get("order_status", "").lower() in ["delivered", "fulfilled"])
+        
+        # Calculate return amount (sum of total_amount for returned orders)
+        return_orders = [o for o in orders if o.get("order_status", "").lower() == "returned"]
+        total_return_amount = sum(float(o.get("total_amount", 0) or 0) for o in return_orders)
+        
+        # Net sales = gross sales - return sales
+        net_sales = total_gross_sale - total_return_amount
+        
+        return {
+            "month": month,
+            "year": year,
+            "total_orders": total_orders,
+            "total_gross_sale": round(total_gross_sale, 2),
+            "total_return_amount": round(total_return_amount, 2),
+            "return_orders_count": len(return_orders),
+            "delivered_orders_count": delivered_count,
+            "fulfilled_orders_count": fulfilled_count,
+            "net_sales": round(net_sales, 2)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
