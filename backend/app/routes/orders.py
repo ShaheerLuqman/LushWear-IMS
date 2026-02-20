@@ -51,6 +51,16 @@ def _period_start_end(month: int, year: int):
     return start_utc.isoformat().replace('+00:00', 'Z'), end_utc.isoformat().replace('+00:00', 'Z')
 
 
+def _period_start_end_dates(month: int, year: int):
+    """Return (start_date, end_date) as YYYY-MM-DD for the period (month 22 to next month 21 inclusive)."""
+    start_date = f"{year}-{month:02d}-22"
+    if month == 12:
+        end_date = f"{year + 1}-01-21"
+    else:
+        end_date = f"{year}-{month + 1:02d}-21"
+    return start_date, end_date
+
+
 @router.get("/", response_model=List[dict])
 async def get_all_orders(
     month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
@@ -1693,22 +1703,85 @@ async def get_month_summary_detail(month: int, year: int):
         
         orders = merged
         
-        # Calculate statistics
-        total_orders = len(orders)
-        total_gross_sale = sum(float(o.get("total_amount", 0) or 0) for o in orders)
+        # Exclude cancelled orders from totals and gross sale
+        non_cancelled = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
         
-        # Count orders by status
-        delivered_count = sum(1 for o in orders if o.get("order_status", "").lower() == "delivered")
-        returned_count = sum(1 for o in orders if o.get("order_status", "").lower() == "returned")
-        fulfilled_count = sum(1 for o in orders if o.get("order_status", "").lower() in ["delivered", "fulfilled"])
+        # Calculate statistics (cancelled not counted in total orders or gross sale)
+        total_orders = len(non_cancelled)
+        total_gross_sale = sum(float(o.get("total_amount", 0) or 0) for o in non_cancelled)
+        
+        # Count orders by status (from non_cancelled)
+        delivered_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "delivered")
+        returned_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "returned")
+        # Pending = order_status fulfilled/CNA/RFD/ICA
+        enroute_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() in ("fulfilled", "cna", "rfd", "ica"))
+        unfulfilled_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "unfulfilled")
         
         # Calculate return amount (sum of total_amount for returned orders)
-        return_orders = [o for o in orders if o.get("order_status", "").lower() == "returned"]
+        return_orders = [o for o in non_cancelled if o.get("order_status", "").lower() == "returned"]
         total_return_amount = sum(float(o.get("total_amount", 0) or 0) for o in return_orders)
         
         # Net sales = gross sales - return sales
         net_sales = total_gross_sale - total_return_amount
-        
+
+        # Net profit only for orders that have delivery_charge set (sum of their net sales minus cost)
+        orders_with_delivery_set = [o for o in non_cancelled if o.get("delivery_charge") is not None]
+        gross_with_delivery = sum(float(o.get("total_amount", 0) or 0) for o in orders_with_delivery_set)
+        return_amount_with_delivery = sum(
+            float(o.get("total_amount", 0) or 0) for o in orders_with_delivery_set
+            if o.get("order_status", "").lower() == "returned"
+        )
+        cost_with_delivery = sum(float(o.get("cost_price", 0) or 0) for o in orders_with_delivery_set)
+        net_profit = (gross_with_delivery - return_amount_with_delivery) - cost_with_delivery
+
+        # Ledger totals for this period (from cashbook entries)
+        start_date, end_date = _period_start_end_dates(month, year)
+        shopify_expense = 0.0
+        ad_expense = 0.0
+        other_expense = 0.0
+        ledgers_resp = supabase.table("ledgers").select("id, name, section").execute()
+        for ledger in ledgers_resp.data or []:
+            name = (ledger.get("name") or "").lower()
+            section = (ledger.get("section") or "").lower()
+            is_expense_section = "expense" in section
+            if "shopify" in name:
+                entries_resp = (
+                    supabase.table("cashbook_entries")
+                    .select("entry_type, amount")
+                    .eq("folio", ledger["id"])
+                    .gte("entry_date", start_date)
+                    .lte("entry_date", end_date)
+                    .execute()
+                )
+                for e in entries_resp.data or []:
+                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                        shopify_expense += float(e.get("amount") or 0)
+            elif "ad" in name:
+                entries_resp = (
+                    supabase.table("cashbook_entries")
+                    .select("entry_type, amount")
+                    .eq("folio", ledger["id"])
+                    .gte("entry_date", start_date)
+                    .lte("entry_date", end_date)
+                    .execute()
+                )
+                for e in entries_resp.data or []:
+                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                        ad_expense += float(e.get("amount") or 0)
+            elif is_expense_section:
+                # Other expenses: Expense section ledgers excluding shopify and ad
+                entries_resp = (
+                    supabase.table("cashbook_entries")
+                    .select("entry_type, amount")
+                    .eq("folio", ledger["id"])
+                    .gte("entry_date", start_date)
+                    .lte("entry_date", end_date)
+                    .execute()
+                )
+                for e in entries_resp.data or []:
+                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                        other_expense += float(e.get("amount") or 0)
+
         return {
             "month": month,
             "year": year,
@@ -1717,8 +1790,13 @@ async def get_month_summary_detail(month: int, year: int):
             "total_return_amount": round(total_return_amount, 2),
             "return_orders_count": len(return_orders),
             "delivered_orders_count": delivered_count,
-            "fulfilled_orders_count": fulfilled_count,
-            "net_sales": round(net_sales, 2)
+            "enroute_orders_count": enroute_count,
+            "unfulfilled_orders_count": unfulfilled_count,
+            "net_sales": round(net_sales, 2),
+            "net_profit": round(net_profit, 2),
+            "shopify_expense": round(shopify_expense, 2),
+            "ad_expense": round(ad_expense, 2),
+            "other_expense": round(other_expense, 2),
         }
     except HTTPException:
         raise

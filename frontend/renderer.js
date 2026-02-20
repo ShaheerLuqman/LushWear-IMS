@@ -2071,6 +2071,21 @@ function getCurrentOrdersPeriod() {
     return getPeriodForDate(getPKTDate());
 }
 
+/** True if the given period (month 22 – next 21) has fully ended in PKT */
+function isPeriodPassed(month, year) {
+    const pkt = getPKTDate();
+    const todayY = pkt.getFullYear();
+    const todayM = pkt.getMonth() + 1;
+    const todayD = pkt.getDate();
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    if (todayY > nextYear) return true;
+    if (todayY < nextYear) return false;
+    if (todayM > nextMonth) return true;
+    if (todayM < nextMonth) return false;
+    return todayD > 21;
+}
+
 /** Oldest period in dropdown: Oct 22 – Nov 21, 2024 */
 const ORDERS_PERIOD_OLDEST_MONTH = 10;
 const ORDERS_PERIOD_OLDEST_YEAR = 2024;
@@ -3168,29 +3183,41 @@ function displayMonthSummaryCards(months) {
         return;
     }
     
-    container.innerHTML = months.map(month => {
-        const monthName = getMonthName(month.month);
-        const periodLabel = formatOrdersPeriodLabel(month.month, month.year);
+    // Group by year (descending: newest year first)
+    const byYear = new Map();
+    for (const m of months) {
+        if (!byYear.has(m.year)) byYear.set(m.year, []);
+        byYear.get(m.year).push(m);
+    }
+    const years = [...byYear.keys()].sort((a, b) => b - a);
+    
+    const sectionsHtml = years.map(year => {
+        const yearMonths = byYear.get(year);
+        const cardsHtml = yearMonths.map(month => {
+            const monthName = getMonthName(month.month);
+            const periodLabel = formatOrdersPeriodLabel(month.month, month.year);
+            return `
+                <div class="month-summary-card" data-month="${month.month}" data-year="${month.year}">
+                    <div class="month-summary-card-header">
+                        <h3 class="month-summary-card-title">${monthName} ${month.year}</h3>
+                        <span class="month-summary-card-period">${periodLabel}</span>
+                    </div>
+                </div>
+            `;
+        }).join('');
         return `
-            <div class="month-summary-card" data-month="${month.month}" data-year="${month.year}">
-                <div class="month-summary-card-header">
-                    <h3 class="month-summary-card-title">${monthName} ${month.year}</h3>
-                    <span class="month-summary-card-period">${periodLabel}</span>
-                </div>
-                <div class="month-summary-card-body">
-                    <p class="month-summary-card-description">Click to view detailed statistics</p>
-                </div>
-                <div class="month-summary-card-footer">
-                    <button class="btn btn-primary btn-sm view-month-detail-btn">View Details</button>
-                </div>
-            </div>
+            <section class="month-summary-year-section">
+                <h2 class="month-summary-year-heading">${year}</h2>
+                <div class="month-summary-cards-in-section">${cardsHtml}</div>
+            </section>
         `;
     }).join('');
     
-    // Add click handlers
+    container.innerHTML = sectionsHtml;
+    
+    // Add click handlers - entire card is clickable
     container.querySelectorAll('.month-summary-card').forEach(card => {
-        card.addEventListener('click', (e) => {
-            if (!e.target.closest('.view-month-detail-btn')) return;
+        card.addEventListener('click', () => {
             const month = parseInt(card.dataset.month);
             const year = parseInt(card.dataset.year);
             openMonthDetail(month, year);
@@ -3206,16 +3233,34 @@ function getMonthName(month) {
 
 async function openMonthDetail(month, year) {
     currentMonthDetail = { month, year };
+    const container = document.getElementById('monthDetailContent');
+    const titleEl = document.getElementById('monthDetailTitle');
+    const monthName = getMonthName(month);
+    const periodLabel = formatOrdersPeriodLabel(month, year);
+
+    // Set title and show loading immediately, then navigate
+    if (titleEl) titleEl.textContent = `${monthName} ${year} - ${periodLabel}`;
+    if (container) {
+        container.innerHTML = `
+            <div class="month-detail-loading">
+                <div class="month-detail-loading-spinner"></div>
+                <p class="month-detail-loading-text">Loading period data...</p>
+            </div>
+        `;
+    }
+    switchView('monthDetail');
+
     try {
         const response = await fetch(`${API_BASE}/orders/month-summary/${month}/${year}`);
         if (!response.ok) throw new Error('Failed to fetch month detail');
-        
         const data = await response.json();
         displayMonthDetail(data);
-        switchView('monthDetail');
     } catch (error) {
         console.error('Error loading month detail:', error);
         showToast('Failed to load month details', 'error');
+        if (container) {
+            container.innerHTML = '<div class="no-data-message">Failed to load period data. Please try again.</div>';
+        }
     }
 }
 
@@ -3232,63 +3277,39 @@ function displayMonthDetail(data) {
         titleEl.textContent = `${monthName} ${data.year} - ${periodLabel}`;
     }
     
+    const fmt = (n) => (typeof n === 'number' && !Number.isInteger(n))
+        ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        : (n ?? 0).toLocaleString('en-US');
+
     container.innerHTML = `
-        <div class="month-detail-stats">
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">📦</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">${data.total_orders}</span>
-                    <span class="month-detail-stat-label">Total Orders</span>
+        <div class="month-detail-sections">
+            <section class="month-detail-section">
+                <h3 class="month-detail-section-heading">Orders</h3>
+                <div class="month-detail-lines">
+                    <div class="month-detail-line"><span class="month-detail-line-label">Total Orders</span><span class="month-detail-line-value">${fmt(data.total_orders)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Delivered Orders</span><span class="month-detail-line-value">${fmt(data.delivered_orders_count)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Return Orders</span><span class="month-detail-line-value">${fmt(data.return_orders_count)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Enroute Orders</span><span class="month-detail-line-value">${fmt(data.enroute_orders_count ?? 0)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Unfulfilled Orders</span><span class="month-detail-line-value">${fmt(data.unfulfilled_orders_count ?? 0)}</span></div>
                 </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">💰</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">Rs ${data.total_gross_sale.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    <span class="month-detail-stat-label">Total Gross Sale</span>
+            </section>
+            <section class="month-detail-section">
+                <h3 class="month-detail-section-heading">Sales</h3>
+                <div class="month-detail-lines">
+                    <div class="month-detail-line"><span class="month-detail-line-label">Total Gross Sale</span><span class="month-detail-line-value">Rs ${fmt(data.total_gross_sale)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Total Return Amount</span><span class="month-detail-line-value">Rs ${fmt(data.total_return_amount)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Net Sales</span><span class="month-detail-line-value">Rs ${fmt(data.net_sales)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Net Profit</span><span class="month-detail-line-value">Rs ${fmt(data.net_profit ?? 0)}</span></div>
                 </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">↩️</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">Rs ${data.total_return_amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    <span class="month-detail-stat-label">Total Return Amount</span>
+            </section>
+            <section class="month-detail-section">
+                <h3 class="month-detail-section-heading">Expenses</h3>
+                <div class="month-detail-lines">
+                    <div class="month-detail-line"><span class="month-detail-line-label">Shopify Expense</span><span class="month-detail-line-value">Rs ${fmt(data.shopify_expense ?? 0)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Ad Expense</span><span class="month-detail-line-value">Rs ${fmt(data.ad_expense ?? 0)}</span></div>
+                    <div class="month-detail-line"><span class="month-detail-line-label">Other Expenses</span><span class="month-detail-line-value">Rs ${fmt(data.other_expense ?? 0)}</span></div>
                 </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">📊</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">Rs ${data.net_sales.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
-                    <span class="month-detail-stat-label">Net Sales</span>
-                </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">✅</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">${data.delivered_orders_count}</span>
-                    <span class="month-detail-stat-label">Delivered Orders</span>
-                </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">↩️</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">${data.return_orders_count}</span>
-                    <span class="month-detail-stat-label">Return Orders</span>
-                </div>
-            </div>
-            
-            <div class="month-detail-stat-card">
-                <div class="month-detail-stat-icon">✔️</div>
-                <div class="month-detail-stat-info">
-                    <span class="month-detail-stat-value">${data.fulfilled_orders_count}</span>
-                    <span class="month-detail-stat-label">Fulfilled Orders</span>
-                </div>
-            </div>
+            </section>
         </div>
     `;
 }
