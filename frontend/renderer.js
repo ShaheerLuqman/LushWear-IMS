@@ -248,6 +248,17 @@ function initProductsGrid() {
             }
         },
         {
+            headerName: 'Collection',
+            field: 'collection',
+            width: 160,
+            filter: 'agTextColumnFilter',
+            filterParams: {
+                filterOptions: ['contains', 'startsWith', 'endsWith'],
+                defaultOption: 'contains'
+            },
+            valueFormatter: (params) => params.value ?? '—'
+        },
+        {
             headerName: 'Price (Rs)',
             field: 'price',
             width: 120,

@@ -32,6 +32,7 @@ class ProductBase(BaseModel):
     name: str
     price: float = 0.0  # Selling price (same across all variants)
     cost_price: Optional[float] = None  # Cost price (same across all variants)
+    collection: Optional[str] = None  # Collection name
     image_url: Optional[str] = None
     shopify_product_id: Optional[int] = None
 
@@ -42,6 +43,7 @@ class ProductUpdate(BaseModel):
     name: Optional[str] = None
     price: Optional[float] = None
     cost_price: Optional[float] = None
+    collection: Optional[str] = None
     image_url: Optional[str] = None
     shopify_product_id: Optional[int] = None
 

@@ -13,6 +13,12 @@ from urllib.parse import unquote, urlparse, parse_qs
 
 router = APIRouter(prefix="/products", tags=["products"])
 
+# Product titles to skip when syncing from Shopify (exact match, case-sensitive)
+SHOPIFY_SYNC_PRODUCTS_IGNORE: List[str] = [
+    "Brides & Bridesmaids PJs",
+    "Free SHIPPING",
+]
+
 @router.get("/", response_model=List[dict])
 async def get_all_products():
     """Get all products with their variants"""
@@ -218,6 +224,9 @@ async def sync_shopify_products():
                 continue
             
             name = shopify_product.get("title", "Untitled Product")
+            if name in SHOPIFY_SYNC_PRODUCTS_IGNORE:
+                continue
+            
             images = shopify_product.get("images", [])
             image_url = images[0].get("src") if images and len(images) > 0 else None
             variants = shopify_product.get("variants", [])
@@ -242,8 +251,9 @@ async def sync_shopify_products():
                 product_id_map[shopify_product_id] = existing_product["id"]
                 if product_has_changed(product_data, existing_product):
                     product_data["id"] = existing_product["id"]
-                    # Preserve cost_price from existing product
+                    # Preserve cost_price and collection from existing product
                     product_data["cost_price"] = existing_product.get("cost_price")
+                    product_data["collection"] = existing_product.get("collection")
                     products_to_update.append(product_data)
             else:
                 # New product, will need to insert and get ID

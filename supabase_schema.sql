@@ -12,6 +12,7 @@ CREATE TABLE IF NOT EXISTS products (
     name VARCHAR(255) NOT NULL,
     price DECIMAL(10, 2) DEFAULT 0.00,  -- Selling price (same across all variants)
     cost_price DECIMAL(10, 2),           -- Cost price (same across all variants)
+    collection VARCHAR(255),              -- Collection name (e.g. from Shopify)
     image_url TEXT,
     -- Timestamps
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
