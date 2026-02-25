@@ -232,7 +232,50 @@ body {
 .header-actions {
     display: flex;
     align-items: center;
-    gap: 16px;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+/* Consistent top-row buttons: same size, text wrap for long labels */
+.header-actions .header-toolbar-btn {
+    padding: 8px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    min-height: 36px;
+    box-sizing: border-box;
+    white-space: normal;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+    text-align: center;
+    line-height: 1.3;
+    max-width: 150px;
+}
+
+.header-toolbar-btn .header-toolbar-btn-icon {
+    margin-right: 6px;
+}
+
+#refreshDeliveryStatusSelectedBtn {
+    max-width: 200px;
+}
+
+/* Icon-only (e.g. fullscreen): exact same height as other toolbar buttons */
+.header-actions .header-toolbar-btn-icon-only {
+    min-width: 36px;
+    width: 36px;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    padding: 0 !important;
+    line-height: 0;
+}
+
+.header-actions .header-toolbar-btn-icon-only span {
+    font-size: 1.1em;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
 .delivery-refresh-progress {
@@ -837,9 +880,12 @@ body:has(#ledgersView.active) .content-area {
 
 .modal.active {
     display: flex;
+    z-index: 10001;
 }
 
 .modal-content {
+    position: relative;
+    z-index: 1;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
@@ -1416,11 +1462,17 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
 }
 
-/* Orders grid: clear filters button in filter row */
+/* Orders grid: clear filters button (icon) in filter row */
 .orders-clear-filters-btn {
-    padding: 4px 8px;
-    font-size: 11px;
-    white-space: nowrap;
+    padding: 4px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+.orders-clear-filters-icon {
+    width: 18px;
+    height: 18px;
+    display: block;
 }
 
 /* AG Grid Container */
@@ -2028,57 +2080,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     line-height: 1;
 }
 
-/* Orders more actions (3-dot menu) - button uses .btn-icon-only for same size as fullscreen */
-.orders-more-actions-wrap {
-    position: relative;
+/* Orders toolbar: action buttons in a group (use same .header-toolbar-btn) */
+.orders-toolbar-actions {
     display: inline-flex;
-}
-
-.orders-more-actions-dropdown {
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 4px;
-    min-width: 180px;
-    padding: 6px 0;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    z-index: 1000;
-    opacity: 0;
-    visibility: hidden;
-    transform: translateY(-4px);
-    transition: opacity 0.15s ease, visibility 0.15s ease, transform 0.15s ease;
-}
-
-.orders-more-actions-dropdown.open {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
-}
-
-.orders-more-actions-item {
-    display: block;
-    width: 100%;
-    padding: 10px 14px;
-    border: none;
-    background: none;
-    font-family: var(--font-primary);
-    font-size: 13px;
-    color: var(--text-primary);
-    text-align: left;
-    cursor: pointer;
-    transition: background 0.15s ease;
-}
-
-.orders-more-actions-item:hover:not(:disabled) {
-    background: var(--bg-tertiary);
-}
-
-.orders-more-actions-item:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 /* AG Grid Footer Row Styles */
@@ -2163,16 +2170,16 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .ledger-section-cards {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
-    gap: 16px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
     padding-left: 8px;
 }
 
 .ledger-card {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 20px;
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
     cursor: pointer;
     transition: var(--transition);
     display: flex;
@@ -2182,37 +2189,85 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .ledger-card:hover {
     border-color: var(--accent-primary);
-    box-shadow: 0 2px 12px var(--accent-glow);
+    box-shadow: 0 2px 8px var(--accent-glow);
     transform: translateY(-1px);
 }
 
 .ledger-card-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
     flex: 1;
     min-width: 0;
 }
 
 .ledger-card-name {
-    font-size: 15px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
 }
 
-.ledger-card-section {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
 .ledger-card-actions {
     display: flex;
-    gap: 6px;
+    gap: 4px;
+    flex-shrink: 0;
 }
 
 .ledger-card-actions .btn {
-    padding: 4px 10px;
-    font-size: 11px;
+    padding: 2px 6px;
+    font-size: 10px;
+}
+
+.ledger-edit-btn {
+    padding: 4px;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.ledger-edit-btn:hover {
+    background: var(--bg-tertiary);
+}
+
+.ledger-edit-icon {
+    width: 16px;
+    height: 16px;
+    display: block;
+}
+
+.edit-ledger-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.edit-ledger-actions-right {
+    display: flex;
+    gap: 8px;
+}
+
+.ledger-edit-delete-wrap {
+    display: inline-block;
+}
+
+.ledger-edit-delete-btn {
+    background: var(--danger);
+    color: white;
+}
+
+.ledger-edit-delete-btn:hover:not(:disabled) {
+    background: #b91c1c;
+}
+
+.ledger-edit-delete-btn:disabled,
+.ledger-edit-delete-btn.ledger-edit-delete-btn-has-entries {
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+    cursor: not-allowed;
+    opacity: 0.8;
 }
 
 /* Ledger Detail */
@@ -2561,6 +2616,17 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 /* Delete Confirmation Modal */
+.app-confirm-message {
+    margin: 0 0 20px;
+    font-size: 15px;
+    color: var(--text-primary);
+    line-height: 1.5;
+}
+
+.app-confirm-modal-content .form-actions {
+    margin-bottom: 0;
+}
+
 .delete-confirm-modal-content {
     max-width: 480px;
 }

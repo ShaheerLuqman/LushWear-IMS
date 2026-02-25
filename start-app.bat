@@ -4,7 +4,7 @@ REM Terminal Visibility Control
 REM Change the line below to set SHOW_TERMINALS=1 to show terminals
 REM Default: 0 (hidden)
 REM ========================================
-set SHOW_TERMINALS=1
+set SHOW_TERMINALS=0
 REM Uncomment the line above and change to 1 to show terminals
 REM Or set it here: set SHOW_TERMINALS=1
 

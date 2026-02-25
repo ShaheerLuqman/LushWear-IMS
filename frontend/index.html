@@ -94,33 +94,27 @@
                             <option value="__all__">All orders</option>
                         </select>
                     </div>
-                    <button id="editCostPricesBtn" class="btn btn-primary" style="display: none;">
+                    <button id="editCostPricesBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         Edit Cost Prices
                     </button>
-                    <button id="syncShopifyBtn" class="btn btn-primary" style="display: none;">
+                    <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         Sync from Shopify
                     </button>
-                    <button id="syncOrdersBtn" class="btn btn-primary" style="display: none;">
+                    <button id="syncOrdersBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         Sync from Shopify
                     </button>
-                    <button id="bulkUpdateOrderBtn" class="btn btn-secondary" style="display: none;" title="Bulk update order">
+                    <button id="bulkUpdateOrderBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update order">
                         Bulk update order
                     </button>
-                    <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
-                        <span style="margin-right: 8px;">🔄</span>
-                        Delivery Status
+                    <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
+                        Fetch Delivery Status
                     </button>
-                    <div id="ordersMoreActionsWrap" class="orders-more-actions-wrap" style="display: none;">
-                        <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary btn-icon-only orders-more-actions-btn" title="More actions">
-                            <span aria-hidden="true">⋮</span>
-                        </button>
-                        <div id="ordersMoreActionsDropdown" class="orders-more-actions-dropdown" aria-hidden="true">
-                            <button type="button" class="orders-more-actions-item" id="ordersMoreActionCreateReplacement">Create Replacement Order</button>
-                            <button type="button" class="orders-more-actions-item" id="ordersMoreActionUploadPostEx">Upload PostEx CSV</button>
-                            <button type="button" class="orders-more-actions-item" id="ordersMoreActionGenerateInvoice">Generate Invoice</button>
-                        </div>
+                    <div id="ordersMoreActionsWrap" class="orders-toolbar-actions" style="display: none;">
+                        <button type="button" id="ordersMoreActionCreateReplacement" class="btn btn-secondary header-toolbar-btn" title="Create replacement order">Create Replacement</button>
+                        <button type="button" id="ordersMoreActionUploadPostEx" class="btn btn-secondary header-toolbar-btn" title="Upload PostEx CSV">Upload PostEx CSV</button>
+                        <button type="button" id="ordersMoreActionGenerateInvoice" class="btn btn-secondary header-toolbar-btn" title="Generate invoice for selected orders">Generate Invoice</button>
                     </div>
-                    <button id="ordersFullScreenBtn" class="btn btn-secondary btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
+                    <button id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
                         <span aria-hidden="true">⛶</span>
                     </button>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
@@ -232,6 +226,44 @@
                                 <div class="modal-actions form-actions">
                                     <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
                                     <button type="submit" class="btn btn-primary">Create</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Edit Ledger Modal -->
+                <div id="editLedgerModal" class="modal">
+                    <div class="modal-content">
+                        <div class="modal-header">
+                            <h2>Edit Ledger</h2>
+                            <button type="button" class="modal-close" id="closeEditLedgerModal" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="editLedgerForm" class="ledger-form">
+                                <div class="form-group">
+                                    <label for="editLedgerName">Ledger name *</label>
+                                    <input type="text" id="editLedgerName" class="form-input" placeholder="e.g. Main Bank Account" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="editLedgerSection">Section *</label>
+                                    <select id="editLedgerSection" class="form-input" required>
+                                        <option value="">Select section...</option>
+                                        <option value="Bank">Bank</option>
+                                        <option value="Expense">Expense</option>
+                                        <option value="Vendors">Vendors</option>
+                                        <option value="Sales">Sales</option>
+                                        <option value="Investors">Investors</option>
+                                    </select>
+                                </div>
+                                <div class="modal-actions form-actions edit-ledger-actions">
+                                    <span id="editLedgerDeleteWrap" class="ledger-edit-delete-wrap" title="">
+                                        <button type="button" class="btn btn-danger ledger-edit-delete-btn" id="editLedgerDeleteBtn">Delete</button>
+                                    </span>
+                                    <div class="edit-ledger-actions-right">
+                                        <button type="button" id="editLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
+                                        <button type="submit" class="btn btn-primary">Save</button>
+                                    </div>
                                 </div>
                             </form>
                         </div>
@@ -423,6 +455,23 @@
                 <div class="form-actions">
                     <button type="button" class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
                     <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- In-app confirmation modal (reusable) -->
+    <div id="appConfirmModal" class="modal">
+        <div class="modal-content delete-confirm-modal-content app-confirm-modal-content">
+            <div class="modal-header">
+                <h2 id="appConfirmTitle">Confirm</h2>
+                <button type="button" class="modal-close" id="appConfirmClose" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="app-confirm-message" id="appConfirmMessage"></p>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="appConfirmCancelBtn">Cancel</button>
+                    <button type="button" class="btn btn-primary" id="appConfirmOkBtn"></button>
                 </div>
             </div>
         </div>

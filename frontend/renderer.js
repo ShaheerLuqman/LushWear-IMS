@@ -256,7 +256,19 @@ function initProductsGrid() {
                 filterOptions: ['contains', 'startsWith', 'endsWith'],
                 defaultOption: 'contains'
             },
-            valueFormatter: (params) => params.value ?? '—'
+            valueFormatter: (params) => (params.value == null || params.value === '') ? '—' : params.value,
+            editable: true,
+            cellStyle: { cursor: 'pointer' },
+            cellEditor: 'agSelectCellEditor',
+            cellEditorParams: {
+                values: ['', 'Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers']
+            },
+            valueSetter: (params) => {
+                const raw = params.newValue === '' ? '' : params.newValue;
+                params.data.collection = raw;
+                saveProductCollection(params.data.id, raw);
+                return true;
+            }
         },
         {
             headerName: 'Price (Rs)',
@@ -335,9 +347,7 @@ function initProductsGrid() {
             minWidth: 80
         },
         animateRows: true,
-        pagination: true,
-        paginationPageSize: 50,
-        paginationPageSizeSelector: [25, 50, 100, 200],
+        pagination: false,
         domLayout: 'normal',
         suppressCellFocus: false,
         stopEditingWhenCellsLoseFocus: true,
@@ -369,7 +379,11 @@ ClearFiltersFloatingFilter.prototype.init = function (params) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn-secondary btn-sm orders-clear-filters-btn';
-    btn.textContent = 'Clear';
+    const icon = document.createElement('img');
+    icon.src = 'assets/clear_filter.png';
+    icon.alt = 'Clear all filters';
+    icon.className = 'orders-clear-filters-icon';
+    btn.appendChild(icon);
     btn.title = 'Clear all filters (column filters and period)';
     btn.addEventListener('click', function () {
         const api = params.api;
@@ -583,7 +597,7 @@ function initOrdersGrid() {
             width: 100,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
-            valueFormatter: (params) => getCourierDisplayName(params.data || {})
+            valueFormatter: (params) => (params.data && params.data.id === '__footer__') ? '' : getCourierDisplayName(params.data || {})
         },
         {
             headerName: 'Tracking #',
@@ -606,6 +620,7 @@ function initOrdersGrid() {
             },
             floatingFilterComponent: OrderStatusFloatingFilter,
             cellRenderer: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
                 const status = params.value || '';
                 let cssClass = 'grid-status-unfulfilled';
                 if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
@@ -626,6 +641,7 @@ function initOrdersGrid() {
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
                 const order = params.data;
                 const courier = order.courier || '';
                 const hasCourier = courier && courier.trim() !== '' && courier.trim().toLowerCase() !== 'unassigned';
@@ -879,6 +895,7 @@ function initOrdersGrid() {
                 values: ['Pending', 'Done', 'Received']
             },
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return null;
                 const order = params.data;
                 const status = (order.order_status || '').toLowerCase();
                 if (status === 'delivered') return 'Done';
@@ -887,6 +904,7 @@ function initOrdersGrid() {
             },
             valueFormatter: (params) => params.value || '-',
             cellRenderer: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
                 const v = (params.value || '').trim();
                 if (!v) return '<span style="color: var(--text-muted);">-</span>';
                 let cssClass = 'grid-piece-pending';
@@ -964,6 +982,7 @@ function initOrdersGrid() {
             floatingFilterComponent: FinalStatusFloatingFilter,
             sortable: true,
             valueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return null;
                 const order = params.data;
                 const status = (order.order_status || '').toLowerCase();
                 const pieceReceived = (order.piece_received || '').trim();
@@ -992,6 +1011,7 @@ function initOrdersGrid() {
                 return 'Warning';
             },
             cellRenderer: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
                 const value = params.value || 'Warning';
                 if (value === 'OK') {
                     return '<span style="font-size: 18px;">🟢</span>';
@@ -1135,11 +1155,12 @@ function initOrdersGrid() {
         
         const footerData = {
             id: '__footer__',
-            // order_number omitted - not numeric, do not show in footer
-            courier: '',
-            tracking_number: '',
-            order_status: '',
-            delivery_status: '',
+            __isFooter: true,
+            order_number: null,
+            courier: null,
+            tracking_number: null,
+            order_status: null,
+            delivery_status: null,
             total_amount: sums.total_amount,
             advance_amount: sums.advance_amount,
             cod: sums.cod,
@@ -1149,10 +1170,10 @@ function initOrdersGrid() {
             cost_price: sums.cost_price,
             net_profit: sums.net_profit,
             profit_percent: sums.total_amount_for_profit > 0 ? (sums.net_profit / sums.total_amount_for_profit) * 100 : null,
-            piece_received: '',
-            items: '',
-            order_receiving_date: '',
-            final_status: ''
+            piece_received: null,
+            items: null,
+            order_receiving_date: null,
+            final_status: null
         };
         
         ordersGridApi.setGridOption('pinnedBottomRowData', selectedCount > 0 ? [footerData] : []);
@@ -1760,6 +1781,25 @@ async function saveCostPrice(productId, costPrice) {
     } catch (error) {
         console.error('Error saving cost price:', error);
         showToast('Failed to save cost price', 'error');
+    }
+}
+
+async function saveProductCollection(productId, collection) {
+    try {
+        const response = await fetch(`${API_BASE}/products/${productId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ collection: collection })
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to update collection');
+        }
+
+        showToast('Collection updated', 'success');
+    } catch (error) {
+        console.error('Error saving collection:', error);
+        showToast('Failed to save collection', 'error');
     }
 }
 
@@ -2762,10 +2802,9 @@ function renderLedgerCards() {
                         <div class="ledger-card" data-id="${l.id}">
                             <div class="ledger-card-info">
                                 <span class="ledger-card-name">${escapeHtml(l.name)}</span>
-                                <span class="ledger-card-section">${escapeHtml(l.section || '')}</span>
                             </div>
                             <div class="ledger-card-actions">
-                                <button class="btn btn-danger btn-sm ledger-delete-btn" data-id="${l.id}" title="Delete ledger">Delete</button>
+                                <button type="button" class="ledger-edit-btn" data-id="${l.id}" title="Edit ledger" aria-label="Edit ledger"><img src="assets/edit.png" alt="Edit" class="ledger-edit-icon"></button>
                             </div>
                         </div>
                     `).join('')}
@@ -2776,21 +2815,21 @@ function renderLedgerCards() {
 
     container.innerHTML = html;
 
-    // Click on card (not the delete button) opens detail
+    // Click on card (not the edit button) opens detail
     container.querySelectorAll('.ledger-card').forEach(card => {
         card.addEventListener('click', (e) => {
-            if (e.target.closest('.ledger-delete-btn')) return;
+            if (e.target.closest('.ledger-edit-btn')) return;
             const id = card.dataset.id;
             openLedgerDetail(id);
         });
     });
 
-    // Delete buttons
-    container.querySelectorAll('.ledger-delete-btn').forEach(btn => {
+    // Edit buttons
+    container.querySelectorAll('.ledger-edit-btn').forEach(btn => {
         btn.addEventListener('click', (e) => {
             e.stopPropagation();
             const id = btn.dataset.id;
-            deleteLedger(id);
+            openEditLedgerModal(id);
         });
     });
 }
@@ -2822,8 +2861,103 @@ function closeCreateLedgerModal() {
     document.getElementById('createLedgerModal').classList.remove('active');
 }
 
+let editLedgerId = null;
+let editLedgerHasEntries = false;
+
+async function openEditLedgerModal(ledgerId) {
+    if (!ledgerId) return;
+    editLedgerId = ledgerId;
+    try {
+        const [ledgerRes, entriesRes] = await Promise.all([
+            fetch(`${API_BASE}/ledgers/${ledgerId}`),
+            fetch(`${API_BASE}/ledgers/${ledgerId}/entries`)
+        ]);
+        if (!ledgerRes.ok) throw new Error('Failed to load ledger');
+        if (!entriesRes.ok) throw new Error('Failed to load entries');
+        const ledger = await ledgerRes.json();
+        const entries = await entriesRes.json();
+        editLedgerHasEntries = Array.isArray(entries) && entries.length > 0;
+
+        const nameInput = document.getElementById('editLedgerName');
+        const sectionSelect = document.getElementById('editLedgerSection');
+        if (nameInput) {
+            nameInput.value = ledger.name || '';
+            nameInput.removeAttribute('readonly');
+            nameInput.removeAttribute('disabled');
+        }
+        if (sectionSelect) sectionSelect.value = ledger.section || '';
+
+        const deleteBtn = document.getElementById('editLedgerDeleteBtn');
+        const deleteWrap = document.getElementById('editLedgerDeleteWrap');
+        if (deleteBtn) {
+            deleteBtn.disabled = editLedgerHasEntries;
+            deleteBtn.classList.toggle('ledger-edit-delete-btn-has-entries', editLedgerHasEntries);
+        }
+        if (deleteWrap) {
+            deleteWrap.title = editLedgerHasEntries ? 'Cannot delete: ledger has entries' : 'Delete ledger (no entries)';
+        }
+
+        document.getElementById('editLedgerModal').classList.add('active');
+        setTimeout(() => { if (nameInput) nameInput.focus(); }, 50);
+    } catch (error) {
+        console.error('Error opening edit ledger:', error);
+        showToast('Failed to load ledger', 'error');
+    }
+}
+
+function closeEditLedgerModal() {
+    document.getElementById('editLedgerModal').classList.remove('active');
+    editLedgerId = null;
+}
+
+async function saveEditLedger() {
+    if (!editLedgerId) return;
+    const name = (document.getElementById('editLedgerName').value || '').trim();
+    const section = (document.getElementById('editLedgerSection').value || '').trim();
+    if (!name || !section) {
+        showToast('Name and section are required', 'error');
+        return;
+    }
+    const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
+    if (!confirmed) return;
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, section })
+        });
+        if (!response.ok) throw new Error('Failed to update ledger');
+        showToast('Ledger updated', 'success');
+        closeEditLedgerModal();
+        await loadLedgers();
+    } catch (error) {
+        console.error('Error updating ledger:', error);
+        showToast('Failed to update ledger', 'error');
+    }
+}
+
+async function deleteLedgerFromEditModal() {
+    if (!editLedgerId) return;
+    if (editLedgerHasEntries) return;
+    const confirmed = await showAppConfirm({ title: 'Delete Ledger', message: 'Are you sure you want to delete this ledger? This cannot be undone.', confirmText: 'Delete', danger: true });
+    if (!confirmed) return;
+    try {
+        const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
+            method: 'DELETE'
+        });
+        if (!response.ok) throw new Error('Failed to delete ledger');
+        showToast('Ledger deleted', 'success');
+        closeEditLedgerModal();
+        await loadLedgers();
+    } catch (error) {
+        console.error('Error deleting ledger:', error);
+        showToast('Failed to delete ledger', 'error');
+    }
+}
+
 async function deleteLedger(ledgerId) {
     if (!ledgerId) return;
+    if (!confirm('Are you sure you want to delete this ledger? This cannot be undone.')) return;
     try {
         const response = await fetch(`${API_BASE}/ledgers/${ledgerId}`, {
             method: 'DELETE'
@@ -3354,25 +3488,8 @@ function initForms() {
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
 
-    // Orders more actions (3-dot menu): Upload PostEx CSV, Generate Invoice
-    const ordersMoreActionsBtn = document.getElementById('ordersMoreActionsBtn');
-    const ordersMoreActionsDropdown = document.getElementById('ordersMoreActionsDropdown');
+    // Orders toolbar actions: Upload PostEx CSV, Generate Invoice, Create Replacement
     const postExCsvInput = document.getElementById('postExCsvInput');
-    if (ordersMoreActionsBtn && ordersMoreActionsDropdown) {
-        ordersMoreActionsBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            const isOpen = ordersMoreActionsDropdown.classList.contains('open');
-            ordersMoreActionsDropdown.classList.toggle('open', !isOpen);
-            ordersMoreActionsDropdown.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-        });
-        document.addEventListener('click', (e) => {
-            const wrap = document.getElementById('ordersMoreActionsWrap');
-            if (wrap && !wrap.contains(e.target)) {
-                ordersMoreActionsDropdown.classList.remove('open');
-                ordersMoreActionsDropdown.setAttribute('aria-hidden', 'true');
-            }
-        });
-    }
     if (postExCsvInput) {
         postExCsvInput.addEventListener('change', async (e) => {
             const file = e.target.files?.[0];
@@ -3383,17 +3500,11 @@ function initForms() {
     }
     const ordersMoreActionUploadPostEx = document.getElementById('ordersMoreActionUploadPostEx');
     if (ordersMoreActionUploadPostEx && postExCsvInput) {
-        ordersMoreActionUploadPostEx.addEventListener('click', () => {
-            ordersMoreActionsDropdown?.classList.remove('open');
-            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
-            postExCsvInput.click();
-        });
+        ordersMoreActionUploadPostEx.addEventListener('click', () => postExCsvInput.click());
     }
     const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
     if (ordersMoreActionGenerateInvoice) {
         ordersMoreActionGenerateInvoice.addEventListener('click', async () => {
-            ordersMoreActionsDropdown?.classList.remove('open');
-            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
             if (!ordersGridApi) {
                 showToast('Orders grid not initialized', 'error');
                 return;
@@ -3476,14 +3587,10 @@ function initForms() {
         });
     }
 
-    // Create Replacement Order menu item
+    // Create Replacement Order
     const ordersMoreActionCreateReplacement = document.getElementById('ordersMoreActionCreateReplacement');
     if (ordersMoreActionCreateReplacement) {
-        ordersMoreActionCreateReplacement.addEventListener('click', () => {
-            ordersMoreActionsDropdown?.classList.remove('open');
-            ordersMoreActionsDropdown?.setAttribute('aria-hidden', 'true');
-            openReplacementOrderModal();
-        });
+        ordersMoreActionCreateReplacement.addEventListener('click', () => openReplacementOrderModal());
     }
 
     // Replacement Order modal
@@ -3672,6 +3779,28 @@ function initForms() {
     document.getElementById('createLedgerCancelBtn')?.addEventListener('click', closeCreateLedgerModal);
     document.getElementById('createLedgerModal')?.addEventListener('click', (e) => {
         if (e.target.id === 'createLedgerModal') closeCreateLedgerModal();
+    });
+
+    // Edit Ledger modal
+    document.getElementById('closeEditLedgerModal')?.addEventListener('click', closeEditLedgerModal);
+    document.getElementById('editLedgerCancelBtn')?.addEventListener('click', closeEditLedgerModal);
+    document.getElementById('editLedgerModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'editLedgerModal') closeEditLedgerModal();
+    });
+    const editLedgerModalContent = document.querySelector('#editLedgerModal .modal-content');
+    if (editLedgerModalContent) {
+        editLedgerModalContent.addEventListener('click', (e) => e.stopPropagation());
+    }
+    const editLedgerForm = document.getElementById('editLedgerForm');
+    if (editLedgerForm) {
+        editLedgerForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            saveEditLedger();
+        });
+    }
+    document.getElementById('editLedgerDeleteBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        deleteLedgerFromEditModal();
     });
 
     // Ledger: back button
@@ -4035,6 +4164,47 @@ async function bulkUpdatePieceReceived() {
 // ============================================
 // Toast
 // ============================================
+
+/**
+ * Show in-app confirmation modal. Returns a Promise that resolves to true if user clicked Confirm, false if Cancel/close.
+ * @param {{ title: string, message: string, confirmText?: string, danger?: boolean }} options
+ */
+function showAppConfirm(options) {
+    const { title = 'Confirm', message, confirmText = 'Confirm', danger = false } = options || {};
+    const modal = document.getElementById('appConfirmModal');
+    const titleEl = document.getElementById('appConfirmTitle');
+    const messageEl = document.getElementById('appConfirmMessage');
+    const okBtn = document.getElementById('appConfirmOkBtn');
+    const cancelBtn = document.getElementById('appConfirmCancelBtn');
+    const closeBtn = document.getElementById('appConfirmClose');
+    if (!modal || !messageEl || !okBtn) return Promise.resolve(false);
+
+    if (titleEl) titleEl.textContent = title;
+    messageEl.textContent = message;
+    okBtn.textContent = confirmText;
+    okBtn.className = danger ? 'btn btn-danger' : 'btn btn-primary';
+
+    modal.classList.add('active');
+
+    return new Promise((resolve) => {
+        const finish = (result) => {
+            modal.classList.remove('active');
+            okBtn.removeEventListener('click', onConfirm);
+            cancelBtn.removeEventListener('click', onCancel);
+            closeBtn.removeEventListener('click', onCancel);
+            modal.removeEventListener('click', onBackdrop);
+            resolve(result);
+        };
+        const onConfirm = () => finish(true);
+        const onCancel = () => finish(false);
+        const onBackdrop = (e) => { if (e.target === modal) finish(false); };
+
+        okBtn.addEventListener('click', onConfirm);
+        cancelBtn.addEventListener('click', onCancel);
+        closeBtn.addEventListener('click', onCancel);
+        modal.addEventListener('click', onBackdrop);
+    });
+}
 
 function showToast(message, type = 'info') {
     toast.textContent = message;
