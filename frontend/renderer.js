@@ -4256,61 +4256,72 @@ async function fetchDeliveryStatusForOrder(orderId, courier, trackingNumber) {
     return response.json();
 }
 
-/** Refresh delivery status for all selected orders: sequential fetch, row-by-row update, progress shown. No modals. */
+const FETCH_DELIVERY_BTN_DEFAULT_TEXT = 'Fetch Delivery Status';
+
+/** Refresh delivery status for all selected orders: sequential fetch, row-by-row update. Status shown in button; continues in background when user changes page. */
 async function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows();
     const toFetch = selected.filter(row => {
+        const status = (row.order_status || '').toLowerCase();
+        if (status === 'delivered' || status === 'returned') return false;
         const courier = (row.courier || '').trim();
         const track = (row.tracking_number || '').trim();
         return courier && courier.toUpperCase() === 'POSTEX' && track && track !== '-';
     });
     if (toFetch.length === 0) {
-        showToast('Select PostEx orders with tracking number to refresh delivery status', 'warning');
+        showToast('Select PostEx orders with tracking number (delivered and returned are skipped)', 'warning');
         return;
     }
-    const progressEl = document.getElementById('deliveryRefreshProgress');
     const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-    if (progressEl) progressEl.style.display = 'inline';
-    if (btn) btn.disabled = true;
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = `Fetching 0/${toFetch.length}`;
+    }
     const total = toFetch.length;
     let fetched = 0;
     const updateProgress = () => {
-        if (progressEl) progressEl.textContent = `Fetched ${fetched} / ${total}`;
+        const b = document.getElementById('refreshDeliveryStatusSelectedBtn');
+        if (b) b.textContent = `Fetching ${fetched}/${total}`;
     };
-    updateProgress();
-    for (const order of toFetch) {
-        try {
-            const data = await fetchDeliveryStatusForOrder(order.id, order.courier, order.tracking_number);
-            ordersGridApi.forEachNode(node => {
-                if (node.data && node.data.id === order.id) {
-                    const updated = { ...node.data, delivery_status: data };
-                    // Check delivery status and update order_status accordingly
-                    // Priority: Return > Delivered > RFD > ICA > CNA
-                    if (deliveryStatusIndicatesReturned(data)) {
-                        updated.order_status = 'returned';
-                    } else if (deliveryStatusIndicatesDelivered(data)) {
-                        updated.order_status = 'delivered';
-                        updated.piece_received = 'Done';
-                    } else if (deliveryStatusIndicatesRFD(data)) {
-                        updated.order_status = 'RFD';
-                    } else if (deliveryStatusIndicatesICA(data)) {
-                        updated.order_status = 'ICA';
-                    } else if (deliveryStatusIndicatesCNA(data)) {
-                        updated.order_status = 'CNA';
-                    }
-                    node.setData(updated);
+    try {
+        for (const order of toFetch) {
+            try {
+                const data = await fetchDeliveryStatusForOrder(order.id, order.courier, order.tracking_number);
+                if (ordersGridApi) {
+                    ordersGridApi.forEachNode(node => {
+                        if (node.data && node.data.id === order.id) {
+                            const updated = { ...node.data, delivery_status: data };
+                            if (deliveryStatusIndicatesReturned(data)) {
+                                updated.order_status = 'returned';
+                            } else if (deliveryStatusIndicatesDelivered(data)) {
+                                updated.order_status = 'delivered';
+                                updated.piece_received = 'Done';
+                            } else if (deliveryStatusIndicatesRFD(data)) {
+                                updated.order_status = 'RFD';
+                            } else if (deliveryStatusIndicatesICA(data)) {
+                                updated.order_status = 'ICA';
+                            } else if (deliveryStatusIndicatesCNA(data)) {
+                                updated.order_status = 'CNA';
+                            }
+                            node.setData(updated);
+                        }
+                    });
                 }
-            });
-        } catch (err) {
-            console.warn('Delivery status fetch failed for order', order.id, err.message);
+            } catch (err) {
+                console.warn('Delivery status fetch failed for order', order.id, err.message);
+            }
+            fetched += 1;
+            updateProgress();
         }
-        fetched += 1;
-        updateProgress();
+        showToast(`Updated delivery status for ${fetched} of ${total} selected orders`, 'success');
+    } finally {
+        const b = document.getElementById('refreshDeliveryStatusSelectedBtn');
+        if (b) {
+            b.disabled = false;
+            b.textContent = FETCH_DELIVERY_BTN_DEFAULT_TEXT;
+        }
     }
-    if (progressEl) progressEl.style.display = 'none';
-    if (btn) btn.disabled = false;
-    showToast(`Updated delivery status for ${fetched} of ${total} selected orders`, 'success');
 }
 
 async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
