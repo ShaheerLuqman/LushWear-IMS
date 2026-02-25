@@ -677,9 +677,24 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
+            editable: (params) => params.node?.rowPinned !== 'bottom',
+            cellStyle: { cursor: 'pointer' },
+            cellEditor: 'agNumberCellEditor',
+            cellEditorParams: { min: 0, max: 999999999.99, precision: 2 },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            valueSetter: (params) => {
+                if (params.data?.id === '__footer__') return false;
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.total_amount = newValue;
+                    saveOrderField(params.data.id, 'total_amount', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
             }
         },
         {
@@ -689,11 +704,24 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: false,
-            cellStyle: { cursor: 'default' },
+            editable: (params) => params.node?.rowPinned !== 'bottom',
+            cellStyle: { cursor: 'pointer' },
+            cellEditor: 'agNumberCellEditor',
+            cellEditorParams: { min: 0, max: 999999999.99, precision: 2 },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            valueSetter: (params) => {
+                if (params.data?.id === '__footer__') return false;
+                const newValue = parseFloat(params.newValue);
+                if (!isNaN(newValue) && newValue >= 0) {
+                    params.data.advance_amount = newValue;
+                    saveOrderField(params.data.id, 'advance_amount', newValue);
+                    params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    return true;
+                }
+                return false;
             }
         },
         {
@@ -1229,6 +1257,7 @@ function initOrdersGrid() {
         domLayout: 'normal',
         suppressCellFocus: false,
         stopEditingWhenCellsLoseFocus: true,
+        singleClickEdit: true,
         getRowId: (params) => params.data.id,
         getRowStyle: (params) => {
             if (params.data.id === '__footer__') {
