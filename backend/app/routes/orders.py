@@ -513,18 +513,28 @@ async def sync_shopify_orders():
             elif "total_shipping_price" in sp_order:
                 shipping_price = float(sp_order.get("total_shipping_price") or 0)
 
-            # Total = line items (excluding removed) + tax + shipping
-            total_amount = total_line_items_price + shopify_tax + shipping_price
-            
-            # Sum of all discounts (custom order-level + per-item discounts)
-            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
-            
-            # Advance: if paid = full order price; if not paid = sum of discounts
-            financial_status = (sp_order.get("financial_status") or "").strip().lower()
-            if financial_status == "paid":
-                advance_amount = total_amount
+            # Detect discount applied by code (e.g. promo code). If so, use Shopify's total (already discounted) and do not treat discount as advance.
+            discount_applications = sp_order.get("discount_applications") or []
+            discount_codes = sp_order.get("discount_codes") or []
+            has_discount_by_code = any(
+                (a.get("type") or "").strip().lower() == "discount_code"
+                for a in discount_applications
+            ) or bool(discount_codes)
+
+            if has_discount_by_code:
+                # Total = Shopify's total price (already has discount deducted)
+                total_amount = float(sp_order.get("current_total_price") or sp_order.get("total_price") or 0)
+                financial_status = (sp_order.get("financial_status") or "").strip().lower()
+                advance_amount = total_amount if financial_status == "paid" else 0.0
             else:
-                advance_amount = total_discounts
+                # Total = line items (excluding removed) + tax + shipping (before any discount)
+                total_amount = total_line_items_price + shopify_tax + shipping_price
+                total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+                financial_status = (sp_order.get("financial_status") or "").strip().lower()
+                if financial_status == "paid":
+                    advance_amount = total_amount
+                else:
+                    advance_amount = total_discounts
             
             # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
             delivery_charge = 0.0
