@@ -20,6 +20,8 @@ let updateFooterRow = null; // Will be set in initOrdersGrid
 // Auto-sync orders every 15 minutes; timer is reset when user clicks sync
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
+/** Guard: when Order# filter is 4 digits and 0 results, we fetch from DB; avoid duplicate requests */
+let ordersFetchByNumberInFlight = null;
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
@@ -1392,6 +1394,38 @@ function initOrdersGrid() {
         onGridReady: (params) => {
             ordersGridApi = params.api;
             updateFooterRow();
+        },
+        onFilterChanged: (params) => {
+            // When Order# filter is exactly 4 digits and no rows match, fetch that order from DB and show it
+            if (!params.api) return;
+            const filterModel = params.api.getFilterModel() || {};
+            const orderNumCol = filterModel.order_number;
+            const filterValue = orderNumCol && (orderNumCol.filter != null) ? String(orderNumCol.filter).trim() : '';
+            const is4Digits = /^\d{4}$/.test(filterValue);
+            const displayedCount = params.api.getDisplayedRowCount();
+            if (!is4Digits || displayedCount > 0) return;
+            (async () => {
+                if (ordersFetchByNumberInFlight === filterValue) return;
+                ordersFetchByNumberInFlight = filterValue;
+                try {
+                    const response = await fetch(`${API_BASE}/orders/by-number/${encodeURIComponent(filterValue)}`);
+                    if (!response.ok) {
+                        if (response.status === 404) showToast(`Order #${filterValue} not found in database`, 'info');
+                        return;
+                    }
+                    const order = await response.json();
+                    if (order && order.id) {
+                        params.api.applyTransaction({ add: [order], addIndex: 0 });
+                        updateFooterRow();
+                        showToast(`Order #${filterValue} loaded from database`, 'success');
+                    }
+                } catch (err) {
+                    console.error('Fetch order by number failed:', err);
+                    showToast('Failed to fetch order from database', 'error');
+                } finally {
+                    ordersFetchByNumberInFlight = null;
+                }
+            })();
         },
         onSelectionChanged: (params) => {
             // Ensure only filtered rows are selected - deselect any non-filtered rows

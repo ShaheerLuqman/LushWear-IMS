@@ -1021,6 +1021,25 @@ async def create_replacement_order(body: ReplacementOrderCreate):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/by-number/{order_number}")
+async def get_order_by_number(order_number: str):
+    """Get a single order by order_number (e.g. 4-digit number). Used when order is not in current grid (e.g. different period)."""
+    try:
+        num = order_number.strip()
+        if not num:
+            raise HTTPException(status_code=400, detail="order_number required")
+        supabase = get_supabase()
+        # Match as string; DB may store as string or int
+        response = supabase.table("orders").select("*").eq("order_number", num).limit(1).execute()
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=404, detail="Order not found")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{order_id}")
 async def get_order(order_id: str):
     """Get a single order by ID"""
