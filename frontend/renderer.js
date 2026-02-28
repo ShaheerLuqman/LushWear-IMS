@@ -22,6 +22,8 @@ const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
 /** Guard: when Order# filter is 4 digits and 0 results, we fetch from DB; avoid duplicate requests */
 let ordersFetchByNumberInFlight = null;
+/** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */
+let ordersFetchedByNumberIds = new Set();
 
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
@@ -1396,14 +1398,41 @@ function initOrdersGrid() {
             updateFooterRow();
         },
         onFilterChanged: (params) => {
-            // When Order# filter is exactly 4 digits and no rows match, fetch that order from DB and show it
+            // Temporarily added "fetch by number" orders: remove when filter is cleared or Order# is changed
             if (!params.api) return;
             const filterModel = params.api.getFilterModel() || {};
             const orderNumCol = filterModel.order_number;
             const filterValue = orderNumCol && (orderNumCol.filter != null) ? String(orderNumCol.filter).trim() : '';
             const is4Digits = /^\d{4}$/.test(filterValue);
+
+            function removeFetchedByNumberRows() {
+                if (ordersFetchedByNumberIds.size === 0) return;
+                const toRemove = [];
+                params.api.forEachNode((node) => {
+                    if (node.data && node.data.id !== '__footer__' && ordersFetchedByNumberIds.has(node.data.id)) {
+                        toRemove.push(node.data);
+                    }
+                });
+                if (toRemove.length) {
+                    params.api.applyTransaction({ remove: toRemove });
+                    updateFooterRow();
+                }
+                ordersFetchedByNumberIds.clear();
+            }
+
+            // Clear or non-4-digit: remove any temporarily added order and stop
+            if (!is4Digits) {
+                removeFetchedByNumberRows();
+                return;
+            }
+
             const displayedCount = params.api.getDisplayedRowCount();
-            if (!is4Digits || displayedCount > 0) return;
+            // Same 4-digit filter but we already have a temporary row for it (e.g. re-apply): no-op
+            if (displayedCount > 0) return;
+
+            // New 4-digit search with 0 results: remove any previous temporary row(s) then fetch this number
+            removeFetchedByNumberRows();
+
             (async () => {
                 if (ordersFetchByNumberInFlight === filterValue) return;
                 ordersFetchByNumberInFlight = filterValue;
@@ -1415,6 +1444,7 @@ function initOrdersGrid() {
                     }
                     const order = await response.json();
                     if (order && order.id) {
+                        ordersFetchedByNumberIds.add(order.id);
                         params.api.applyTransaction({ add: [order], addIndex: 0 });
                         updateFooterRow();
                         showToast(`Order #${filterValue} loaded from database`, 'success');
