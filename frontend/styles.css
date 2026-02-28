@@ -1580,6 +1580,43 @@ body:has(#ledgersView.active) .content-area {
     border-radius: 4px;
 }
 
+/* Vertically center content in floating filter row */
+.ag-theme-alpine .ag-floating-filter-body {
+    display: flex;
+    align-items: center;
+}
+
+.grid-floating-filter-wrap {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 100%;
+}
+
+/* Custom floating filter dropdown (Order Status, Collection, Piece Received, etc.) */
+.grid-floating-filter-select {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 13px;
+    font-family: var(--font-primary);
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.grid-floating-filter-select:hover {
+    border-color: var(--accent-primary);
+}
+
+.grid-floating-filter-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+}
+
 /* Editable cells highlight */
 .ag-theme-alpine .ag-cell-inline-editing {
     background: #f8f9fa;

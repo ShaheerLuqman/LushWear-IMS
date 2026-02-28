@@ -225,6 +225,21 @@ function initProductsGrid() {
 
     const columnDefs = [
         {
+            headerName: '',
+            colId: 'select',
+            width: 52,
+            minWidth: 52,
+            maxWidth: 52,
+            checkboxSelection: true,
+            headerCheckboxSelection: true,
+            headerCheckboxSelectionFilteredOnly: true,
+            filter: ProductsClearFiltersPassThroughFilter,
+            sortable: false,
+            floatingFilter: true,
+            floatingFilterComponent: ProductsClearFiltersFloatingFilter,
+            suppressSizeToFit: true
+        },
+        {
             headerName: 'Image',
             field: 'image_url',
             width: 80,
@@ -253,8 +268,22 @@ function initProductsGrid() {
             width: 160,
             filter: 'agTextColumnFilter',
             filterParams: {
-                filterOptions: ['contains', 'startsWith', 'endsWith'],
-                defaultOption: 'contains'
+                filterOptions: ['equals'],
+                defaultOption: 'equals',
+                maxNumConditions: 1,
+                textMatcher: ({ filterOption, value, filterText }) => {
+                    if (filterOption !== 'equals') return value === filterText;
+                    // Sentinel for "empty collection" so AG Grid doesn't treat it as no filter
+                    if (filterText === '__empty__') {
+                        return (value === '' || value == null);
+                    }
+                    return value === filterText;
+                }
+            },
+            floatingFilterComponent: CollectionFloatingFilter,
+            valueGetter: (params) => {
+                const v = params.data?.collection;
+                return (v == null || v === '') ? '' : v;
             },
             valueFormatter: (params) => (params.value == null || params.value === '') ? '—' : params.value,
             editable: true,
@@ -339,6 +368,8 @@ function initProductsGrid() {
     const gridOptions = {
         columnDefs: columnDefs,
         rowData: [],
+        rowSelection: 'multiple',
+        suppressRowClickSelection: true,
         defaultColDef: {
             sortable: true,
             resizable: true,
@@ -399,17 +430,50 @@ ClearFiltersFloatingFilter.prototype.init = function (params) {
 ClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
 ClearFiltersFloatingFilter.prototype.onParentModelChanged = function () {};
 
+// No-op filter for products grid first column (so floating filter cell is rendered)
+function ProductsClearFiltersPassThroughFilter() {}
+ProductsClearFiltersPassThroughFilter.prototype.init = function () {};
+ProductsClearFiltersPassThroughFilter.prototype.getGui = function () { return document.createElement('div'); };
+ProductsClearFiltersPassThroughFilter.prototype.doesRowPassFilter = function () { return true; };
+ProductsClearFiltersPassThroughFilter.prototype.getModel = function () { return null; };
+ProductsClearFiltersPassThroughFilter.prototype.setModel = function () {};
+
+// Clear all filters button for products grid (floating filter in first column)
+function ProductsClearFiltersFloatingFilter() {}
+ProductsClearFiltersFloatingFilter.prototype.init = function (params) {
+    this.eGui = document.createElement('div');
+    this.eGui.style.width = '100%';
+    this.eGui.style.display = 'flex';
+    this.eGui.style.alignItems = 'center';
+    this.eGui.style.justifyContent = 'center';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-secondary btn-sm orders-clear-filters-btn';
+    const icon = document.createElement('img');
+    icon.src = 'assets/clear_filter.png';
+    icon.alt = 'Clear all filters';
+    icon.className = 'orders-clear-filters-icon';
+    btn.appendChild(icon);
+    btn.title = 'Clear all filters';
+    btn.addEventListener('click', function () {
+        if (params.api) params.api.setFilterModel(null);
+    });
+    this.eGui.appendChild(btn);
+};
+ProductsClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
+ProductsClearFiltersFloatingFilter.prototype.onParentModelChanged = function () {};
+
 // Custom floating filter for Order Status: shows a <select> dropdown in the filter row
 const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'cancelled', 'CNA', 'ICA'];
 function OrderStatusFloatingFilter() {}
 OrderStatusFloatingFilter.prototype.init = function (params) {
     this.params = params;
     this.eGui = document.createElement('div');
+    this.eGui.className = 'grid-floating-filter-wrap';
     this.eGui.style.width = '100%';
     const select = document.createElement('select');
+    select.className = 'grid-floating-filter-select';
     select.style.width = '100%';
-    select.style.padding = '4px 6px';
-    select.style.fontSize = '12px';
     const allOption = document.createElement('option');
     allOption.value = '__all__';
     allOption.textContent = 'All';
@@ -454,11 +518,11 @@ function FinalStatusFloatingFilter() {}
 FinalStatusFloatingFilter.prototype.init = function (params) {
     this.params = params;
     this.eGui = document.createElement('div');
+    this.eGui.className = 'grid-floating-filter-wrap';
     this.eGui.style.width = '100%';
     const select = document.createElement('select');
+    select.className = 'grid-floating-filter-select';
     select.style.width = '100%';
-    select.style.padding = '4px 6px';
-    select.style.fontSize = '12px';
     const allOption = document.createElement('option');
     allOption.value = '__all__';
     allOption.textContent = 'All';
@@ -496,17 +560,69 @@ FinalStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel
     }
 };
 
+// Custom floating filter for Collection (products): dropdown like Order Status
+const COLLECTION_VALUES = ['', 'Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers'];
+function CollectionFloatingFilter() {}
+CollectionFloatingFilter.prototype.init = function (params) {
+    this.params = params;
+    this.eGui = document.createElement('div');
+    this.eGui.className = 'grid-floating-filter-wrap';
+    this.eGui.style.width = '100%';
+    const select = document.createElement('select');
+    select.className = 'grid-floating-filter-select';
+    select.style.width = '100%';
+    const allOption = document.createElement('option');
+    allOption.value = '__all__';
+    allOption.textContent = 'All';
+    select.appendChild(allOption);
+    COLLECTION_VALUES.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v === '' ? '—' : v;
+        select.appendChild(opt);
+    });
+    const api = params.api;
+    const columnId = params.column.getColId();
+    select.addEventListener('change', function () {
+        const val = select.value;
+        const currentModel = api.getFilterModel() || {};
+        const newModel = Object.assign({}, currentModel);
+        if (val === '__all__') {
+            delete newModel[columnId];
+        } else {
+            // Use sentinel for empty so AG Grid doesn't treat it as "no filter"
+            const filterVal = (val === '') ? '__empty__' : val;
+            newModel[columnId] = { filterType: 'text', type: 'equals', filter: filterVal };
+        }
+        api.setFilterModel(newModel);
+    });
+    this.eGui.appendChild(select);
+    this.select = select;
+};
+CollectionFloatingFilter.prototype.getGui = function () { return this.eGui; };
+CollectionFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
+    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null) {
+        this.select.value = '__all__';
+    } else if (parentModel.filter === '__empty__') {
+        this.select.value = '';
+    } else if (COLLECTION_VALUES.indexOf(parentModel.filter) !== -1) {
+        this.select.value = parentModel.filter;
+    } else {
+        this.select.value = '__all__';
+    }
+};
+
 // Custom floating filter for Piece Received: dropdown in the filter row
 const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];
 function PieceReceivedFloatingFilter() {}
 PieceReceivedFloatingFilter.prototype.init = function (params) {
     this.params = params;
     this.eGui = document.createElement('div');
+    this.eGui.className = 'grid-floating-filter-wrap';
     this.eGui.style.width = '100%';
     const select = document.createElement('select');
+    select.className = 'grid-floating-filter-select';
     select.style.width = '100%';
-    select.style.padding = '4px 6px';
-    select.style.fontSize = '12px';
     const allOption = document.createElement('option');
     allOption.value = '__all__';
     allOption.textContent = 'All';
@@ -1986,6 +2102,7 @@ function switchView(viewName) {
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     const ordersMoreActionsWrap = document.getElementById('ordersMoreActionsWrap');
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
+    const bulkUpdateCostPriceBtn = document.getElementById('bulkUpdateCostPriceBtn');
     const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
 
     if (editCostPricesBtn) {
@@ -1993,6 +2110,7 @@ function switchView(viewName) {
     }
 
     if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
+    if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
 
     const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
     const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
@@ -2000,6 +2118,7 @@ function switchView(viewName) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
+            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'inline-flex';
             if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
@@ -2022,6 +2141,7 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'none';
             if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
+            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
@@ -2035,6 +2155,7 @@ function switchView(viewName) {
             syncOrdersBtn.style.display = 'none';
             if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
+            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
@@ -3222,8 +3343,7 @@ async function syncShopifyOrders() {
             `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
             'success'
         );
-
-        loadOrders();
+        // Do not auto-reload the grid; user can change period or refresh to see updated data
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');
@@ -3510,6 +3630,12 @@ function initForms() {
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
     if (bulkUpdateOrderBtn) {
         bulkUpdateOrderBtn.addEventListener('click', openBulkUpdateOrderModal);
+    }
+
+    // Bulk update cost price (products)
+    const bulkUpdateCostPriceBtn = document.getElementById('bulkUpdateCostPriceBtn');
+    if (bulkUpdateCostPriceBtn) {
+        bulkUpdateCostPriceBtn.addEventListener('click', openBulkUpdateCostPriceModal);
     }
 
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
@@ -4012,6 +4138,75 @@ function closeBulkUpdateOrderModal() {
     document.getElementById('bulkUpdateOrderModal')?.classList.remove('active');
 }
 
+function openBulkUpdateCostPriceModal() {
+    if (!productsGridApi) {
+        showToast('Products grid not ready', 'error');
+        return;
+    }
+    const selected = productsGridApi.getSelectedRows();
+    if (!selected.length) {
+        showToast('Select at least one product using the checkboxes', 'error');
+        return;
+    }
+    const namesEl = document.getElementById('bulkUpdateCostPriceNames');
+    const countEl = document.getElementById('bulkUpdateCostPriceCount');
+    const priceEl = document.getElementById('bulkUpdateCostPriceValue');
+    if (namesEl) namesEl.value = selected.map((r) => r.name || '(no name)').join('\n');
+    if (countEl) countEl.textContent = selected.length === 1 ? '1 product' : `${selected.length} products`;
+    if (priceEl) priceEl.value = '';
+    document.getElementById('bulkUpdateCostPriceModal')?.classList.add('active');
+    if (priceEl) priceEl.focus();
+}
+
+function closeBulkUpdateCostPriceModal() {
+    document.getElementById('bulkUpdateCostPriceModal')?.classList.remove('active');
+}
+
+async function submitBulkUpdateCostPrice() {
+    if (!productsGridApi) return;
+    const selected = productsGridApi.getSelectedRows();
+    if (!selected.length) {
+        showToast('No products selected', 'error');
+        return;
+    }
+    const priceEl = document.getElementById('bulkUpdateCostPriceValue');
+    const raw = priceEl?.value?.trim();
+    const costPrice = raw === '' ? NaN : parseFloat(raw);
+    if (isNaN(costPrice) || costPrice < 0) {
+        showToast('Enter a valid cost price (0 or more)', 'error');
+        return;
+    }
+    const submitBtn = document.getElementById('bulkUpdateCostPriceSubmit');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Updating...';
+    }
+    try {
+        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                updates: selected.map((r) => ({ id: r.id, cost_price: costPrice }))
+            })
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to update cost prices');
+        }
+        const result = await response.json();
+        showToast(result.message || `Updated cost price for ${selected.length} product(s)`, 'success');
+        closeBulkUpdateCostPriceModal();
+        await loadProducts();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Update cost price';
+        }
+    }
+}
+
 document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'bulkUpdateOrderModal') closeBulkUpdateOrderModal();
 });
@@ -4019,6 +4214,14 @@ document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) =
 document.getElementById('closeBulkUpdateOrderModal')?.addEventListener('click', closeBulkUpdateOrderModal);
 
 document.getElementById('bulkUpdateOrderNumbers')?.addEventListener('input', updateBulkUpdateOrderCount);
+
+// Bulk update cost price modal
+document.getElementById('bulkUpdateCostPriceModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'bulkUpdateCostPriceModal') closeBulkUpdateCostPriceModal();
+});
+document.getElementById('closeBulkUpdateCostPriceModal')?.addEventListener('click', closeBulkUpdateCostPriceModal);
+document.getElementById('bulkUpdateCostPriceCancel')?.addEventListener('click', closeBulkUpdateCostPriceModal);
+document.getElementById('bulkUpdateCostPriceSubmit')?.addEventListener('click', submitBulkUpdateCostPrice);
 
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();

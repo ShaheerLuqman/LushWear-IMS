@@ -103,6 +103,9 @@
                     <button id="syncOrdersBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         Sync from Shopify
                     </button>
+                    <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
+                        Bulk update cost price
+                    </button>
                     <button id="bulkUpdateOrderBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update order">
                         Bulk update order
                     </button>
@@ -344,6 +347,29 @@
                     <div class="bulk-update-actions">
                         <button type="button" id="bulkUpdateResultsClose" class="btn btn-primary">Close</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Update Cost Price Modal (products) -->
+    <div id="bulkUpdateCostPriceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Bulk update cost price</h2>
+                <button type="button" class="modal-close" id="closeBulkUpdateCostPriceModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">Selected products (select products in the grid using checkboxes):</p>
+                <p id="bulkUpdateCostPriceCount" class="bulk-update-order-count">0 products</p>
+                <textarea id="bulkUpdateCostPriceNames" class="bulk-update-textarea" rows="10" readonly placeholder="Select products in the grid first"></textarea>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="bulkUpdateCostPriceValue">New cost price (Rs) *</label>
+                    <input type="number" id="bulkUpdateCostPriceValue" class="form-input" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="bulk-update-actions" style="margin-top: 16px;">
+                    <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
+                    <button type="button" id="bulkUpdateCostPriceSubmit" class="btn btn-primary">Update cost price</button>
                 </div>
             </div>
         </div>
