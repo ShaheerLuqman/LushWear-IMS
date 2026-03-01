@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS orders (
     order_receiving_date TIMESTAMP WITH TIME ZONE,
     items TEXT[],
     piece_received TEXT NOT NULL DEFAULT 'Pending' CHECK (piece_received IN ('Pending', 'Done', 'Received')),
+    replacement_of_order_no VARCHAR(20),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

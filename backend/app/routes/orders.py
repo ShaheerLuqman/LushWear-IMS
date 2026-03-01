@@ -485,6 +485,7 @@ async def sync_shopify_orders():
         orders_to_insert = []
         orders_to_update = []
         orders_to_skip = []
+        original_orders_to_reset_piece_received = set()
         current_time = datetime.utcnow().isoformat()
 
         for sp_order in all_orders:
@@ -562,6 +563,20 @@ async def sync_shopify_orders():
             else:
                 order_received_date = current_time
             
+            replacement_of = None
+            replacement_of_from_tag = False
+            if re.match(r"^\d+-R$", str(order_number or ""), re.IGNORECASE):
+                replacement_of = re.match(r"^(\d+)-R$", str(order_number), re.IGNORECASE).group(1)
+            else:
+                tags_raw = sp_order.get("tags")
+                tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
+                for tag in tags_str.split(","):
+                    tag = tag.strip()
+                    if re.match(r"^\d+-R$", tag, re.IGNORECASE):
+                        replacement_of = re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1)
+                        replacement_of_from_tag = True
+                        break
+
             order_data = {
                 "order_number": order_number,
                 "courier": courier,
@@ -575,9 +590,12 @@ async def sync_shopify_orders():
                 "cost_price": cost_price,
                 "order_receiving_date": order_received_date,
                 "items": items,
+                "replacement_of_order_no": replacement_of,
                 "updated_at": current_time
             }
-            
+            if replacement_of_from_tag and replacement_of:
+                original_orders_to_reset_piece_received.add(replacement_of)
+
             if order_number in existing_orders_map:
                 existing_order = existing_orders_map[order_number]
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
@@ -586,14 +604,16 @@ async def sync_shopify_orders():
                     existing_tot = float(existing_order.get("total_amount") or 0)
                     adv_changed = abs(existing_adv - advance_amount) > 0.01
                     tot_changed = abs(existing_tot - total_amount) > 0.01
-                    if adv_changed or tot_changed:
-                        financial_only = {
-                            **existing_order, 
-                            "advance_amount": advance_amount, 
+                    if adv_changed or tot_changed or replacement_of:
+                        update_payload = {
+                            **existing_order,
+                            "advance_amount": advance_amount,
                             "total_amount": total_amount,
-                            "updated_at": current_time
+                            "updated_at": current_time,
                         }
-                        orders_to_update.append(financial_only)
+                        if replacement_of is not None:
+                            update_payload["replacement_of_order_no"] = replacement_of
+                        orders_to_update.append(update_payload)
                     else:
                         orders_to_skip.append(order_number)
                     continue
@@ -689,6 +709,23 @@ async def sync_shopify_orders():
                 batch = orders_to_update[i:i + batch_size]
                 supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
                 updated_count += len(batch)
+
+        for original_num in original_orders_to_reset_piece_received:
+            orig = (
+                supabase.table("orders")
+                .select("id, piece_received")
+                .eq("order_number", original_num)
+                .limit(1)
+                .execute()
+            )
+            if orig.data:
+                row = orig.data[0]
+                piece_received = (row.get("piece_received") or "").strip().lower()
+                if piece_received == "done":
+                    supabase.table("orders").update({
+                        "piece_received": "Pending",
+                        "updated_at": current_time,
+                    }).eq("id", row["id"]).execute()
         
         synced_count = created_count + updated_count
         skipped_count = len(orders_to_skip)
@@ -1009,6 +1046,7 @@ async def create_replacement_order(body: ReplacementOrderCreate):
             "cost_price": body.cost_price,
             "order_receiving_date": order_receiving_date or now,
             "items": None,
+            "replacement_of_order_no": original_num,
             "created_at": now,
             "updated_at": now,
         }

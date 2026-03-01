@@ -419,15 +419,10 @@ ClearFiltersFloatingFilter.prototype.init = function (params) {
     icon.alt = 'Clear all filters';
     icon.className = 'orders-clear-filters-icon';
     btn.appendChild(icon);
-    btn.title = 'Clear all filters (column filters and period)';
+    btn.title = 'Clear column filters (keeps period selection)';
     btn.addEventListener('click', function () {
         const api = params.api;
         if (api) api.setFilterModel(null);
-        const periodEl = document.getElementById('ordersPeriodFilter');
-        if (periodEl && periodEl.value !== '__all__') {
-            periodEl.value = '__all__';
-            if (typeof loadOrders === 'function') loadOrders();
-        }
     });
     this.eGui.appendChild(btn);
 };
@@ -698,6 +693,19 @@ function initOrdersGrid() {
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
             cellStyle: { fontWeight: 'bold' },
+            valueFormatter: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
+                const on = params.value;
+                if (on == null || on === '') return '';
+                const s = String(on);
+                const replacementOf = params.data?.replacement_of_order_no;
+                if (replacementOf) return `${s} (${replacementOf}-R)`;
+                if (/^\d+-R$/i.test(s)) {
+                    const base = s.replace(/-R$/i, '');
+                    return `${base} (${s})`;
+                }
+                return s;
+            },
             comparator: (a, b) => {
                 // Sort numerically, with -R orders right after their parent
                 const parseON = (v) => {
