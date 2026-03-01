@@ -2910,24 +2910,35 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .month-detail-sections {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px 32px;
+    align-content: start;
+    max-width: 100%;
+}
+
+.month-detail-column {
     display: flex;
     flex-direction: column;
-    gap: 28px;
-    max-width: 560px;
+    gap: 24px;
+    min-width: 0;
 }
 
 .month-detail-section {
     display: flex;
     flex-direction: column;
     gap: 0;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    min-width: 0;
 }
 
 .month-detail-section-heading {
-    font-size: 17px;
+    font-size: 16px;
     font-weight: 700;
     color: var(--text-primary);
-    margin: 0 0 12px 0;
-    padding-bottom: 8px;
+    margin: 0 0 10px 0;
+    padding-bottom: 6px;
     border-bottom: 2px solid var(--border-color);
 }
 
@@ -2935,17 +2946,23 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: flex;
     flex-direction: column;
     gap: 0;
-    max-width: 560px;
+    max-width: 100%;
 }
 
 .month-detail-line {
     display: flex;
     justify-content: space-between;
     align-items: baseline;
-    gap: 24px;
-    padding: 12px 0;
+    gap: 16px;
+    padding: 8px 0;
     border-bottom: 1px solid var(--border-color);
-    font-size: 15px;
+    font-size: 14px;
+}
+
+@media (max-width: 720px) {
+    .month-detail-sections {
+        grid-template-columns: 1fr;
+    }
 }
 
 .month-detail-line:last-child {

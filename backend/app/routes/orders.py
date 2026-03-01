@@ -1763,6 +1763,63 @@ async def get_month_summary_detail(month: int, year: int):
         cost_with_delivery = sum(float(o.get("cost_price", 0) or 0) for o in orders_with_delivery_set)
         net_profit = (gross_with_delivery - return_amount_with_delivery) - cost_with_delivery
 
+        # DC charges: sum delivery_charge for all delivered and all returned orders (include even if delivery_charge is null/0)
+        dc_charges_delivered = sum(
+            float(o.get("delivery_charge") or 0) for o in non_cancelled
+            if (o.get("order_status") or "").strip().lower() == "delivered"
+        )
+        dc_charges_returned = sum(
+            float(o.get("delivery_charge") or 0) for o in non_cancelled
+            if (o.get("order_status") or "").strip().lower() == "returned"
+        )
+        dc_charges_total = dc_charges_delivered + dc_charges_returned
+
+        # Products sold by collection (5 collections + Others for products without a collection)
+        KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
+        products_resp = supabase.table("products").select("name, collection, price").execute()
+        products_list = []  # (name_lower, collection_display, price)
+        products_map = {}   # name_lower -> (collection_display, price)
+        for p in (products_resp.data or []):
+            name = (p.get("name") or "").strip()
+            if not name:
+                continue
+            name_lower = name.lower()
+            coll_raw = (p.get("collection") or "").strip()
+            collection_display = coll_raw if coll_raw in KNOWN_COLLECTIONS else "Others"
+            price = float(p.get("price") or 0)
+            products_list.append((name_lower, collection_display, price))
+            products_map[name_lower] = (collection_display, price)
+            if " - " in name:
+                base = name.rsplit(" - ", 1)[0].lower().strip()
+                if base and base not in products_map:
+                    products_map[base] = (collection_display, price)
+
+        def resolve_item_to_collection_and_price(item_name):
+            item_lower = (item_name or "").lower().strip()
+            if not item_lower:
+                return ("Others", 0.0)
+            if item_lower in products_map:
+                return products_map[item_lower]
+            if " - " in item_name:
+                base = item_name.rsplit(" - ", 1)[0].lower().strip()
+                if base in products_map:
+                    return products_map[base]
+            for (name_lower, coll, price) in products_list:
+                if name_lower in item_lower or item_lower in name_lower:
+                    return (coll, price)
+            return ("Others", 0.0)
+
+        products_agg = {c: {"count": 0, "sum": 0.0} for c in KNOWN_COLLECTIONS + ["Others"]}
+        for order in non_cancelled:
+            for item_name in (order.get("items") or []):
+                coll, price = resolve_item_to_collection_and_price(item_name)
+                products_agg[coll]["count"] += 1
+                products_agg[coll]["sum"] += price
+        products_sold_by_collection = [
+            {"collection": c, "count": products_agg[c]["count"], "sum": round(products_agg[c]["sum"], 2)}
+            for c in KNOWN_COLLECTIONS + ["Others"]
+        ]
+
         # Ledger totals for this period (from cashbook entries)
         start_date, end_date = _period_start_end_dates(month, year)
         shopify_expense = 0.0
@@ -1823,6 +1880,10 @@ async def get_month_summary_detail(month: int, year: int):
             "unfulfilled_orders_count": unfulfilled_count,
             "net_sales": round(net_sales, 2),
             "net_profit": round(net_profit, 2),
+            "dc_charges_delivered": round(dc_charges_delivered, 2),
+            "dc_charges_returned": round(dc_charges_returned, 2),
+            "dc_charges_total": round(dc_charges_total, 2),
+            "products_sold_by_collection": products_sold_by_collection,
             "shopify_expense": round(shopify_expense, 2),
             "ad_expense": round(ad_expense, 2),
             "other_expense": round(other_expense, 2),

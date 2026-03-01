@@ -3641,33 +3641,56 @@ function displayMonthDetail(data) {
 
     container.innerHTML = `
         <div class="month-detail-sections">
-            <section class="month-detail-section">
-                <h3 class="month-detail-section-heading">Orders</h3>
-                <div class="month-detail-lines">
-                    <div class="month-detail-line"><span class="month-detail-line-label">Total Orders</span><span class="month-detail-line-value">${fmt(data.total_orders)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Delivered Orders</span><span class="month-detail-line-value">${fmt(data.delivered_orders_count)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Return Orders</span><span class="month-detail-line-value">${fmt(data.return_orders_count)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Enroute Orders</span><span class="month-detail-line-value">${fmt(data.enroute_orders_count ?? 0)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Unfulfilled Orders</span><span class="month-detail-line-value">${fmt(data.unfulfilled_orders_count ?? 0)}</span></div>
-                </div>
-            </section>
-            <section class="month-detail-section">
-                <h3 class="month-detail-section-heading">Sales</h3>
-                <div class="month-detail-lines">
-                    <div class="month-detail-line"><span class="month-detail-line-label">Total Gross Sale</span><span class="month-detail-line-value">Rs ${fmt(data.total_gross_sale)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Total Return Amount</span><span class="month-detail-line-value">Rs ${fmt(data.total_return_amount)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Net Sales</span><span class="month-detail-line-value">Rs ${fmt(data.net_sales)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Net Profit</span><span class="month-detail-line-value">Rs ${fmt(data.net_profit ?? 0)}</span></div>
-                </div>
-            </section>
-            <section class="month-detail-section">
-                <h3 class="month-detail-section-heading">Expenses</h3>
-                <div class="month-detail-lines">
-                    <div class="month-detail-line"><span class="month-detail-line-label">Shopify Expense</span><span class="month-detail-line-value">Rs ${fmt(data.shopify_expense ?? 0)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Ad Expense</span><span class="month-detail-line-value">Rs ${fmt(data.ad_expense ?? 0)}</span></div>
-                    <div class="month-detail-line"><span class="month-detail-line-label">Other Expenses</span><span class="month-detail-line-value">Rs ${fmt(data.other_expense ?? 0)}</span></div>
-                </div>
-            </section>
+            <div class="month-detail-column">
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">Sales</h3>
+                    <div class="month-detail-lines">
+                        <div class="month-detail-line"><span class="month-detail-line-label">Total Gross Sale</span><span class="month-detail-line-value">Rs ${fmt(data.total_gross_sale)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Total Return Amount</span><span class="month-detail-line-value">Rs ${fmt(data.total_return_amount)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Net Sales</span><span class="month-detail-line-value">Rs ${fmt(data.net_sales)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Net Profit</span><span class="month-detail-line-value">Rs ${fmt(data.net_profit ?? 0)}</span></div>
+                    </div>
+                </section>
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">Expenses</h3>
+                    <div class="month-detail-lines">
+                        <div class="month-detail-line"><span class="month-detail-line-label">Shopify Expense</span><span class="month-detail-line-value">Rs ${fmt(data.shopify_expense ?? 0)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Ad Expense</span><span class="month-detail-line-value">Rs ${fmt(data.ad_expense ?? 0)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Other Expenses</span><span class="month-detail-line-value">Rs ${fmt(data.other_expense ?? 0)}</span></div>
+                    </div>
+                </section>
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">Products Sold by Collection</h3>
+                    <div class="month-detail-lines">
+                        ${(data.products_sold_by_collection || []).map(row => `
+                            <div class="month-detail-line">
+                                <span class="month-detail-line-label">${row.collection || 'Others'}</span>
+                                <span class="month-detail-line-value">${fmt(row.count)} units · Rs ${fmt(row.sum)}</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </section>
+            </div>
+            <div class="month-detail-column">
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">Orders</h3>
+                    <div class="month-detail-lines">
+                        <div class="month-detail-line"><span class="month-detail-line-label">Total Orders</span><span class="month-detail-line-value">${fmt(data.total_orders)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Delivered Orders</span><span class="month-detail-line-value">${fmt(data.delivered_orders_count)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Return Orders</span><span class="month-detail-line-value">${fmt(data.return_orders_count)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Enroute Orders</span><span class="month-detail-line-value">${fmt(data.enroute_orders_count ?? 0)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Unfulfilled Orders</span><span class="month-detail-line-value">${fmt(data.unfulfilled_orders_count ?? 0)}</span></div>
+                    </div>
+                </section>
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">DC Charges</h3>
+                    <div class="month-detail-lines">
+                        <div class="month-detail-line"><span class="month-detail-line-label">DC Charges (Delivered)</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_delivered ?? 0)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">DC Charges (Returned)</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_returned ?? 0)}</span></div>
+                        <div class="month-detail-line"><span class="month-detail-line-label">Total DC Charges</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_total ?? 0)}</span></div>
+                    </div>
+                </section>
+            </div>
         </div>
     `;
 }
