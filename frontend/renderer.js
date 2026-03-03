@@ -3738,7 +3738,7 @@ function initForms() {
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
 
-    // Orders toolbar actions: Upload PostEx CSV, Generate Invoice, Create Replacement
+    // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet, Create Replacement
     const postExCsvInput = document.getElementById('postExCsvInput');
     if (postExCsvInput) {
         postExCsvInput.addEventListener('change', async (e) => {
@@ -3752,9 +3752,9 @@ function initForms() {
     if (ordersMoreActionUploadPostEx && postExCsvInput) {
         ordersMoreActionUploadPostEx.addEventListener('click', () => postExCsvInput.click());
     }
-    const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
-    if (ordersMoreActionGenerateInvoice) {
-        ordersMoreActionGenerateInvoice.addEventListener('click', async () => {
+    const ordersMoreActionGenerateLoadSheet = document.getElementById('ordersMoreActionGenerateLoadSheet');
+    if (ordersMoreActionGenerateLoadSheet) {
+        ordersMoreActionGenerateLoadSheet.addEventListener('click', async () => {
             if (!ordersGridApi) {
                 showToast('Orders grid not initialized', 'error');
                 return;
@@ -3765,18 +3765,18 @@ function initForms() {
                 return;
             }
             const orderIds = selectedRows.map(row => row.id);
-            ordersMoreActionGenerateInvoice.disabled = true;
-            const originalText = ordersMoreActionGenerateInvoice.textContent;
-            ordersMoreActionGenerateInvoice.textContent = 'Generating...';
+            ordersMoreActionGenerateLoadSheet.disabled = true;
+            const originalText = ordersMoreActionGenerateLoadSheet.textContent;
+            ordersMoreActionGenerateLoadSheet.textContent = 'Generating...';
             try {
-                const response = await fetch(`${API_BASE}/orders/generate-invoice`, {
+                const response = await fetch(`${API_BASE}/orders/generate-load-sheet`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(orderIds)
                 });
                 if (!response.ok) {
                     const error = await response.json();
-                    throw new Error(error.detail || 'Failed to generate invoice');
+                    throw new Error(error.detail || 'Failed to generate load sheet');
                 }
                 const blob = await response.blob();
                 
@@ -3788,7 +3788,7 @@ function initForms() {
                 const hours = String(now.getHours()).padStart(2, '0');
                 const minutes = String(now.getMinutes()).padStart(2, '0');
                 const seconds = String(now.getSeconds()).padStart(2, '0');
-                const filename = `invoice_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.pdf`;
+                const filename = `load_sheet_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.pdf`;
                 
                 // Convert blob to base64 string for Electron API (more reliable than large arrays)
                 const arrayBuffer = await blob.arrayBuffer();
@@ -3799,7 +3799,7 @@ function initForms() {
                 if (window.electronAPI && window.electronAPI.saveAndOpenPDF) {
                     const result = await window.electronAPI.saveAndOpenPDF(base64String, filename);
                     if (result.success) {
-                        showToast(`PDF invoice generated and opened for ${selectedRows.length} order(s)`, 'success');
+                        showToast(`PDF load sheet generated and opened for ${selectedRows.length} order(s)`, 'success');
                     } else {
                         // Fallback to browser download
                         const url = window.URL.createObjectURL(blob);
@@ -3810,7 +3810,7 @@ function initForms() {
                         a.click();
                         document.body.removeChild(a);
                         window.URL.revokeObjectURL(url);
-                        showToast(`PDF invoice generated for ${selectedRows.length} order(s)`, 'success');
+                        showToast(`PDF load sheet generated for ${selectedRows.length} order(s)`, 'success');
                     }
                 } else {
                     // Fallback for non-Electron environment
@@ -3825,14 +3825,14 @@ function initForms() {
                     setTimeout(() => {
                         window.URL.revokeObjectURL(url);
                     }, 1000);
-                    showToast(`PDF invoice generated for ${selectedRows.length} order(s)`, 'success');
+                    showToast(`PDF load sheet generated for ${selectedRows.length} order(s)`, 'success');
                 }
             } catch (error) {
-                console.error('Error generating invoice:', error);
-                showToast(error.message || 'Failed to generate invoice', 'error');
+                console.error('Error generating load sheet:', error);
+                showToast(error.message || 'Failed to generate load sheet', 'error');
             } finally {
-                ordersMoreActionGenerateInvoice.disabled = false;
-                ordersMoreActionGenerateInvoice.textContent = originalText;
+                ordersMoreActionGenerateLoadSheet.disabled = false;
+                ordersMoreActionGenerateLoadSheet.textContent = originalText;
             }
         });
     }

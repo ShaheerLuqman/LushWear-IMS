@@ -1457,9 +1457,9 @@ async def delete_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _generate_pdf_invoice(orders: List[dict], template_path: Optional[Path] = None) -> BytesIO:
+def _generate_pdf_load_sheet(orders: List[dict], template_path: Optional[Path] = None) -> BytesIO:
     """
-    Generate a PDF invoice from orders data.
+    Generate a PDF load sheet from orders data.
     
     Args:
         orders: List of order dictionaries
@@ -1506,7 +1506,7 @@ def _generate_pdf_invoice(orders: List[dict], template_path: Optional[Path] = No
     
     # Add logo image above the title
     # Path: __file__ is backend/app/routes/orders.py, so we need to go up one level to backend/app/
-    logo_path = Path(__file__).parent.parent / "logo_invoice.png"
+    logo_path = Path(__file__).parent.parent / "logo_load_sheet.png"
     logo_absolute_path = logo_path.absolute()
     
     if logo_path.exists():
@@ -1546,7 +1546,7 @@ def _generate_pdf_invoice(orders: List[dict], template_path: Optional[Path] = No
         print(f"Warning: Logo file not found at {logo_absolute_path}")
     
     # Title
-    elements.append(Paragraph("Invoice", title_style))
+    elements.append(Paragraph("Load Sheet", title_style))
     elements.append(Spacer(1, 10*mm))
     
     # Date
@@ -1652,9 +1652,9 @@ def _generate_pdf_invoice(orders: List[dict], template_path: Optional[Path] = No
     return buffer
 
 
-@router.post("/generate-invoice")
-async def generate_invoice(order_ids: List[str]):
-    """Generate a PDF invoice from template for selected orders"""
+@router.post("/generate-load-sheet")
+async def generate_load_sheet(order_ids: List[str]):
+    """Generate a PDF load sheet from template for selected orders"""
     try:
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
@@ -1668,22 +1668,21 @@ async def generate_invoice(order_ids: List[str]):
             raise HTTPException(status_code=404, detail="No orders found")
         
         # Check if template exists (optional - for future use)
-        template_path = Path(__file__).parent.parent / "invoice_template.pdf"
-        template_path = template_path if template_path.exists() else None
+        template_path = None
         
         # Generate PDF
-        pdf_buffer = _generate_pdf_invoice(orders, template_path)
+        pdf_buffer = _generate_pdf_load_sheet(orders, template_path)
         
         # Return PDF file as download
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
+            headers={"Content-Disposition": "attachment; filename=load_sheet.pdf"}
         )
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating PDF invoice: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error generating PDF load sheet: {str(e)}")
 
 
 @router.get("/month-summary/list")
