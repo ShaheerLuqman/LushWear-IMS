@@ -506,7 +506,7 @@ async def sync_shopify_orders():
                 total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
             shopify_tax = extract_tax_amount(sp_order) or 0.0  # Used only for total_amount calc; we never store tax from Shopify
 
-            # Get shipping price (used only for total_amount calc; we never store delivery_charge from Shopify)
+            # Shopify shipping: we never store it as total_amount; delivery_charge is set in-app. If delivery was removed manually in Shopify, subtract it so total_amount excludes it.
             shipping_price = 0.0
             if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
                 shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
@@ -523,14 +523,20 @@ async def sync_shopify_orders():
                 for a in discount_applications
             ) or bool(discount_codes)
 
+            # Total amount: use current_total_price when present (already reflects manual edits e.g. delivery removed). Otherwise use total_price minus shipping so delivery is not included in total_amount.
+            current_total = sp_order.get("current_total_price")
+            total_price_val = sp_order.get("total_price")
+            if current_total is not None and str(current_total).strip() != "":
+                total_amount = float(current_total)
+            elif total_price_val is not None and str(total_price_val).strip() != "":
+                total_amount = float(total_price_val) - shipping_price
+            else:
+                total_amount = total_line_items_price + shopify_tax
+
             if has_discount_by_code:
-                # Total = Shopify's total price (already has discount deducted)
-                total_amount = float(sp_order.get("current_total_price") or sp_order.get("total_price") or 0)
                 financial_status = (sp_order.get("financial_status") or "").strip().lower()
                 advance_amount = total_amount if financial_status == "paid" else 0.0
             else:
-                # Total = line items (excluding removed) + tax + shipping (before any discount)
-                total_amount = total_line_items_price + shopify_tax + shipping_price
                 total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
                 financial_status = (sp_order.get("financial_status") or "").strip().lower()
                 if financial_status == "paid":
@@ -619,7 +625,6 @@ async def sync_shopify_orders():
                         fields_updated = ["advance_amount", "total_amount"]
                         if replacement_of is not None:
                             fields_updated.append("replacement_of_order_no")
-                        sync_update_log.append({"order_id": existing_order["id"], "order_number": order_number, "fields": fields_updated})
                     elif replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
                         # Only set replacement_of_order_no (e.g. first time we see tag 5404-R); do not overwrite advance/total
                         update_payload = {
@@ -628,7 +633,6 @@ async def sync_shopify_orders():
                             "updated_at": current_time,
                         }
                         orders_to_update.append(update_payload)
-                        sync_update_log.append({"order_id": existing_order["id"], "order_number": order_number, "fields": ["replacement_of_order_no"]})
                     else:
                         orders_to_skip.append(order_number)
                     continue
