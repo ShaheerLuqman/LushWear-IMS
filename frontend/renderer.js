@@ -746,7 +746,19 @@ function initOrdersGrid() {
             width: 100,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filterValueGetter: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
+                const on = params.api.getValue('order_number', params.node);
+                if (on == null || on === '') return '';
+                const s = String(on);
+                const replacementOf = params.data?.replacement_of_order_no;
+                if (replacementOf) return `${s} (${replacementOf}-R)`;
+                if (/^\d+-R$/i.test(s)) {
+                    const base = s.replace(/-R$/i, '');
+                    return `${base} (${s})`;
+                }
+                return s;
+            },
             cellStyle: { fontWeight: 'bold' },
             valueFormatter: (params) => {
                 if (params.data && params.data.id === '__footer__') return '';
@@ -1108,10 +1120,7 @@ function initOrdersGrid() {
             },
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return null;
-                const order = params.data;
-                const status = (order.order_status || '').toLowerCase();
-                if (status === 'delivered') return 'Done';
-                const stored = (order.piece_received || '').trim();
+                const stored = (params.data.piece_received || '').trim();
                 return ['Pending', 'Done', 'Received'].includes(stored) ? stored : 'Pending';
             },
             valueFormatter: (params) => params.value || '-',
@@ -4934,7 +4943,9 @@ async function refreshDeliveryStatusSelected() {
                                 updated.order_status = 'returned';
                             } else if (deliveryStatusIndicatesDelivered(data)) {
                                 updated.order_status = 'delivered';
-                                updated.piece_received = 'Done';
+                                if ((node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                                    updated.piece_received = 'Done';
+                                }
                             } else if (deliveryStatusIndicatesRFD(data)) {
                                 updated.order_status = 'RFD';
                             } else if (deliveryStatusIndicatesICA(data)) {
@@ -5022,7 +5033,9 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
                         updated.order_status = 'returned';
                     } else if (deliveryStatusIndicatesDelivered(data)) {
                         updated.order_status = 'delivered';
-                        updated.piece_received = 'Done';
+                        if ((node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                            updated.piece_received = 'Done';
+                        }
                     } else if (deliveryStatusIndicatesRFD(data)) {
                         updated.order_status = 'RFD';
                     } else if (deliveryStatusIndicatesICA(data)) {

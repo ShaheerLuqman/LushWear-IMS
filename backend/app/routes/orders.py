@@ -1035,7 +1035,7 @@ async def create_replacement_order(body: ReplacementOrderCreate):
 
         original_order = (
             supabase.table("orders")
-            .select("id, order_receiving_date")
+            .select("id, order_receiving_date, piece_received")
             .eq("order_number", original_num)
             .limit(1)
             .execute()
@@ -1067,6 +1067,17 @@ async def create_replacement_order(body: ReplacementOrderCreate):
         }
 
         response = supabase.table("orders").insert(order_data).execute()
+
+        # If original order has piece_received "Done", set it to "Pending". Leave "Pending" or "Received" unchanged.
+        if original_order.data:
+            orig_row = original_order.data[0]
+            piece_received = (orig_row.get("piece_received") or "").strip().lower()
+            if piece_received == "done":
+                supabase.table("orders").update({
+                    "piece_received": "Pending",
+                    "updated_at": now,
+                }).eq("id", orig_row["id"]).execute()
+
         return response.data[0]
     except HTTPException:
         raise
@@ -1418,10 +1429,10 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
     try:
         supabase = get_supabase()
-        # Fetch orders so we can merge delivery_status per order
+        # Fetch orders so we can merge delivery_status and optionally set piece_received per order
         response = (
             supabase.table("orders")
-            .select("id, order_number, delivery_status")
+            .select("id, order_number, delivery_status, piece_received")
             .in_("order_number", body.order_numbers)
             .execute()
         )
@@ -1435,11 +1446,17 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
             new_delivery_status = _delivery_status_with_latest_status(
                 order.get("delivery_status"), body.order_status
             )
-            supabase.table("orders").update({
+            update_payload = {
                 "order_status": body.order_status,
                 "delivery_status": new_delivery_status,
                 "updated_at": updated_at,
-            }).eq("id", order_id).execute()
+            }
+            # When marking as delivered: set piece_received to Done only if still Pending (first time). Do not overwrite if user already changed it.
+            if body.order_status == "delivered":
+                current_piece = (order.get("piece_received") or "").strip().lower()
+                if current_piece == "pending":
+                    update_payload["piece_received"] = "Done"
+            supabase.table("orders").update(update_payload).eq("id", order_id).execute()
             onum = order.get("order_number")
             if onum is not None:
                 updated_order_numbers.append(str(onum))
@@ -1622,7 +1639,10 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                 update_payload["order_status"] = "returned"
             elif _delivery_status_indicates_delivered(delivery_status_data):
                 update_payload["order_status"] = "delivered"
-                update_payload["piece_received"] = "Done"
+                # Set piece_received to Done only when still Pending (first time delivered). Do not overwrite if user already changed it.
+                current_piece = (order.get("piece_received") or "").strip().lower()
+                if current_piece == "pending":
+                    update_payload["piece_received"] = "Done"
             elif _delivery_status_indicates_rfd(delivery_status_data):
                 update_payload["order_status"] = "RFD"
             elif _delivery_status_indicates_ica(delivery_status_data):
