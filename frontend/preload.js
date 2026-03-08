@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.on('fullscreen-changed', (_e, isFullScreen) => cb(isFullScreen));
     },
     openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
-    saveAndOpenPDF: (buffer, filename) => ipcRenderer.invoke('save-and-open-pdf', buffer, filename)
+    saveAndOpenPDF: (buffer, filename) => ipcRenderer.invoke('save-and-open-pdf', buffer, filename),
+    saveLoadSheetPDF: (buffer, filename) => ipcRenderer.invoke('save-load-sheet-pdf', buffer, filename),
+    openLoadSheetsFolder: () => ipcRenderer.invoke('open-load-sheets-folder')
 });
 

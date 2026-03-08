@@ -197,7 +197,8 @@ async def sync_shopify_orders():
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
-            "cost_price, items, total_amount, advance_amount, order_receiving_date"
+            "cost_price, items, total_amount, advance_amount, order_receiving_date, "
+            "replacement_of_order_no"
         )
         while True:
             existing_orders_response = (
@@ -604,7 +605,8 @@ async def sync_shopify_orders():
                     existing_tot = float(existing_order.get("total_amount") or 0)
                     adv_changed = abs(existing_adv - advance_amount) > 0.01
                     tot_changed = abs(existing_tot - total_amount) > 0.01
-                    if adv_changed or tot_changed or replacement_of:
+                    # Only update amounts when they actually changed; for replacement orders we may only need to set replacement_of_order_no
+                    if adv_changed or tot_changed:
                         update_payload = {
                             **existing_order,
                             "advance_amount": advance_amount,
@@ -614,6 +616,19 @@ async def sync_shopify_orders():
                         if replacement_of is not None:
                             update_payload["replacement_of_order_no"] = replacement_of
                         orders_to_update.append(update_payload)
+                        fields_updated = ["advance_amount", "total_amount"]
+                        if replacement_of is not None:
+                            fields_updated.append("replacement_of_order_no")
+                        sync_update_log.append({"order_id": existing_order["id"], "order_number": order_number, "fields": fields_updated})
+                    elif replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
+                        # Only set replacement_of_order_no (e.g. first time we see tag 5404-R); do not overwrite advance/total
+                        update_payload = {
+                            **existing_order,
+                            "replacement_of_order_no": replacement_of,
+                            "updated_at": current_time,
+                        }
+                        orders_to_update.append(update_payload)
+                        sync_update_log.append({"order_id": existing_order["id"], "order_number": order_number, "fields": ["replacement_of_order_no"]})
                     else:
                         orders_to_skip.append(order_number)
                     continue
@@ -1078,6 +1093,151 @@ async def get_order_by_number(order_number: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class LoadSheetLogCreate(BaseModel):
+    assignment_number: str
+    rider_name: str
+    order_numbers: List[str]
+
+
+# Load Sheet Logs (must be before /{order_id} so "load-sheet-logs" is not matched as order_id)
+@router.post("/load-sheet-logs", response_model=dict)
+async def create_load_sheet_log(body: LoadSheetLogCreate):
+    """Save a load sheet log (assignment number, rider name, order numbers)."""
+    try:
+        if not body.assignment_number or not body.assignment_number.strip():
+            raise HTTPException(status_code=400, detail="Assignment number is required")
+        if not body.rider_name or not body.rider_name.strip():
+            raise HTTPException(status_code=400, detail="Rider name is required")
+        if not body.order_numbers:
+            raise HTTPException(status_code=400, detail="At least one order is required")
+        supabase = get_supabase()
+        row = {
+            "assignment_number": body.assignment_number.strip(),
+            "rider_name": body.rider_name.strip(),
+            "order_numbers": body.order_numbers,
+        }
+        response = supabase.table("load_sheet_logs").insert(row).execute()
+        if not response.data or len(response.data) == 0:
+            raise HTTPException(status_code=500, detail="Failed to create load sheet log")
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/load-sheet-logs", response_model=List[dict])
+async def list_load_sheet_logs():
+    """List all load sheet logs, newest first."""
+    try:
+        supabase = get_supabase()
+        response = (
+            supabase.table("load_sheet_logs")
+            .select("*")
+            .execute()
+        )
+        rows = response.data if response.data is not None else []
+        out = []
+        allowed_keys = {"id", "assignment_number", "rider_name", "created_at", "order_numbers", "order_ids"}
+        for row in rows:
+            try:
+                if isinstance(row, dict):
+                    r = {k: v for k, v in row.items() if k in allowed_keys}
+                else:
+                    r = {k: getattr(row, k, None) for k in allowed_keys if hasattr(row, k)}
+                    r = {k: v for k, v in r.items() if v is not None or k in ("order_numbers", "order_ids")}
+            except Exception:
+                r = {}
+            if "order_numbers" not in r and "order_ids" in r:
+                r["order_numbers"] = r.get("order_ids")
+            out.append(r)
+        out.sort(key=lambda x: (x.get("created_at") or ""), reverse=True)
+        result = []
+        for r in out:
+            clean = {}
+            for k, v in r.items():
+                if hasattr(v, "isoformat"):
+                    clean[k] = v.isoformat()
+                elif hasattr(v, "hex"):
+                    clean[k] = str(v)
+                else:
+                    clean[k] = v
+            result.append(clean)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        err_msg = str(e)
+        if "does not exist" in err_msg.lower() or "load_sheet_logs" in err_msg or "relation" in err_msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Load sheet logs table is not set up. Add the load_sheet_logs table (see supabase_schema.sql) and run the migration."
+            )
+        raise HTTPException(status_code=500, detail=err_msg)
+
+
+@router.get("/load-sheet-logs/{log_id}/pdf")
+async def get_load_sheet_log_pdf(log_id: str):
+    """Regenerate and download the PDF for a load sheet log."""
+    try:
+        supabase = get_supabase()
+        log_response = (
+            supabase.table("load_sheet_logs")
+            .select("*")
+            .eq("id", log_id)
+            .limit(1)
+            .execute()
+        )
+        if not log_response.data or len(log_response.data) == 0:
+            raise HTTPException(status_code=404, detail="Load sheet log not found")
+        log_row = log_response.data[0]
+        order_numbers = log_row.get("order_numbers") or []
+        order_ids = log_row.get("order_ids") or []
+        if order_numbers:
+            orders_response = supabase.table("orders").select("*").in_("order_number", order_numbers).execute()
+        elif order_ids:
+            orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
+        else:
+            raise HTTPException(status_code=400, detail="No orders in this load sheet log")
+        orders = orders_response.data or []
+        if not orders:
+            raise HTTPException(status_code=404, detail="Orders not found")
+        assignment_number = (log_row.get("assignment_number") or "").strip() or None
+        rider_name = (log_row.get("rider_name") or "").strip() or None
+        pdf_buffer = _generate_pdf_load_sheet(orders, None, assignment_number=assignment_number, rider_name=rider_name)
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=load_sheet.pdf"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/load-sheet-logs/{log_id}")
+async def delete_load_sheet_log(log_id: str):
+    """Delete a load sheet log by ID."""
+    try:
+        supabase = get_supabase()
+        response = (
+            supabase.table("load_sheet_logs")
+            .delete()
+            .eq("id", log_id)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Load sheet log not found")
+        return {"message": "Load sheet log deleted"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{order_id}")
 async def get_order(order_id: str):
     """Get a single order by ID"""
@@ -1497,13 +1657,20 @@ async def delete_order(order_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-def _generate_pdf_load_sheet(orders: List[dict], template_path: Optional[Path] = None) -> BytesIO:
+def _generate_pdf_load_sheet(
+    orders: List[dict],
+    template_path: Optional[Path] = None,
+    assignment_number: Optional[str] = None,
+    rider_name: Optional[str] = None,
+) -> BytesIO:
     """
     Generate a PDF load sheet from orders data.
     
     Args:
         orders: List of order dictionaries
         template_path: Optional path to a PDF template (for future use with PyPDF2/pdfrw)
+        assignment_number: Optional assignment number to show on the PDF
+        rider_name: Optional rider name to show on the PDF
     
     Returns:
         BytesIO buffer containing the PDF
@@ -1589,11 +1756,14 @@ def _generate_pdf_load_sheet(orders: List[dict], template_path: Optional[Path] =
     elements.append(Paragraph("Load Sheet", title_style))
     elements.append(Spacer(1, 10*mm))
     
-    # Date
+    # Date, Assignment #, Rider (each on its own line)
     now = datetime.now()
     current_date = now.strftime("%d/%m/%Y")
-    date_para = Paragraph(f"<b>Date:</b> {current_date}", normal_style)
-    elements.append(date_para)
+    elements.append(Paragraph(f"<b>Date:</b> {current_date}", normal_style))
+    if assignment_number:
+        elements.append(Paragraph(f"<b>Assignment #:</b> {assignment_number}", normal_style))
+    if rider_name:
+        elements.append(Paragraph(f"<b>Rider:</b> {rider_name}", normal_style))
     elements.append(Spacer(1, 5*mm))
     
     # Sort orders by order_number

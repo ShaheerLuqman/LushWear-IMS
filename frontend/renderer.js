@@ -61,6 +61,7 @@ function applyEditLockState() {
         'submitReplacementOrder',
         'bulkUpdateCostPriceSubmit',
         'bulkUpdateDeliveryChargesConfirm',
+        'loadSheetModalConfirm',
     ];
     editButtons.forEach((id) => {
         const el = document.getElementById(id);
@@ -2169,6 +2170,228 @@ function deleteReplacementOrder(orderId, orderData) {
 }
 
 // ============================================
+// Generate Load Sheet modal & Load Sheet Logs
+// ============================================
+
+function openGenerateLoadSheetModal() {
+    if (!ordersGridApi) {
+        showToast('Orders grid not initialized', 'error');
+        return;
+    }
+    const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+    if (selectedRows.length === 0) {
+        showToast('Please select at least one order', 'error');
+        return;
+    }
+    const orderNumbers = selectedRows.map(row => row.order_number).filter(Boolean);
+    const unique = [...new Set(orderNumbers)].sort((a, b) => {
+        const na = parseInt(a, 10);
+        const nb = parseInt(b, 10);
+        if (!isNaN(na) && !isNaN(nb)) return na - nb;
+        return String(a).localeCompare(String(b));
+    });
+    const countEl = document.getElementById('loadSheetOrderCount');
+    const textarea = document.getElementById('loadSheetOrderNumbers');
+    const assignmentEl = document.getElementById('loadSheetAssignmentNumber');
+    const riderEl = document.getElementById('loadSheetRiderName');
+    if (countEl) countEl.textContent = unique.length === 1 ? '1 order selected' : `${unique.length} orders selected`;
+    if (textarea) textarea.value = unique.join('\n');
+    if (assignmentEl) assignmentEl.value = '';
+    if (riderEl) riderEl.value = '';
+    document.getElementById('generateLoadSheetModal')?.classList.add('active');
+    if (assignmentEl) assignmentEl.focus();
+}
+
+function closeGenerateLoadSheetModal() {
+    document.getElementById('generateLoadSheetModal')?.classList.remove('active');
+}
+
+async function confirmGenerateLoadSheet() {
+    const assignmentEl = document.getElementById('loadSheetAssignmentNumber');
+    const riderEl = document.getElementById('loadSheetRiderName');
+    const assignmentNumber = assignmentEl?.value?.trim();
+    const riderName = riderEl?.value?.trim();
+    if (!assignmentNumber) {
+        showToast('Enter assignment number', 'error');
+        return;
+    }
+    if (!riderName) {
+        showToast('Enter rider name', 'error');
+        return;
+    }
+    if (!ordersGridApi) return;
+    const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+    const orderNumbers = selectedRows.map(row => String(row.order_number)).filter(Boolean);
+    if (orderNumbers.length === 0) {
+        showToast('No orders selected', 'error');
+        return;
+    }
+    const confirmBtn = document.getElementById('loadSheetModalConfirm');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Saving & generating...';
+    }
+    try {
+        const createRes = await fetch(`${API_BASE}/orders/load-sheet-logs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                assignment_number: assignmentNumber,
+                rider_name: riderName,
+                order_numbers: orderNumbers
+            })
+        });
+        if (!createRes.ok) {
+            const err = await createRes.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to save load sheet log');
+        }
+        const logData = await createRes.json();
+        const logId = logData.id;
+        closeGenerateLoadSheetModal();
+        const pdfRes = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
+        if (!pdfRes.ok) throw new Error('Failed to generate PDF');
+        const blob = await pdfRes.blob();
+        const now = new Date();
+        const filename = `load_sheet_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}.pdf`;
+        if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
+            const arrayBuffer = await blob.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            const base64String = btoa(String.fromCharCode(...uint8Array));
+            const result = await window.electronAPI.saveLoadSheetPDF(base64String, filename);
+            if (result && result.success) {
+                showToast(`Load sheet saved to app folder and opened (${orderNumbers.length} order(s))`, 'success');
+            } else {
+                showToast(result?.error || 'Failed to save PDF', 'error');
+            }
+        } else {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast(`Load sheet saved and PDF downloaded (${orderNumbers.length} order(s))`, 'success');
+        }
+        if (currentView === 'loadSheetLogs') loadLoadSheetLogs();
+    } catch (error) {
+        showToast(error.message || 'Failed to generate load sheet', 'error');
+    } finally {
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Generate & Download PDF';
+        }
+    }
+}
+
+async function loadLoadSheetLogs() {
+    const tbody = document.getElementById('loadSheetLogsTableBody');
+    const emptyEl = document.getElementById('loadSheetLogsEmpty');
+    if (!tbody) return;
+    tbody.innerHTML = '';
+    if (emptyEl) emptyEl.style.display = 'none';
+    try {
+        const response = await fetch(`${API_BASE}/orders/load-sheet-logs`);
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || `Failed to load (${response.status})`);
+        }
+        const logs = await response.json();
+        if (logs.length === 0) {
+            if (emptyEl) emptyEl.style.display = 'block';
+            return;
+        }
+        logs.forEach((log, index) => {
+            const tr = document.createElement('tr');
+            const created = log.created_at ? formatDateTimeDDMMYYYY(log.created_at) : '';
+            const orderNumbers = Array.isArray(log.order_numbers) ? log.order_numbers : [];
+            const orderNumbersDisplay = orderNumbers.length <= 3
+                ? orderNumbers.join(', ')
+                : orderNumbers.slice(0, 3).join(', ') + '...';
+            const orderNumbersTitle = orderNumbers.join(', ') || '—';
+            tr.innerHTML = `
+                <td>${index + 1}</td>
+                <td>${escapeHtml(log.assignment_number || '')}</td>
+                <td>${escapeHtml(log.rider_name || '')}</td>
+                <td>${escapeHtml(created)}</td>
+                <td class="load-sheet-order-numbers-cell" title="${escapeHtml(orderNumbersTitle)}">${escapeHtml(orderNumbersDisplay || '—')}</td>
+                <td class="load-sheet-actions-cell">
+                    <button type="button" class="btn btn-secondary btn-sm load-sheet-download-pdf" data-log-id="${escapeHtml(log.id)}" title="Download PDF"><i class="fas fa-download" aria-hidden="true"></i></button>
+                    <button type="button" class="btn btn-danger btn-sm load-sheet-delete-log" data-log-id="${escapeHtml(log.id)}" title="Delete"><i class="fas fa-trash" aria-hidden="true"></i></button>
+                </td>
+            `;
+            tbody.appendChild(tr);
+        });
+        tbody.querySelectorAll('.load-sheet-download-pdf').forEach(btn => {
+            btn.addEventListener('click', () => downloadLoadSheetLogPdf(btn.getAttribute('data-log-id')));
+        });
+        tbody.querySelectorAll('.load-sheet-delete-log').forEach(btn => {
+            btn.addEventListener('click', () => deleteLoadSheetLog(btn.getAttribute('data-log-id')));
+        });
+    } catch (error) {
+        showToast(error.message || 'Failed to load load sheet logs', 'error');
+        if (emptyEl) emptyEl.style.display = 'block';
+    }
+}
+
+async function deleteLoadSheetLog(logId) {
+    if (!logId) return;
+    const confirmed = await showAppConfirm({
+        title: 'Delete Load Sheet Log',
+        message: 'Are you sure you want to delete this load sheet log? This cannot be undone.',
+        confirmText: 'Delete',
+        danger: true
+    });
+    if (!confirmed) return;
+    try {
+        const response = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}`, { method: 'DELETE' });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to delete');
+        }
+        showToast('Load sheet log deleted', 'success');
+        loadLoadSheetLogs();
+    } catch (error) {
+        showToast(error.message || 'Failed to delete load sheet log', 'error');
+    }
+}
+
+async function downloadLoadSheetLogPdf(logId) {
+    if (!logId) return;
+    try {
+        const response = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
+        if (!response.ok) throw new Error('Failed to generate PDF');
+        const blob = await response.blob();
+        const now = new Date();
+        const filename = `load_sheet_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}.pdf`;
+        if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
+            const arrayBuffer = await blob.arrayBuffer();
+            const uint8Array = new Uint8Array(arrayBuffer);
+            const base64String = btoa(String.fromCharCode(...uint8Array));
+            const result = await window.electronAPI.saveLoadSheetPDF(base64String, filename);
+            if (result && result.success) {
+                showToast('PDF saved to Load Sheets folder and opened', 'success');
+            } else {
+                showToast(result?.error || 'Failed to save PDF', 'error');
+            }
+        } else {
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast('PDF downloaded', 'success');
+        }
+    } catch (error) {
+        showToast(error.message || 'Failed to download PDF', 'error');
+    }
+}
+
+// ============================================
 // Navigation
 // ============================================
 
@@ -2228,7 +2451,8 @@ function switchView(viewName) {
         'ledgerDetail': { title: 'Ledger', subtitle: 'View ledger entries' },
         'monthSummary': { title: 'Month Summary', subtitle: 'View monthly order summaries' },
         'monthDetail': { title: 'Month Details', subtitle: 'View detailed month statistics' },
-        'products': { title: 'Products', subtitle: 'Manage your product catalog' }
+        'products': { title: 'Products', subtitle: 'Manage your product catalog' },
+        'loadSheetLogs': { title: 'Load Sheet Logs', subtitle: 'View and download past load sheets' }
     };
 
     document.getElementById('viewTitle').textContent = titles[viewName].title;
@@ -2322,6 +2546,8 @@ function switchView(viewName) {
             if (cashbookIncomingGridApi) cashbookIncomingGridApi.sizeColumnsToFit();
             if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.sizeColumnsToFit();
         }, 100);
+    } else if (viewName === 'loadSheetLogs') {
+        loadLoadSheetLogs();
     } else if (viewName === 'ledgers') {
         loadLedgers();
     } else if (viewName === 'ledgerDetail') {
@@ -3821,87 +4047,7 @@ function initForms() {
     }
     const ordersMoreActionGenerateLoadSheet = document.getElementById('ordersMoreActionGenerateLoadSheet');
     if (ordersMoreActionGenerateLoadSheet) {
-        ordersMoreActionGenerateLoadSheet.addEventListener('click', async () => {
-            if (!ordersGridApi) {
-                showToast('Orders grid not initialized', 'error');
-                return;
-            }
-            const selectedRows = ordersGridApi.getSelectedRows();
-            if (selectedRows.length === 0) {
-                showToast('Please select at least one order', 'error');
-                return;
-            }
-            const orderIds = selectedRows.map(row => row.id);
-            ordersMoreActionGenerateLoadSheet.disabled = true;
-            const originalText = ordersMoreActionGenerateLoadSheet.textContent;
-            ordersMoreActionGenerateLoadSheet.textContent = 'Generating...';
-            try {
-                const response = await fetch(`${API_BASE}/orders/generate-load-sheet`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(orderIds)
-                });
-                if (!response.ok) {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Failed to generate load sheet');
-                }
-                const blob = await response.blob();
-                
-                // Generate filename with date and time
-                const now = new Date();
-                const year = now.getFullYear();
-                const month = String(now.getMonth() + 1).padStart(2, '0');
-                const day = String(now.getDate()).padStart(2, '0');
-                const hours = String(now.getHours()).padStart(2, '0');
-                const minutes = String(now.getMinutes()).padStart(2, '0');
-                const seconds = String(now.getSeconds()).padStart(2, '0');
-                const filename = `load_sheet_${year}-${month}-${day}_${hours}-${minutes}-${seconds}.pdf`;
-                
-                // Convert blob to base64 string for Electron API (more reliable than large arrays)
-                const arrayBuffer = await blob.arrayBuffer();
-                const uint8Array = new Uint8Array(arrayBuffer);
-                const base64String = btoa(String.fromCharCode(...uint8Array));
-                
-                // Use Electron API to save and open the PDF
-                if (window.electronAPI && window.electronAPI.saveAndOpenPDF) {
-                    const result = await window.electronAPI.saveAndOpenPDF(base64String, filename);
-                    if (result.success) {
-                        showToast(`PDF load sheet generated and opened for ${selectedRows.length} order(s)`, 'success');
-                    } else {
-                        // Fallback to browser download
-                        const url = window.URL.createObjectURL(blob);
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                        window.URL.revokeObjectURL(url);
-                        showToast(`PDF load sheet generated for ${selectedRows.length} order(s)`, 'success');
-                    }
-                } else {
-                    // Fallback for non-Electron environment
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    window.open(url, '_blank');
-                    setTimeout(() => {
-                        window.URL.revokeObjectURL(url);
-                    }, 1000);
-                    showToast(`PDF load sheet generated for ${selectedRows.length} order(s)`, 'success');
-                }
-            } catch (error) {
-                console.error('Error generating load sheet:', error);
-                showToast(error.message || 'Failed to generate load sheet', 'error');
-            } finally {
-                ordersMoreActionGenerateLoadSheet.disabled = false;
-                ordersMoreActionGenerateLoadSheet.textContent = originalText;
-            }
-        });
+        ordersMoreActionGenerateLoadSheet.addEventListener('click', openGenerateLoadSheetModal);
     }
 
     // Create Replacement Order
@@ -3986,6 +4132,33 @@ function initForms() {
     confirmDeleteBtn?.addEventListener('click', confirmDeleteReplacementOrder);
     deleteConfirmModal?.addEventListener('click', (e) => {
         if (e.target === deleteConfirmModal) closeDeleteConfirmModal();
+    });
+
+    // Generate Load Sheet modal
+    document.getElementById('generateLoadSheetModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'generateLoadSheetModal') closeGenerateLoadSheetModal();
+    });
+    document.getElementById('closeGenerateLoadSheetModal')?.addEventListener('click', closeGenerateLoadSheetModal);
+    document.getElementById('loadSheetModalCancel')?.addEventListener('click', closeGenerateLoadSheetModal);
+    document.getElementById('loadSheetModalConfirm')?.addEventListener('click', confirmGenerateLoadSheet);
+
+    // Load Sheet Logs page
+    document.getElementById('loadSheetLogsRefreshBtn')?.addEventListener('click', () => loadLoadSheetLogs());
+    document.getElementById('loadSheetLogsOpenFolderBtn')?.addEventListener('click', async () => {
+        if (window.electronAPI && window.electronAPI.openLoadSheetsFolder) {
+            try {
+                const result = await window.electronAPI.openLoadSheetsFolder();
+                if (result && result.success) {
+                    showToast('Load Sheets folder opened', 'success');
+                } else {
+                    showToast(result?.error || 'Failed to open folder', 'error');
+                }
+            } catch (e) {
+                showToast(e?.message || 'Failed to open folder', 'error');
+            }
+        } else {
+            showToast('Open folder is only available in the desktop app', 'warning');
+        }
     });
 
     // Refresh delivery status for selected orders

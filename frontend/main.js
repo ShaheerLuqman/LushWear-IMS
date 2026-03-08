@@ -70,36 +70,31 @@ ipcMain.handle('open-file', async (_, filePath) => {
 // Register IPC handlers before app.whenReady()
 console.log('Registering IPC handlers...');
 
+// Load sheets saved to app folder (project root / load_sheets), no save dialog
+const LOAD_SHEETS_FOLDER = path.join(__dirname, '..', 'load_sheets');
+
+function ensureLoadSheetsFolder() {
+    if (!fs.existsSync(LOAD_SHEETS_FOLDER)) {
+        fs.mkdirSync(LOAD_SHEETS_FOLDER, { recursive: true });
+    }
+    return LOAD_SHEETS_FOLDER;
+}
+
 ipcMain.handle('save-and-open-pdf', async (event, base64Data, filename) => {
     try {
         console.log('save-and-open-pdf handler called with filename:', filename);
-        
-        // Get Downloads folder path
         const downloadsPath = app.getPath('downloads');
         const filePath = path.join(downloadsPath, filename);
-        
-        // Convert base64 string back to Buffer
         const buffer = Buffer.from(base64Data, 'base64');
-        
-        // Save the file asynchronously to ensure it's fully written
         await fs.promises.writeFile(filePath, buffer);
-        
-        // Small delay to ensure file is fully flushed to disk
         await new Promise(resolve => setTimeout(resolve, 100));
-        
-        // Verify file exists before opening
         if (!fs.existsSync(filePath)) {
             throw new Error('File was not created successfully');
         }
-        
-        // Open the file in default PDF application
         const result = await shell.openPath(filePath);
-        
-        // shell.openPath returns an empty string on success, or an error message on failure
         if (result) {
             throw new Error(result);
         }
-        
         console.log('PDF saved and opened successfully:', filePath);
         return { success: true, path: filePath };
     } catch (error) {
@@ -108,7 +103,42 @@ ipcMain.handle('save-and-open-pdf', async (event, base64Data, filename) => {
     }
 });
 
-console.log('IPC handler save-and-open-pdf registered');
+ipcMain.handle('save-load-sheet-pdf', async (event, base64Data, filename) => {
+    try {
+        ensureLoadSheetsFolder();
+        const filePath = path.join(LOAD_SHEETS_FOLDER, filename);
+        const buffer = Buffer.from(base64Data, 'base64');
+        await fs.promises.writeFile(filePath, buffer);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (!fs.existsSync(filePath)) {
+            throw new Error('File was not created successfully');
+        }
+        const result = await shell.openPath(filePath);
+        if (result) {
+            throw new Error(result);
+        }
+        return { success: true, path: filePath };
+    } catch (error) {
+        console.error('Error saving load sheet PDF:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+ipcMain.handle('open-load-sheets-folder', async () => {
+    try {
+        ensureLoadSheetsFolder();
+        const result = await shell.openPath(LOAD_SHEETS_FOLDER);
+        if (result) {
+            throw new Error(result);
+        }
+        return { success: true };
+    } catch (error) {
+        console.error('Error opening load sheets folder:', error);
+        return { success: false, error: error.message };
+    }
+});
+
+console.log('IPC handlers registered (save-and-open-pdf, save-load-sheet-pdf, open-load-sheets-folder)');
 
 function setupFullScreenListeners() {
     if (!mainWindow || mainWindow.isDestroyed()) return;

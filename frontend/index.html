@@ -76,6 +76,10 @@
                     <span class="nav-icon">🛍️</span>
                     <span class="nav-tooltip">Products</span>
                 </button>
+                <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
+                    <span class="nav-icon">📋</span>
+                    <span class="nav-tooltip">Load Sheet Logs</span>
+                </button>
             </nav>
             <div class="sidebar-lock-wrap">
                 <button type="button" id="editLockBtn" class="nav-item sidebar-lock-btn locked" title="Unlock editing to make changes">
@@ -312,6 +316,34 @@
                 <div id="productsView" class="view">
                     <div id="productsGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
+
+                <!-- Load Sheet Logs View -->
+                <div id="loadSheetLogsView" class="view">
+                    <div class="load-sheet-logs-container">
+                        <div class="load-sheet-logs-toolbar">
+                            <button type="button" id="loadSheetLogsRefreshBtn" class="btn btn-secondary">Refresh</button>
+                            <button type="button" id="loadSheetLogsOpenFolderBtn" class="btn btn-secondary" title="Open Load Sheets folder"><i class="fas fa-folder-open"></i> Open folder</button>
+                        </div>
+                        <div class="load-sheet-logs-table-wrap">
+                            <table class="load-sheet-logs-table">
+                                <thead>
+                                    <tr>
+                                        <th>Sr. #</th>
+                                        <th>Assignment #</th>
+                                        <th>Rider</th>
+                                        <th>Date time</th>
+                                        <th>Order numbers</th>
+                                        <th>Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="loadSheetLogsTableBody">
+                                    <!-- Rows rendered by JS -->
+                                </tbody>
+                            </table>
+                            <p id="loadSheetLogsEmpty" class="load-sheet-logs-empty" style="display: none;">No load sheet logs yet.</p>
+                        </div>
+                    </div>
+                </div>
             </div>
         </main>
     </div>
@@ -478,6 +510,33 @@
                         <button type="submit" class="btn btn-primary" id="submitReplacementOrder">Create</button>
                     </div>
                 </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Generate Load Sheet Modal -->
+    <div id="generateLoadSheetModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Generate Load Sheet</h2>
+                <button type="button" class="modal-close" id="closeGenerateLoadSheetModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">Enter assignment details. Selected orders will be saved and a PDF will be generated.</p>
+                <p id="loadSheetOrderCount" class="bulk-update-order-count">0 orders selected</p>
+                <textarea id="loadSheetOrderNumbers" class="bulk-update-textarea" rows="4" readonly placeholder="Order numbers"></textarea>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="loadSheetAssignmentNumber">Assignment Number *</label>
+                    <input type="text" id="loadSheetAssignmentNumber" class="form-input" placeholder="e.g. ASG-001">
+                </div>
+                <div class="form-group" style="margin-top: 12px;">
+                    <label for="loadSheetRiderName">Rider Name *</label>
+                    <input type="text" id="loadSheetRiderName" class="form-input" placeholder="e.g. Ahmed">
+                </div>
+                <div class="bulk-update-actions" style="margin-top: 16px;">
+                    <button type="button" id="loadSheetModalCancel" class="btn btn-secondary">Cancel</button>
+                    <button type="button" id="loadSheetModalConfirm" class="btn btn-primary">Generate &amp; Download PDF</button>
+                </div>
             </div>
         </div>
     </div>

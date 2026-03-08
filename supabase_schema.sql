@@ -64,3 +64,17 @@ CREATE INDEX IF NOT EXISTS idx_orders_number ON orders(order_number);
 CREATE INDEX IF NOT EXISTS idx_orders_order_status ON orders(order_status);
 CREATE INDEX IF NOT EXISTS idx_orders_delivery_status ON orders(delivery_status);
 CREATE INDEX IF NOT EXISTS idx_orders_piece_received ON orders(piece_received);
+
+-- Load Sheet Logs (assignment number, rider, order numbers, created_at)
+CREATE TABLE IF NOT EXISTS load_sheet_logs (
+    id UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    assignment_number VARCHAR(100) NOT NULL,
+    rider_name VARCHAR(255) NOT NULL,
+    order_numbers JSONB NOT NULL DEFAULT '[]',  -- array of order number strings (e.g. ["2721", "2722"])
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at ON load_sheet_logs(created_at DESC);
+
+-- If RLS is enabled on the project, allow access to load_sheet_logs (run if you get 500 on GET /api/orders/load-sheet-logs):
+-- ALTER TABLE load_sheet_logs ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "Allow all load_sheet_logs" ON load_sheet_logs FOR ALL USING (true) WITH CHECK (true);
