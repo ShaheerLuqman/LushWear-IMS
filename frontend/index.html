@@ -330,6 +330,7 @@
                         <button type="button" id="bulkUpdateSetReturned" class="btn btn-secondary">Order status Returned</button>
                         <button type="button" id="bulkUpdateSetCancelled" class="btn btn-secondary">Order status Cancelled</button>
                         <button type="button" id="bulkUpdateSetPieceReceived" class="btn btn-secondary">Return Piece Received</button>
+                        <button type="button" id="bulkUpdateDeliveryChargesBtn" class="btn btn-secondary">Update delivery charges</button>
                     </div>
                 </div>
                 <div id="bulkUpdateOrderResults" class="bulk-update-results" style="display: none;">
@@ -347,6 +348,27 @@
                     <div class="bulk-update-actions">
                         <button type="button" id="bulkUpdateResultsClose" class="btn btn-primary">Close</button>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Update Delivery Charges Modal (orders) -->
+    <div id="bulkUpdateDeliveryChargesModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Update delivery charges</h2>
+                <button type="button" class="modal-close" id="closeBulkUpdateDeliveryChargesModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">Set delivery charges (Rs) for all selected orders:</p>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="bulkUpdateDeliveryChargesValue">Delivery charges (Rs) *</label>
+                    <input type="number" id="bulkUpdateDeliveryChargesValue" class="form-input" min="0" step="0.01" placeholder="0.00">
+                </div>
+                <div class="bulk-update-actions" style="margin-top: 16px;">
+                    <button type="button" id="bulkUpdateDeliveryChargesCancel" class="btn btn-secondary">Cancel</button>
+                    <button type="button" id="bulkUpdateDeliveryChargesConfirm" class="btn btn-primary">Confirm</button>
                 </div>
             </div>
         </div>

@@ -725,6 +725,7 @@ function initOrdersGrid() {
             width: 100,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
+            filterValueGetter: (params) => (params.data && params.data.id === '__footer__') ? null : getCourierDisplayName(params.data || {}),
             valueFormatter: (params) => (params.data && params.data.id === '__footer__') ? '' : getCourierDisplayName(params.data || {})
         },
         {
@@ -3737,6 +3738,7 @@ function initForms() {
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
+    document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
 
     // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet, Create Replacement
     const postExCsvInput = document.getElementById('postExCsvInput');
@@ -4233,6 +4235,66 @@ function closeBulkUpdateOrderModal() {
     document.getElementById('bulkUpdateOrderModal')?.classList.remove('active');
 }
 
+function openBulkUpdateDeliveryChargesModal() {
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const valueEl = document.getElementById('bulkUpdateDeliveryChargesValue');
+    if (valueEl) {
+        valueEl.value = '';
+        valueEl.focus();
+    }
+    document.getElementById('bulkUpdateDeliveryChargesModal')?.classList.add('active');
+}
+
+function closeBulkUpdateDeliveryChargesModal() {
+    document.getElementById('bulkUpdateDeliveryChargesModal')?.classList.remove('active');
+}
+
+async function submitBulkUpdateDeliveryCharges() {
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const valueEl = document.getElementById('bulkUpdateDeliveryChargesValue');
+    const raw = valueEl?.value?.trim();
+    const deliveryCharge = raw === '' ? NaN : parseFloat(raw);
+    if (isNaN(deliveryCharge) || deliveryCharge < 0) {
+        showToast('Enter a valid delivery charge (0 or more)', 'error');
+        return;
+    }
+    const confirmBtn = document.getElementById('bulkUpdateDeliveryChargesConfirm');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Updating...';
+    }
+    try {
+        const response = await fetch(`${API_BASE}/orders/bulk-update-delivery-charges`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_numbers: orderNumbers, delivery_charge: deliveryCharge }),
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to update delivery charges');
+        }
+        const result = await response.json();
+        closeBulkUpdateDeliveryChargesModal();
+        showBulkUpdateResults(result);
+        loadOrders();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Confirm';
+        }
+    }
+}
+
 function openBulkUpdateCostPriceModal() {
     if (!productsGridApi) {
         showToast('Products grid not ready', 'error');
@@ -4309,6 +4371,14 @@ document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) =
 document.getElementById('closeBulkUpdateOrderModal')?.addEventListener('click', closeBulkUpdateOrderModal);
 
 document.getElementById('bulkUpdateOrderNumbers')?.addEventListener('input', updateBulkUpdateOrderCount);
+
+// Bulk update delivery charges modal
+document.getElementById('bulkUpdateDeliveryChargesModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'bulkUpdateDeliveryChargesModal') closeBulkUpdateDeliveryChargesModal();
+});
+document.getElementById('closeBulkUpdateDeliveryChargesModal')?.addEventListener('click', closeBulkUpdateDeliveryChargesModal);
+document.getElementById('bulkUpdateDeliveryChargesCancel')?.addEventListener('click', closeBulkUpdateDeliveryChargesModal);
+document.getElementById('bulkUpdateDeliveryChargesConfirm')?.addEventListener('click', submitBulkUpdateDeliveryCharges);
 
 // Bulk update cost price modal
 document.getElementById('bulkUpdateCostPriceModal')?.addEventListener('click', (e) => {
@@ -4708,7 +4778,7 @@ function displayDeliveryStatus(data, orderId) {
     let html = `
         <div class="delivery-status-info">
             <div class="info-row">
-                <strong>Courier:</strong> ${escapeHtml(data.courier || '')}
+                <strong>Courier:</strong> ${escapeHtml(formatCourierForDisplay(data.courier) || '')}
             </div>
             <div class="info-row">
                 <strong>Tracking Number:</strong> ${escapeHtml(data.tracking_number || '')}

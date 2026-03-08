@@ -9,7 +9,14 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
-/** When courier is "Other" and tracking_number is not purely numeric, show tracking_number in the Courier column. */
+/** Show Fedex as TCS in the app. */
+function formatCourierForDisplay(courier) {
+    if (courier == null || String(courier).trim() === '') return courier;
+    if (String(courier).trim().toLowerCase() === 'fedex') return 'TCS';
+    return courier;
+}
+
+/** When courier is "Other" and tracking_number is not purely numeric, show tracking_number in the Courier column. Fedex is shown as TCS. */
 function getCourierDisplayName(order) {
     if (!order) return '-';
     const courier = (order.courier != null) ? String(order.courier).trim() : '';
@@ -17,7 +24,9 @@ function getCourierDisplayName(order) {
     const isOther = courier.toLowerCase() === 'other';
     const trackingIsNotNumeric = tracking !== '' && !/^\d+$/.test(tracking);
     if (isOther && trackingIsNotNumeric) return tracking;
-    return courier || '-';
+    const raw = courier || '-';
+    if (raw === '-') return raw;
+    return formatCourierForDisplay(raw) || '-';
 }
 
 function debounce(func, wait) {

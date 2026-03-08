@@ -1301,6 +1301,46 @@ class BulkUpdatePieceReceivedBody(BaseModel):
     order_numbers: List[str]
 
 
+class BulkUpdateDeliveryChargeBody(BaseModel):
+    order_numbers: List[str]
+    delivery_charge: float
+
+
+@router.post("/bulk-update-delivery-charges")
+async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody):
+    """Set delivery_charge for multiple orders by order_number."""
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    if body.delivery_charge < 0:
+        raise HTTPException(status_code=400, detail="delivery_charge must be 0 or greater")
+    try:
+        supabase = get_supabase()
+        update_data = {
+            "delivery_charge": float(body.delivery_charge),
+            "updated_at": datetime.utcnow().isoformat(),
+        }
+        response = (
+            supabase.table("orders")
+            .update(update_data)
+            .in_("order_number", body.order_numbers)
+            .execute()
+        )
+        updated_rows = response.data or []
+        updated_order_numbers = [str(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
+        requested_set = set(body.order_numbers)
+        updated_set = set(updated_order_numbers)
+        not_found_order_numbers = sorted(requested_set - updated_set)
+        return {
+            "updated_count": len(updated_order_numbers),
+            "delivery_charge": body.delivery_charge,
+            "requested_count": len(body.order_numbers),
+            "updated_order_numbers": sorted(updated_order_numbers),
+            "not_found_order_numbers": not_found_order_numbers,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/bulk-update-piece-received")
 async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
     """Set piece_received to 'Received' for multiple orders by order_number."""
