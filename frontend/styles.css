@@ -194,6 +194,21 @@ body {
     visibility: visible;
 }
 
+.sidebar-lock-wrap {
+    margin-top: auto;
+    padding: 12px 12px 0;
+    border-top: 1px solid var(--border-color);
+}
+
+.sidebar-lock-btn.locked {
+    background: var(--accent-glow);
+    color: var(--accent-primary);
+}
+
+.sidebar-lock-btn.locked:hover {
+    background: rgba(139, 92, 246, 0.25);
+    color: var(--accent-primary);
+}
 
 @keyframes pulse {
     0%, 100% { opacity: 1; }

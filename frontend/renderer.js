@@ -25,6 +25,59 @@ let ordersFetchByNumberInFlight = null;
 /** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */
 let ordersFetchedByNumberIds = new Set();
 
+/** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: locked on open. */
+let editLocked = true;
+
+function isEditingAllowed() {
+    return !editLocked;
+}
+
+function applyEditLockState() {
+    const locked = editLocked;
+    const lockBtn = document.getElementById('editLockBtn');
+    const lockIcon = document.getElementById('editLockIcon');
+    const lockTooltip = document.getElementById('editLockTooltip');
+    if (lockBtn) {
+        lockBtn.classList.toggle('locked', locked);
+        if (lockIcon) lockIcon.textContent = locked ? '🔒' : '🔓';
+        if (lockTooltip) lockTooltip.textContent = locked ? 'Unlock editing' : 'Lock editing';
+    }
+    const editButtons = [
+        'createLedgerBtn',
+        'editLedgerDeleteBtn',
+        'bulkUpdateOrderBtn',
+        'bulkUpdateCostPriceBtn',
+        'bulkUpdateDeliveryChargesBtn',
+        'bulkUpdateSetDelivered',
+        'bulkUpdateSetReturned',
+        'bulkUpdateSetCancelled',
+        'bulkUpdateSetPieceReceived',
+        'refreshDeliveryStatusSelectedBtn',
+        'ordersMoreActionCreateReplacement',
+        'ordersMoreActionUploadPostEx',
+        'ordersMoreActionGenerateLoadSheet',
+        'syncShopifyBtn',
+        'syncOrdersBtn',
+        'submitReplacementOrder',
+        'bulkUpdateCostPriceSubmit',
+        'bulkUpdateDeliveryChargesConfirm',
+    ];
+    editButtons.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = locked;
+    });
+    const editLedgerForm = document.getElementById('editLedgerForm');
+    if (editLedgerForm) {
+        const submitBtn = editLedgerForm.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = locked;
+    }
+    const createLedgerForm = document.getElementById('createLedgerForm');
+    if (createLedgerForm) {
+        const submitBtn = createLedgerForm.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = locked;
+    }
+}
+
 // DOM Elements
 const navItems = document.querySelectorAll('.nav-item');
 const views = document.querySelectorAll('.view');
@@ -78,6 +131,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Only show app when both are loaded
     if (productsLoaded && ordersLoaded) {
         switchView('orders');
+        applyEditLockState();
         
         // Hide loading screen
         if (loadingScreen) {
@@ -290,7 +344,7 @@ function initProductsGrid() {
                 return (v == null || v === '') ? '' : v;
             },
             valueFormatter: (params) => (params.value == null || params.value === '') ? '—' : params.value,
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agSelectCellEditor',
             cellEditorParams: {
@@ -350,7 +404,7 @@ function initProductsGrid() {
             field: 'cost_price',
             width: 140,
             filter: 'agNumberColumnFilter',
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
@@ -806,7 +860,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: (params) => params.node?.rowPinned !== 'bottom',
+            editable: (params) => isEditingAllowed() && params.node?.rowPinned !== 'bottom',
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agNumberCellEditor',
             cellEditorParams: { min: 0, max: 999999999.99, precision: 2 },
@@ -833,7 +887,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: (params) => params.node?.rowPinned !== 'bottom',
+            editable: (params) => isEditingAllowed() && params.node?.rowPinned !== 'bottom',
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agNumberCellEditor',
             cellEditorParams: { min: 0, max: 999999999.99, precision: 2 },
@@ -880,7 +934,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
@@ -904,7 +958,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
@@ -959,7 +1013,7 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: numberFilterValueGetter,
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
@@ -1045,7 +1099,7 @@ function initOrdersGrid() {
                 maxNumConditions: 1
             },
             floatingFilterComponent: PieceReceivedFloatingFilter,
-            editable: true,
+            editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agSelectCellEditor',
             cellEditorParams: {
@@ -1775,7 +1829,7 @@ function buildCashbookGridColumns(side) {
             headerName: 'Description',
             field: 'description',
             flex: 1,
-            editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            editable: (params) => isEditingAllowed() && !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
                 if (isCashbookNewRow(params.data)) {
                     // Highlight if amount is filled but description is empty
@@ -1817,7 +1871,7 @@ function buildCashbookGridColumns(side) {
             field: 'amount',
             width: 100,
             filter: 'agNumberColumnFilter',
-            editable: (params) => !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            editable: (params) => isEditingAllowed() && !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
             cellClass: (params) => {
                 if (isCashbookNewRow(params.data)) {
                     // Highlight if description is filled but amount is empty
@@ -1895,6 +1949,7 @@ function initCashbookIncomingGrid() {
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
+        singleClickEdit: true,
         stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
         getRowStyle: (params) => {
@@ -1946,6 +2001,7 @@ function initCashbookOutgoingGrid() {
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
+        singleClickEdit: true,
         stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
         getRowStyle: (params) => {
@@ -2118,11 +2174,20 @@ function deleteReplacementOrder(orderId, orderData) {
 
 function initNavigation() {
     navItems.forEach(item => {
+        if (!item.dataset.view) return; // e.g. edit lock button has no data-view
         item.addEventListener('click', () => {
             const view = item.dataset.view;
             switchView(view);
         });
     });
+    const editLockBtn = document.getElementById('editLockBtn');
+    if (editLockBtn) {
+        editLockBtn.addEventListener('click', () => {
+            editLocked = !editLocked;
+            applyEditLockState();
+            showToast(editLocked ? 'Editing locked' : 'Editing unlocked', 'success');
+        });
+    }
 }
 
 function initOrdersPeriodFilter() {
@@ -3861,6 +3926,10 @@ function initForms() {
     if (replacementOrderForm) {
         replacementOrderForm.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (!isEditingAllowed()) {
+                showToast('Editing is locked', 'error');
+                return;
+            }
             const submitBtn = document.getElementById('submitReplacementOrder');
             const originalNum = document.getElementById('replOrderNumber').value.trim();
             const courier = document.getElementById('replCourier').value;
@@ -4014,6 +4083,10 @@ function initForms() {
     if (createLedgerForm) {
         createLedgerForm.addEventListener('submit', (e) => {
             e.preventDefault();
+            if (!isEditingAllowed()) {
+                showToast('Editing is locked', 'error');
+                return;
+            }
             const name = document.getElementById('createLedgerName').value.trim();
             const section = document.getElementById('createLedgerSection').value;
             if (!name) {
@@ -4047,11 +4120,19 @@ function initForms() {
     if (editLedgerForm) {
         editLedgerForm.addEventListener('submit', (e) => {
             e.preventDefault();
+            if (!isEditingAllowed()) {
+                showToast('Editing is locked', 'error');
+                return;
+            }
             saveEditLedger();
         });
     }
     document.getElementById('editLedgerDeleteBtn')?.addEventListener('click', (e) => {
         e.preventDefault();
+        if (!isEditingAllowed()) {
+            showToast('Editing is locked', 'error');
+            return;
+        }
         deleteLedgerFromEditModal();
     });
 
@@ -4254,6 +4335,10 @@ function closeBulkUpdateDeliveryChargesModal() {
 }
 
 async function submitBulkUpdateDeliveryCharges() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
         showToast('Enter at least one valid order number (one per line).', 'error');
@@ -4320,6 +4405,10 @@ function closeBulkUpdateCostPriceModal() {
 }
 
 async function submitBulkUpdateCostPrice() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
     if (!productsGridApi) return;
     const selected = productsGridApi.getSelectedRows();
     if (!selected.length) {
@@ -4411,6 +4500,10 @@ function parseOrderNumbersFromTextarea() {
 }
 
 async function bulkUpdateOrderStatus(orderStatus) {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
         showToast('Enter at least one valid order number (one per line).', 'error');
@@ -4476,6 +4569,10 @@ async function bulkUpdateOrderStatus(orderStatus) {
 }
 
 async function bulkUpdatePieceReceived() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
         showToast('Enter at least one valid order number (one per line).', 'error');
