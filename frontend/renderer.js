@@ -3215,10 +3215,11 @@ async function updateCashInHand() {
                 });
                 
                 let balance = 0;
+                // Bank ledgers: reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming.
                 sorted.forEach(entry => {
                     const incoming = parseFloat(entry.incoming) || 0;
                     const outgoing = parseFloat(entry.outgoing) || 0;
-                    balance += incoming - outgoing;
+                    balance += outgoing - incoming;
                 });
                 
                 bankLedgerBalances.push({
@@ -3562,13 +3563,12 @@ function renderLedgerDetailGrid() {
     });
 
     let running = 0;
+    // Bank ledgers: reversed — add debit side (outgoing in data), subtract credit side (incoming in data) = outgoing - incoming. Non-Bank: incoming - outgoing.
+    const balanceDelta = isBankSection ? (inc, out) => out - inc : (inc, out) => inc - out;
     const rowsWithBalance = sorted.map(entry => {
         const incoming = parseFloat(entry.incoming) || 0;
         const outgoing = parseFloat(entry.outgoing) || 0;
-        
-        // Balance calculation (always uses original values)
-        running += incoming - outgoing;
-        
+        running += balanceDelta(incoming, outgoing);
         return { 
             ...entry, 
             incoming: incoming,
