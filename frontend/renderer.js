@@ -2203,10 +2203,12 @@ function openGenerateLoadSheetModal() {
     const textarea = document.getElementById('loadSheetOrderNumbers');
     const assignmentEl = document.getElementById('loadSheetAssignmentNumber');
     const riderEl = document.getElementById('loadSheetRiderName');
+    const deliveryChargeEl = document.getElementById('loadSheetDeliveryCharge');
     if (countEl) countEl.textContent = unique.length === 1 ? '1 order selected' : `${unique.length} orders selected`;
     if (textarea) textarea.value = unique.join('\n');
     if (assignmentEl) assignmentEl.value = '';
     if (riderEl) riderEl.value = '';
+    if (deliveryChargeEl) deliveryChargeEl.value = '';
     document.getElementById('generateLoadSheetModal')?.classList.add('active');
     if (assignmentEl) assignmentEl.focus();
 }
@@ -2218,14 +2220,21 @@ function closeGenerateLoadSheetModal() {
 async function confirmGenerateLoadSheet() {
     const assignmentEl = document.getElementById('loadSheetAssignmentNumber');
     const riderEl = document.getElementById('loadSheetRiderName');
+    const deliveryChargeEl = document.getElementById('loadSheetDeliveryCharge');
     const assignmentNumber = assignmentEl?.value?.trim();
     const riderName = riderEl?.value?.trim();
+    const deliveryChargeRaw = deliveryChargeEl?.value?.trim();
+    const deliveryCharge = deliveryChargeRaw === '' ? null : parseFloat(deliveryChargeRaw);
     if (!assignmentNumber) {
         showToast('Enter assignment number', 'error');
         return;
     }
     if (!riderName) {
         showToast('Enter rider name', 'error');
+        return;
+    }
+    if (deliveryCharge !== null && (Number.isNaN(deliveryCharge) || deliveryCharge < 0)) {
+        showToast('Delivery charges must be 0 or greater', 'error');
         return;
     }
     if (!ordersGridApi) return;
@@ -2247,7 +2256,8 @@ async function confirmGenerateLoadSheet() {
             body: JSON.stringify({
                 assignment_number: assignmentNumber,
                 rider_name: riderName,
-                order_numbers: orderNumbers
+                order_numbers: orderNumbers,
+                delivery_charge: deliveryCharge
             })
         });
         if (!createRes.ok) {
@@ -2319,12 +2329,14 @@ async function loadLoadSheetLogs() {
                 ? orderNumbers.join(', ')
                 : orderNumbers.slice(0, 3).join(', ') + '...';
             const orderNumbersTitle = orderNumbers.join(', ') || '—';
+            const dc = log.delivery_charge != null && log.delivery_charge !== '' ? Number(log.delivery_charge).toFixed(2) : '—';
             tr.innerHTML = `
                 <td>${index + 1}</td>
                 <td>${escapeHtml(log.assignment_number || '')}</td>
                 <td>${escapeHtml(log.rider_name || '')}</td>
                 <td>${escapeHtml(created)}</td>
                 <td class="load-sheet-order-numbers-cell" title="${escapeHtml(orderNumbersTitle)}">${escapeHtml(orderNumbersDisplay || '—')}</td>
+                <td>${escapeHtml(dc)}</td>
                 <td class="load-sheet-actions-cell">
                     <button type="button" class="btn btn-secondary btn-sm load-sheet-download-pdf" data-log-id="${escapeHtml(log.id)}" title="Download PDF"><i class="fas fa-download" aria-hidden="true"></i></button>
                     <button type="button" class="btn btn-danger btn-sm load-sheet-delete-log" data-log-id="${escapeHtml(log.id)}" title="Delete"><i class="fas fa-trash" aria-hidden="true"></i></button>

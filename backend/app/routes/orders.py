@@ -1112,12 +1112,13 @@ class LoadSheetLogCreate(BaseModel):
     assignment_number: str
     rider_name: str
     order_numbers: List[str]
+    delivery_charge: Optional[float] = None  # delivery charges to store in log and apply to all orders
 
 
 # Load Sheet Logs (must be before /{order_id} so "load-sheet-logs" is not matched as order_id)
 @router.post("/load-sheet-logs", response_model=dict)
 async def create_load_sheet_log(body: LoadSheetLogCreate):
-    """Save a load sheet log (assignment number, rider name, order numbers)."""
+    """Save a load sheet log (assignment number, rider name, order numbers, delivery_charge). Updates all orders with the given delivery_charge."""
     try:
         if not body.assignment_number or not body.assignment_number.strip():
             raise HTTPException(status_code=400, detail="Assignment number is required")
@@ -1125,15 +1126,27 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
             raise HTTPException(status_code=400, detail="Rider name is required")
         if not body.order_numbers:
             raise HTTPException(status_code=400, detail="At least one order is required")
+        dc = body.delivery_charge
+        if dc is not None and dc < 0:
+            raise HTTPException(status_code=400, detail="delivery_charge must be 0 or greater")
         supabase = get_supabase()
         row = {
             "assignment_number": body.assignment_number.strip(),
             "rider_name": body.rider_name.strip(),
             "order_numbers": body.order_numbers,
         }
+        if dc is not None:
+            row["delivery_charge"] = float(dc)
         response = supabase.table("load_sheet_logs").insert(row).execute()
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create load sheet log")
+        # Update all orders in this load sheet with the delivery charge
+        if dc is not None and body.order_numbers:
+            update_data = {
+                "delivery_charge": float(dc),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+            supabase.table("orders").update(update_data).in_("order_number", body.order_numbers).execute()
         return response.data[0]
     except HTTPException:
         raise
@@ -1153,7 +1166,7 @@ async def list_load_sheet_logs():
         )
         rows = response.data if response.data is not None else []
         out = []
-        allowed_keys = {"id", "assignment_number", "rider_name", "created_at", "order_numbers", "order_ids"}
+        allowed_keys = {"id", "assignment_number", "rider_name", "delivery_charge", "created_at", "order_numbers", "order_ids"}
         for row in rows:
             try:
                 if isinstance(row, dict):

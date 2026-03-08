@@ -71,9 +71,13 @@ CREATE TABLE IF NOT EXISTS load_sheet_logs (
     assignment_number VARCHAR(100) NOT NULL,
     rider_name VARCHAR(255) NOT NULL,
     order_numbers JSONB NOT NULL DEFAULT '[]',  -- array of order number strings (e.g. ["2721", "2722"])
+    delivery_charge DECIMAL(10, 2),             -- delivery charges applied to all orders in this load sheet
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at ON load_sheet_logs(created_at DESC);
+
+-- If load_sheet_logs already existed without delivery_charge, add the column:
+-- ALTER TABLE load_sheet_logs ADD COLUMN IF NOT EXISTS delivery_charge DECIMAL(10, 2);
 
 -- If RLS is enabled on the project, allow access to load_sheet_logs (run if you get 500 on GET /api/orders/load-sheet-logs):
 -- ALTER TABLE load_sheet_logs ENABLE ROW LEVEL SECURITY;
