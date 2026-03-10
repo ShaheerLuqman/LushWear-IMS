@@ -328,7 +328,6 @@
                             <table class="load-sheet-logs-table">
                                 <thead>
                                     <tr>
-                                        <th>Sr. #</th>
                                         <th>Assignment #</th>
                                         <th>Rider</th>
                                         <th>Date time</th>
@@ -532,7 +531,8 @@
                 </div>
                 <div class="form-group" style="margin-top: 12px;">
                     <label for="loadSheetRiderName">Rider Name *</label>
-                    <input type="text" id="loadSheetRiderName" class="form-input" placeholder="e.g. Ahmed">
+                    <input type="text" id="loadSheetRiderName" class="form-input" placeholder="e.g. Ahmed" list="loadSheetRiderNameList" autocomplete="off">
+                    <datalist id="loadSheetRiderNameList"></datalist>
                 </div>
                 <div class="form-group" style="margin-top: 12px;">
                     <label for="loadSheetDeliveryCharge">Delivery charges</label>

@@ -17,6 +17,9 @@ let ledgerEntries = [];
 let currentLedger = null;
 let ledgerDetailGridApi = null;
 let updateFooterRow = null; // Will be set in initOrdersGrid
+let loadSheetRiderNames = [];
+/** Next assignment number for load sheet (format LW-N). Updated when load sheet logs are fetched. */
+let nextLoadSheetAssignmentNumber = 1;
 // Auto-sync orders every 15 minutes; timer is reset when user clicks sync
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
@@ -150,6 +153,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncShopifyProducts();
         syncShopifyOrders();
         scheduleOrdersAutoSync();
+        fetchLoadSheetRiderNames();
     }
 });
 
@@ -2206,9 +2210,10 @@ function openGenerateLoadSheetModal() {
     const deliveryChargeEl = document.getElementById('loadSheetDeliveryCharge');
     if (countEl) countEl.textContent = unique.length === 1 ? '1 order selected' : `${unique.length} orders selected`;
     if (textarea) textarea.value = unique.join('\n');
-    if (assignmentEl) assignmentEl.value = '';
+    if (assignmentEl) assignmentEl.value = `LW-${nextLoadSheetAssignmentNumber}`;
     if (riderEl) riderEl.value = '';
     if (deliveryChargeEl) deliveryChargeEl.value = '';
+    syncLoadSheetRiderNameDatalist();
     document.getElementById('generateLoadSheetModal')?.classList.add('active');
     if (assignmentEl) assignmentEl.focus();
 }
@@ -2293,7 +2298,11 @@ async function confirmGenerateLoadSheet() {
             window.URL.revokeObjectURL(url);
             showToast(`Load sheet saved and PDF downloaded (${orderNumbers.length} order(s))`, 'success');
         }
-        if (currentView === 'loadSheetLogs') loadLoadSheetLogs();
+        if (currentView === 'loadSheetLogs') {
+            loadLoadSheetLogs();
+        } else {
+            fetchLoadSheetRiderNames();
+        }
     } catch (error) {
         showToast(error.message || 'Failed to generate load sheet', 'error');
     } finally {
@@ -2302,6 +2311,47 @@ async function confirmGenerateLoadSheet() {
             confirmBtn.textContent = 'Generate & Download PDF';
         }
     }
+}
+
+async function fetchLoadSheetRiderNames() {
+    try {
+        const response = await fetch(`${API_BASE}/orders/load-sheet-logs`);
+        if (!response.ok) return;
+        const logs = await response.json();
+        const namesSet = new Set();
+        logs.forEach((log) => {
+            const name = (log && typeof log.rider_name === 'string') ? log.rider_name.trim() : '';
+            if (name) namesSet.add(name);
+        });
+        loadSheetRiderNames = Array.from(namesSet).sort((a, b) => a.localeCompare(b));
+        updateNextLoadSheetAssignmentNumber(logs);
+        syncLoadSheetRiderNameDatalist();
+    } catch {
+        // Ignore errors; suggestions are a convenience only
+    }
+}
+
+function updateNextLoadSheetAssignmentNumber(logs) {
+    let max = 0;
+    (logs || []).forEach((log) => {
+        const an = log && log.assignment_number;
+        if (typeof an === 'string') {
+            const m = an.trim().match(/^LW-(\d+)$/i);
+            if (m) max = Math.max(max, parseInt(m[1], 10));
+        }
+    });
+    nextLoadSheetAssignmentNumber = max + 1;
+}
+
+function syncLoadSheetRiderNameDatalist() {
+    const datalist = document.getElementById('loadSheetRiderNameList');
+    if (!datalist) return;
+    datalist.innerHTML = '';
+    loadSheetRiderNames.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        datalist.appendChild(option);
+    });
 }
 
 async function loadLoadSheetLogs() {
@@ -2317,11 +2367,13 @@ async function loadLoadSheetLogs() {
             throw new Error(err.detail || `Failed to load (${response.status})`);
         }
         const logs = await response.json();
+        updateNextLoadSheetAssignmentNumber(logs);
+        fetchLoadSheetRiderNames();
         if (logs.length === 0) {
             if (emptyEl) emptyEl.style.display = 'block';
             return;
         }
-        logs.forEach((log, index) => {
+        logs.forEach((log) => {
             const tr = document.createElement('tr');
             const created = log.created_at ? formatDateTimeDDMMYYYY(log.created_at) : '';
             const orderNumbers = Array.isArray(log.order_numbers) ? log.order_numbers : [];
@@ -2331,7 +2383,6 @@ async function loadLoadSheetLogs() {
             const orderNumbersTitle = orderNumbers.join(', ') || '—';
             const dc = log.delivery_charge != null && log.delivery_charge !== '' ? Number(log.delivery_charge).toFixed(2) : '—';
             tr.innerHTML = `
-                <td>${index + 1}</td>
                 <td>${escapeHtml(log.assignment_number || '')}</td>
                 <td>${escapeHtml(log.rider_name || '')}</td>
                 <td>${escapeHtml(created)}</td>
