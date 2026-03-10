@@ -2186,36 +2186,64 @@ function deleteReplacementOrder(orderId, orderData) {
 // Generate Load Sheet modal & Load Sheet Logs
 // ============================================
 
-function openGenerateLoadSheetModal() {
-    if (!ordersGridApi) {
-        showToast('Orders grid not initialized', 'error');
-        return;
-    }
-    const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
-    if (selectedRows.length === 0) {
-        showToast('Please select at least one order', 'error');
-        return;
-    }
-    const orderNumbers = selectedRows.map(row => row.order_number).filter(Boolean);
-    const unique = [...new Set(orderNumbers)].sort((a, b) => {
+const MONTH_ABBREV = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+function loadSheetFilenameFromDateAndRider(date, riderName) {
+    const d = date instanceof Date ? date : new Date(date);
+    const day = d.getDate();
+    const month = MONTH_ABBREV[d.getMonth()] || 'Jan';
+    const year = d.getFullYear();
+    const rider = (riderName || 'LoadSheet').replace(/\s+/g, '_').replace(/[/\\:*?"<>|]/g, '');
+    return `${day}_${month}_${year}_${rider}.pdf`;
+}
+
+function parseLoadSheetOrderNumbersFromBox() {
+    const textarea = document.getElementById('loadSheetOrderNumbers');
+    if (!textarea) return [];
+    const raw = (textarea.value || '').split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+    const unique = [...new Set(raw)].sort((a, b) => {
         const na = parseInt(a, 10);
         const nb = parseInt(b, 10);
         if (!isNaN(na) && !isNaN(nb)) return na - nb;
         return String(a).localeCompare(String(b));
     });
+    return unique;
+}
+
+function updateLoadSheetModalState() {
+    const orderNumbers = parseLoadSheetOrderNumbersFromBox();
+    const countEl = document.getElementById('loadSheetOrderCount');
+    const confirmBtn = document.getElementById('loadSheetModalConfirm');
+    if (countEl) countEl.textContent = orderNumbers.length === 0 ? '0 orders' : (orderNumbers.length === 1 ? '1 order' : `${orderNumbers.length} orders`);
+    if (confirmBtn) confirmBtn.disabled = orderNumbers.length === 0;
+}
+
+function openGenerateLoadSheetModal() {
     const countEl = document.getElementById('loadSheetOrderCount');
     const textarea = document.getElementById('loadSheetOrderNumbers');
     const assignmentEl = document.getElementById('loadSheetAssignmentNumber');
     const riderEl = document.getElementById('loadSheetRiderName');
     const deliveryChargeEl = document.getElementById('loadSheetDeliveryCharge');
-    if (countEl) countEl.textContent = unique.length === 1 ? '1 order selected' : `${unique.length} orders selected`;
-    if (textarea) textarea.value = unique.join('\n');
+    if (ordersGridApi) {
+        const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+        const orderNumbers = selectedRows.map(row => row.order_number).filter(Boolean);
+        const unique = [...new Set(orderNumbers)].sort((a, b) => {
+            const na = parseInt(a, 10);
+            const nb = parseInt(b, 10);
+            if (!isNaN(na) && !isNaN(nb)) return na - nb;
+            return String(a).localeCompare(String(b));
+        });
+        if (textarea) textarea.value = unique.join('\n');
+    } else {
+        if (textarea) textarea.value = '';
+    }
     if (assignmentEl) assignmentEl.value = `LW-${nextLoadSheetAssignmentNumber}`;
     if (riderEl) riderEl.value = '';
     if (deliveryChargeEl) deliveryChargeEl.value = '';
     syncLoadSheetRiderNameDatalist();
     document.getElementById('generateLoadSheetModal')?.classList.add('active');
-    if (assignmentEl) assignmentEl.focus();
+    updateLoadSheetModalState();
+    if (textarea && textarea.value.trim()) assignmentEl?.focus(); else textarea?.focus();
 }
 
 function closeGenerateLoadSheetModal() {
@@ -2242,13 +2270,8 @@ async function confirmGenerateLoadSheet() {
         showToast('Delivery charges must be 0 or greater', 'error');
         return;
     }
-    if (!ordersGridApi) return;
-    const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
-    const orderNumbers = selectedRows.map(row => String(row.order_number)).filter(Boolean);
-    if (orderNumbers.length === 0) {
-        showToast('No orders selected', 'error');
-        return;
-    }
+    const orderNumbers = parseLoadSheetOrderNumbersFromBox().map(String);
+    if (orderNumbers.length === 0) return; // button is disabled, but guard anyway
     const confirmBtn = document.getElementById('loadSheetModalConfirm');
     if (confirmBtn) {
         confirmBtn.disabled = true;
@@ -2275,8 +2298,7 @@ async function confirmGenerateLoadSheet() {
         const pdfRes = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
         if (!pdfRes.ok) throw new Error('Failed to generate PDF');
         const blob = await pdfRes.blob();
-        const now = new Date();
-        const filename = `load_sheet_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}-${String(now.getSeconds()).padStart(2, '0')}.pdf`;
+        const filename = loadSheetFilenameFromDateAndRider(new Date(), riderName);
         if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
             const arrayBuffer = await blob.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
@@ -2389,14 +2411,14 @@ async function loadLoadSheetLogs() {
                 <td class="load-sheet-order-numbers-cell" title="${escapeHtml(orderNumbersTitle)}">${escapeHtml(orderNumbersDisplay || '—')}</td>
                 <td>${escapeHtml(dc)}</td>
                 <td class="load-sheet-actions-cell">
-                    <button type="button" class="btn btn-secondary btn-sm load-sheet-download-pdf" data-log-id="${escapeHtml(log.id)}" title="Download PDF"><i class="fas fa-download" aria-hidden="true"></i></button>
+                    <button type="button" class="btn btn-secondary btn-sm load-sheet-download-pdf" data-log-id="${escapeHtml(log.id)}" data-rider-name="${escapeHtml(log.rider_name || '')}" data-created-at="${escapeHtml(log.created_at || '')}" title="Download PDF"><i class="fas fa-download" aria-hidden="true"></i></button>
                     <button type="button" class="btn btn-danger btn-sm load-sheet-delete-log" data-log-id="${escapeHtml(log.id)}" title="Delete"><i class="fas fa-trash" aria-hidden="true"></i></button>
                 </td>
             `;
             tbody.appendChild(tr);
         });
         tbody.querySelectorAll('.load-sheet-download-pdf').forEach(btn => {
-            btn.addEventListener('click', () => downloadLoadSheetLogPdf(btn.getAttribute('data-log-id')));
+            btn.addEventListener('click', () => downloadLoadSheetLogPdf(btn.getAttribute('data-log-id'), btn.getAttribute('data-rider-name'), btn.getAttribute('data-created-at')));
         });
         tbody.querySelectorAll('.load-sheet-delete-log').forEach(btn => {
             btn.addEventListener('click', () => deleteLoadSheetLog(btn.getAttribute('data-log-id')));
@@ -2429,14 +2451,13 @@ async function deleteLoadSheetLog(logId) {
     }
 }
 
-async function downloadLoadSheetLogPdf(logId) {
+async function downloadLoadSheetLogPdf(logId, riderName, createdAt) {
     if (!logId) return;
     try {
         const response = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
         if (!response.ok) throw new Error('Failed to generate PDF');
         const blob = await response.blob();
-        const now = new Date();
-        const filename = `load_sheet_${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}.pdf`;
+        const filename = loadSheetFilenameFromDateAndRider(createdAt || new Date(), riderName);
         if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
             const arrayBuffer = await blob.arrayBuffer();
             const uint8Array = new Uint8Array(arrayBuffer);
@@ -4213,6 +4234,7 @@ function initForms() {
     document.getElementById('closeGenerateLoadSheetModal')?.addEventListener('click', closeGenerateLoadSheetModal);
     document.getElementById('loadSheetModalCancel')?.addEventListener('click', closeGenerateLoadSheetModal);
     document.getElementById('loadSheetModalConfirm')?.addEventListener('click', confirmGenerateLoadSheet);
+    document.getElementById('loadSheetOrderNumbers')?.addEventListener('input', updateLoadSheetModalState);
 
     // Load Sheet Logs page
     document.getElementById('loadSheetLogsRefreshBtn')?.addEventListener('click', () => loadLoadSheetLogs());
