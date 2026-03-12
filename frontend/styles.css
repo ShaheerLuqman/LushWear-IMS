@@ -1632,6 +1632,135 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
 }
 
+/* Date range floating filter wrapper */
+.date-range-floating-filter.grid-floating-filter-wrap {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+/* Date range floating filter trigger button */
+.date-range-floating-filter .grid-floating-filter-btn {
+    width: 100%;
+    padding: 4px 8px;
+    font-size: 12px;
+    font-family: var(--font-primary);
+    color: var(--text-secondary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.date-range-floating-filter .grid-floating-filter-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--text-primary);
+}
+.date-range-floating-filter .grid-floating-filter-btn:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Date range context menu (popup) */
+.date-range-menu {
+    position: absolute;
+    z-index: 9999;
+    display: none;
+    min-width: 220px;
+    padding: 12px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    font-family: var(--font-primary);
+}
+.date-range-menu .date-range-menu__label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+.date-range-menu .date-range-menu__field {
+    margin-bottom: 10px;
+}
+.date-range-menu .date-range-menu__field:last-of-type {
+    margin-bottom: 12px;
+}
+.date-range-menu .grid-floating-filter-date,
+.date-range-menu .date-range-menu__input {
+    width: 100%;
+    padding: 8px 10px;
+    font-size: 13px;
+    font-family: var(--font-primary);
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.date-range-menu .grid-floating-filter-date::placeholder,
+.date-range-menu .date-range-menu__input::placeholder {
+    color: var(--text-muted);
+}
+.date-range-menu .grid-floating-filter-date:hover,
+.date-range-menu .date-range-menu__input:hover {
+    border-color: var(--text-muted);
+}
+.date-range-menu .grid-floating-filter-date:focus,
+.date-range-menu .date-range-menu__input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.date-range-menu .date-range-menu__actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+}
+.date-range-menu .date-range-menu__btn {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    font-family: var(--font-primary);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+    border: 1px solid transparent;
+}
+.date-range-menu .date-range-menu__btn--clear {
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border-color: var(--border-color);
+}
+.date-range-menu .date-range-menu__btn--clear:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+}
+.date-range-menu .date-range-menu__btn--apply {
+    color: #fff;
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+}
+.date-range-menu .date-range-menu__btn--apply:hover {
+    background: var(--accent-secondary);
+    border-color: var(--accent-secondary);
+}
+.date-range-menu .date-range-menu__btn:focus {
+    outline: none;
+}
+.date-range-menu .date-range-menu__btn--apply:focus {
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
 /* Editable cells highlight */
 .ag-theme-alpine .ag-cell-inline-editing {
     background: #f8f9fa;

@@ -618,6 +618,217 @@ FinalStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel
     }
 };
 
+// Custom floating filter for Date column: "Select range" button + tiny popup with two date pickers.
+// Selecting From/To filters orders inclusively between and on those dates using agDateColumnFilter's inRange model.
+function DateRangeFloatingFilter() {}
+DateRangeFloatingFilter.prototype.init = function (params) {
+    const self = this;
+    this.params = params;
+    this.eGui = document.createElement('div');
+    this.eGui.className = 'grid-floating-filter-wrap date-range-floating-filter';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'grid-floating-filter-btn';
+    button.textContent = 'Select range';
+
+    // Create a global popup attached to document.body so it isn't clipped by grid containers
+    const menu = document.createElement('div');
+    menu.className = 'date-range-menu';
+    menu.style.display = 'none';
+
+    const fromField = document.createElement('div');
+    fromField.className = 'date-range-menu__field';
+    const fromLabel = document.createElement('label');
+    fromLabel.className = 'date-range-menu__label';
+    fromLabel.textContent = 'From';
+
+    const fromInput = document.createElement('input');
+    fromInput.type = 'text';
+    fromInput.placeholder = 'dd/mm/yyyy';
+    fromInput.className = 'grid-floating-filter-date';
+
+    const toField = document.createElement('div');
+    toField.className = 'date-range-menu__field';
+    const toLabel = document.createElement('label');
+    toLabel.className = 'date-range-menu__label';
+    toLabel.textContent = 'To';
+
+    const toInput = document.createElement('input');
+    toInput.type = 'text';
+    toInput.placeholder = 'dd/mm/yyyy';
+    toInput.className = 'grid-floating-filter-date';
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'date-range-menu__actions';
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'date-range-menu__btn date-range-menu__btn--clear';
+    clearBtn.textContent = 'Clear';
+
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'date-range-menu__btn date-range-menu__btn--apply';
+    applyBtn.textContent = 'Apply';
+
+    const updateFilter = () => {
+        const rawFrom = (fromInput.value || '').trim();
+        const rawTo = (toInput.value || '').trim();
+        const fromVal = rawFrom ? parseDDMMYYYYToYYYYMMDD(rawFrom) : null;
+        const toVal = rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null;
+        const api = self.params.api;
+        const columnId = self.params.column.getColId();
+        if (!api || !columnId) return;
+
+        const currentModel = api.getFilterModel() || {};
+        const newModel = { ...currentModel };
+
+        if (fromVal && toVal) {
+            // Inclusive in-range filter for this date column
+            // Bump dateTo by one day to avoid any off-by-one issues with timezones
+            const toDate = new Date(toVal);
+            toDate.setDate(toDate.getDate() + 1);
+            const toPlusOne = toDate.toISOString().slice(0, 10);
+            newModel[columnId] = {
+                filterType: 'date',
+                type: 'inRange',
+                dateFrom: fromVal,
+                dateTo: toPlusOne,
+            };
+            button.textContent = 'Range set';
+        } else if (!fromVal && !toVal) {
+            // Clear filter when both are empty
+            delete newModel[columnId];
+            button.textContent = 'Select range';
+        } else {
+            // Only one of the dates is set; don't change the filter yet.
+            return;
+        }
+
+        api.setFilterModel(newModel);
+    };
+
+    applyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        updateFilter();
+        menu.style.display = 'none';
+    });
+
+    clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        fromInput.value = '';
+        toInput.value = '';
+        if (self.fromPicker) self.fromPicker.clear();
+        if (self.toPicker) self.toPicker.clear();
+        const api = self.params.api;
+        const columnId = self.params.column.getColId();
+        if (api && columnId) {
+            const currentModel = api.getFilterModel() || {};
+            const newModel = { ...currentModel };
+            delete newModel[columnId];
+            api.setFilterModel(newModel);
+        }
+        button.textContent = 'Select range';
+        menu.style.display = 'none';
+    });
+
+    // Format model date (Date or ISO string) as DD/MM/YYYY for the text inputs
+    const toDateInputValue = (val) => {
+        if (val == null || val === '') return '';
+        return formatDateDDMMYYYY(val);
+    };
+
+    button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.style.display === 'none') {
+            // Sync From/To inputs from current filter so menu shows last selected dates
+            const api = self.params.api;
+            const columnId = self.params.column.getColId();
+            if (api && columnId) {
+                const filterModel = api.getFilterModel() || {};
+                const colFilter = filterModel[columnId];
+                if (colFilter && colFilter.type === 'inRange') {
+                    const fromStr = toDateInputValue(colFilter.dateFrom);
+                    const toStr = toDateInputValue(colFilter.dateTo);
+                    fromInput.value = fromStr;
+                    toInput.value = toStr;
+                    if (self.fromPicker) self.fromPicker.setDate(fromStr || null, false);
+                    if (self.toPicker) self.toPicker.setDate(toStr || null, false);
+                } else {
+                    fromInput.value = '';
+                    toInput.value = '';
+                    if (self.fromPicker) self.fromPicker.clear();
+                    if (self.toPicker) self.toPicker.clear();
+                }
+            }
+            // Position popup under the button in viewport coordinates
+            const rect = button.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + window.scrollY}px`;
+            menu.style.left = `${rect.left + window.scrollX}px`;
+            menu.style.display = 'block';
+        } else {
+            menu.style.display = 'none';
+        }
+    });
+
+    fromField.appendChild(fromLabel);
+    fromField.appendChild(fromInput);
+    toField.appendChild(toLabel);
+    toField.appendChild(toInput);
+    menu.appendChild(fromField);
+    menu.appendChild(toField);
+    actionsRow.appendChild(clearBtn);
+    actionsRow.appendChild(applyBtn);
+    menu.appendChild(actionsRow);
+
+    // Date picker (Flatpickr): dd/mm/yyyy display, opens on focus/click
+    const flatpickrOpts = {
+        dateFormat: 'd/m/Y',
+        allowInput: true,
+        static: false
+    };
+    const fromPicker = window.flatpickr ? window.flatpickr(fromInput, flatpickrOpts) : null;
+    const toPicker = window.flatpickr ? window.flatpickr(toInput, flatpickrOpts) : null;
+
+    this.eGui.appendChild(button);
+    document.body.appendChild(menu);
+    this.button = button;
+    this.menu = menu;
+    this.fromInput = fromInput;
+    this.toInput = toInput;
+    this.fromPicker = fromPicker;
+    this.toPicker = toPicker;
+};
+DateRangeFloatingFilter.prototype.getGui = function () { return this.eGui; };
+DateRangeFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
+    if (!parentModel) {
+        if (this.fromInput) this.fromInput.value = '';
+        if (this.toInput) this.toInput.value = '';
+        if (this.fromPicker) this.fromPicker.clear();
+        if (this.toPicker) this.toPicker.clear();
+        this.button.textContent = 'Select range';
+        return;
+    }
+    if (parentModel.type === 'inRange') {
+        const fromStr = formatDateDDMMYYYY(parentModel.dateFrom);
+        const toStr = formatDateDDMMYYYY(parentModel.dateTo);
+        if (this.fromInput) this.fromInput.value = fromStr;
+        if (this.toInput) this.toInput.value = toStr;
+        if (this.fromPicker) this.fromPicker.setDate(fromStr || null, false);
+        if (this.toPicker) this.toPicker.setDate(toStr || null, false);
+    } else {
+        if (this.fromInput) this.fromInput.value = '';
+        if (this.toInput) this.toInput.value = '';
+        if (this.fromPicker) this.fromPicker.clear();
+        if (this.toPicker) this.toPicker.clear();
+    }
+    const fromVal = this.fromInput ? this.fromInput.value : '';
+    const toVal = this.toInput ? this.toInput.value : '';
+    // Only indicate whether a range is set; do not show actual dates on the button
+    this.button.textContent = (fromVal && toVal) ? 'Range set' : 'Select range';
+};
+
 // Custom floating filter for Collection (products): dropdown like Order Status
 const COLLECTION_VALUES = ['', 'Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers'];
 function CollectionFloatingFilter() {}
@@ -1171,18 +1382,17 @@ function initOrdersGrid() {
             }
         },
         {
-            headerName: 'Order Date',
+            headerName: 'Date',
             field: 'order_receiving_date',
             width: 130,
-            hide: true,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: (params) => {
-                const v = params.api.getValue(params.column.getColId(), params.node);
-                if (v instanceof Date) return v.toISOString().slice(0, 10);
-                if (v) return String(v).slice(0, 10);
-                return '';
+            hide: false,
+            filter: 'agDateColumnFilter',
+            filterParams: {
+                filterOptions: ['inRange'],
+                defaultOption: 'inRange',
+                browserDatePicker: true
             },
+            floatingFilterComponent: DateRangeFloatingFilter,
             valueGetter: (params) => {
                 const date = params.data.order_receiving_date || params.data.created_at;
                 return date ? new Date(date) : null;
