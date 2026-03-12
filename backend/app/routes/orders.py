@@ -523,27 +523,49 @@ async def sync_shopify_orders():
                 for a in discount_applications
             ) or bool(discount_codes)
 
-            # Total amount: use current_total_price when present (already reflects manual edits e.g. delivery removed). Otherwise use total_price minus shipping so delivery is not included in total_amount.
+            # Total amount:
+            # - For voided orders, Shopify may set current_* totals to 0.00 while total_price/subtotal_price remain non-zero.
+            #   In that case we must ignore current_total_price to avoid resetting our totals to 0.
+            # - For non-voided orders, prefer current_total_price (reflects edits e.g. delivery removed), else total_price - shipping.
+            financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
             current_total = sp_order.get("current_total_price")
             total_price_val = sp_order.get("total_price")
-            if current_total is not None and str(current_total).strip() != "":
-                total_amount = float(current_total)
-            elif total_price_val is not None and str(total_price_val).strip() != "":
-                total_amount = float(total_price_val) - shipping_price
+            if financial_status_peek == "voided":
+                if total_price_val is not None and str(total_price_val).strip() != "":
+                    total_amount = float(total_price_val) - shipping_price
+                else:
+                    # Fallback if total_price missing: subtotal of active line items + tax
+                    total_amount = total_line_items_price + shopify_tax
             else:
-                total_amount = total_line_items_price + shopify_tax
+                if current_total is not None and str(current_total).strip() != "":
+                    total_amount = float(current_total)
+                elif total_price_val is not None and str(total_price_val).strip() != "":
+                    total_amount = float(total_price_val) - shipping_price
+                else:
+                    total_amount = total_line_items_price + shopify_tax
 
             if has_discount_by_code:
-                financial_status = (sp_order.get("financial_status") or "").strip().lower()
+                financial_status = financial_status_peek
                 advance_amount = total_amount if financial_status == "paid" else 0.0
             else:
                 total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
-                financial_status = (sp_order.get("financial_status") or "").strip().lower()
+                financial_status = financial_status_peek
                 if financial_status == "paid":
                     advance_amount = total_amount
                 else:
                     advance_amount = total_discounts
-            
+
+            # For voided orders, keep existing total charges so we don't reset to Shopify's zeroed values
+            if financial_status == "voided" and order_number in existing_orders_map:
+                existing_order = existing_orders_map[order_number]
+                existing_total = float(existing_order.get("total_amount") or 0)
+                existing_advance = float(existing_order.get("advance_amount") or 0)
+                # Preserve existing if it is already set; otherwise use Shopify-derived total_price based amount
+                if existing_total > 0.01:
+                    total_amount = existing_total
+                if existing_advance > 0.01:
+                    advance_amount = existing_advance
+
             # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
             delivery_charge = 0.0
             tax_amount = 0.0
@@ -607,25 +629,9 @@ async def sync_shopify_orders():
                 existing_order = existing_orders_map[order_number]
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
                 if existing_status in ("delivered", "returned"):
-                    existing_adv = float(existing_order.get("advance_amount") or 0)
-                    existing_tot = float(existing_order.get("total_amount") or 0)
-                    adv_changed = abs(existing_adv - advance_amount) > 0.01
-                    tot_changed = abs(existing_tot - total_amount) > 0.01
-                    # Only update amounts when they actually changed; for replacement orders we may only need to set replacement_of_order_no
-                    if adv_changed or tot_changed:
-                        update_payload = {
-                            **existing_order,
-                            "advance_amount": advance_amount,
-                            "total_amount": total_amount,
-                            "updated_at": current_time,
-                        }
-                        if replacement_of is not None:
-                            update_payload["replacement_of_order_no"] = replacement_of
-                        orders_to_update.append(update_payload)
-                        fields_updated = ["advance_amount", "total_amount"]
-                        if replacement_of is not None:
-                            fields_updated.append("replacement_of_order_no")
-                    elif replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
+                    # Once an order has left "unfulfilled" (e.g. delivered/returned), do not overwrite totals/items/cost.
+                    # Allow only replacement_of_order_no to be set if it was missing.
+                    if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
                         # Only set replacement_of_order_no (e.g. first time we see tag 5404-R); do not overwrite advance/total
                         update_payload = {
                             **existing_order,
@@ -655,6 +661,7 @@ async def sync_shopify_orders():
                 existing_courier = (existing_order.get("courier") or "").strip()
                 existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
+                freeze_amounts_items_cost = existing_status != "unfulfilled"
 
                 # Compare and update courier and tracking_number from Shopify if they differ
                 shopify_courier = (courier or "").strip()
@@ -691,16 +698,21 @@ async def sync_shopify_orders():
                 # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
                 order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
 
-                if courier_is_assigned:
-                    order_data["total_amount"] = total_amount
-                    order_data["advance_amount"] = advance_amount
-                    # delivery_charge already set above (180 for SCS, otherwise existing)
-                    order_data["tax_amount"] = existing_order.get("tax_amount", 0)
+                # Update total_amount/items/cost_price only while status is unfulfilled.
+                # After it changes from unfulfilled, freeze these fields.
+                if freeze_amounts_items_cost:
+                    order_data["total_amount"] = existing_order.get("total_amount")
+                    order_data["advance_amount"] = existing_order.get("advance_amount")
                     order_data["cost_price"] = existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
                 else:
-                    skip_fields = False
+                    order_data["total_amount"] = total_amount
+                    order_data["advance_amount"] = advance_amount
+                    order_data["cost_price"] = cost_price
+                    order_data["items"] = items
+                    # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
+                    skip_fields = courier_is_assigned
 
                 # Always update if courier or tracking_number changed, otherwise check other fields
                 if courier_changed or tracking_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
