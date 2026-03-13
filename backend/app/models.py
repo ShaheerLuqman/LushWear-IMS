@@ -71,6 +71,7 @@ class OrderBase(BaseModel):
     order_number: str
     courier: str
     tracking_number: Optional[str] = None
+    folio: Optional[str] = None
     order_status: str
     piece_received: str = "Pending"  # Pending | Done | Received
     delivery_status: Optional[Dict[str, Any]] = None
@@ -89,6 +90,7 @@ class OrderUpdate(BaseModel):
     order_number: Optional[str] = None
     courier: Optional[str] = None
     tracking_number: Optional[str] = None
+    folio: Optional[str] = None
     order_status: Optional[str] = None
     piece_received: Optional[str] = None
     delivery_status: Optional[Dict[str, Any]] = None

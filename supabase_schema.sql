@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS orders (
     order_number VARCHAR(20) NOT NULL UNIQUE,
     courier VARCHAR(100) NOT NULL,
     tracking_number VARCHAR(255),
+    folio VARCHAR(255),
     order_status VARCHAR(50) NOT NULL,
     delivery_status JSONB,
     total_amount DECIMAL(10, 2) NOT NULL,

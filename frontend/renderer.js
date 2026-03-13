@@ -1027,6 +1027,14 @@ function initOrdersGrid() {
             }
         },
         {
+            headerName: 'Folio',
+            field: 'folio',
+            width: 120,
+            filter: 'agTextColumnFilter',
+            filterParams: textFilterContains,
+            valueFormatter: (params) => params.value ?? '-'
+        },
+        {
             headerName: 'Cost Price',
             field: 'cost_price',
             width: 110,
@@ -1386,6 +1394,7 @@ function initOrdersGrid() {
             order_number: null,
             courier: null,
             tracking_number: null,
+            folio: null,
             order_status: null,
             delivery_status: null,
             total_amount: sums.total_amount,
