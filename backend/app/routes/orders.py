@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Form
 from fastapi.responses import Response
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
@@ -803,12 +803,15 @@ def _parse_float(val: Any, default: float = 0.0) -> float:
 
 
 @router.post("/upload-postex-csv")
-async def upload_postex_csv(file: UploadFile = File(...)):
+async def upload_postex_csv(
+    file: UploadFile = File(...),
+    assignment_number: Optional[str] = Form(None),
+):
     """
     Upload a PostEx CSV file. Matches rows by ORDER_REF_NUMBER to orders and updates
     delivery_charge (from SHIPPING_CHARGES), tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX),
-    courier (set to PostEx), and tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
-    including exponential notation e.g. 2.63E+13).
+    courier (set to PostEx), tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
+    including exponential notation e.g. 2.63E+13), and optionally folio (from assignment_number).
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
@@ -967,6 +970,8 @@ async def upload_postex_csv(file: UploadFile = File(...)):
             }
             if r.get("tracking_number"):
                 update_data["tracking_number"] = r["tracking_number"]
+            if assignment_number is not None and assignment_number.strip():
+                update_data["folio"] = assignment_number.strip()
             supabase.table("orders").update(update_data).eq("id", order["id"]).execute()
             updated_order_ids.append(order["id"])
             updated_count += 1
@@ -1152,12 +1157,14 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
         response = supabase.table("load_sheet_logs").insert(row).execute()
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create load sheet log")
-        # Update all orders in this load sheet with the delivery charge
-        if dc is not None and body.order_numbers:
+        # Update all orders in this load sheet: set folio to assignment number, and optionally delivery_charge
+        if body.order_numbers:
             update_data = {
-                "delivery_charge": float(dc),
+                "folio": body.assignment_number.strip(),
                 "updated_at": datetime.utcnow().isoformat(),
             }
+            if dc is not None:
+                update_data["delivery_charge"] = float(dc)
             supabase.table("orders").update(update_data).in_("order_number", body.order_numbers).execute()
         return response.data[0]
     except HTTPException:
@@ -1260,9 +1267,21 @@ async def get_load_sheet_log_pdf(log_id: str):
 
 @router.delete("/load-sheet-logs/{log_id}")
 async def delete_load_sheet_log(log_id: str):
-    """Delete a load sheet log by ID."""
+    """Delete a load sheet log by ID. Clears folio on all orders that were in this load sheet."""
     try:
         supabase = get_supabase()
+        # Fetch the log to get order_numbers before deleting
+        log_response = supabase.table("load_sheet_logs").select("order_numbers").eq("id", log_id).execute()
+        if not log_response.data or len(log_response.data) == 0:
+            raise HTTPException(status_code=404, detail="Load sheet log not found")
+        order_numbers = log_response.data[0].get("order_numbers") or []
+        # Clear folio on all orders that were in this load sheet
+        if order_numbers:
+            supabase.table("orders").update({
+                "folio": None,
+                "updated_at": datetime.utcnow().isoformat(),
+            }).in_("order_number", order_numbers).execute()
+        # Delete the load sheet log
         response = (
             supabase.table("load_sheet_logs")
             .delete()
@@ -1585,8 +1604,8 @@ async def update_order(order_id: str, order: OrderUpdate):
     """Update an existing order"""
     try:
         supabase = get_supabase()
-        update_data = {k: v for k, v in order.model_dump().items() if v is not None}
-        # piece_received defaults to Pending; set to Done when order is delivered (e.g. from delivery-status save)
+        # Include only fields that were sent (so we can set optional fields like folio to null)
+        update_data = {k: v for k, v in order.model_dump(exclude_unset=True).items()}
         update_data["updated_at"] = datetime.utcnow().isoformat()
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:

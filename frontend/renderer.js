@@ -1032,7 +1032,16 @@ function initOrdersGrid() {
             width: 120,
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
-            valueFormatter: (params) => params.value ?? '-'
+            editable: (params) => isEditingAllowed() && params.node?.rowPinned !== 'bottom',
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => params.value ?? '-',
+            valueSetter: (params) => {
+                if (params.data?.id === '__footer__') return;
+                const newValue = params.newValue != null ? String(params.newValue).trim() : null;
+                params.data.folio = newValue || null;
+                saveOrderField(params.data.id, 'folio', newValue);
+                params.api.refreshCells({ rowNodes: [params.node], force: true });
+            }
         },
         {
             headerName: 'Cost Price',
@@ -2337,6 +2346,7 @@ async function confirmGenerateLoadSheet() {
         } else {
             fetchLoadSheetRiderNames();
         }
+        loadOrders();
     } catch (error) {
         showToast(error.message || 'Failed to generate load sheet', 'error');
     } finally {
@@ -2458,6 +2468,7 @@ async function deleteLoadSheetLog(logId) {
         }
         showToast('Load sheet log deleted', 'success');
         loadLoadSheetLogs();
+        loadOrders();
     } catch (error) {
         showToast(error.message || 'Failed to delete load sheet log', 'error');
     }
@@ -3988,8 +3999,8 @@ function scheduleOrdersAutoSync() {
     }, ORDERS_AUTO_SYNC_INTERVAL_MS);
 }
 
-async function uploadPostExCsv(file) {
-    const btn = document.getElementById('ordersMoreActionUploadPostEx');
+async function uploadPostExCsv(file, assignmentNumber) {
+    const btn = document.getElementById('uploadPostExModalUpload');
     const originalText = btn?.textContent;
     if (btn) {
         btn.disabled = true;
@@ -3998,6 +4009,9 @@ async function uploadPostExCsv(file) {
     try {
         const formData = new FormData();
         formData.append('file', file);
+        if (assignmentNumber != null && String(assignmentNumber).trim() !== '') {
+            formData.append('assignment_number', String(assignmentNumber).trim());
+        }
         const response = await fetch(`${API_BASE}/orders/upload-postex-csv`, {
             method: 'POST',
             body: formData
@@ -4008,6 +4022,7 @@ async function uploadPostExCsv(file) {
             throw new Error(detail || response.statusText || 'Upload failed');
         }
         showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
+        closeUploadPostExModal();
 
         // Show popup if any orders have receivable != CSV NET_AMOUNT
         const mismatches = data.amount_mismatches || [];
@@ -4050,6 +4065,24 @@ async function uploadPostExCsv(file) {
             btn.textContent = originalText;
         }
     }
+}
+
+function openUploadPostExModal() {
+    const modal = document.getElementById('uploadPostExModal');
+    const fileInput = document.getElementById('uploadPostExFileInput');
+    const fileNameEl = document.getElementById('uploadPostExFileName');
+    const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
+    if (fileInput) {
+        fileInput.value = '';
+        if (fileNameEl) fileNameEl.textContent = 'No file chosen';
+    }
+    if (assignmentInput) assignmentInput.value = '';
+    if (modal) modal.classList.add('active');
+}
+
+function closeUploadPostExModal() {
+    const modal = document.getElementById('uploadPostExModal');
+    if (modal) modal.classList.remove('active');
 }
 
 // ============================================
@@ -4291,18 +4324,38 @@ function initForms() {
     document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
 
     // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet, Create Replacement
-    const postExCsvInput = document.getElementById('postExCsvInput');
-    if (postExCsvInput) {
-        postExCsvInput.addEventListener('change', async (e) => {
-            const file = e.target.files?.[0];
-            if (!file) return;
-            e.target.value = '';
-            await uploadPostExCsv(file);
+    const ordersMoreActionUploadPostEx = document.getElementById('ordersMoreActionUploadPostEx');
+    if (ordersMoreActionUploadPostEx) {
+        ordersMoreActionUploadPostEx.addEventListener('click', openUploadPostExModal);
+    }
+    // Upload PostEx modal: file name display, upload button, close/cancel
+    const uploadPostExFileInput = document.getElementById('uploadPostExFileInput');
+    const uploadPostExFileNameEl = document.getElementById('uploadPostExFileName');
+    if (uploadPostExFileInput && uploadPostExFileNameEl) {
+        uploadPostExFileInput.addEventListener('change', () => {
+            const file = uploadPostExFileInput.files?.[0];
+            uploadPostExFileNameEl.textContent = file ? file.name : 'No file chosen';
         });
     }
-    const ordersMoreActionUploadPostEx = document.getElementById('ordersMoreActionUploadPostEx');
-    if (ordersMoreActionUploadPostEx && postExCsvInput) {
-        ordersMoreActionUploadPostEx.addEventListener('click', () => postExCsvInput.click());
+    const uploadPostExModalUploadBtn = document.getElementById('uploadPostExModalUpload');
+    if (uploadPostExModalUploadBtn) {
+        uploadPostExModalUploadBtn.addEventListener('click', async () => {
+            const fileInput = document.getElementById('uploadPostExFileInput');
+            const file = fileInput?.files?.[0];
+            if (!file) {
+                showToast('Please select a CSV file', 'error');
+                return;
+            }
+            const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
+            const assignmentNumber = assignmentInput?.value?.trim() || null;
+            await uploadPostExCsv(file, assignmentNumber);
+        });
+    }
+    document.getElementById('closeUploadPostExModal')?.addEventListener('click', closeUploadPostExModal);
+    document.getElementById('uploadPostExModalCancel')?.addEventListener('click', closeUploadPostExModal);
+    const uploadPostExModalEl = document.getElementById('uploadPostExModal');
+    if (uploadPostExModalEl) {
+        uploadPostExModalEl.addEventListener('click', (e) => { if (e.target === uploadPostExModalEl) closeUploadPostExModal(); });
     }
     const ordersMoreActionGenerateLoadSheet = document.getElementById('ordersMoreActionGenerateLoadSheet');
     if (ordersMoreActionGenerateLoadSheet) {

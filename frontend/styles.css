@@ -964,6 +964,22 @@ body:has(#ledgersView.active) .content-area {
     font-size: 14px;
 }
 
+.upload-postex-file-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.upload-postex-file-row input[type="file"] {
+    max-width: 100%;
+}
+
+.upload-postex-filename {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
 .bulk-update-order-count {
     margin: 0 0 8px;
     color: var(--text-secondary);
