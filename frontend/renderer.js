@@ -2258,6 +2258,7 @@ function openGenerateLoadSheetModal() {
     } else {
         if (textarea) textarea.value = '';
     }
+    if (countEl) countEl.textContent = '0 orders';
     if (assignmentEl) assignmentEl.value = `LW-${nextLoadSheetAssignmentNumber}`;
     if (riderEl) riderEl.value = '';
     if (deliveryChargeEl) deliveryChargeEl.value = '';
