@@ -408,13 +408,25 @@ async def sync_shopify_orders():
             return total_cost
         
         def extract_items(order):
+            """Build order items list from line_items, excluding removed items (current_quantity 0)."""
             if "line_items" not in order or not order["line_items"]:
                 return []
             item_names = []
             for item in order["line_items"]:
+                qty = item.get("current_quantity")
+                if qty is None:
+                    qty = item.get("quantity") or 0
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty <= 0:
+                    continue
                 name = item.get("name", "")
                 if name:
-                    item_names.append(name)
+                    # Append name once per quantity so list reflects actual items in the order
+                    for _ in range(qty):
+                        item_names.append(name)
             return item_names
 
         def subtotal_line_items_excluding_removed(order):
