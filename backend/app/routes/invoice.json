@@ -1,0 +1,35 @@
+{
+    "consignee_information": {
+      "name": "Wasif Khan",
+      "contact": "03480513383",
+      "delivery_address": "Barikot Swat TCS Buner Road Near Punjab Bakers, TCS Barikot Swat near Punjab Bakers"
+    },
+    "shipper_information": {
+      "name": "Lushwear",
+      "contact": "03390153893",
+      "pickup_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi, opposite Tariq Road wala Qabristan",
+      "return_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi, opposite Tariq Road wala Qabristan"
+    },
+    "shipment_information": {
+      "pieces": 1,
+      "order_ref": "#5293",
+      "tracking_no": "27306960003276",
+      "origin": "Karachi",
+      "destination": "Swat",
+      "return_city": "Karachi",
+      "remarks": "THIS ORDER IS 100% CONFIRMED"
+    },
+    "order_information": {
+      "amount": "2648.00",
+      "currency": "PKR",
+      "date": "2026-02-23",
+      "order_type": "Normal"
+    },
+    "order_details": [
+      {
+        "product": "Enigma",
+        "size": "M",
+        "quantity": 1
+      }
+    ]
+}
