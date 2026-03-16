@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Form, Body
 from fastapi.responses import Response
 from typing import List, Dict, Any, Optional
 from pydantic import BaseModel
@@ -14,6 +14,7 @@ from io import BytesIO
 import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs
+import json
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -1940,6 +1941,152 @@ def _generate_pdf_load_sheet(
     doc.build(elements)
     buffer.seek(0)
     return buffer
+
+
+def _load_invoice_shipper_defaults() -> Dict[str, str]:
+    """Load fixed shipper information from invoice.json if present."""
+    invoice_json_path = Path(__file__).parent / "invoice.json"
+    try:
+        if invoice_json_path.exists():
+            with open(invoice_json_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                shipper = (data.get("shipper_information") or {})
+                return {
+                    "name": shipper.get("name") or "Lushwear",
+                    "contact": shipper.get("contact") or "03390153893",
+                    "pickup_address": shipper.get("pickup_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+                    "return_address": shipper.get("return_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+                }
+    except Exception:
+        pass
+    return {
+        "name": "Lushwear",
+        "contact": "03390153893",
+        "pickup_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+        "return_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+    }
+
+
+def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
+    """Generate a PDF with one invoice table per order. Shipper info is fixed; consignee/shipment/order from each order."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=15*mm, leftMargin=15*mm,
+        topMargin=15*mm, bottomMargin=15*mm
+    )
+    elements = []
+    styles = getSampleStyleSheet()
+    normal_style = ParagraphStyle(
+        "InvoiceNormal", parent=styles["Normal"], fontSize=9, textColor=colors.black
+    )
+    header_style = ParagraphStyle(
+        "InvoiceHeader", parent=styles["Normal"], fontSize=10, textColor=colors.black, fontName="Helvetica-Bold"
+    )
+    shipper = _load_invoice_shipper_defaults()
+
+    def _cell_text(s: str) -> Paragraph:
+        return Paragraph((s or "-").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), normal_style)
+
+    def _cell_header(s: str) -> Paragraph:
+        return Paragraph((s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), header_style)
+
+    for order in orders:
+        # Order-specific fields (from DB; use optional shipping fields if present later)
+        consignee_name = order.get("shipping_name") or order.get("consignee_name") or "-"
+        consignee_contact = order.get("shipping_phone") or order.get("consignee_contact") or "-"
+        consignee_address = order.get("shipping_address") or order.get("delivery_address") or "-"
+        order_ref = "#" + str(order.get("order_number") or "")
+        tracking = (order.get("tracking_number") or "-").strip() or "-"
+        amount = float(order.get("total_amount") or 0)
+        order_date_raw = order.get("order_receiving_date") or order.get("created_at")
+        if order_date_raw:
+            try:
+                if isinstance(order_date_raw, str) and "T" in order_date_raw:
+                    order_date_raw = order_date_raw.split("T")[0]
+                parts = str(order_date_raw).strip()[:10].split("-")
+                if len(parts) == 3:
+                    order_date = f"{parts[2]}/{parts[1]}/{parts[0]}"
+                else:
+                    order_date = str(order_date_raw)[:10]
+            except Exception:
+                order_date = str(order_date_raw)[:10] if order_date_raw else "-"
+        else:
+            order_date = "-"
+        order_type = "Replacement" if order.get("replacement_of_order_no") else "Normal"
+        pieces = order.get("pieces")
+        if pieces is None:
+            items_list = order.get("items") or []
+            pieces = len(items_list) if items_list else 1
+        pieces = str(pieces)
+        origin = order.get("origin") or "-"
+        destination = order.get("destination") or "-"
+        return_city = order.get("return_city") or "Karachi"
+        remarks = order.get("remarks") or "THIS ORDER IS 100% CONFIRMED"
+
+        items_list = order.get("items") or []
+        if items_list:
+            order_details_txt = ", ".join(f"1 x {item}" for item in items_list) if isinstance(items_list[0], str) else str(items_list)
+        else:
+            order_details_txt = "-"
+
+        table_data = [
+            [_cell_header("Consignee Information"), _cell_text(""), _cell_header("Shipment Information"), _cell_text(""), _cell_header("Order Information"), _cell_text("")],
+            [_cell_text("Name:"), _cell_text(consignee_name), _cell_text("Pieces"), _cell_text(pieces), _cell_text("Amount:"), _cell_text(f"{amount:.0f}")],
+            [_cell_text("Contact:"), _cell_text(consignee_contact), _cell_text("Order Ref:"), _cell_text(order_ref), _cell_text("Date:"), _cell_text(order_date)],
+            [_cell_text("Delivery Address:"), _cell_text(consignee_address), _cell_text("Tracking No:"), _cell_text(tracking), _cell_text("Order Type:"), _cell_text(order_type)],
+            [_cell_text(""), _cell_text(""), _cell_text("Origin"), _cell_text(origin), _cell_text(""), _cell_text("")],
+            [_cell_header("Shipper Information"), _cell_text(""), _cell_text("Destination"), _cell_text(destination), _cell_text(""), _cell_text("")],
+            [_cell_text("Name:"), _cell_text(shipper["name"]), _cell_text("Return City:"), _cell_text(return_city), _cell_text(""), _cell_text("")],
+            [_cell_text("Contact:"), _cell_text(shipper["contact"]), _cell_text("Remarks"), _cell_text(remarks), _cell_text(""), _cell_text("")],
+            [_cell_text("Pickup Address:"), _cell_text(shipper["pickup_address"]), _cell_text(""), _cell_text(""), _cell_text(""), _cell_text("")],
+            [_cell_text("Return Address:"), _cell_text(shipper["return_address"]), _cell_text(""), _cell_text(""), _cell_text(""), _cell_text("")],
+            [_cell_text("Order Details:"), _cell_text(order_details_txt), _cell_text(""), _cell_text(""), _cell_text(""), _cell_text("")],
+        ]
+        col_widths = [28*mm, 52*mm, 28*mm, 52*mm, 25*mm, 25*mm]
+        tbl = Table(table_data, colWidths=col_widths)
+        tbl.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+            ("BACKGROUND", (0, 0), (0, 0), colors.HexColor("#E8E8E8")),
+            ("BACKGROUND", (2, 0), (2, 0), colors.HexColor("#E8E8E8")),
+            ("BACKGROUND", (4, 0), (4, 0), colors.HexColor("#E8E8E8")),
+            ("BACKGROUND", (0, 5), (1, 5), colors.HexColor("#E8E8E8")),
+        ]))
+        elements.append(tbl)
+        elements.append(Spacer(1, 12*mm))
+    if not elements:
+        elements.append(Paragraph("No orders.", normal_style))
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+@router.post("/generate-invoice")
+async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
+    """Generate a PDF invoice with one table per selected order."""
+    try:
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="No orders selected")
+        supabase = get_supabase()
+        orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
+        orders = orders_response.data or []
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found")
+        pdf_buffer = _generate_pdf_invoice(orders)
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=invoice.pdf"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
 
 
 @router.post("/generate-load-sheet")

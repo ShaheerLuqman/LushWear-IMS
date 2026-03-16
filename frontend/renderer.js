@@ -61,6 +61,7 @@ function applyEditLockState() {
         'ordersMoreActionCreateReplacement',
         'ordersMoreActionUploadPostEx',
         'ordersMoreActionGenerateLoadSheet',
+        'ordersMoreActionGenerateInvoice',
         'syncShopifyBtn',
         'syncOrdersBtn',
         'submitReplacementOrder',
@@ -4361,6 +4362,48 @@ function initForms() {
     const ordersMoreActionGenerateLoadSheet = document.getElementById('ordersMoreActionGenerateLoadSheet');
     if (ordersMoreActionGenerateLoadSheet) {
         ordersMoreActionGenerateLoadSheet.addEventListener('click', openGenerateLoadSheetModal);
+    }
+    const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
+    if (ordersMoreActionGenerateInvoice) {
+        ordersMoreActionGenerateInvoice.addEventListener('click', async () => {
+            if (!ordersGridApi) {
+                showToast('Orders grid not initialized', 'error');
+                return;
+            }
+            const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+            if (selectedRows.length === 0) {
+                showToast('Please select at least one order', 'error');
+                return;
+            }
+            const orderIds = selectedRows.map(row => row.id).filter(Boolean);
+            if (orderIds.length === 0) {
+                showToast('Selected orders have no ID', 'error');
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/orders/generate-invoice`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderIds)
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Failed to generate invoice');
+                }
+                const blob = await res.blob();
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `invoice_${new Date().toISOString().slice(0, 10)}.pdf`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
+            } catch (e) {
+                showToast(e.message || 'Failed to generate invoice', 'error');
+            }
+        });
     }
 
     // Create Replacement Order
