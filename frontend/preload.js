@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openFile: (filePath) => ipcRenderer.invoke('open-file', filePath),
     saveAndOpenPDF: (buffer, filename) => ipcRenderer.invoke('save-and-open-pdf', buffer, filename),
     saveLoadSheetPDF: (buffer, filename) => ipcRenderer.invoke('save-load-sheet-pdf', buffer, filename),
+    saveInvoicePDF: (buffer, filename) => ipcRenderer.invoke('save-invoice-pdf', buffer, filename),
     openLoadSheetsFolder: () => ipcRenderer.invoke('open-load-sheets-folder')
 });
 

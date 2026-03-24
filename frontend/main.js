@@ -124,6 +124,37 @@ ipcMain.handle('save-load-sheet-pdf', async (event, base64Data, filename) => {
     }
 });
 
+// Invoices saved to app folder (project root / invoices), same pattern as load_sheets
+const INVOICES_FOLDER = path.join(__dirname, '..', 'invoices');
+
+function ensureInvoicesFolder() {
+    if (!fs.existsSync(INVOICES_FOLDER)) {
+        fs.mkdirSync(INVOICES_FOLDER, { recursive: true });
+    }
+    return INVOICES_FOLDER;
+}
+
+ipcMain.handle('save-invoice-pdf', async (event, base64Data, filename) => {
+    try {
+        ensureInvoicesFolder();
+        const filePath = path.join(INVOICES_FOLDER, filename);
+        const buffer = Buffer.from(base64Data, 'base64');
+        await fs.promises.writeFile(filePath, buffer);
+        await new Promise(resolve => setTimeout(resolve, 100));
+        if (!fs.existsSync(filePath)) {
+            throw new Error('File was not created successfully');
+        }
+        const result = await shell.openPath(filePath);
+        if (result) {
+            throw new Error(result);
+        }
+        return { success: true, path: filePath };
+    } catch (error) {
+        console.error('Error saving invoice PDF:', error);
+        return { success: false, error: error.message };
+    }
+});
+
 ipcMain.handle('open-load-sheets-folder', async () => {
     try {
         ensureLoadSheetsFolder();
@@ -138,7 +169,7 @@ ipcMain.handle('open-load-sheets-folder', async () => {
     }
 });
 
-console.log('IPC handlers registered (save-and-open-pdf, save-load-sheet-pdf, open-load-sheets-folder)');
+console.log('IPC handlers registered (save-and-open-pdf, save-load-sheet-pdf, save-invoice-pdf, open-load-sheets-folder)');
 
 function setupFullScreenListeners() {
     if (!mainWindow || mainWindow.isDestroyed()) return;

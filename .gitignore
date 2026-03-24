@@ -45,3 +45,6 @@ Desktop.ini
 # Generated load sheets (saved by app)
 load_sheets/
 
+# Generated invoices (saved by app)
+invoices/
+

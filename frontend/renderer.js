@@ -2234,6 +2234,13 @@ function loadSheetFilenameFromDateAndRider(date, riderName) {
     return `${day}_${month}_${year}_${rider}.pdf`;
 }
 
+/** Local date + time; safe for Windows filenames (no colons). */
+function invoicePdfFilename() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `invoice_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`;
+}
+
 function parseLoadSheetOrderNumbersFromBox() {
     const textarea = document.getElementById('loadSheetOrderNumbers');
     if (!textarea) return [];
@@ -4405,15 +4412,31 @@ function initForms() {
                     throw new Error(err.detail || 'Failed to generate invoice');
                 }
                 const blob = await res.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `invoice_${new Date().toISOString().slice(0, 10)}.pdf`;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                window.URL.revokeObjectURL(url);
-                showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
+                const filename = invoicePdfFilename();
+                if (window.electronAPI && window.electronAPI.saveInvoicePDF) {
+                    const arrayBuffer = await blob.arrayBuffer();
+                    const uint8Array = new Uint8Array(arrayBuffer);
+                    const base64String = btoa(String.fromCharCode(...uint8Array));
+                    const result = await window.electronAPI.saveInvoicePDF(base64String, filename);
+                    if (result && result.success) {
+                        showToast(`Invoice saved and opened (${orderIds.length} order(s))`, 'success');
+                    } else {
+                        showToast(result?.error || 'Failed to save invoice PDF', 'error');
+                    }
+                } else {
+                    const url = window.URL.createObjectURL(blob);
+                    const opened = window.open(url, '_blank', 'noopener,noreferrer');
+                    if (!opened) {
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                    }
+                    setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                    showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
+                }
             } catch (e) {
                 showToast(e.message || 'Failed to generate invoice', 'error');
             }
