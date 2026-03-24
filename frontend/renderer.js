@@ -30,6 +30,21 @@ let ordersFetchByNumberInFlight = null;
 /** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */
 let ordersFetchedByNumberIds = new Set();
 
+const ORDERS_MORE_ACTION_IDS = [
+    'ordersMoreActionCreateReplacement',
+    'ordersMoreActionUploadPostEx',
+    'ordersMoreActionGenerateLoadSheet',
+    'ordersMoreActionGenerateInvoice',
+];
+
+function setOrdersMoreToolbarButtonsVisible(show) {
+    const disp = show ? 'inline-flex' : 'none';
+    ORDERS_MORE_ACTION_IDS.forEach((id) => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = disp;
+    });
+}
+
 /** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: locked on open. */
 let editLocked = true;
 
@@ -2728,7 +2743,6 @@ function switchView(viewName) {
     const editCostPricesBtn = document.getElementById('editCostPricesBtn');
     const syncProductsBtn = document.getElementById('syncShopifyBtn');
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
-    const ordersMoreActionsWrap = document.getElementById('ordersMoreActionsWrap');
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
     const bulkUpdateCostPriceBtn = document.getElementById('bulkUpdateCostPriceBtn');
     const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
@@ -2748,7 +2762,7 @@ function switchView(viewName) {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'inline-flex';
-            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
+            setOrdersMoreToolbarButtonsVisible(false);
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
@@ -2757,7 +2771,7 @@ function switchView(viewName) {
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
-            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'inline-flex';
+            setOrdersMoreToolbarButtonsVisible(true);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
             if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
@@ -2771,7 +2785,7 @@ function switchView(viewName) {
         } else if (viewName === 'cashbook') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
-            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
+            setOrdersMoreToolbarButtonsVisible(false);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
@@ -2786,7 +2800,7 @@ function switchView(viewName) {
         } else {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'none';
-            if (ordersMoreActionsWrap) ordersMoreActionsWrap.style.display = 'none';
+            setOrdersMoreToolbarButtonsVisible(false);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';

@@ -2283,15 +2283,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     line-height: 1;
 }
 
-/* Orders toolbar: action buttons in a group (use same .header-toolbar-btn) */
-.orders-toolbar-actions {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-    flex-shrink: 0;
-}
-
 /* AG Grid Footer Row Styles */
 .ag-theme-alpine .ag-pinned-bottom-row {
     background-color: var(--bg-secondary) !important;
