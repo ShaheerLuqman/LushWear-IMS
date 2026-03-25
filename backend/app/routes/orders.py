@@ -2265,10 +2265,10 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
         "InvoiceBold", parent=styles["Normal"], fontSize=9, textColor=colors.black, fontName="Helvetica-Bold"
     )
     shipper = _load_invoice_shipper_defaults()
-    inter_table_gap = 4 * mm
+    inter_table_gap = 12 * mm
     tables_per_page = 3
     slot_height = (doc.height - (tables_per_page - 1) * inter_table_gap) / tables_per_page
-    logo_height = 9 * mm
+    logo_height = 6 * mm
     logo_gap = 1.5 * mm
     table_slot_height = max(20 * mm, slot_height - logo_height - logo_gap)
     invoice_logo_path = Path(__file__).parent.parent / "logo_invoice.png"
