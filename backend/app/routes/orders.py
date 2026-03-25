@@ -21,6 +21,7 @@ from reportlab.lib.units import mm
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak, Image, Flowable
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
+from reportlab.lib.utils import ImageReader
 
 router = APIRouter(prefix="/orders", tags=["orders"])
 
@@ -2264,9 +2265,21 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
         "InvoiceBold", parent=styles["Normal"], fontSize=9, textColor=colors.black, fontName="Helvetica-Bold"
     )
     shipper = _load_invoice_shipper_defaults()
-    inter_table_gap = 12 * mm
+    inter_table_gap = 4 * mm
     tables_per_page = 3
     slot_height = (doc.height - (tables_per_page - 1) * inter_table_gap) / tables_per_page
+    logo_height = 9 * mm
+    logo_gap = 1.5 * mm
+    table_slot_height = max(20 * mm, slot_height - logo_height - logo_gap)
+    invoice_logo_path = Path(__file__).parent.parent / "logo_invoice.png"
+    logo_width = None
+    if invoice_logo_path.exists():
+        try:
+            iw, ih = ImageReader(str(invoice_logo_path)).getSize()
+            if iw and ih:
+                logo_width = logo_height * (float(iw) / float(ih))
+        except Exception:
+            logo_width = None
 
     def _cell_text(s: str) -> Paragraph:
         return Paragraph((s or "-").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"), normal_style)
@@ -2375,7 +2388,10 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
             ("BACKGROUND", (0, 4), (1, 4), colors.HexColor("#E8E8E8")),
             ("BACKGROUND", (4, 7), (4, 8), colors.HexColor("#E8E8E8")),
         ]))
-        elements.append(_ScaleTableToSlot(tbl, doc.width, slot_height))
+        if logo_width:
+            elements.append(Image(str(invoice_logo_path), width=logo_width, height=logo_height, hAlign="LEFT"))
+            elements.append(Spacer(1, logo_gap))
+        elements.append(_ScaleTableToSlot(tbl, doc.width, table_slot_height))
         if idx != len(orders) - 1 and idx % tables_per_page != tables_per_page - 1:
             elements.append(Spacer(1, inter_table_gap))
     if not elements:
