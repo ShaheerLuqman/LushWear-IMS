@@ -1311,6 +1311,23 @@ async def delete_load_sheet_log(log_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/returned-delivery-charges-sum")
+async def get_returned_delivery_charges_sum():
+    """Sum of delivery_charge for all orders with order_status 'returned'."""
+    try:
+        supabase = get_supabase()
+        response = (
+            supabase.table("orders")
+            .select("delivery_charge")
+            .ilike("order_status", "returned")
+            .execute()
+        )
+        total = sum(float(row.get("delivery_charge") or 0) for row in (response.data or []))
+        return {"sum": total}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/{order_id}")
 async def get_order(order_id: str):
     """Get a single order by ID"""

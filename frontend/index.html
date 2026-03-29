@@ -153,34 +153,39 @@
                 <div id="dashboardView" class="view">
                     <div class="stats-grid">
                         <div class="stat-card">
-                            <div class="stat-icon">◫</div>
                             <div class="stat-info">
-                                <span class="stat-value" id="totalProducts">0</span>
                                 <span class="stat-label">Total Products</span>
+                                <span class="stat-value" id="totalProducts">0</span>
                             </div>
                         </div>
                         <div class="stat-card">
-                            <div class="stat-icon">◈</div>
                             <div class="stat-info">
-                                <span class="stat-value" id="totalStock">0</span>
+                                <span class="stat-label">Total variants</span>
+                                <span class="stat-value" id="totalProductsAndVariants">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
                                 <span class="stat-label">Items in Stock</span>
-                            </div>
-                        </div>
-                        <div class="stat-card warning">
-                            <div class="stat-icon">⚠</div>
-                            <div class="stat-info">
-                                <span class="stat-value" id="lowStock">0</span>
-                                <span class="stat-label">Low Stock Items</span>
+                                <span class="stat-value" id="totalStock">0</span>
                             </div>
                         </div>
                         <div class="stat-card">
-                            <div class="stat-icon">Rs</div>
                             <div class="stat-info">
-                                <span class="stat-value" id="totalValue">0</span>
                                 <span class="stat-label">Total Value</span>
+                                <span class="stat-value" id="totalValue">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Delivery charges (returned orders)</span>
+                                <span class="stat-value" id="returnedDeliveryChargesSum">—</span>
                             </div>
                         </div>
                     </div>
+                    <section class="dashboard-collections-section" aria-label="Inventory by collection">
+                        <div id="dashboardCollectionsGrid" class="dashboard-collections-grid"></div>
+                    </section>
                 </div>
 
                 <!-- Orders View -->

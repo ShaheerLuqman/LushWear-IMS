@@ -3008,6 +3008,7 @@ async function loadOrders() {
         }
     } finally {
         if (ordersGridApi) ordersGridApi.hideOverlay();
+        void updateDashboard();
     }
 }
 
@@ -3030,6 +3031,7 @@ async function loadOrdersForPeriod(month, year) {
         if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
     } finally {
         if (ordersGridApi) ordersGridApi.hideOverlay();
+        void updateDashboard();
     }
 }
 
@@ -4112,16 +4114,86 @@ function closeUploadPostExModal() {
 // UI Updates
 // ============================================
 
-function updateDashboard() {
+function renderDashboardCollectionsBreakdown() {
+    const container = document.getElementById('dashboardCollectionsGrid');
+    if (!container) return;
+
+    const agg = new Map();
+    for (const p of products) {
+        const raw = (p.collection != null ? String(p.collection) : '').trim();
+        const label = raw || 'Uncategorized';
+        const price = parseFloat(p.price) || 0;
+        const qty = p.total_quantity || 0;
+        if (!agg.has(label)) {
+            agg.set(label, { count: 0, value: 0 });
+        }
+        const row = agg.get(label);
+        row.count += 1;
+        row.value += price * qty;
+    }
+
+    const rows = [...agg.entries()].map(([collection, data]) => ({ collection, ...data }));
+    rows.sort((a, b) => {
+        if (a.collection === 'Uncategorized') return 1;
+        if (b.collection === 'Uncategorized') return -1;
+        return a.collection.localeCompare(b.collection, undefined, { sensitivity: 'base' });
+    });
+
+    if (rows.length === 0) {
+        container.innerHTML = '<p class="dashboard-collections-empty">No products to show.</p>';
+        return;
+    }
+
+    container.innerHTML = rows
+        .map(({ collection, count, value }) => {
+            const countLabel = count === 1 ? '1 product' : `${count.toLocaleString()} products`;
+            return `<div class="stat-card">
+                <div class="stat-info">
+                    <span class="stat-label">${escapeHtml(collection)}</span>
+                    <span class="stat-detail">${countLabel}</span>
+                    <span class="stat-value">Rs ${Math.round(value).toLocaleString()}</span>
+                </div>
+            </div>`;
+        })
+        .join('');
+}
+
+async function updateDashboard() {
     const totalProducts = products.length;
+    const totalVariantRows = products.reduce(
+        (sum, p) => sum + (Array.isArray(p.variants) ? p.variants.length : 0),
+        0
+    );
+    const totalProductsAndVariants = totalProducts + totalVariantRows;
     const totalStock = products.reduce((sum, p) => sum + (p.total_quantity || 0), 0);
-    const lowStock = products.filter(p => (p.total_quantity || 0) < 10).length;
     const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.total_quantity || 0)), 0);
 
     document.getElementById('totalProducts').textContent = totalProducts;
+    const productsVariantsEl = document.getElementById('totalProductsAndVariants');
+    if (productsVariantsEl) {
+        productsVariantsEl.textContent = totalProductsAndVariants.toLocaleString();
+    }
     document.getElementById('totalStock').textContent = totalStock.toLocaleString();
-    document.getElementById('lowStock').textContent = lowStock;
     document.getElementById('totalValue').textContent = `Rs ${Math.round(totalValue).toLocaleString()}`;
+
+    renderDashboardCollectionsBreakdown();
+
+    const returnedDeliveryEl = document.getElementById('returnedDeliveryChargesSum');
+    if (returnedDeliveryEl) {
+        try {
+            const response = await fetch(`${API_BASE}/orders/returned-delivery-charges-sum`);
+            if (response.ok) {
+                const data = await response.json();
+                const sum = parseFloat(data.sum) || 0;
+                returnedDeliveryEl.textContent = `Rs ${Math.round(sum).toLocaleString()}`;
+            } else {
+                returnedDeliveryEl.textContent = '—';
+            }
+        } catch (e) {
+            console.error('Error fetching returned delivery charges sum:', e);
+            returnedDeliveryEl.textContent = '—';
+        }
+    }
 }
 
 // ============================================
