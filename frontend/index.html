@@ -21,8 +21,29 @@
 </head>
 
 <body>
+    <!-- PIN gate (before data load) -->
+    <div id="pinGateRoot" class="pin-gate-root">
+        <div class="pin-gate-card">
+            <img src="assets/Logo_Large.png" alt="" class="pin-gate-logo">
+            <h2 id="pinGateTitle" class="pin-gate-title">Enter PIN</h2>
+            <p id="pinGateWaiting" class="pin-gate-waiting" style="display: none;">Connecting to server…</p>
+            <form id="pinGateForm" class="pin-gate-form" autocomplete="off">
+                <label class="pin-gate-label" for="pinGatePin">PIN</label>
+                <input type="password" id="pinGatePin" class="pin-gate-input" inputmode="numeric"
+                    minlength="4" maxlength="64" required autocomplete="new-password" placeholder="••••">
+                <div id="pinGateConfirmWrap" class="pin-gate-confirm-wrap" style="display: none;">
+                    <label class="pin-gate-label" for="pinGateConfirm">Confirm PIN</label>
+                    <input type="password" id="pinGateConfirm" class="pin-gate-input" inputmode="numeric"
+                        minlength="4" maxlength="64" autocomplete="new-password" placeholder="••••">
+                </div>
+                <p id="pinGateError" class="pin-gate-error" role="alert"></p>
+                <button type="submit" id="pinGateSubmit" class="btn btn-primary pin-gate-submit">Continue</button>
+            </form>
+        </div>
+    </div>
+
     <!-- Loading Screen -->
-    <div id="loadingScreen" class="loading-screen">
+    <div id="loadingScreen" class="loading-screen" style="display: none;">
         <div class="loading-content">
             <img src="assets/Logo_Large.png" alt="LUSHWEAR" class="loading-logo">
             <div class="loading-spinner"></div>
@@ -42,6 +63,39 @@
             </div>
         </div>
     </div>
+
+    <!-- Change PIN (after unlock) -->
+    <div id="changePinModal" class="modal">
+        <div class="modal-content pin-change-modal-content">
+            <div class="modal-header">
+                <h2>Change PIN</h2>
+                <button type="button" class="modal-close" id="changePinModalClose" aria-label="Close">&times;</button>
+            </div>
+            <form id="changePinForm" class="modal-body pin-change-form" autocomplete="off">
+                <div class="form-group">
+                    <label for="changePinCurrent">Current PIN</label>
+                    <input type="password" id="changePinCurrent" class="pin-gate-input" inputmode="numeric"
+                        minlength="4" maxlength="64" required autocomplete="current-password">
+                </div>
+                <div class="form-group">
+                    <label for="changePinNew">New PIN</label>
+                    <input type="password" id="changePinNew" class="pin-gate-input" inputmode="numeric"
+                        minlength="4" maxlength="64" required autocomplete="new-password">
+                </div>
+                <div class="form-group">
+                    <label for="changePinNewConfirm">Confirm new PIN</label>
+                    <input type="password" id="changePinNewConfirm" class="pin-gate-input" inputmode="numeric"
+                        minlength="4" maxlength="64" required autocomplete="new-password">
+                </div>
+                <p id="changePinError" class="pin-gate-error" role="alert"></p>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="changePinCancelBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="changePinSaveBtn">Save PIN</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
     <!-- Title Bar for Window Controls -->
     <div class="titlebar">
         <div class="titlebar-drag"></div>
@@ -128,10 +182,16 @@
                     <button type="button" id="ordersMoreActionCreateReplacement" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Create replacement order">Create Replacement</button>
                     <button type="button" id="ordersMoreActionUploadPostEx" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Upload PostEx CSV">Upload PostEx CSV</button>
                     <button type="button" id="ordersMoreActionGenerateLoadSheet" class="btn btn-secondary header-toolbar-btn" style="display: none; min-width: 12em;" title="Generate load sheet for selected orders">Generate Load Sheet</button>
-                    <button id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only" style="display: none;" title="Full screen (Esc to exit)">
-                        <span aria-hidden="true">⛶</span>
-                    </button>
-                    <button type="button" id="ordersMoreActionGenerateInvoice" class="btn btn-secondary header-toolbar-btn" style="display: none; min-width: 12em;" title="Generate invoice PDF for selected orders">Generate Invoice</button>
+                    <div id="headerOrdersAppActions" class="header-orders-app-actions" style="display: none;" role="group" aria-label="App security and view">
+                        <button type="button" id="changePinBtn" class="btn btn-secondary header-toolbar-btn header-orders-app-actions-btn" title="Change app PIN">Change PIN</button>
+                        <button type="button" id="lockAppBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Lock app (enter PIN to unlock)" aria-label="Lock app">
+                            <img src="assets/padlock.png" alt="" class="header-lock-app-img" width="18" height="18" decoding="async" draggable="false">
+                        </button>
+                        <button type="button" id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Full screen (Esc to exit)">
+                            <span class="header-fullscreen-icon" aria-hidden="true">⛶</span>
+                        </button>
+                    </div>
+                    <button type="button" id="ordersMoreActionGenerateInvoice" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Generate invoice PDF for selected orders">Generate Invoice</button>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
                     <div id="cashbookDateFilterWrap" class="header-inline" style="display: none;">
                         <div id="cashInHandDisplay" class="cash-in-hand-display">

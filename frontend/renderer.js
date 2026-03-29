@@ -1,6 +1,25 @@
 // API Configuration
 const API_BASE = 'http://127.0.0.1:8000/api';
 
+function formatApiErrorDetail(payload) {
+    if (!payload || typeof payload !== 'object') {
+        return 'Request failed';
+    }
+    const d = payload.detail;
+    if (typeof d === 'string') {
+        return d;
+    }
+    if (Array.isArray(d)) {
+        return d
+            .map((x) => (x && typeof x === 'object' && x.msg ? x.msg : String(x)))
+            .join(' ');
+    }
+    return 'Request failed';
+}
+
+/** PIN gate form submit handler (removed after success so lock-app can re-open the gate). */
+let pinGateSubmitHandler = null;
+
 // State
 let products = [];
 let orders = [];
@@ -105,63 +124,333 @@ const navItems = document.querySelectorAll('.nav-item');
 const views = document.querySelectorAll('.view');
 const toast = document.getElementById('toast');
 
-
-// Initialize
-document.addEventListener('DOMContentLoaded', async () => {
-    // Show loading screen
-    const loadingScreen = document.getElementById('loadingScreen');
-    const appContainer = document.querySelector('.app-container');
-    
-    if (loadingScreen) {
-        loadingScreen.style.display = 'flex';
+function initChangePinModal() {
+    const modal = document.getElementById('changePinModal');
+    const form = document.getElementById('changePinForm');
+    const errEl = document.getElementById('changePinError');
+    const openBtn = document.getElementById('changePinBtn');
+    const closeBtn = document.getElementById('changePinModalClose');
+    const cancelBtn = document.getElementById('changePinCancelBtn');
+    if (!modal || !form) {
+        return;
     }
-    
-    // Hide main content completely until data is loaded
+
+    function openModal() {
+        if (errEl) {
+            errEl.textContent = '';
+        }
+        form.reset();
+        modal.classList.add('active');
+        const cur = document.getElementById('changePinCurrent');
+        if (cur) {
+            cur.focus();
+        }
+    }
+
+    function closeModal() {
+        modal.classList.remove('active');
+    }
+
+    if (openBtn) {
+        openBtn.addEventListener('click', openModal);
+    }
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeModal);
+    }
+    if (cancelBtn) {
+        cancelBtn.addEventListener('click', closeModal);
+    }
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (errEl) {
+            errEl.textContent = '';
+        }
+        const current = (document.getElementById('changePinCurrent') || {}).value || '';
+        const newPin = (document.getElementById('changePinNew') || {}).value || '';
+        const confirm = (document.getElementById('changePinNewConfirm') || {}).value || '';
+        if (newPin !== confirm) {
+            if (errEl) {
+                errEl.textContent = 'New PINs do not match';
+            }
+            return;
+        }
+        const saveBtn = document.getElementById('changePinSaveBtn');
+        if (saveBtn) {
+            saveBtn.disabled = true;
+        }
+        try {
+            const r = await fetch(`${API_BASE}/app-pin/change`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    current_pin: current,
+                    new_pin: newPin,
+                    confirm_pin: confirm
+                })
+            });
+            const data = await r.json().catch(() => ({}));
+            if (!r.ok) {
+                throw new Error(formatApiErrorDetail(data));
+            }
+            showToast('PIN updated', 'success');
+            closeModal();
+        } catch (ex) {
+            if (errEl) {
+                errEl.textContent = ex.message || 'Could not update PIN';
+            }
+        } finally {
+            if (saveBtn) {
+                saveBtn.disabled = false;
+            }
+        }
+    });
+}
+
+/**
+ * Block until PIN is verified or first-time setup completes.
+ * @returns {Promise<boolean>} false only if server reports app_pin table missing (503).
+ */
+function runPinGate() {
+    const root = document.getElementById('pinGateRoot');
+    const titleEl = document.getElementById('pinGateTitle');
+    const errEl = document.getElementById('pinGateError');
+    const form = document.getElementById('pinGateForm');
+    const pinInput = document.getElementById('pinGatePin');
+    const confirmWrap = document.getElementById('pinGateConfirmWrap');
+    const confirmInput = document.getElementById('pinGateConfirm');
+    const submitBtn = document.getElementById('pinGateSubmit');
+    const waitingEl = document.getElementById('pinGateWaiting');
+    if (!root || !form || !pinInput || !confirmInput || !submitBtn) {
+        return Promise.resolve(true);
+    }
+
+    if (errEl) {
+        errEl.textContent = '';
+    }
+    submitBtn.disabled = true;
+
+    if (pinGateSubmitHandler) {
+        form.removeEventListener('submit', pinGateSubmitHandler);
+        pinGateSubmitHandler = null;
+    }
+
+    return new Promise((resolve) => {
+        let configured = false;
+
+        function detachPinGateSubmit() {
+            if (pinGateSubmitHandler && form) {
+                form.removeEventListener('submit', pinGateSubmitHandler);
+                pinGateSubmitHandler = null;
+            }
+        }
+
+        async function loadStatus() {
+            for (;;) {
+                try {
+                    if (waitingEl) {
+                        waitingEl.style.display = 'block';
+                        waitingEl.textContent = 'Connecting to server…';
+                    }
+                    const r = await fetch(`${API_BASE}/app-pin/status`);
+                    const data = await r.json().catch(() => ({}));
+                    if (waitingEl) {
+                        waitingEl.style.display = 'none';
+                    }
+                    if (r.status === 503) {
+                        if (errEl) {
+                            errEl.textContent = formatApiErrorDetail(data);
+                        }
+                        submitBtn.disabled = true;
+                        detachPinGateSubmit();
+                        resolve(false);
+                        return;
+                    }
+                    if (!r.ok) {
+                        throw new Error(formatApiErrorDetail(data));
+                    }
+                    configured = !!data.configured;
+                    if (titleEl) {
+                        titleEl.textContent = configured ? 'Enter PIN' : 'Create your PIN';
+                    }
+                    if (confirmWrap) {
+                        confirmWrap.style.display = configured ? 'none' : 'block';
+                    }
+                    if (configured) {
+                        confirmInput.removeAttribute('required');
+                    } else {
+                        confirmInput.setAttribute('required', 'required');
+                    }
+                    pinInput.value = '';
+                    confirmInput.value = '';
+                    pinInput.focus();
+                    submitBtn.disabled = false;
+                    break;
+                } catch {
+                    if (waitingEl) {
+                        waitingEl.style.display = 'block';
+                        waitingEl.textContent = 'Waiting for server… Retrying.';
+                    }
+                    await new Promise((t) => setTimeout(t, 800));
+                }
+            }
+        }
+
+        pinGateSubmitHandler = async function pinGateOnSubmit(ev) {
+            ev.preventDefault();
+            if (errEl) {
+                errEl.textContent = '';
+            }
+            const pin = pinInput.value;
+            const confirm = confirmInput.value;
+            if (!configured && pin !== confirm) {
+                if (errEl) {
+                    errEl.textContent = 'PINs do not match';
+                }
+                return;
+            }
+            submitBtn.disabled = true;
+            try {
+                if (!configured) {
+                    const r = await fetch(`${API_BASE}/app-pin/setup`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ pin, confirm_pin: confirm })
+                    });
+                    const data = await r.json().catch(() => ({}));
+                    if (!r.ok) {
+                        throw new Error(formatApiErrorDetail(data));
+                    }
+                    root.hidden = true;
+                    pinInput.value = '';
+                    confirmInput.value = '';
+                    detachPinGateSubmit();
+                    resolve(true);
+                    return;
+                }
+                const r = await fetch(`${API_BASE}/app-pin/verify`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ pin })
+                });
+                const data = await r.json().catch(() => ({}));
+                if (!r.ok) {
+                    if (errEl) {
+                        errEl.textContent =
+                            r.status === 401 ? 'Incorrect PIN' : formatApiErrorDetail(data);
+                    }
+                    pinInput.value = '';
+                    pinInput.focus();
+                    return;
+                }
+                root.hidden = true;
+                pinInput.value = '';
+                confirmInput.value = '';
+                detachPinGateSubmit();
+                resolve(true);
+            } catch (ex) {
+                if (errEl) {
+                    errEl.textContent = ex.message || 'Something went wrong';
+                }
+            } finally {
+                submitBtn.disabled = false;
+            }
+        };
+
+        form.addEventListener('submit', pinGateSubmitHandler);
+        loadStatus();
+    });
+}
+
+function lockApp() {
+    exitOrdersFullScreen();
+    const appContainer = document.querySelector('.app-container');
+    const root = document.getElementById('pinGateRoot');
+    if (!root) {
+        return;
+    }
+    root.hidden = false;
     if (appContainer) {
         appContainer.style.visibility = 'hidden';
         appContainer.style.opacity = '0';
     }
-    
+    runPinGate().then((ok) => {
+        if (ok && appContainer) {
+            appContainer.style.visibility = 'visible';
+            setTimeout(() => {
+                appContainer.style.opacity = '1';
+            }, 10);
+        }
+    });
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', async () => {
+    const loadingScreen = document.getElementById('loadingScreen');
+    const appContainer = document.querySelector('.app-container');
+
+    if (loadingScreen) {
+        loadingScreen.style.display = 'none';
+    }
+
+    if (appContainer) {
+        appContainer.style.visibility = 'hidden';
+        appContainer.style.opacity = '0';
+    }
+
     initNavigation();
     initOrdersPeriodFilter();
     initOrdersDateRangeButton();
     initForms();
     initGrids();
-    
-    // Load data in parallel - wait for both to complete successfully
+    initChangePinModal();
+    const lockAppBtn = document.getElementById('lockAppBtn');
+    if (lockAppBtn) {
+        lockAppBtn.addEventListener('click', () => lockApp());
+    }
+
+    const pinOk = await runPinGate();
+    if (!pinOk) {
+        return;
+    }
+
+    if (loadingScreen) {
+        loadingScreen.style.display = 'flex';
+    }
+
     let productsLoaded = false;
     let ordersLoaded = false;
-    
-    const loadProductsPromise = loadProducts().then(() => {
-        productsLoaded = true;
-    }).catch(error => {
-        console.error('Error loading products:', error);
-        showToast('Failed to load products', 'error');
-        productsLoaded = true;
-    });
-    
-    const loadOrdersPromise = loadOrders().then(() => {
-        ordersLoaded = true;
-    }).catch(error => {
-        console.error('Error loading orders:', error);
-        showToast('Failed to load orders', 'error');
-        ordersLoaded = true;
-    });
-    
-    // Wait for both to complete
+
+    const loadProductsPromise = loadProducts()
+        .then(() => {
+            productsLoaded = true;
+        })
+        .catch((error) => {
+            console.error('Error loading products:', error);
+            showToast('Failed to load products', 'error');
+            productsLoaded = true;
+        });
+
+    const loadOrdersPromise = loadOrders()
+        .then(() => {
+            ordersLoaded = true;
+        })
+        .catch((error) => {
+            console.error('Error loading orders:', error);
+            showToast('Failed to load orders', 'error');
+            ordersLoaded = true;
+        });
+
     await Promise.all([loadProductsPromise, loadOrdersPromise]);
-    
-    // Only show app when both are loaded
+
     if (productsLoaded && ordersLoaded) {
         switchView('orders');
         applyEditLockState();
-        
-        // Hide loading screen
+
         if (loadingScreen) {
             loadingScreen.style.display = 'none';
         }
-        
-        // Show app with fade-in
+
         if (appContainer) {
             appContainer.style.visibility = 'visible';
             setTimeout(() => {
@@ -2762,7 +3051,7 @@ function switchView(viewName) {
     if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
 
     const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
-    const ordersFullScreenBtn = document.getElementById('ordersFullScreenBtn');
+    const headerOrdersAppActions = document.getElementById('headerOrdersAppActions');
     const ordersDateRangeBtn = document.getElementById('ordersDateRangeBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
@@ -2771,7 +3060,7 @@ function switchView(viewName) {
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'inline-flex';
             setOrdersMoreToolbarButtonsVisible(false);
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             exitOrdersFullScreen();
@@ -2781,7 +3070,7 @@ function switchView(viewName) {
             setOrdersMoreToolbarButtonsVisible(true);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
-            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'inline-flex';
+            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'inline-flex';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'inline-flex';
             if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
@@ -2796,7 +3085,7 @@ function switchView(viewName) {
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
             exitOrdersFullScreen();
@@ -2811,7 +3100,7 @@ function switchView(viewName) {
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (ordersFullScreenBtn) ordersFullScreenBtn.style.display = 'none';
+            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             exitOrdersFullScreen();

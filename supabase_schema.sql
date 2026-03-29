@@ -83,3 +83,10 @@ CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at ON load_sheet_logs(cre
 -- If RLS is enabled on the project, allow access to load_sheet_logs (run if you get 500 on GET /api/orders/load-sheet-logs):
 -- ALTER TABLE load_sheet_logs ENABLE ROW LEVEL SECURITY;
 -- CREATE POLICY "Allow all load_sheet_logs" ON load_sheet_logs FOR ALL USING (true) WITH CHECK (true);
+
+-- App unlock PIN (bcrypt hash only; see supabase_app_pin.sql)
+CREATE TABLE IF NOT EXISTS app_pin (
+    id TEXT PRIMARY KEY DEFAULT 'default',
+    pin_hash TEXT NOT NULL,
+    updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
