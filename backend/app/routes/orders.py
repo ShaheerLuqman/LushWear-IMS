@@ -546,7 +546,7 @@ async def sync_shopify_orders():
             total_price_val = sp_order.get("total_price")
             if financial_status_peek == "voided":
                 if total_price_val is not None and str(total_price_val).strip() != "":
-                    total_amount = float(total_price_val) - shipping_price
+                    total_amount = float(total_price_val)
                 else:
                     # Fallback if total_price missing: subtotal of active line items + tax
                     total_amount = total_line_items_price + shopify_tax
