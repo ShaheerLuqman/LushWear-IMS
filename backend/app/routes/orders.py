@@ -1426,6 +1426,37 @@ def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
     return False
 
 
+def _derive_order_status_from_latest(delivery_status_data: dict) -> Optional[str]:
+    """
+    Derive order_status using ONLY the latest status from delivery_status.
+    This ensures that when both 'Delivered to Customer' and 'Return to KARACHI'
+    appear in the history, the last status wins.
+    """
+    if not delivery_status_data:
+        return None
+
+    latest = (delivery_status_data.get("latest_status") or "").strip()
+    if not latest:
+        history = delivery_status_data.get("status_history") or []
+        if history:
+            # History is chronological; take the LAST entry as the latest.
+            latest = (history[-1].get("status") or "").strip()
+
+    if not latest:
+        return None
+
+    if "Return to KARACHI" in latest:
+        return "returned"
+    if "Delivered to Customer" in latest:
+        return "delivered"
+    if "Attempt Made: RFD" in latest:
+        return "RFD"
+    if "Attempt Made: ICA" in latest:
+        return "ICA"
+    if "Attempt Made: CNA" in latest:
+        return "CNA"
+    return None
+
 @router.post("/", response_model=dict)
 async def create_order(order: OrderCreate):
     """Create a new order"""
@@ -1697,7 +1728,8 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                                 }
                                 for item in status_history
                             ],
-                            "latest_status": status_history[0].get("transactionStatusMessage", "") if status_history else "",
+                            # Use the LAST entry as the latest status, since courier history is chronological.
+                            "latest_status": status_history[-1].get("transactionStatusMessage", "") if status_history else "",
                             "fetched_at": datetime.utcnow().isoformat()
                         }
         else:
@@ -1712,22 +1744,15 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                 "delivery_status": delivery_status_data,
                 "updated_at": datetime.utcnow().isoformat()
             }
-            # Check delivery status and update order_status accordingly
-            # Priority: Return > Delivered > RFD > ICA > CNA
-            if _delivery_status_indicates_returned(delivery_status_data):
-                update_payload["order_status"] = "returned"
-            elif _delivery_status_indicates_delivered(delivery_status_data):
-                update_payload["order_status"] = "delivered"
-                # Set piece_received to Done only when still Pending (first time delivered). Do not overwrite if user already changed it.
-                current_piece = (order.get("piece_received") or "").strip().lower()
-                if current_piece == "pending":
-                    update_payload["piece_received"] = "Done"
-            elif _delivery_status_indicates_rfd(delivery_status_data):
-                update_payload["order_status"] = "RFD"
-            elif _delivery_status_indicates_ica(delivery_status_data):
-                update_payload["order_status"] = "ICA"
-            elif _delivery_status_indicates_cna(delivery_status_data):
-                update_payload["order_status"] = "CNA"
+            # Derive order_status from the LAST courier status instead of using a fixed priority.
+            derived_status = _derive_order_status_from_latest(delivery_status_data)
+            if derived_status:
+                update_payload["order_status"] = derived_status
+                if derived_status == "delivered":
+                    # Set piece_received to Done only when still Pending (first time delivered). Do not overwrite if user already changed it.
+                    current_piece = (order.get("piece_received") or "").strip().lower()
+                    if current_piece == "pending":
+                        update_payload["piece_received"] = "Done"
             supabase.table("orders").update(update_payload).eq("id", order_id).execute()
 
         return delivery_status_data

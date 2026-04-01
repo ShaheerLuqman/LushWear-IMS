@@ -1159,7 +1159,16 @@ function initOrdersGrid() {
                 const lastStatus = order.delivery_status;
                 const hasStoredStatus = lastStatus && (lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history.length > 0));
                 const statusText = hasStoredStatus
-                    ? ((lastStatus.latest_status || (lastStatus.status_history && lastStatus.status_history[0] && lastStatus.status_history[0].status)) || '').trim()
+                    ? (
+                        (lastStatus.latest_status)
+                        || (
+                            lastStatus.status_history
+                            && lastStatus.status_history.length > 0
+                            && lastStatus.status_history[lastStatus.status_history.length - 1]
+                            && lastStatus.status_history[lastStatus.status_history.length - 1].status
+                        )
+                        || ''
+                    ).trim()
                     : '';
                 const displayStatus = statusText || '';
                 const fetchedAt = hasStoredStatus && lastStatus.fetched_at
@@ -5685,19 +5694,12 @@ async function refreshDeliveryStatusSelected() {
                     ordersGridApi.forEachNode(node => {
                         if (node.data && node.data.id === order.id) {
                             const updated = { ...node.data, delivery_status: data };
-                            if (deliveryStatusIndicatesReturned(data)) {
-                                updated.order_status = 'returned';
-                            } else if (deliveryStatusIndicatesDelivered(data)) {
-                                updated.order_status = 'delivered';
-                                if ((node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                            const derivedStatus = deriveOrderStatusFromLatest(data);
+                            if (derivedStatus) {
+                                updated.order_status = derivedStatus;
+                                if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
                                     updated.piece_received = 'Done';
                                 }
-                            } else if (deliveryStatusIndicatesRFD(data)) {
-                                updated.order_status = 'RFD';
-                            } else if (deliveryStatusIndicatesICA(data)) {
-                                updated.order_status = 'ICA';
-                            } else if (deliveryStatusIndicatesCNA(data)) {
-                                updated.order_status = 'CNA';
                             }
                             node.setData(updated);
                         }
@@ -5773,21 +5775,13 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === orderId) {
                     const updated = { ...node.data, delivery_status: data };
-                    // Check delivery status and update order_status accordingly
-                    // Priority: Return > Delivered > RFD > ICA > CNA
-                    if (deliveryStatusIndicatesReturned(data)) {
-                        updated.order_status = 'returned';
-                    } else if (deliveryStatusIndicatesDelivered(data)) {
-                        updated.order_status = 'delivered';
-                        if ((node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                    // Derive order_status from the LAST courier status, same as backend.
+                    const derivedStatus = deriveOrderStatusFromLatest(data);
+                    if (derivedStatus) {
+                        updated.order_status = derivedStatus;
+                        if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
                             updated.piece_received = 'Done';
                         }
-                    } else if (deliveryStatusIndicatesRFD(data)) {
-                        updated.order_status = 'RFD';
-                    } else if (deliveryStatusIndicatesICA(data)) {
-                        updated.order_status = 'ICA';
-                    } else if (deliveryStatusIndicatesCNA(data)) {
-                        updated.order_status = 'CNA';
                     }
                     node.setData(updated);
                 }

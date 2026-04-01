@@ -79,3 +79,29 @@ function deliveryStatusIndicatesICA(data) {
 function deliveryStatusIndicatesCNA(data) {
     return deliveryStatusIncludes(data, 'Attempt Made: CNA');
 }
+
+/**
+ * Derive order_status from the LAST courier status only.
+ * Mirrors backend _derive_order_status_from_latest behaviour.
+ */
+function deriveOrderStatusFromLatest(data) {
+    if (!data) return null;
+
+    let latest = (data.latest_status || '').trim();
+    if (!latest) {
+        const history = data.status_history || [];
+        if (history.length > 0) {
+            // History is chronological; take the LAST entry as the latest.
+            latest = (history[history.length - 1].status || '').trim();
+        }
+    }
+
+    if (!latest) return null;
+
+    if (latest.includes('Return to KARACHI')) return 'returned';
+    if (latest.includes('Delivered to Customer')) return 'delivered';
+    if (latest.includes('Attempt Made: RFD')) return 'RFD';
+    if (latest.includes('Attempt Made: ICA')) return 'ICA';
+    if (latest.includes('Attempt Made: CNA')) return 'CNA';
+    return null;
+}
