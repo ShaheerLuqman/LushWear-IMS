@@ -6,6 +6,7 @@ from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
 from datetime import datetime, timedelta, timezone
+import asyncio
 import httpx
 import re
 import csv
@@ -27,6 +28,98 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 
 # Pakistan Time (PKT) is UTC+5
 PKT_TIMEZONE = timezone(timedelta(hours=5))
+
+
+def _compute_shopify_tax(order: dict) -> float:
+    """Compute tax for a Shopify order using the same precedence as sync logic."""
+    if "current_total_tax_set" in order and order["current_total_tax_set"]:
+        shop_money = order["current_total_tax_set"].get("shop_money", {})
+        if shop_money:
+            try:
+                return float(shop_money.get("amount", "0.00"))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return float(order.get("current_total_tax") or 0)
+    except (TypeError, ValueError):
+        pass
+    if "total_tax_set" in order and order["total_tax_set"]:
+        shop_money = order["total_tax_set"].get("shop_money", {})
+        if shop_money:
+            try:
+                return float(shop_money.get("amount", "0.00"))
+            except (TypeError, ValueError):
+                pass
+    try:
+        return float(order.get("total_tax", "0.00"))
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _voided_order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
+    """
+    For voided orders, Shopify order-level total_price / total_line_items_price can double-count
+    replaced line items. Use fulfilled merchandise (price * quantity per fulfillment line) plus
+    shipping_lines (excluding is_removed), which matches what was actually shipped + shipping.
+
+    Returns None when there are no fulfillments or no positive merchandise from fulfillment lines
+    (caller should fall back to total_price or subtotal + tax).
+    """
+    fulfillments = sp_order.get("fulfillments") or []
+    if not fulfillments:
+        return None
+
+    merchandise = 0.0
+    for f in fulfillments:
+        for li in f.get("line_items") or []:
+            qty = li.get("quantity")
+            if qty is None:
+                qty = 1
+            try:
+                qty = int(qty)
+            except (TypeError, ValueError):
+                qty = 0
+            try:
+                price = float(li.get("price") or 0)
+            except (TypeError, ValueError):
+                price = 0.0
+            merchandise += price * qty
+
+    if merchandise <= 0:
+        return None
+
+    shipping_total = 0.0
+    for sl in sp_order.get("shipping_lines") or []:
+        if sl.get("is_removed"):
+            continue
+        disc = sl.get("discounted_price")
+        if disc is not None and str(disc).strip() != "":
+            try:
+                shipping_total += float(disc)
+                continue
+            except (TypeError, ValueError):
+                pass
+        dps = sl.get("discounted_price_set") or sl.get("price_set")
+        if isinstance(dps, dict):
+            sm = dps.get("shop_money") or {}
+            amt = sm.get("amount")
+            if amt is not None and str(amt).strip() != "":
+                try:
+                    shipping_total += float(amt)
+                except (TypeError, ValueError):
+                    pass
+
+    if shipping_total <= 0 and sp_order.get("total_shipping_price_set"):
+        shop_money = (sp_order["total_shipping_price_set"] or {}).get("shop_money") or {}
+        amt = shop_money.get("amount")
+        if amt is not None and str(amt).strip() != "":
+            try:
+                shipping_total = float(amt)
+            except (TypeError, ValueError):
+                pass
+
+    return merchandise + shipping_total
+
 
 def _period_start_end(month: int, year: int):
     """Return (start_iso, end_iso) for period: month's 22 00:00:00 PKT to next month's 22 00:00:00 PKT (exclusive).
@@ -540,12 +633,16 @@ async def sync_shopify_orders():
             # Total amount:
             # - For voided orders, Shopify may set current_* totals to 0.00 while total_price/subtotal_price remain non-zero.
             #   In that case we must ignore current_total_price to avoid resetting our totals to 0.
+            #   Voided: prefer sum(fulfillment line items) + shipping_lines to avoid double-counting replaced lines; else total_price.
             # - For non-voided orders, prefer current_total_price (reflects edits e.g. delivery removed), else total_price - shipping.
             financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
             current_total = sp_order.get("current_total_price")
             total_price_val = sp_order.get("total_price")
             if financial_status_peek == "voided":
-                if total_price_val is not None and str(total_price_val).strip() != "":
+                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
+                if voided_from_fulfillments is not None:
+                    total_amount = voided_from_fulfillments + shopify_tax
+                elif total_price_val is not None and str(total_price_val).strip() != "":
                     total_amount = float(total_price_val)
                 else:
                     # Fallback if total_price missing: subtotal of active line items + tax
@@ -1116,6 +1213,234 @@ async def create_replacement_order(body: ReplacementOrderCreate):
         return response.data[0]
     except HTTPException:
         raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/fix-voided-totals", response_model=dict)
+async def fix_voided_order_totals(
+    only_returned_status: bool = Query(
+        False,
+        description="If true, only update rows whose DB order_status is 'returned' (legacy behavior). "
+        "If false (default), update any order in the date range whose Shopify financial_status is voided.",
+    ),
+):
+    """
+    One-time maintenance endpoint.
+    Recalculate total_amount for Shopify-voided orders on/after 22 Jan 2025 using:
+    - Prefer fulfilled line items + shipping_lines (avoids double-counting replaced items); else Shopify total_price.
+
+    By default processes every local order in range whose Shopify order is voided (not only DB status returned).
+    """
+    try:
+        supabase = get_supabase()
+        print(f"[fix-voided-totals] started | only_returned_status={only_returned_status}")
+
+        # Start from 22 Jan 2025 (inclusive). Uses order_receiving_date if present, else created_at.
+        start_iso = "2025-01-22T00:00:00"
+        min_order_number = 4581
+        max_order_number = 5326
+        fetch_batch_size = 50
+
+        # Fetch ALL candidate orders from DB (Supabase defaults to limit 1000, so we paginate).
+        page_size = 1000
+        orders: List[Dict[str, Any]] = []
+
+        # 1) Orders with order_receiving_date on/after start_iso
+        offset = 0
+        while True:
+            resp = (
+                supabase.table("orders")
+                .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
+                .gte("order_receiving_date", start_iso)
+                .gte("order_number", str(min_order_number))
+                .lte("order_number", str(max_order_number))
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = resp.data or []
+            if not batch:
+                break
+            orders.extend(batch)
+            print(f"[fix-voided-totals] fetched by order_receiving_date batch size={len(batch)} offset={offset}")
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        # 2) Orders where order_receiving_date is null but created_at on/after start_iso
+        offset = 0
+        seen_ids = {o["id"] for o in orders}
+        while True:
+            resp_created = (
+                supabase.table("orders")
+                .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
+                .is_("order_receiving_date", "null")
+                .gte("created_at", start_iso)
+                .gte("order_number", str(min_order_number))
+                .lte("order_number", str(max_order_number))
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            batch = resp_created.data or []
+            if not batch:
+                break
+            print(f"[fix-voided-totals] fetched by created_at batch size={len(batch)} offset={offset}")
+            for o in batch:
+                if o["id"] not in seen_ids:
+                    orders.append(o)
+                    seen_ids.add(o["id"])
+            if len(batch) < page_size:
+                break
+            offset += page_size
+
+        if not orders:
+            print("[fix-voided-totals] no candidate orders found in date range")
+            return {
+                "updated_count": 0,
+                "checked_count": 0,
+                "voided_in_shopify_count": 0,
+                "shopify_fetch_failed_count": 0,
+                "skipped_not_voided_count": 0,
+                "only_returned_status": only_returned_status,
+            }
+
+        print(f"[fix-voided-totals] total candidates={len(orders)}")
+        updated_count = 0
+        checked_count = 0
+        voided_in_shopify_count = 0
+        shopify_fetch_failed_count = 0
+        skipped_not_voided_count = 0
+        eligible_candidates_count = 0
+        updated_order_numbers: List[str] = []
+
+        # Pre-filter local rows once, then fetch Shopify orders concurrently in batches.
+        candidate_rows: List[Tuple[str, Dict[str, Any]]] = []
+        for db_order in orders:
+            order_number = str(db_order.get("order_number") or "").strip()
+            if not order_number:
+                print(f"[fix-voided-totals] skip row id={db_order.get('id')} reason=missing_order_number")
+                continue
+
+            if only_returned_status:
+                status = (db_order.get("order_status") or "").strip().lower()
+                if status != "returned":
+                    print(f"[fix-voided-totals] skip order={order_number} reason=status_not_returned status={status}")
+                    continue
+
+            candidate_rows.append((order_number, db_order))
+
+        eligible_candidates_count = len(candidate_rows)
+        print(
+            f"[fix-voided-totals] eligible local candidates={eligible_candidates_count} "
+            f"batch_size={fetch_batch_size}"
+        )
+
+        for i in range(0, len(candidate_rows), fetch_batch_size):
+            chunk = candidate_rows[i:i + fetch_batch_size]
+            checked_count += len(chunk)
+            chunk_start = i + 1
+            chunk_end = i + len(chunk)
+            print(f"[fix-voided-totals] processing chunk {chunk_start}-{chunk_end}")
+
+            fetch_tasks = [
+                _fetch_shopify_order_by_order_number(order_number)
+                for order_number, _ in chunk
+            ]
+            fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+            for (order_number, db_order), sp_order_result in zip(chunk, fetch_results):
+                if isinstance(sp_order_result, Exception):
+                    shopify_fetch_failed_count += 1
+                    print(
+                        f"[fix-voided-totals] skip order={order_number} "
+                        f"reason=shopify_fetch_exception err={sp_order_result}"
+                    )
+                    continue
+
+                sp_order = sp_order_result
+                if not sp_order:
+                    shopify_fetch_failed_count += 1
+                    print(f"[fix-voided-totals] skip order={order_number} reason=shopify_fetch_failed")
+                    continue
+
+                financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
+                if financial_status_peek != "voided":
+                    skipped_not_voided_count += 1
+                    print(
+                        f"[fix-voided-totals] skip order={order_number} "
+                        f"reason=not_voided financial_status={financial_status_peek}"
+                    )
+                    continue
+
+                voided_in_shopify_count += 1
+
+                # Recalculate total_amount using voided rule (fulfillments + shipping, else total_price).
+                shopify_tax = _compute_shopify_tax(sp_order) or 0.0
+                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
+                if voided_from_fulfillments is not None:
+                    new_total = voided_from_fulfillments + shopify_tax
+                    print(
+                        f"[fix-voided-totals] order={order_number} calc=fulfillments_plus_shipping "
+                        f"base={voided_from_fulfillments:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}"
+                    )
+                else:
+                    total_line_items_price = 0.0
+                    try:
+                        total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
+                    except (TypeError, ValueError):
+                        total_line_items_price = 0.0
+                    total_price_val = sp_order.get("total_price")
+                    if total_price_val is not None and str(total_price_val).strip() != "":
+                        new_total = float(total_price_val)
+                        print(
+                            f"[fix-voided-totals] order={order_number} calc=fallback_total_price "
+                            f"new_total={new_total:.2f}"
+                        )
+                    else:
+                        new_total = total_line_items_price + shopify_tax
+                        print(
+                            f"[fix-voided-totals] order={order_number} calc=fallback_line_items_plus_tax "
+                            f"line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}"
+                        )
+
+                # Preserve advance_amount from DB; only fix total_amount
+                existing_total = float(db_order.get("total_amount") or 0.0)
+                if abs(existing_total - new_total) < 0.01:
+                    print(
+                        f"[fix-voided-totals] skip order={order_number} reason=no_change "
+                        f"existing_total={existing_total:.2f} new_total={new_total:.2f}"
+                    )
+                    continue
+
+                supabase.table("orders").update(
+                    {
+                        "total_amount": new_total,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                ).eq("id", db_order["id"]).execute()
+                updated_count += 1
+                updated_order_numbers.append(str(order_number))
+                print(
+                    f"[fix-voided-totals] updated order={order_number} "
+                    f"existing_total={existing_total:.2f} new_total={new_total:.2f}"
+                )
+
+        print(
+            f"[fix-voided-totals] completed | checked={checked_count} updated={updated_count} "
+            f"voided_in_shopify={voided_in_shopify_count} fetch_failed={shopify_fetch_failed_count} "
+            f"not_voided={skipped_not_voided_count} eligible_candidates={eligible_candidates_count}"
+        )
+        return {
+            "updated_count": updated_count,
+            "checked_count": checked_count,
+            "voided_in_shopify_count": voided_in_shopify_count,
+            "shopify_fetch_failed_count": shopify_fetch_failed_count,
+            "skipped_not_voided_count": skipped_not_voided_count,
+            "eligible_candidates_count": eligible_candidates_count,
+            "fetch_batch_size": fetch_batch_size,
+            "only_returned_status": only_returned_status,
+            "updated_order_numbers": updated_order_numbers,
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
