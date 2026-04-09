@@ -1237,9 +1237,7 @@ async def fix_voided_order_totals(
         print(f"[fix-voided-totals] started | only_returned_status={only_returned_status}")
 
         # Start from 22 Jan 2025 (inclusive). Uses order_receiving_date if present, else created_at.
-        start_iso = "2025-01-22T00:00:00"
-        min_order_number = 4581
-        max_order_number = 5326
+        start_iso = "2026-01-22T00:00:00"
         fetch_batch_size = 50
 
         # Fetch ALL candidate orders from DB (Supabase defaults to limit 1000, so we paginate).
@@ -1253,8 +1251,6 @@ async def fix_voided_order_totals(
                 supabase.table("orders")
                 .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
                 .gte("order_receiving_date", start_iso)
-                .gte("order_number", str(min_order_number))
-                .lte("order_number", str(max_order_number))
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -1276,8 +1272,6 @@ async def fix_voided_order_totals(
                 .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
                 .is_("order_receiving_date", "null")
                 .gte("created_at", start_iso)
-                .gte("order_number", str(min_order_number))
-                .lte("order_number", str(max_order_number))
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
