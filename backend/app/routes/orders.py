@@ -164,23 +164,74 @@ async def get_all_orders(
     """Get all orders, optionally filtered by month period (month's 22 to next month's 21)."""
     try:
         supabase = get_supabase()
+        page_size = 1000
+        
         if month is not None and year is not None:
             start_iso, end_iso = _period_start_end(month, year)
-            # Orders with order_receiving_date in range
-            # Start is inclusive (>=), end is exclusive (<) to include all of the last day
-            r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lt("order_receiving_date", end_iso).order("order_number", desc=True).execute()
-            # Orders with null order_receiving_date but created_at in range
-            r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lt("created_at", end_iso).order("order_number", desc=True).execute()
-            seen_ids = {o["id"] for o in r1.data}
-            merged = list(r1.data)
-            for o in r2.data:
+            
+            # Fetch all orders with order_receiving_date in range (paginated)
+            r1_data = []
+            offset = 0
+            while True:
+                response = (
+                    supabase.table("orders")
+                    .select("*")
+                    .gte("order_receiving_date", start_iso)
+                    .lt("order_receiving_date", end_iso)
+                    .order("order_number", desc=True)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                r1_data.extend(response.data)
+                if len(response.data) < page_size:
+                    break
+                offset += page_size
+            
+            # Fetch all orders with null order_receiving_date but created_at in range (paginated)
+            r2_data = []
+            offset = 0
+            while True:
+                response = (
+                    supabase.table("orders")
+                    .select("*")
+                    .is_("order_receiving_date", "null")
+                    .gte("created_at", start_iso)
+                    .lt("created_at", end_iso)
+                    .order("order_number", desc=True)
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                r2_data.extend(response.data)
+                if len(response.data) < page_size:
+                    break
+                offset += page_size
+            
+            # Merge results, avoiding duplicates
+            seen_ids = {o["id"] for o in r1_data}
+            merged = list(r1_data)
+            for o in r2_data:
                 if o["id"] not in seen_ids:
                     merged.append(o)
                     seen_ids.add(o["id"])
             merged.sort(key=lambda x: (x.get("order_number") or ""), reverse=True)
             return merged
-        response = supabase.table("orders").select("*").order("order_number", desc=True).execute()
-        return response.data
+        
+        # Fetch all orders without filter (paginated)
+        all_orders = []
+        offset = 0
+        while True:
+            response = (
+                supabase.table("orders")
+                .select("*")
+                .order("order_number", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            all_orders.extend(response.data)
+            if len(response.data) < page_size:
+                break
+            offset += page_size
+        return all_orders
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2833,10 +2884,22 @@ async def get_month_summary_list():
     """Get list of all available months with order data"""
     try:
         supabase = get_supabase()
+        page_size = 1000
         
-        # Get all orders to determine which months have data
-        response = supabase.table("orders").select("order_receiving_date, created_at").execute()
-        orders = response.data
+        # Get all orders to determine which months have data (paginated)
+        orders = []
+        offset = 0
+        while True:
+            response = (
+                supabase.table("orders")
+                .select("order_receiving_date, created_at")
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            orders.extend(response.data)
+            if len(response.data) < page_size:
+                break
+            offset += page_size
         
         # Extract unique months from orders
         months_set = set()
@@ -2896,16 +2959,48 @@ async def get_month_summary_detail(month: int, year: int):
         start_iso, end_iso = _period_start_end(month, year)
         
         supabase = get_supabase()
+        page_size = 1000
         
-        # Get orders for this period
+        # Get orders for this period (paginated to handle >1000 orders)
         # Orders with order_receiving_date in range
-        r1 = supabase.table("orders").select("*").gte("order_receiving_date", start_iso).lt("order_receiving_date", end_iso).execute()
-        # Orders with null order_receiving_date but created_at in range
-        r2 = supabase.table("orders").select("*").is_("order_receiving_date", "null").gte("created_at", start_iso).lt("created_at", end_iso).execute()
+        r1_data = []
+        offset = 0
+        while True:
+            response = (
+                supabase.table("orders")
+                .select("*")
+                .gte("order_receiving_date", start_iso)
+                .lt("order_receiving_date", end_iso)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            r1_data.extend(response.data)
+            if len(response.data) < page_size:
+                break
+            offset += page_size
         
-        seen_ids = {o["id"] for o in r1.data}
-        merged = list(r1.data)
-        for o in r2.data:
+        # Orders with null order_receiving_date but created_at in range
+        r2_data = []
+        offset = 0
+        while True:
+            response = (
+                supabase.table("orders")
+                .select("*")
+                .is_("order_receiving_date", "null")
+                .gte("created_at", start_iso)
+                .lt("created_at", end_iso)
+                .range(offset, offset + page_size - 1)
+                .execute()
+            )
+            r2_data.extend(response.data)
+            if len(response.data) < page_size:
+                break
+            offset += page_size
+        
+        # Merge results, avoiding duplicates
+        seen_ids = {o["id"] for o in r1_data}
+        merged = list(r1_data)
+        for o in r2_data:
             if o["id"] not in seen_ids:
                 merged.append(o)
                 seen_ids.add(o["id"])
