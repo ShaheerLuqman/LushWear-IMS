@@ -756,8 +756,10 @@ async def sync_shopify_orders():
             
             replacement_of = None
             replacement_of_from_tag = False
+            is_replacement_order = False
             if re.match(r"^\d+-R$", str(order_number or ""), re.IGNORECASE):
                 replacement_of = re.match(r"^(\d+)-R$", str(order_number), re.IGNORECASE).group(1)
+                is_replacement_order = True
             else:
                 tags_raw = sp_order.get("tags")
                 tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
@@ -766,7 +768,11 @@ async def sync_shopify_orders():
                     if re.match(r"^\d+-R$", tag, re.IGNORECASE):
                         replacement_of = re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1)
                         replacement_of_from_tag = True
+                        is_replacement_order = True
                         break
+
+            # Replacement orders (XXXX-R) always have 0 cost price
+            order_cost_price = 0.0 if is_replacement_order else cost_price
 
             order_data = {
                 "order_number": order_number,
@@ -778,7 +784,7 @@ async def sync_shopify_orders():
                 "advance_amount": advance_amount,
                 "delivery_charge": delivery_charge,
                 "tax_amount": tax_amount,
-                "cost_price": cost_price,
+                "cost_price": order_cost_price,
                 "order_receiving_date": order_received_date,
                 "items": items,
                 "replacement_of_order_no": replacement_of,
@@ -865,13 +871,15 @@ async def sync_shopify_orders():
                 if freeze_amounts_items_cost:
                     order_data["total_amount"] = existing_order.get("total_amount")
                     order_data["advance_amount"] = existing_order.get("advance_amount")
-                    order_data["cost_price"] = existing_order.get("cost_price")
+                    # Replacement orders (XXXX-R) always have 0 cost price
+                    order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
                     skip_fields = True
                 else:
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
-                    order_data["cost_price"] = cost_price
+                    # Replacement orders (XXXX-R) always have 0 cost price
+                    order_data["cost_price"] = 0.0 if is_replacement_order else cost_price
                     order_data["items"] = items
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
@@ -1241,7 +1249,7 @@ async def create_replacement_order(body: ReplacementOrderCreate):
             "advance_amount": body.advance_amount,
             "delivery_charge": delivery_charge,
             "tax_amount": 0.0,
-            "cost_price": body.cost_price,
+            "cost_price": 0.0,  # Replacement orders always have 0 cost price
             "order_receiving_date": order_receiving_date or now,
             "items": None,
             "replacement_of_order_no": original_num,
