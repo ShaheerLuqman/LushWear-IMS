@@ -81,27 +81,50 @@ function deliveryStatusIndicatesCNA(data) {
 }
 
 /**
- * Derive order_status from the LAST courier status only.
+ * Classify a status text into one of the relevant order statuses.
+ */
+function classifyStatus(statusText) {
+    if (!statusText) return null;
+    const statusLower = statusText.toLowerCase();
+    // Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
+    if (statusLower.includes('return')) return 'returned';
+    if (statusLower.includes('delivered to customer')) return 'delivered';
+    if (statusLower.includes('attempt made: rfd')) return 'RFD';
+    if (statusLower.includes('attempt made: ica')) return 'ICA';
+    if (statusLower.includes('attempt made: cna')) return 'CNA';
+    return null;
+}
+
+/**
+ * Derive order_status by finding the most recent RELEVANT status from delivery history.
+ * Relevant statuses are: delivered, returned, RFD, ICA, CNA.
  * Mirrors backend _derive_order_status_from_latest behaviour.
  */
 function deriveOrderStatusFromLatest(data) {
     if (!data) return null;
 
-    let latest = (data.latest_status || '').trim();
-    if (!latest) {
-        const history = data.status_history || [];
-        if (history.length > 0) {
-            // History is chronological; take the LAST entry as the latest.
-            latest = (history[history.length - 1].status || '').trim();
-        }
+    const history = data.status_history || [];
+    
+    // Sort by datetime ascending (oldest first, newest last)
+    const sorted = [...history].sort((a, b) => {
+        const dtA = a.datetime || '';
+        const dtB = b.datetime || '';
+        return dtA.localeCompare(dtB);
+    });
+    
+    // Find the last relevant status by iterating from newest to oldest
+    for (let i = sorted.length - 1; i >= 0; i--) {
+        const statusText = (sorted[i].status || '').trim();
+        const classified = classifyStatus(statusText);
+        if (classified) return classified;
     }
-
-    if (!latest) return null;
-
-    if (latest.includes('Return to KARACHI')) return 'returned';
-    if (latest.includes('Delivered to Customer')) return 'delivered';
-    if (latest.includes('Attempt Made: RFD')) return 'RFD';
-    if (latest.includes('Attempt Made: ICA')) return 'ICA';
-    if (latest.includes('Attempt Made: CNA')) return 'CNA';
+    
+    // Fallback: check latest_status field if no relevant status found in history
+    const latest = (data.latest_status || '').trim();
+    if (latest) {
+        const classified = classifyStatus(latest);
+        if (classified) return classified;
+    }
+    
     return null;
 }

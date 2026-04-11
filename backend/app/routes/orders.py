@@ -1796,35 +1796,56 @@ def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
     return False
 
 
+def _classify_status(status_text: str) -> Optional[str]:
+    """Classify a status text into one of the relevant order statuses."""
+    if not status_text:
+        return None
+    status_lower = status_text.lower()
+    # Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
+    if "return" in status_lower:
+        return "returned"
+    if "delivered to customer" in status_lower:
+        return "delivered"
+    if "attempt made: rfd" in status_lower:
+        return "RFD"
+    if "attempt made: ica" in status_lower:
+        return "ICA"
+    if "attempt made: cna" in status_lower:
+        return "CNA"
+    return None
+
+
 def _derive_order_status_from_latest(delivery_status_data: dict) -> Optional[str]:
     """
-    Derive order_status using ONLY the latest status from delivery_status.
-    This ensures that when both 'Delivered to Customer' and 'Return to KARACHI'
-    appear in the history, the last status wins.
+    Derive order_status by finding the most recent RELEVANT status from delivery history.
+    Relevant statuses are: delivered, returned, RFD, ICA, CNA.
+    This ensures we pick the latest meaningful status, not just the last entry.
     """
     if not delivery_status_data:
         return None
 
+    history = delivery_status_data.get("status_history") or []
+    
+    # Sort by datetime ascending (oldest first, newest last)
+    sorted_history = sorted(
+        history,
+        key=lambda x: x.get("datetime", "") or ""
+    )
+    
+    # Find the last relevant status by iterating from newest to oldest
+    for entry in reversed(sorted_history):
+        status_text = (entry.get("status") or "").strip()
+        classified = _classify_status(status_text)
+        if classified:
+            return classified
+    
+    # Fallback: check latest_status field if no relevant status found in history
     latest = (delivery_status_data.get("latest_status") or "").strip()
-    if not latest:
-        history = delivery_status_data.get("status_history") or []
-        if history:
-            # History is chronological; take the LAST entry as the latest.
-            latest = (history[-1].get("status") or "").strip()
-
-    if not latest:
-        return None
-
-    if "Return to KARACHI" in latest:
-        return "returned"
-    if "Delivered to Customer" in latest:
-        return "delivered"
-    if "Attempt Made: RFD" in latest:
-        return "RFD"
-    if "Attempt Made: ICA" in latest:
-        return "ICA"
-    if "Attempt Made: CNA" in latest:
-        return "CNA"
+    if latest:
+        classified = _classify_status(latest)
+        if classified:
+            return classified
+    
     return None
 
 @router.post("/", response_model=dict)
@@ -2073,42 +2094,62 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         existing_delivery = order.get("delivery_status")
 
         if courier.upper() == "POSTEX":
-            # If last status is final, no need to call PostEx; return stored details
-            if existing_delivery and _delivery_status_is_final(existing_delivery):
-                delivery_status_data = existing_delivery
-            else:
-                async with httpx.AsyncClient(timeout=30.0) as client:
-                    api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
-                    response = await client.get(api_url)
-                    response.raise_for_status()
-                    data = response.json()
-                    if data.get("statusCode") == "200" and "dist" in data:
-                        dist = data["dist"]
-                        status_history = dist.get("transactionStatusHistory", [])
-                        delivery_status_data = {
-                            "courier": "PostEx",
-                            "tracking_number": dist.get("trackingNumber", tracking_number),
-                            "customer_name": dist.get("customerName", ""),
-                            "order_pickup_date": dist.get("orderPickupDate", ""),
-                            "status_history": [
-                                {
-                                    "status": item.get("transactionStatusMessage", ""),
-                                    "status_code": item.get("transactionStatusMessageCode", ""),
-                                    "datetime": item.get("modifiedDatetime", "")
-                                }
-                                for item in status_history
-                            ],
-                            # Use the LAST entry as the latest status, since courier history is chronological.
-                            "latest_status": status_history[-1].get("transactionStatusMessage", "") if status_history else "",
-                            "fetched_at": datetime.utcnow().isoformat()
+            # Always fetch fresh data from PostEx to ensure we have the latest status
+            # (Previously we skipped fetch for "final" statuses, but this caused stale data issues)
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
+                response = await client.get(api_url)
+                response.raise_for_status()
+                data = response.json()
+                if data.get("statusCode") == "200" and "dist" in data:
+                    dist = data["dist"]
+                    status_history_raw = dist.get("transactionStatusHistory", [])
+                    
+                    # Build status history list with parsed datetime for sorting
+                    status_history_parsed = []
+                    for item in status_history_raw:
+                        entry = {
+                            "status": item.get("transactionStatusMessage", ""),
+                            "status_code": item.get("transactionStatusMessageCode", ""),
+                            "datetime": item.get("modifiedDatetime", "")
                         }
+                        status_history_parsed.append(entry)
+                    
+                    # Sort by datetime ascending (oldest first, newest last)
+                    # PostEx returns history in reverse chronological order (newest first)
+                    def parse_datetime_for_sort(entry):
+                        dt_str = entry.get("datetime", "")
+                        if not dt_str:
+                            return ""
+                        try:
+                            # PostEx datetime format: "2024-01-15T10:30:00" or similar ISO format
+                            return dt_str
+                        except Exception:
+                            return ""
+                    
+                    status_history_sorted = sorted(status_history_parsed, key=parse_datetime_for_sort)
+                    
+                    # Latest status is the one with the most recent datetime
+                    latest_status = ""
+                    if status_history_sorted:
+                        latest_status = status_history_sorted[-1].get("status", "")
+                    
+                    delivery_status_data = {
+                        "courier": "PostEx",
+                        "tracking_number": dist.get("trackingNumber", tracking_number),
+                        "customer_name": dist.get("customerName", ""),
+                        "order_pickup_date": dist.get("orderPickupDate", ""),
+                        "status_history": status_history_sorted,
+                        "latest_status": latest_status,
+                        "fetched_at": datetime.utcnow().isoformat()
+                    }
         else:
             raise HTTPException(status_code=400, detail="Only PostEx is supported for delivery status tracking")
         
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
-        # Only persist when we fetched new data (not when we returned stored final status)
+        # Persist fetched data and update order_status when save=true
         if save:
             update_payload = {
                 "delivery_status": delivery_status_data,
@@ -2116,14 +2157,19 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             }
             # Derive order_status from the LAST courier status instead of using a fixed priority.
             derived_status = _derive_order_status_from_latest(delivery_status_data)
+            print(f"[delivery-status] order_id={order_id} latest_status={delivery_status_data.get('latest_status')!r} derived_status={derived_status!r}")
             if derived_status:
                 update_payload["order_status"] = derived_status
+                print(f"[delivery-status] Updating order_status to {derived_status}")
                 if derived_status == "delivered":
                     # Set piece_received to Done only when still Pending (first time delivered). Do not overwrite if user already changed it.
                     current_piece = (order.get("piece_received") or "").strip().lower()
                     if current_piece == "pending":
                         update_payload["piece_received"] = "Done"
+            else:
+                print(f"[delivery-status] No derived_status, order_status not updated")
             supabase.table("orders").update(update_payload).eq("id", order_id).execute()
+            print(f"[delivery-status] Update payload: {update_payload.keys()}")
 
         return delivery_status_data
         
