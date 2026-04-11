@@ -1498,6 +1498,129 @@ async def fix_voided_order_totals(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class RecalculateTotalsBody(BaseModel):
+    order_numbers: List[str]
+
+
+@router.post("/recalculate-totals", response_model=dict)
+async def recalculate_order_totals(body: RecalculateTotalsBody):
+    """
+    Recalculate total_amount for specified orders from Shopify.
+    Uses fulfilled line items + shipping_lines (preferred) or fallback to Shopify total_price.
+    Does NOT check for voided status - recalculates for any order.
+    """
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    
+    try:
+        supabase = get_supabase()
+        order_numbers_input = [str(n).strip() for n in body.order_numbers if str(n).strip()]
+        
+        if not order_numbers_input:
+            raise HTTPException(status_code=400, detail="No valid order numbers provided")
+        
+        print(f"[recalculate-totals] started | order_numbers={order_numbers_input}")
+        
+        # Fetch the orders from DB
+        db_orders_map: Dict[str, Dict[str, Any]] = {}
+        for order_num in order_numbers_input:
+            resp = (
+                supabase.table("orders")
+                .select("id, order_number, total_amount, advance_amount, order_status")
+                .eq("order_number", order_num)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                db_orders_map[order_num] = resp.data[0]
+        
+        not_found_in_db = [n for n in order_numbers_input if n not in db_orders_map]
+        if not_found_in_db:
+            print(f"[recalculate-totals] orders not found in DB: {not_found_in_db}")
+        
+        updated_count = 0
+        checked_count = 0
+        shopify_fetch_failed_count = 0
+        updated_order_numbers: List[str] = []
+        fetch_batch_size = 50
+        
+        # Process orders in batches
+        candidate_rows = list(db_orders_map.items())
+        
+        for i in range(0, len(candidate_rows), fetch_batch_size):
+            chunk = candidate_rows[i:i + fetch_batch_size]
+            checked_count += len(chunk)
+            
+            fetch_tasks = [
+                _fetch_shopify_order_by_order_number(order_number)
+                for order_number, _ in chunk
+            ]
+            fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+            
+            for (order_number, db_order), sp_order_result in zip(chunk, fetch_results):
+                if isinstance(sp_order_result, Exception):
+                    shopify_fetch_failed_count += 1
+                    print(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_exception err={sp_order_result}")
+                    continue
+                
+                sp_order = sp_order_result
+                if not sp_order:
+                    shopify_fetch_failed_count += 1
+                    print(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_failed")
+                    continue
+                
+                # Calculate new total using the same logic as fix-voided-totals
+                shopify_tax = _compute_shopify_tax(sp_order) or 0.0
+                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
+                
+                if voided_from_fulfillments is not None:
+                    new_total = voided_from_fulfillments + shopify_tax
+                    print(f"[recalculate-totals] order={order_number} calc=fulfillments_plus_shipping base={voided_from_fulfillments:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
+                else:
+                    total_line_items_price = 0.0
+                    try:
+                        total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
+                    except (ValueError, TypeError):
+                        total_line_items_price = 0.0
+                    total_price_val = sp_order.get("total_price")
+                    if total_price_val is not None and str(total_price_val).strip() != "":
+                        new_total = float(total_price_val)
+                        print(f"[recalculate-totals] order={order_number} calc=fallback_total_price new_total={new_total:.2f}")
+                    else:
+                        new_total = total_line_items_price + shopify_tax
+                        print(f"[recalculate-totals] order={order_number} calc=fallback_line_items_plus_tax line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
+                
+                # Update the order
+                existing_total = float(db_order.get("total_amount") or 0.0)
+                if abs(existing_total - new_total) < 0.01:
+                    print(f"[recalculate-totals] skip order={order_number} reason=no_change existing_total={existing_total:.2f} new_total={new_total:.2f}")
+                    continue
+                
+                supabase.table("orders").update(
+                    {
+                        "total_amount": new_total,
+                        "updated_at": datetime.utcnow().isoformat(),
+                    }
+                ).eq("id", db_order["id"]).execute()
+                updated_count += 1
+                updated_order_numbers.append(str(order_number))
+                print(f"[recalculate-totals] updated order={order_number} existing_total={existing_total:.2f} new_total={new_total:.2f}")
+        
+        print(f"[recalculate-totals] completed | checked={checked_count} updated={updated_count} fetch_failed={shopify_fetch_failed_count}")
+        
+        return {
+            "updated_count": updated_count,
+            "checked_count": checked_count,
+            "shopify_fetch_failed_count": shopify_fetch_failed_count,
+            "updated_order_numbers": updated_order_numbers,
+            "not_found_in_db": not_found_in_db,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/by-number/{order_number}")
 async def get_order_by_number(order_number: str):
     """Get a single order by order_number (e.g. 4-digit number). Used when order is not in current grid (e.g. different period)."""
