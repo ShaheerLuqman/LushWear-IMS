@@ -20,6 +20,13 @@ function formatApiErrorDetail(payload) {
 /** PIN gate form submit handler (removed after success so lock-app can re-open the gate). */
 let pinGateSubmitHandler = null;
 
+/**
+ * Prefetch promises started as soon as the backend is confirmed ready (while the user types
+ * their PIN). Awaited in DOMContentLoaded instead of starting fresh fetches after PIN entry.
+ */
+let _prefetchProductsPromise = null;
+let _prefetchOrdersPromise = null;
+
 // State
 let products = [];
 let orders = [];
@@ -246,18 +253,24 @@ function runPinGate() {
         }
 
         async function loadStatus() {
+            // Hide the PIN form and show connecting state while backend isn't ready
+            if (form) form.style.display = 'none';
+            if (titleEl) titleEl.style.display = 'none';
+            if (waitingEl) {
+                waitingEl.style.display = 'block';
+                waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Connecting to server…';
+            }
+
             for (;;) {
                 try {
-                    if (waitingEl) {
-                        waitingEl.style.display = 'block';
-                        waitingEl.textContent = 'Connecting to server…';
-                    }
                     const r = await fetch(`${API_BASE}/app-pin/status`);
                     const data = await r.json().catch(() => ({}));
-                    if (waitingEl) {
-                        waitingEl.style.display = 'none';
-                    }
+
                     if (r.status === 503) {
+                        // Restore form to show the error message
+                        if (waitingEl) waitingEl.style.display = 'none';
+                        if (form) form.style.display = '';
+                        if (titleEl) titleEl.style.display = '';
                         if (errEl) {
                             errEl.textContent = formatApiErrorDetail(data);
                         }
@@ -269,6 +282,22 @@ function runPinGate() {
                     if (!r.ok) {
                         throw new Error(formatApiErrorDetail(data));
                     }
+
+                    // Backend is ready — start prefetching data immediately while user types PIN
+                    if (!_prefetchProductsPromise) {
+                        _prefetchProductsPromise = loadProducts().catch((err) => {
+                            console.error('Prefetch products error:', err);
+                        });
+                        _prefetchOrdersPromise = loadOrders().catch((err) => {
+                            console.error('Prefetch orders error:', err);
+                        });
+                    }
+
+                    // Hide connecting state, reveal form
+                    if (waitingEl) waitingEl.style.display = 'none';
+                    if (form) form.style.display = '';
+                    if (titleEl) titleEl.style.display = '';
+
                     configured = !!data.configured;
                     if (titleEl) {
                         titleEl.textContent = configured ? 'Enter PIN' : 'Create your PIN';
@@ -289,7 +318,7 @@ function runPinGate() {
                 } catch {
                     if (waitingEl) {
                         waitingEl.style.display = 'block';
-                        waitingEl.textContent = 'Waiting for server… Retrying.';
+                        waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Waiting for server…';
                     }
                     await new Promise((t) => setTimeout(t, 800));
                 }
@@ -421,7 +450,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     let productsLoaded = false;
     let ordersLoaded = false;
 
-    const loadProductsPromise = loadProducts()
+    // If prefetch was started during PIN entry, await those promises; otherwise fetch now.
+    const loadProductsPromise = (_prefetchProductsPromise || loadProducts())
         .then(() => {
             productsLoaded = true;
         })
@@ -431,7 +461,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             productsLoaded = true;
         });
 
-    const loadOrdersPromise = loadOrders()
+    const loadOrdersPromise = (_prefetchOrdersPromise || loadOrders())
         .then(() => {
             ordersLoaded = true;
         })
