@@ -694,6 +694,7 @@ async def sync_shopify_orders():
                 code in PRICE_REDUCTION_DISCOUNT_CODES
                 for code in normalized_discount_codes
             )
+            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
 
             # Total amount:
             # Prefer fulfillment-derived merchandise + shipping for all orders.
@@ -712,10 +713,11 @@ async def sync_shopify_orders():
                 total_amount = total_line_items_price + shopify_tax
 
             if has_price_reduction_discount_code:
+                # Code-based discounts reduce selling price instead of being treated as advance.
+                total_amount = max(0.0, total_amount - total_discounts)
                 financial_status = financial_status_peek
                 advance_amount = total_amount if financial_status == "paid" else 0.0
             else:
-                total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
                 financial_status = financial_status_peek
                 if financial_status == "paid":
                     advance_amount = total_amount
@@ -2772,20 +2774,40 @@ async def _fetch_shopify_order_by_order_number(order_number: str) -> Optional[di
     name_params = [num, f"#{num}"]
     async with httpx.AsyncClient(timeout=45.0) as client:
         for name_param in name_params:
-            try:
-                r = await client.get(
-                    base,
-                    headers=headers,
-                    params={"status": "any", "name": name_param, "limit": 10},
-                )
-                if r.status_code != 200:
+            # Retry transient failures/rate limits for this name query.
+            max_attempts = 4
+            for attempt in range(max_attempts):
+                try:
+                    r = await client.get(
+                        base,
+                        headers=headers,
+                        params={"status": "any", "name": name_param, "limit": 10},
+                    )
+                    if r.status_code == 200:
+                        data = r.json()
+                        for o in data.get("orders") or []:
+                            if _shopify_order_matches_db_order(order_number, o):
+                                return o
+                        break
+                    if r.status_code == 429:
+                        retry_after_header = r.headers.get("Retry-After")
+                        try:
+                            retry_after = float(retry_after_header) if retry_after_header else 0.0
+                        except (TypeError, ValueError):
+                            retry_after = 0.0
+                        # Exponential backoff with Shopify hint when available.
+                        wait_seconds = max(retry_after, 0.6 * (2 ** attempt))
+                        await asyncio.sleep(wait_seconds)
+                        continue
+                    if 500 <= r.status_code < 600:
+                        await asyncio.sleep(0.5 * (2 ** attempt))
+                        continue
+                    break
+                except Exception:
+                    if attempt == max_attempts - 1:
+                        break
+                    await asyncio.sleep(0.5 * (2 ** attempt))
                     continue
-                data = r.json()
-                for o in data.get("orders") or []:
-                    if _shopify_order_matches_db_order(order_number, o):
-                        return o
-            except Exception:
-                continue
     return None
 
 
