@@ -95,8 +95,9 @@ def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
     if merchandise <= 0:
         return None
 
+    shipping_lines = sp_order.get("shipping_lines") or []
     shipping_total = 0.0
-    for sl in sp_order.get("shipping_lines") or []:
+    for sl in shipping_lines:
         if sl.get("is_removed"):
             continue
         disc = sl.get("discounted_price")
@@ -116,7 +117,9 @@ def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
                 except (TypeError, ValueError):
                     pass
 
-    if shipping_total <= 0 and sp_order.get("total_shipping_price_set"):
+    # Only fall back to order-level shipping when shipping_lines are missing.
+    # If shipping_lines are present but all are removed, shipping is intentionally waived.
+    if shipping_total <= 0 and not shipping_lines and sp_order.get("total_shipping_price_set"):
         shop_money = (sp_order["total_shipping_price_set"] or {}).get("shop_money") or {}
         amt = shop_money.get("amount")
         if amt is not None and str(amt).strip() != "":
