@@ -29,6 +29,14 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 # Pakistan Time (PKT) is UTC+5
 PKT_TIMEZONE = timezone(timedelta(hours=5))
 
+# Discounts applied with these codes reduce the order total and are not treated as advance.
+PRICE_REDUCTION_DISCOUNT_CODES = {
+    "INFLUOFF",
+    "REPLACEMENT100OFF",
+    "GET10OFF",
+    "GET5OFF",
+}
+
 
 def _compute_shopify_tax(order: dict) -> float:
     """Compute tax for a Shopify order using the same precedence as sync logic."""
@@ -56,14 +64,13 @@ def _compute_shopify_tax(order: dict) -> float:
         return 0.0
 
 
-def _voided_order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
+def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
     """
-    For voided orders, Shopify order-level total_price / total_line_items_price can double-count
-    replaced line items. Use fulfilled merchandise (price * quantity per fulfillment line) plus
-    shipping_lines (excluding is_removed), which matches what was actually shipped + shipping.
+    Compute order total from fulfillments: fulfilled merchandise (price * quantity per
+    fulfillment line) + shipping_lines (excluding is_removed).
 
     Returns None when there are no fulfillments or no positive merchandise from fulfillment lines
-    (caller should fall back to total_price or subtotal + tax).
+    (caller should use the standard Shopify total fallbacks).
     """
     fulfillments = sp_order.get("fulfillments") or []
     if not fulfillments:
@@ -673,40 +680,35 @@ async def sync_shopify_orders():
             elif "total_shipping_price" in sp_order:
                 shipping_price = float(sp_order.get("total_shipping_price") or 0)
 
-            # Detect discount applied by code (e.g. promo code). If so, use Shopify's total (already discounted) and do not treat discount as advance.
-            discount_applications = sp_order.get("discount_applications") or []
+            # Treat only configured discount codes as true price reductions.
             discount_codes = sp_order.get("discount_codes") or []
-            has_discount_by_code = any(
-                (a.get("type") or "").strip().lower() == "discount_code"
-                for a in discount_applications
-            ) or bool(discount_codes)
+            normalized_discount_codes = {
+                str(code_obj.get("code") or "").strip().upper()
+                for code_obj in discount_codes
+                if isinstance(code_obj, dict)
+            }
+            has_price_reduction_discount_code = any(
+                code in PRICE_REDUCTION_DISCOUNT_CODES
+                for code in normalized_discount_codes
+            )
 
             # Total amount:
-            # - For voided orders, Shopify may set current_* totals to 0.00 while total_price/subtotal_price remain non-zero.
-            #   In that case we must ignore current_total_price to avoid resetting our totals to 0.
-            #   Voided: prefer sum(fulfillment line items) + shipping_lines to avoid double-counting replaced lines; else total_price.
-            # - For non-voided orders, prefer current_total_price (reflects edits e.g. delivery removed), else total_price - shipping.
+            # Prefer fulfillment-derived merchandise + shipping for all orders.
+            # If unavailable, fall back to Shopify totals.
             financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
             current_total = sp_order.get("current_total_price")
             total_price_val = sp_order.get("total_price")
-            if financial_status_peek == "voided":
-                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
-                if voided_from_fulfillments is not None:
-                    total_amount = voided_from_fulfillments + shopify_tax
-                elif total_price_val is not None and str(total_price_val).strip() != "":
-                    total_amount = float(total_price_val)
-                else:
-                    # Fallback if total_price missing: subtotal of active line items + tax
-                    total_amount = total_line_items_price + shopify_tax
+            fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+            if fulfillment_based_total is not None:
+                total_amount = fulfillment_based_total + shopify_tax
+            elif current_total is not None and str(current_total).strip() != "":
+                total_amount = float(current_total)
+            elif total_price_val is not None and str(total_price_val).strip() != "":
+                total_amount = float(total_price_val) - shipping_price
             else:
-                if current_total is not None and str(current_total).strip() != "":
-                    total_amount = float(current_total)
-                elif total_price_val is not None and str(total_price_val).strip() != "":
-                    total_amount = float(total_price_val) - shipping_price
-                else:
-                    total_amount = total_line_items_price + shopify_tax
+                total_amount = total_line_items_price + shopify_tax
 
-            if has_discount_by_code:
+            if has_price_reduction_discount_code:
                 financial_status = financial_status_peek
                 advance_amount = total_amount if financial_status == "paid" else 0.0
             else:
@@ -1429,7 +1431,7 @@ async def fix_voided_order_totals(
 
                 # Recalculate total_amount using voided rule (fulfillments + shipping, else total_price).
                 shopify_tax = _compute_shopify_tax(sp_order) or 0.0
-                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
+                voided_from_fulfillments = _order_total_from_fulfillments(sp_order)
                 if voided_from_fulfillments is not None:
                     new_total = voided_from_fulfillments + shopify_tax
                     print(
@@ -1571,7 +1573,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 
                 # Calculate new total using the same logic as fix-voided-totals
                 shopify_tax = _compute_shopify_tax(sp_order) or 0.0
-                voided_from_fulfillments = _voided_order_total_from_fulfillments(sp_order)
+                voided_from_fulfillments = _order_total_from_fulfillments(sp_order)
                 
                 if voided_from_fulfillments is not None:
                     new_total = voided_from_fulfillments + shopify_tax
