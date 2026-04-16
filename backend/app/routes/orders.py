@@ -78,6 +78,9 @@ def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
 
     merchandise = 0.0
     for f in fulfillments:
+        fulfillment_status = str(f.get("status") or "").strip().lower()
+        if fulfillment_status == "cancelled":
+            continue
         for li in f.get("line_items") or []:
             qty = li.get("quantity")
             if qty is None:
@@ -1596,6 +1599,27 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                     else:
                         new_total = total_line_items_price + shopify_tax
                         print(f"[recalculate-totals] order={order_number} calc=fallback_line_items_plus_tax line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
+
+                # Keep recalculation behavior aligned with sync logic: only configured
+                # discount codes reduce selling price instead of being treated as advance.
+                discount_codes = sp_order.get("discount_codes") or []
+                normalized_discount_codes = {
+                    str(code_obj.get("code") or "").strip().upper()
+                    for code_obj in discount_codes
+                    if isinstance(code_obj, dict)
+                }
+                has_price_reduction_discount_code = any(
+                    code in PRICE_REDUCTION_DISCOUNT_CODES
+                    for code in normalized_discount_codes
+                )
+                total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+                if has_price_reduction_discount_code:
+                    discounted_total = max(0.0, new_total - total_discounts)
+                    print(
+                        f"[recalculate-totals] order={order_number} apply_price_reduction_discount "
+                        f"pre_discount_total={new_total:.2f} discounts={total_discounts:.2f} new_total={discounted_total:.2f}"
+                    )
+                    new_total = discounted_total
                 
                 # Update the order
                 existing_total = float(db_order.get("total_amount") or 0.0)
