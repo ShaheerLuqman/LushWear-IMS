@@ -65,6 +65,11 @@ class ProductCostPriceUpdate(BaseModel):
 class ProductBatchCostPriceUpdate(BaseModel):
     updates: List[ProductCostPriceUpdate]
 
+
+class RecalculateOrderCostsByProductBody(BaseModel):
+    product_id: str
+    created_after: datetime
+
 # ==================== ORDER MODELS ====================
 
 class OrderBase(BaseModel):

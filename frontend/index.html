@@ -173,6 +173,9 @@
                     <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
                         Bulk update cost price
                     </button>
+                    <button id="recalculateOrderCostsBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Recalculate order cost totals for orders containing the selected product">
+                        Recalculate order costs
+                    </button>
                     <button id="bulkUpdateOrderBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update order">
                         Bulk update order
                     </button>
@@ -496,6 +499,34 @@
                 <div class="bulk-update-actions" style="margin-top: 16px;">
                     <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
                     <button type="button" id="bulkUpdateCostPriceSubmit" class="btn btn-primary">Update cost price</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recalculate order costs for selected product (products) -->
+    <div id="recalculateOrderCostsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Recalculate order costs</h2>
+                <button type="button" class="modal-close" id="closeRecalculateOrderCostsModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">
+                    Refresh order cost totals from current product costs. Only orders on or after the date below that include this product are updated.
+                </p>
+                <input type="hidden" id="recalculateOrderCostsProductId" value="">
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="recalculateOrderCostsProductName">Selected product</label>
+                    <input type="text" id="recalculateOrderCostsProductName" class="form-input" readonly placeholder="Select one product in the grid">
+                </div>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="recalculateOrderCostsCreatedAfter">Update orders created on or after *</label>
+                    <input type="datetime-local" id="recalculateOrderCostsCreatedAfter" class="form-input" required>
+                </div>
+                <div class="bulk-update-actions" style="margin-top: 16px;">
+                    <button type="button" id="recalculateOrderCostsCancel" class="btn btn-secondary">Cancel</button>
+                    <button type="button" id="recalculateOrderCostsSubmit" class="btn btn-primary">Recalculate</button>
                 </div>
             </div>
         </div>

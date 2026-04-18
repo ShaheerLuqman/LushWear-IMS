@@ -1,8 +1,9 @@
 from fastapi import APIRouter, HTTPException
-from typing import List
+from typing import List, Dict
 from app.models import (
     Product, ProductCreate, ProductUpdate, ProductWithVariants,
-    ProductBatchCostPriceUpdate, Variant, VariantCreate, VariantUpdate
+    ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
+    Variant, VariantCreate, VariantUpdate,
 )
 from app.database import get_supabase
 from app.config import settings
@@ -18,6 +19,15 @@ SHOPIFY_SYNC_PRODUCTS_IGNORE: List[str] = [
     "Brides & Bridesmaids PJs",
     "Free SHIPPING",
 ]
+
+
+def _is_replacement_order(row: dict) -> bool:
+    """Same notion as Shopify sync: replacement SKUs (NNNN-R) or explicit link to original order."""
+    if row.get("replacement_of_order_no"):
+        return True
+    on = str(row.get("order_number") or "").strip()
+    return bool(re.match(r"^\d+-R$", on, re.IGNORECASE))
+
 
 @router.get("/", response_model=List[dict])
 async def get_all_products():
@@ -409,6 +419,102 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/recalculate-order-costs")
+async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProductBody):
+    """Recompute order cost_price from product costs for orders that include the given product (line starts with \"Name - \")."""
+    try:
+        supabase = get_supabase()
+        product_id = (body.product_id or "").strip()
+        if not product_id:
+            raise HTTPException(status_code=400, detail="product_id is required")
+
+        prod = (
+            supabase.table("products").select("name").eq("id", product_id).limit(1).execute().data
+        )
+        if not prod:
+            raise HTTPException(status_code=404, detail="Product not found")
+        pname = (prod[0].get("name") or "").strip()
+        if not pname:
+            raise HTTPException(status_code=400, detail="Product has no name")
+
+        costs: Dict[str, float] = {}
+        for p in supabase.table("products").select("name, cost_price").execute().data or []:
+            k = (p.get("name") or "").strip().lower()
+            if not k:
+                continue
+            try:
+                costs[k] = float(p.get("cost_price") or 0)
+            except (TypeError, ValueError):
+                costs[k] = 0.0
+
+        prefix = f"{pname} - "
+        after = body.created_after.isoformat()
+        now_iso = datetime.utcnow().isoformat()
+        page, offset = 500, 0
+        scanned = updated = 0
+        updated_order_numbers: List[str] = []
+
+        while True:
+            rows = (
+                supabase.table("orders")
+                .select("id, order_number, replacement_of_order_no, items, cost_price")
+                .gte("created_at", after)
+                .order("created_at")
+                .range(offset, offset + page - 1)
+                .execute()
+                .data
+                or []
+            )
+            if not rows:
+                break
+
+            for row in rows:
+                scanned += 1
+                items = row.get("items") if isinstance(row.get("items"), list) else []
+                if not any(isinstance(x, str) and x.startswith(prefix) for x in items):
+                    continue
+
+                if _is_replacement_order(row):
+                    new_cost = 0.0
+                else:
+                    new_cost = 0.0
+                    for line in items:
+                        if not isinstance(line, str):
+                            continue
+                        base = line.split(" - ", 1)[0].strip().lower()
+                        if base in costs:
+                            new_cost += costs[base]
+
+                try:
+                    old = float(row.get("cost_price") or 0)
+                except (TypeError, ValueError):
+                    old = 0.0
+                if abs(old - new_cost) < 0.01:
+                    continue
+                supabase.table("orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
+                updated += 1
+                num = row.get("order_number")
+                if num is not None:
+                    updated_order_numbers.append(str(num))
+
+            if len(rows) < page:
+                break
+            offset += page
+
+        print(f"[recalculate-order-costs] updated {updated} order(s): {updated_order_numbers}")
+
+        return {
+            "scanned": scanned,
+            "updated": updated,
+            "updated_order_numbers": updated_order_numbers,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @router.get("/{product_id}")
 async def get_product(product_id: str):

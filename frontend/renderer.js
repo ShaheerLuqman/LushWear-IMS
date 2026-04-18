@@ -93,6 +93,7 @@ function applyEditLockState() {
         'editLedgerDeleteBtn',
         'bulkUpdateOrderBtn',
         'bulkUpdateCostPriceBtn',
+        'recalculateOrderCostsBtn',
         'bulkUpdateDeliveryChargesBtn',
         'bulkUpdateSetDelivered',
         'bulkUpdateSetReturned',
@@ -107,6 +108,7 @@ function applyEditLockState() {
         'syncOrdersBtn',
         'submitReplacementOrder',
         'bulkUpdateCostPriceSubmit',
+        'recalculateOrderCostsSubmit',
         'bulkUpdateDeliveryChargesConfirm',
         'loadSheetModalConfirm',
     ];
@@ -3080,6 +3082,7 @@ function switchView(viewName) {
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
     const bulkUpdateCostPriceBtn = document.getElementById('bulkUpdateCostPriceBtn');
+    const recalculateOrderCostsBtn = document.getElementById('recalculateOrderCostsBtn');
     const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
 
     if (editCostPricesBtn) {
@@ -3088,6 +3091,7 @@ function switchView(viewName) {
 
     if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
     if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
+    if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
 
     const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
     const headerOrdersAppActions = document.getElementById('headerOrdersAppActions');
@@ -3097,6 +3101,7 @@ function switchView(viewName) {
             syncProductsBtn.style.display = 'inline-flex';
             syncOrdersBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'inline-flex';
+            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'inline-flex';
             setOrdersMoreToolbarButtonsVisible(false);
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
@@ -3123,6 +3128,7 @@ function switchView(viewName) {
             setOrdersMoreToolbarButtonsVisible(false);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
+            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
@@ -3138,6 +3144,7 @@ function switchView(viewName) {
             setOrdersMoreToolbarButtonsVisible(false);
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
             if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
+            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
@@ -4740,6 +4747,11 @@ function initForms() {
         bulkUpdateCostPriceBtn.addEventListener('click', openBulkUpdateCostPriceModal);
     }
 
+    const recalculateOrderCostsBtn = document.getElementById('recalculateOrderCostsBtn');
+    if (recalculateOrderCostsBtn) {
+        recalculateOrderCostsBtn.addEventListener('click', openRecalculateOrderCostsModal);
+    }
+
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
@@ -5420,6 +5432,94 @@ async function submitBulkUpdateCostPrice() {
     }
 }
 
+function openRecalculateOrderCostsModal() {
+    if (!productsGridApi) {
+        showToast('Products grid not ready', 'error');
+        return;
+    }
+    const selected = productsGridApi.getSelectedRows();
+    if (selected.length !== 1) {
+        showToast('Select exactly one product', 'error');
+        return;
+    }
+    const row = selected[0];
+    const idEl = document.getElementById('recalculateOrderCostsProductId');
+    const nameEl = document.getElementById('recalculateOrderCostsProductName');
+    const dtEl = document.getElementById('recalculateOrderCostsCreatedAfter');
+    if (idEl) idEl.value = row.id || '';
+    if (nameEl) nameEl.value = row.name || '';
+    if (dtEl) {
+        const n = new Date();
+        n.setHours(0, 0, 0, 0);
+        const pad = (x) => String(x).padStart(2, '0');
+        dtEl.value = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}`;
+    }
+    document.getElementById('recalculateOrderCostsModal')?.classList.add('active');
+}
+
+function closeRecalculateOrderCostsModal() {
+    document.getElementById('recalculateOrderCostsModal')?.classList.remove('active');
+}
+
+async function submitRecalculateOrderCosts() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const idEl = document.getElementById('recalculateOrderCostsProductId');
+    const dtEl = document.getElementById('recalculateOrderCostsCreatedAfter');
+    const productId = idEl?.value?.trim();
+    const raw = dtEl?.value;
+    if (!productId) {
+        showToast('No product selected', 'error');
+        return;
+    }
+    if (!raw) {
+        showToast('Select date and time', 'error');
+        return;
+    }
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) {
+        showToast('Invalid date and time', 'error');
+        return;
+    }
+    const submitBtn = document.getElementById('recalculateOrderCostsSubmit');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Updating...';
+    }
+    try {
+        const response = await fetch(`${API_BASE}/products/recalculate-order-costs`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                product_id: productId,
+                created_after: d.toISOString()
+            })
+        });
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            const detail = err.detail;
+            const msg = typeof detail === 'string' ? detail : (Array.isArray(detail) ? JSON.stringify(detail) : 'Failed to recalculate');
+            throw new Error(msg);
+        }
+        const result = await response.json();
+        closeRecalculateOrderCostsModal();
+        const nums = result.updated_order_numbers;
+        if (Array.isArray(nums) && nums.length) {
+            console.log('[recalculate-order-costs] updated order_numbers:', nums);
+        }
+        showToast(`Updated ${result.updated ?? 0} order(s) (${result.scanned ?? 0} checked)`, 'success');
+    } catch (error) {
+        showToast(error.message || 'Recalculation failed', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Recalculate';
+        }
+    }
+}
+
 document.getElementById('bulkUpdateOrderModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'bulkUpdateOrderModal') closeBulkUpdateOrderModal();
 });
@@ -5443,6 +5543,13 @@ document.getElementById('bulkUpdateCostPriceModal')?.addEventListener('click', (
 document.getElementById('closeBulkUpdateCostPriceModal')?.addEventListener('click', closeBulkUpdateCostPriceModal);
 document.getElementById('bulkUpdateCostPriceCancel')?.addEventListener('click', closeBulkUpdateCostPriceModal);
 document.getElementById('bulkUpdateCostPriceSubmit')?.addEventListener('click', submitBulkUpdateCostPrice);
+
+document.getElementById('recalculateOrderCostsModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'recalculateOrderCostsModal') closeRecalculateOrderCostsModal();
+});
+document.getElementById('closeRecalculateOrderCostsModal')?.addEventListener('click', closeRecalculateOrderCostsModal);
+document.getElementById('recalculateOrderCostsCancel')?.addEventListener('click', closeRecalculateOrderCostsModal);
+document.getElementById('recalculateOrderCostsSubmit')?.addEventListener('click', submitRecalculateOrderCosts);
 
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();

@@ -402,6 +402,19 @@ body {
     margin-left: auto;
 }
 
+/* Products view: keep toolbar buttons on one row */
+body:has(#productsView.active) .header-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+}
+
 /* Consistent toolbar buttons — fixed height across header */
 .header-actions .header-toolbar-btn {
     display: inline-flex;
