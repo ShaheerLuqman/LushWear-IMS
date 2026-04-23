@@ -1206,10 +1206,14 @@ function initOrdersGrid() {
                 const fetchedAt = hasStoredStatus && lastStatus.fetched_at
                     ? formatDateTimeDDMMYYYY(lastStatus.fetched_at)
                     : '';
-                const isPostEx = (courier || '').trim().toUpperCase() === 'POSTEX';
+                const courierNormalized = (courier || '').trim().toUpperCase();
+                const supportsDeliveryRefresh = (
+                    courierNormalized === 'POSTEX' ||
+                    courierNormalized === 'COURIERS NEXT'
+                );
                 const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                const refreshBtn = isPostEx
+                const refreshBtn = supportsDeliveryRefresh
                     ? `<button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>`
                     : '';
                 return `<div class="delivery-cell-with-status" title="${escapeHtml(displayStatus)}">
@@ -5806,10 +5810,15 @@ async function refreshDeliveryStatusSelected() {
         if (status === 'delivered' || status === 'returned') return false;
         const courier = (row.courier || '').trim();
         const track = (row.tracking_number || '').trim();
-        return courier && courier.toUpperCase() === 'POSTEX' && track && track !== '-';
+        const courierNormalized = courier.toUpperCase();
+        const supportsDeliveryRefresh = (
+            courierNormalized === 'POSTEX' ||
+            courierNormalized === 'COURIERS NEXT'
+        );
+        return supportsDeliveryRefresh && track && track !== '-';
     });
     if (toFetch.length === 0) {
-        showToast('Select PostEx orders with tracking number (delivered and returned are skipped)', 'warning');
+        showToast('Select PostEx/Couriers Next orders with tracking number (delivered and returned are skipped)', 'warning');
         return;
     }
     const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -5866,8 +5875,13 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         return;
     }
     
-    if ((courier || '').trim().toUpperCase() !== 'POSTEX') {
-        showToast('Delivery status is only available for PostEx courier', 'warning');
+    const courierNormalized = (courier || '').trim().toUpperCase();
+    const supportsDeliveryRefresh = (
+        courierNormalized === 'POSTEX' ||
+        courierNormalized === 'COURIERS NEXT'
+    );
+    if (!supportsDeliveryRefresh) {
+        showToast('Delivery status is only available for PostEx and Couriers Next courier', 'warning');
         return;
     }
     

@@ -1,63 +1,63 @@
 {
     "orders": [
         {
-            "id": 7200315539760,
-            "admin_graphql_api_id": "gid://shopify/Order/7200315539760",
-            "app_id": 1354745,
-            "browser_ip": "116.90.106.71",
+            "id": 7240833433904,
+            "admin_graphql_api_id": "gid://shopify/Order/7240833433904",
+            "app_id": 580111,
+            "browser_ip": "154.57.192.15",
             "buyer_accepts_marketing": false,
             "cancel_reason": null,
             "cancelled_at": null,
-            "cart_token": null,
-            "checkout_id": 40770535686448,
-            "checkout_token": "02e06ea75700dbee306da0682a0f6020",
+            "cart_token": "hWNAbjztnl1Ai2bKjgpMy1em",
+            "checkout_id": 40925032808752,
+            "checkout_token": "bcfaaa115013a83e953cf67c0f437cf9",
             "client_details": {
-                "accept_language": null,
+                "accept_language": "en-PK",
                 "browser_height": null,
-                "browser_ip": "116.90.106.71",
+                "browser_ip": "154.57.192.15",
                 "browser_width": null,
                 "session_hash": null,
-                "user_agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Shopify Mobile/iOS/10.2609.0 (iPhone13,4/com.jadedpixel.shopify/18.0) - Build 229075 polaris_uplift ExtensibilityHost MobileBridge"
+                "user_agent": "Mozilla/5.0 (Linux; Android 16; SM-A566B Build/BP2A.250605.031.A3; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/146.0.7680.168 Mobile Safari/537.36 [FB_IAB/FB4A;FBAV/554.0.0.57.70;IABMV/1;]"
             },
             "closed_at": null,
             "company": null,
-            "confirmation_number": "0M95CV16L",
+            "confirmation_number": "555LJVEVR",
             "confirmed": true,
-            "contact_email": "shoaibyounas36@yahoo.com",
-            "created_at": "2026-03-13T17:02:39+05:00",
+            "contact_email": "marium.zidane@gmail.com",
+            "created_at": "2026-04-04T00:33:25+05:00",
             "currency": "PKR",
-            "current_subtotal_price": "0.00",
+            "current_subtotal_price": "2049.00",
             "current_subtotal_price_set": {
                 "shop_money": {
-                    "amount": "0.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "0.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 }
             },
             "current_total_additional_fees_set": null,
-            "current_total_discounts": "1999.00",
+            "current_total_discounts": "0.00",
             "current_total_discounts_set": {
                 "shop_money": {
-                    "amount": "1999.00",
+                    "amount": "0.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "1999.00",
+                    "amount": "0.00",
                     "currency_code": "PKR"
                 }
             },
             "current_total_duties_set": null,
-            "current_total_price": "249.00",
+            "current_total_price": "2298.00",
             "current_total_price_set": {
                 "shop_money": {
-                    "amount": "249.00",
+                    "amount": "2298.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "249.00",
+                    "amount": "2298.00",
                     "currency_code": "PKR"
                 }
             },
@@ -74,75 +74,54 @@
             },
             "customer_locale": "en-PK",
             "device_id": null,
-            "discount_codes": [
-                {
-                    "code": "REPLACEMENT100OFF",
-                    "amount": "1999.00",
-                    "type": "percentage"
-                }
-            ],
+            "discount_codes": [],
             "duties_included": false,
-            "email": "shoaibyounas36@yahoo.com",
+            "email": "marium.zidane@gmail.com",
             "estimated_taxes": false,
             "financial_status": "pending",
             "fulfillment_status": "fulfilled",
-            "landing_site": null,
+            "landing_site": "/",
             "landing_site_ref": null,
             "location_id": null,
             "merchant_business_entity_id": "MTg5NDI2NDYwOTc2",
             "merchant_of_record_app_id": null,
-            "name": "#6099",
-            "note": "Order has been shipped via PostEx with Tracking 26306960003855. Order has been shipped via PostEx with Tracking 29306960003854. ",
-            "note_attributes": [
-                {
-                    "name": "hxs_courier_name",
-                    "value": "PostEx"
-                },
-                {
-                    "name": "hxs_courier_tracking",
-                    "value": "26306960003855"
-                },
-                {
-                    "name": "hxs_courier_url",
-                    "value": "https://postex.pk/tracking?cn=26306960003855"
-                },
-                {
-                    "name": "hxs_courier_label",
-                    "value": "https://merchant.postex.pk/get-invoice?trackingNumbers=26306960003855"
-                }
-            ],
-            "number": 5099,
-            "order_number": 6099,
-            "order_status_url": "https://lushwear.pk/89426460976/orders/416b78babb44d4cf9b96c244e4b35c92/authenticate?key=5f27998026df47d5d36390d2b58e92d3",
+            "name": "#7160",
+            "note": null,
+            "note_attributes": [],
+            "number": 6160,
+            "order_number": 7160,
+            "order_status_url": "https://lushwear.pk/89426460976/orders/6b68efecf7a480673bed683edff25e2f/authenticate?key=f01b092da1bd461c0b209f99cfe2be72",
             "original_total_additional_fees_set": null,
             "original_total_duties_set": null,
-            "payment_gateway_names": [],
+            "payment_gateway_names": [
+                "Cash on Delivery (COD)"
+            ],
             "phone": null,
             "po_number": null,
             "presentment_currency": "PKR",
-            "processed_at": "2026-03-13T17:02:39+05:00",
+            "processed_at": "2026-04-04T00:33:22+05:00",
             "reference": null,
-            "referring_site": null,
+            "referring_site": "http://m.facebook.com/",
             "source_identifier": null,
-            "source_name": "shopify_draft_order",
+            "source_name": "web",
             "source_url": null,
-            "subtotal_price": "0.00",
+            "subtotal_price": "2049.00",
             "subtotal_price_set": {
                 "shop_money": {
-                    "amount": "0.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "0.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 }
             },
-            "tags": "5280-R, PostEx, ✅ Order Confirmed",
+            "tags": "Confirmed",
             "tax_exempt": false,
             "tax_lines": [],
             "taxes_included": false,
             "test": false,
-            "token": "416b78babb44d4cf9b96c244e4b35c92",
+            "token": "6b68efecf7a480673bed683edff25e2f",
             "total_cash_rounding_payment_adjustment_set": {
                 "shop_money": {
                     "amount": "0.00",
@@ -163,37 +142,37 @@
                     "currency_code": "PKR"
                 }
             },
-            "total_discounts": "1999.00",
+            "total_discounts": "0.00",
             "total_discounts_set": {
                 "shop_money": {
-                    "amount": "1999.00",
+                    "amount": "0.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "1999.00",
+                    "amount": "0.00",
                     "currency_code": "PKR"
                 }
             },
-            "total_line_items_price": "1999.00",
+            "total_line_items_price": "2049.00",
             "total_line_items_price_set": {
                 "shop_money": {
-                    "amount": "1999.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "1999.00",
+                    "amount": "2049.00",
                     "currency_code": "PKR"
                 }
             },
-            "total_outstanding": "249.00",
-            "total_price": "249.00",
+            "total_outstanding": "2298.00",
+            "total_price": "2298.00",
             "total_price_set": {
                 "shop_money": {
-                    "amount": "249.00",
+                    "amount": "2298.00",
                     "currency_code": "PKR"
                 },
                 "presentment_money": {
-                    "amount": "249.00",
+                    "amount": "2298.00",
                     "currency_code": "PKR"
                 }
             },
@@ -220,31 +199,31 @@
             },
             "total_tip_received": "0.00",
             "total_weight": 0,
-            "updated_at": "2026-03-13T17:21:02+05:00",
-            "user_id": 113381769520,
+            "updated_at": "2026-04-04T14:52:55+05:00",
+            "user_id": null,
             "billing_address": {
-                "first_name": "Shoaib",
-                "address1": "Iqbal Autos Karim Pura Road Sialkot",
-                "phone": "03217139005",
-                "city": "Sialkot",
-                "zip": "51310",
+                "first_name": "Marium",
+                "address1": "House C-78 block A kda officers housing society behind national stadium",
+                "phone": "03203734568",
+                "city": "Karachi",
+                "zip": "78400",
                 "province": null,
                 "country": "Pakistan",
-                "last_name": "Bhalli",
-                "address2": "Iqbal Autos",
+                "last_name": "Sauban",
+                "address2": "National stadium",
                 "company": null,
-                "latitude": 32.4961857,
-                "longitude": 74.5425851,
-                "name": "Shoaib Bhalli",
+                "latitude": 24.9029017,
+                "longitude": 67.0957696,
+                "name": "Marium Sauban",
                 "country_code": "PK",
                 "province_code": null
             },
             "customer": {
-                "id": 9628227764528,
-                "created_at": "2026-02-20T11:05:08+05:00",
-                "updated_at": "2026-03-13T17:02:40+05:00",
-                "first_name": "Shoaib",
-                "last_name": "Bhalli",
+                "id": 9801795043632,
+                "created_at": "2026-04-04T00:33:23+05:00",
+                "updated_at": "2026-04-04T00:33:26+05:00",
+                "first_name": "Marium",
+                "last_name": "Sauban",
                 "state": "disabled",
                 "note": null,
                 "verified_email": true,
@@ -257,158 +236,59 @@
                 },
                 "sms_marketing_consent": null,
                 "tags": "",
-                "email": "shoaibyounas36@yahoo.com",
+                "email": "marium.zidane@gmail.com",
                 "phone": null,
                 "currency": "PKR",
                 "tax_exemptions": [],
-                "admin_graphql_api_id": "gid://shopify/Customer/9628227764528",
+                "admin_graphql_api_id": "gid://shopify/Customer/9801795043632",
                 "default_address": {
-                    "id": 11524847468848,
-                    "customer_id": 9628227764528,
-                    "first_name": "Shoaib",
-                    "last_name": "Bhalli",
+                    "id": 11841309606192,
+                    "customer_id": 9801795043632,
+                    "first_name": "Marium",
+                    "last_name": "Sauban",
                     "company": null,
-                    "address1": "Iqbal Autos Karim Pura Road Sialkot",
-                    "address2": "Iqbal Autos",
-                    "city": "Sialkot",
+                    "address1": "House C-78 block A kda officers housing society behind national stadium",
+                    "address2": "National stadium",
+                    "city": "Karachi",
                     "province": null,
                     "country": "Pakistan",
-                    "zip": "51310",
-                    "phone": "03217139005",
-                    "name": "Shoaib Bhalli",
+                    "zip": "78400",
+                    "phone": "03203734568",
+                    "name": "Marium Sauban",
                     "province_code": null,
                     "country_code": "PK",
                     "country_name": "Pakistan",
                     "default": true
                 }
             },
-            "discount_applications": [
-                {
-                    "target_type": "line_item",
-                    "type": "discount_code",
-                    "value": "100.0",
-                    "value_type": "percentage",
-                    "allocation_method": "across",
-                    "target_selection": "all",
-                    "code": "REPLACEMENT100OFF"
-                }
-            ],
+            "discount_applications": [],
             "fulfillments": [
                 {
-                    "id": 6342204391728,
-                    "admin_graphql_api_id": "gid://shopify/Fulfillment/6342204391728",
-                    "created_at": "2026-03-13T17:06:57+05:00",
+                    "id": 6383049212208,
+                    "admin_graphql_api_id": "gid://shopify/Fulfillment/6383049212208",
+                    "created_at": "2026-04-04T14:52:54+05:00",
                     "location_id": 100809048368,
-                    "name": "#6099.1",
-                    "order_id": 7200315539760,
-                    "origin_address": {},
-                    "receipt": {},
-                    "service": "manual",
-                    "shipment_status": null,
-                    "status": "cancelled",
-                    "tracking_company": "PostEx",
-                    "tracking_number": "29306960003854",
-                    "tracking_numbers": [
-                        "29306960003854"
-                    ],
-                    "tracking_url": "https://postex.pk/tracking?cn=29306960003854",
-                    "tracking_urls": [
-                        "https://postex.pk/tracking?cn=29306960003854"
-                    ],
-                    "updated_at": "2026-03-13T17:08:18+05:00",
-                    "line_items": [
-                        {
-                            "id": 17530448838960,
-                            "admin_graphql_api_id": "gid://shopify/LineItem/17530448838960",
-                            "attributed_staffs": [],
-                            "current_quantity": 1,
-                            "fulfillable_quantity": 0,
-                            "fulfillment_service": "manual",
-                            "fulfillment_status": "fulfilled",
-                            "gift_card": false,
-                            "grams": 0,
-                            "name": "Ruby Camisole Set - M",
-                            "price": "1999.00",
-                            "price_set": {
-                                "shop_money": {
-                                    "amount": "1999.00",
-                                    "currency_code": "PKR"
-                                },
-                                "presentment_money": {
-                                    "amount": "1999.00",
-                                    "currency_code": "PKR"
-                                }
-                            },
-                            "product_exists": true,
-                            "product_id": 10022317654320,
-                            "properties": [],
-                            "quantity": 1,
-                            "requires_shipping": true,
-                            "sku": null,
-                            "taxable": false,
-                            "title": "Ruby Camisole Set",
-                            "total_discount": "0.00",
-                            "total_discount_set": {
-                                "shop_money": {
-                                    "amount": "0.00",
-                                    "currency_code": "PKR"
-                                },
-                                "presentment_money": {
-                                    "amount": "0.00",
-                                    "currency_code": "PKR"
-                                }
-                            },
-                            "variant_id": 50390284566832,
-                            "variant_inventory_management": "shopify",
-                            "variant_title": "M",
-                            "vendor": "Lush Wear",
-                            "tax_lines": [],
-                            "duties": [],
-                            "discount_allocations": [
-                                {
-                                    "amount": "1999.00",
-                                    "amount_set": {
-                                        "shop_money": {
-                                            "amount": "1999.00",
-                                            "currency_code": "PKR"
-                                        },
-                                        "presentment_money": {
-                                            "amount": "1999.00",
-                                            "currency_code": "PKR"
-                                        }
-                                    },
-                                    "discount_application_index": 0
-                                }
-                            ]
-                        }
-                    ]
-                },
-                {
-                    "id": 6342207275312,
-                    "admin_graphql_api_id": "gid://shopify/Fulfillment/6342207275312",
-                    "created_at": "2026-03-13T17:08:47+05:00",
-                    "location_id": 100809048368,
-                    "name": "#6099.2",
-                    "order_id": 7200315539760,
+                    "name": "#7160.1",
+                    "order_id": 7240833433904,
                     "origin_address": {},
                     "receipt": {},
                     "service": "manual",
                     "shipment_status": null,
                     "status": "success",
-                    "tracking_company": "PostEx",
-                    "tracking_number": "26306960003855",
+                    "tracking_company": "Couriers Next",
+                    "tracking_number": "202370600260",
                     "tracking_numbers": [
-                        "26306960003855"
+                        "202370600260"
                     ],
-                    "tracking_url": "https://postex.pk/tracking?cn=26306960003855",
+                    "tracking_url": "https://portal.couriersnext.com/track-details.php?track_code=202370600260",
                     "tracking_urls": [
-                        "https://postex.pk/tracking?cn=26306960003855"
+                        "https://portal.couriersnext.com/track-details.php?track_code=202370600260"
                     ],
-                    "updated_at": "2026-03-13T17:08:47+05:00",
+                    "updated_at": "2026-04-04T14:52:55+05:00",
                     "line_items": [
                         {
-                            "id": 17530448838960,
-                            "admin_graphql_api_id": "gid://shopify/LineItem/17530448838960",
+                            "id": 17607188873520,
+                            "admin_graphql_api_id": "gid://shopify/LineItem/17607188873520",
                             "attributed_staffs": [],
                             "current_quantity": 1,
                             "fulfillable_quantity": 0,
@@ -416,15 +296,15 @@
                             "fulfillment_status": "fulfilled",
                             "gift_card": false,
                             "grams": 0,
-                            "name": "Ruby Camisole Set - M",
-                            "price": "1999.00",
+                            "name": "Ruby Camisole Set - L",
+                            "price": "2049.00",
                             "price_set": {
                                 "shop_money": {
-                                    "amount": "1999.00",
+                                    "amount": "2049.00",
                                     "currency_code": "PKR"
                                 },
                                 "presentment_money": {
-                                    "amount": "1999.00",
+                                    "amount": "2049.00",
                                     "currency_code": "PKR"
                                 }
                             },
@@ -447,36 +327,21 @@
                                     "currency_code": "PKR"
                                 }
                             },
-                            "variant_id": 50390284566832,
+                            "variant_id": 50390284599600,
                             "variant_inventory_management": "shopify",
-                            "variant_title": "M",
+                            "variant_title": "L",
                             "vendor": "Lush Wear",
                             "tax_lines": [],
                             "duties": [],
-                            "discount_allocations": [
-                                {
-                                    "amount": "1999.00",
-                                    "amount_set": {
-                                        "shop_money": {
-                                            "amount": "1999.00",
-                                            "currency_code": "PKR"
-                                        },
-                                        "presentment_money": {
-                                            "amount": "1999.00",
-                                            "currency_code": "PKR"
-                                        }
-                                    },
-                                    "discount_application_index": 0
-                                }
-                            ]
+                            "discount_allocations": []
                         }
                     ]
                 }
             ],
             "line_items": [
                 {
-                    "id": 17530448838960,
-                    "admin_graphql_api_id": "gid://shopify/LineItem/17530448838960",
+                    "id": 17607188873520,
+                    "admin_graphql_api_id": "gid://shopify/LineItem/17607188873520",
                     "attributed_staffs": [],
                     "current_quantity": 1,
                     "fulfillable_quantity": 0,
@@ -484,15 +349,15 @@
                     "fulfillment_status": "fulfilled",
                     "gift_card": false,
                     "grams": 0,
-                    "name": "Ruby Camisole Set - M",
-                    "price": "1999.00",
+                    "name": "Ruby Camisole Set - L",
+                    "price": "2049.00",
                     "price_set": {
                         "shop_money": {
-                            "amount": "1999.00",
+                            "amount": "2049.00",
                             "currency_code": "PKR"
                         },
                         "presentment_money": {
-                            "amount": "1999.00",
+                            "amount": "2049.00",
                             "currency_code": "PKR"
                         }
                     },
@@ -515,60 +380,37 @@
                             "currency_code": "PKR"
                         }
                     },
-                    "variant_id": 50390284566832,
+                    "variant_id": 50390284599600,
                     "variant_inventory_management": "shopify",
-                    "variant_title": "M",
+                    "variant_title": "L",
                     "vendor": "Lush Wear",
                     "tax_lines": [],
                     "duties": [],
-                    "discount_allocations": [
-                        {
-                            "amount": "1999.00",
-                            "amount_set": {
-                                "shop_money": {
-                                    "amount": "1999.00",
-                                    "currency_code": "PKR"
-                                },
-                                "presentment_money": {
-                                    "amount": "1999.00",
-                                    "currency_code": "PKR"
-                                }
-                            },
-                            "discount_application_index": 0
-                        }
-                    ]
+                    "discount_allocations": []
                 }
             ],
-            "payment_terms": {
-                "id": 61388456240,
-                "created_at": "2026-03-13T17:02:40+05:00",
-                "due_in_days": null,
-                "payment_schedules": [],
-                "payment_terms_name": "Due on receipt",
-                "payment_terms_type": "receipt",
-                "updated_at": "2026-03-13T17:02:40+05:00"
-            },
+            "payment_terms": null,
             "refunds": [],
             "shipping_address": {
-                "first_name": "Shoaib",
-                "address1": "Iqbal Autos Karim Pura Road Sialkot",
-                "phone": "03217139005",
-                "city": "Sialkot",
-                "zip": "51310",
+                "first_name": "Marium",
+                "address1": "House C-78 block A kda officers housing society behind national stadium",
+                "phone": "03203734568",
+                "city": "Karachi",
+                "zip": "78400",
                 "province": null,
                 "country": "Pakistan",
-                "last_name": "Bhalli",
-                "address2": "Iqbal Autos",
+                "last_name": "Sauban",
+                "address2": "National stadium",
                 "company": null,
-                "latitude": 32.4961857,
-                "longitude": 74.5425851,
-                "name": "Shoaib Bhalli",
+                "latitude": 24.9029017,
+                "longitude": 67.0957696,
+                "name": "Marium Sauban",
                 "country_code": "PK",
                 "province_code": null
             },
             "shipping_lines": [
                 {
-                    "id": 5771276026160,
+                    "id": 5805094895920,
                     "carrier_identifier": null,
                     "code": "Standard",
                     "discounted_price": "249.00",

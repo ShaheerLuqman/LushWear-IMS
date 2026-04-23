@@ -1964,9 +1964,14 @@ def _classify_status(status_text: str) -> Optional[str]:
         return None
     status_lower = status_text.lower()
     # Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
-    if "return" in status_lower:
+    if (
+        "return" in status_lower
+        or "refused by consignee" in status_lower
+        or "shipper advice" in status_lower
+    ):
         return "returned"
-    if "delivered to customer" in status_lower:
+    # Handle both PostEx ("Delivered to Customer") and Courier Next ("Delivered ...") variants.
+    if "delivered to customer" in status_lower or ("delivered" in status_lower and "undelivered" not in status_lower):
         return "delivered"
     if "attempt made: rfd" in status_lower:
         return "RFD"
@@ -1975,6 +1980,11 @@ def _classify_status(status_text: str) -> Optional[str]:
     if "attempt made: cna" in status_lower:
         return "CNA"
     return None
+
+
+def _normalize_courier_name(courier: str) -> str:
+    """Normalize courier names for resilient matching."""
+    return re.sub(r"[^a-z0-9]+", "", (courier or "").strip().lower())
 
 
 def _derive_order_status_from_latest(delivery_status_data: dict) -> Optional[str]:
@@ -2244,18 +2254,19 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         
         order = order_response.data[0]
         courier = order.get("courier", "").strip()
+        courier_normalized = _normalize_courier_name(courier)
         tracking_number = order.get("tracking_number", "").strip()
         
         if not tracking_number:
             raise HTTPException(status_code=400, detail="Tracking number not available")
         
-        if courier.upper() == "UNASSIGNED":
+        if courier_normalized == "unassigned":
             raise HTTPException(status_code=400, detail="Courier not assigned")
         
         delivery_status_data = None
         existing_delivery = order.get("delivery_status")
 
-        if courier.upper() == "POSTEX":
+        if courier_normalized in ("postex",):
             # Always fetch fresh data from PostEx to ensure we have the latest status
             # (Previously we skipped fetch for "final" statuses, but this caused stale data issues)
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -2305,8 +2316,52 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                         "latest_status": latest_status,
                         "fetched_at": datetime.utcnow().isoformat()
                     }
+        elif courier_normalized in ("couriersnext", "couriernext"):
+            # Couriers Next API returns a list of status entries.
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                api_url = "https://portal.couriersnext.com/API/TrackOrder.php"
+                payload = {"tracking_no": tracking_number}
+                headers = {"Content-Type": "application/json"}
+                response = await client.post(api_url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+                if not isinstance(data, list):
+                    raise HTTPException(status_code=500, detail="Invalid response from Couriers Next tracking API")
+
+                status_history_raw = [item for item in data if isinstance(item, dict)]
+                status_history_parsed = []
+                for item in status_history_raw:
+                    status_history_parsed.append({
+                        "status": item.get("status", "") or "",
+                        "status_code": item.get("title", "") or "",
+                        "datetime": item.get("created", "") or "",
+                    })
+
+                # Sort by provider timestamp ascending (oldest first, newest last)
+                status_history_sorted = sorted(
+                    status_history_parsed,
+                    key=lambda x: x.get("datetime", "") or ""
+                )
+
+                latest_status = status_history_sorted[-1].get("status", "") if status_history_sorted else ""
+                first_row = status_history_raw[0] if status_history_raw else {}
+                resolved_tracking = (
+                    (first_row.get("tracking_no") if isinstance(first_row, dict) else None)
+                    or tracking_number
+                )
+
+                delivery_status_data = {
+                    "courier": "Couriers Next",
+                    "tracking_number": resolved_tracking,
+                    "customer_name": "",
+                    "order_pickup_date": "",
+                    "status_history": status_history_sorted,
+                    "latest_status": latest_status,
+                    "fetched_at": datetime.utcnow().isoformat(),
+                }
         else:
-            raise HTTPException(status_code=400, detail="Only PostEx is supported for delivery status tracking")
+            raise HTTPException(status_code=400, detail="Only PostEx and Couriers Next are supported for delivery status tracking")
         
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")

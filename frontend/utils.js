@@ -87,8 +87,13 @@ function classifyStatus(statusText) {
     if (!statusText) return null;
     const statusLower = statusText.toLowerCase();
     // Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
-    if (statusLower.includes('return')) return 'returned';
-    if (statusLower.includes('delivered to customer')) return 'delivered';
+    if (
+        statusLower.includes('return') ||
+        statusLower.includes('refused by consignee') ||
+        statusLower.includes('shipper advice')
+    ) return 'returned';
+    // Handle both PostEx ("Delivered to Customer") and Courier Next ("Delivered") variants.
+    if (statusLower.includes('delivered to customer') || (statusLower.includes('delivered') && !statusLower.includes('undelivered'))) return 'delivered';
     if (statusLower.includes('attempt made: rfd')) return 'RFD';
     if (statusLower.includes('attempt made: ica')) return 'ICA';
     if (statusLower.includes('attempt made: cna')) return 'CNA';
