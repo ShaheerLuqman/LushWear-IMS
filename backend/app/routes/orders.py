@@ -637,7 +637,9 @@ async def sync_shopify_orders():
                 elif field == "items":
                     shopify_list = shopify_val if isinstance(shopify_val, list) else []
                     existing_list = existing_val if isinstance(existing_val, list) else []
-                    if set(shopify_list) != set(existing_list):
+                    # Compare as sorted lists so quantity changes are detected too
+                    # (set() would hide duplicates and miss product count changes).
+                    if sorted(str(x) for x in shopify_list) != sorted(str(x) for x in existing_list):
                         return True
                 elif field == "courier":
                     shopify_str = (shopify_val or "").strip() or "Unassigned"
@@ -747,10 +749,11 @@ async def sync_shopify_orders():
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
             items = extract_items(sp_order)
+            calculated_cost_from_items = calculate_cost_from_items(items, products_cost_map) if items else 0.0
             
             # If cost_price is 0, calculate it from items using products table
             if cost_price == 0.0 and items:
-                cost_price = calculate_cost_from_items(items, products_cost_map)
+                cost_price = calculated_cost_from_items
             
             order_received_date = sp_order.get("created_at")
             if order_received_date:
@@ -840,6 +843,8 @@ async def sync_shopify_orders():
                 existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
                 freeze_amounts_items_cost = existing_status != "unfulfilled"
+                existing_items_list = existing_order.get("items") if isinstance(existing_order.get("items"), list) else []
+                items_changed = sorted(str(x) for x in items) != sorted(str(x) for x in existing_items_list)
 
                 # Compare and update courier and tracking_number from Shopify if they differ
                 shopify_courier = (courier or "").strip()
@@ -888,8 +893,14 @@ async def sync_shopify_orders():
                 else:
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
-                    # Replacement orders (XXXX-R) always have 0 cost price
-                    order_data["cost_price"] = 0.0 if is_replacement_order else cost_price
+                    # Replacement orders (XXXX-R) always have 0 cost price.
+                    # For unfulfilled orders, if Shopify items changed, recalculate from current product costs.
+                    if is_replacement_order:
+                        order_data["cost_price"] = 0.0
+                    elif items_changed:
+                        order_data["cost_price"] = calculated_cost_from_items
+                    else:
+                        order_data["cost_price"] = cost_price
                     order_data["items"] = items
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
@@ -1510,6 +1521,335 @@ async def fix_voided_order_totals(
 
 class RecalculateTotalsBody(BaseModel):
     order_numbers: List[str]
+
+
+class ForceSyncOrdersBody(BaseModel):
+    order_numbers: List[str]
+
+
+@router.post("/sync-shopify-force", response_model=dict)
+async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
+    """
+    Force-sync specific orders from Shopify by order number.
+    Skips normal sync restrictions (delivered/returned freeze, assigned courier guard, etc.).
+    """
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+
+    try:
+        supabase = get_supabase()
+        current_time = datetime.utcnow().isoformat()
+        order_numbers_input = [str(n).strip() for n in body.order_numbers if str(n).strip()]
+        if not order_numbers_input:
+            raise HTTPException(status_code=400, detail="No valid order numbers provided")
+
+        # products cost map for item-based cost calculation fallback
+        products_cost_map: Dict[str, float] = {}
+        products_response = supabase.table("products").select("name, cost_price").execute()
+        for p in products_response.data or []:
+            name = (p.get("name") or "").strip().lower()
+            if not name:
+                continue
+            try:
+                products_cost_map[name] = float(p.get("cost_price") or 0.0)
+            except (TypeError, ValueError):
+                products_cost_map[name] = 0.0
+
+        # existing orders map by order_number
+        existing_orders_map: Dict[str, Dict[str, Any]] = {}
+        existing_rows = (
+            supabase.table("orders")
+            .select(
+                "id, order_number, order_status, piece_received, delivery_status, "
+                "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no"
+            )
+            .in_("order_number", order_numbers_input)
+            .execute()
+            .data
+            or []
+        )
+        for row in existing_rows:
+            key = str(row.get("order_number") or "").strip()
+            if key:
+                existing_orders_map[key] = row
+
+        def _parse_iso_local(s):
+            if not s:
+                return None
+            if isinstance(s, datetime):
+                return s
+            try:
+                return datetime.fromisoformat(str(s).strip().replace("Z", "+00:00"))
+            except (ValueError, TypeError):
+                return None
+
+        def extract_courier(order):
+            fulfillments = order.get("fulfillments") or []
+            if not fulfillments:
+                return "Unassigned"
+            active = [f for f in fulfillments if f.get("status") != "cancelled"]
+            fulfillments_to_check = active if active else fulfillments
+            latest_fulfillment = None
+            latest_timestamp = None
+            for fulfillment in fulfillments_to_check:
+                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+                ts = _parse_iso_local(timestamp_str)
+                if ts and (latest_timestamp is None or ts > latest_timestamp):
+                    latest_timestamp = ts
+                    latest_fulfillment = fulfillment
+            if not latest_fulfillment and fulfillments_to_check:
+                latest_fulfillment = fulfillments_to_check[-1]
+            tracking_company = (latest_fulfillment or {}).get("tracking_company")
+            tracking_company = str(tracking_company or "").strip()
+            return tracking_company or "Unassigned"
+
+        def extract_tracking_number(order):
+            fulfillments = order.get("fulfillments") or []
+            if not fulfillments:
+                return None
+            active = [f for f in fulfillments if f.get("status") != "cancelled"]
+            fulfillments_to_check = active if active else fulfillments
+            latest_fulfillment = None
+            latest_timestamp = None
+            for fulfillment in fulfillments_to_check:
+                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+                ts = _parse_iso_local(timestamp_str)
+                if ts and (latest_timestamp is None or ts > latest_timestamp):
+                    latest_timestamp = ts
+                    latest_fulfillment = fulfillment
+            if not latest_fulfillment and fulfillments_to_check:
+                latest_fulfillment = fulfillments_to_check[-1]
+            tn = str((latest_fulfillment or {}).get("tracking_number") or "").strip()
+            return tn or None
+
+        def extract_order_status(order):
+            cancelled_at_raw = order.get("cancelled_at")
+            fulfillment_dt = None
+            for f in order.get("fulfillments") or []:
+                ct = f.get("created_at")
+                parsed = _parse_iso_local(ct)
+                if parsed and (fulfillment_dt is None or parsed > fulfillment_dt):
+                    fulfillment_dt = parsed
+            if cancelled_at_raw and fulfillment_dt is not None:
+                cancelled_at = _parse_iso_local(cancelled_at_raw)
+                if cancelled_at and cancelled_at > fulfillment_dt:
+                    return "returned"
+            if cancelled_at_raw is not None:
+                return "cancelled"
+            fulfillment_status = order.get("fulfillment_status")
+            if fulfillment_status == "fulfilled":
+                return "fulfilled"
+            return "unfulfilled"
+
+        def extract_tax_amount(order):
+            if "current_total_tax_set" in order and order["current_total_tax_set"]:
+                shop_money = order["current_total_tax_set"].get("shop_money", {})
+                if shop_money:
+                    try:
+                        return float(shop_money.get("amount", "0.00"))
+                    except (TypeError, ValueError):
+                        pass
+            try:
+                return float(order.get("current_total_tax") or 0)
+            except (TypeError, ValueError):
+                pass
+            if "total_tax_set" in order and order["total_tax_set"]:
+                shop_money = order["total_tax_set"].get("shop_money", {})
+                if shop_money:
+                    try:
+                        return float(shop_money.get("amount", "0.00"))
+                    except (TypeError, ValueError):
+                        pass
+            try:
+                return float(order.get("total_tax", "0.00"))
+            except (TypeError, ValueError):
+                return 0.0
+
+        def extract_cost_price(order):
+            for attr in order.get("note_attributes") or []:
+                if attr.get("name") in ["cost_price", "Cost Price", "cost"]:
+                    try:
+                        return float(attr.get("value", 0))
+                    except (TypeError, ValueError):
+                        return None
+            return None
+
+        def extract_items(order):
+            item_names: List[str] = []
+            for item in order.get("line_items") or []:
+                qty = item.get("current_quantity")
+                if qty is None:
+                    qty = item.get("quantity") or 0
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty <= 0:
+                    continue
+                name = item.get("name", "")
+                if name:
+                    for _ in range(qty):
+                        item_names.append(name)
+            return item_names
+
+        def calculate_cost_from_items(items):
+            if not items:
+                return 0.0
+            total_cost = 0.0
+            for item_name in items:
+                item_lower = item_name.lower().strip()
+                if item_lower in products_cost_map:
+                    total_cost += products_cost_map[item_lower]
+                    continue
+                if " - " in item_name:
+                    base_name = item_name.rsplit(" - ", 1)[0].lower().strip()
+                    if base_name in products_cost_map:
+                        total_cost += products_cost_map[base_name]
+                        continue
+                for product_name, cost in products_cost_map.items():
+                    if product_name in item_lower or item_lower in product_name:
+                        total_cost += cost
+                        break
+            return total_cost
+
+        fetch_tasks = [_fetch_shopify_order_by_order_number(n) for n in order_numbers_input]
+        fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
+
+        upserts: List[Dict[str, Any]] = []
+        created_order_numbers: List[str] = []
+        updated_order_numbers: List[str] = []
+        shopify_fetch_failed: List[str] = []
+
+        for requested_number, sp_order_result in zip(order_numbers_input, fetch_results):
+            if isinstance(sp_order_result, Exception) or not sp_order_result:
+                shopify_fetch_failed.append(requested_number)
+                continue
+
+            sp_order = sp_order_result
+            shopify_order_number_raw = sp_order.get("order_number")
+            if shopify_order_number_raw is None:
+                shopify_fetch_failed.append(requested_number)
+                continue
+            shopify_order_number = str(int(shopify_order_number_raw))
+            target_order_number = requested_number if requested_number in existing_orders_map else shopify_order_number
+            existing_order = existing_orders_map.get(target_order_number)
+
+            courier = extract_courier(sp_order)
+            tracking_number = extract_tracking_number(sp_order)
+            order_status = extract_order_status(sp_order)
+            shopify_tax = extract_tax_amount(sp_order) or 0.0
+            fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+            if fulfillment_based_total is not None:
+                total_amount = fulfillment_based_total + shopify_tax
+            else:
+                current_total = sp_order.get("current_total_price")
+                total_price_val = sp_order.get("total_price")
+                if current_total is not None and str(current_total).strip() != "":
+                    total_amount = float(current_total)
+                elif total_price_val is not None and str(total_price_val).strip() != "":
+                    total_amount = float(total_price_val)
+                else:
+                    try:
+                        total_amount = float(sp_order.get("total_line_items_price") or 0) + shopify_tax
+                    except (TypeError, ValueError):
+                        total_amount = shopify_tax
+
+            discount_codes = sp_order.get("discount_codes") or []
+            normalized_discount_codes = {
+                str(code_obj.get("code") or "").strip().upper()
+                for code_obj in discount_codes
+                if isinstance(code_obj, dict)
+            }
+            has_price_reduction_discount_code = any(
+                code in PRICE_REDUCTION_DISCOUNT_CODES
+                for code in normalized_discount_codes
+            )
+            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+            financial_status = (sp_order.get("financial_status") or "").strip().lower()
+            if has_price_reduction_discount_code:
+                total_amount = max(0.0, total_amount - total_discounts)
+                advance_amount = total_amount if financial_status == "paid" else 0.0
+            else:
+                advance_amount = total_amount if financial_status == "paid" else total_discounts
+
+            items = extract_items(sp_order)
+            cost_price = extract_cost_price(sp_order)
+            if cost_price is None or cost_price == 0.0:
+                cost_price = calculate_cost_from_items(items)
+
+            replacement_of = None
+            is_replacement_order = False
+            if re.match(r"^\d+-R$", target_order_number, re.IGNORECASE):
+                m = re.match(r"^(\d+)-R$", target_order_number, re.IGNORECASE)
+                replacement_of = m.group(1) if m else None
+                is_replacement_order = True
+            else:
+                tags_raw = sp_order.get("tags")
+                tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip()
+                for tag in tags_str.split(","):
+                    tag = tag.strip()
+                    m = re.match(r"^(\d+)-R$", tag, re.IGNORECASE)
+                    if m:
+                        replacement_of = m.group(1)
+                        is_replacement_order = True
+                        break
+
+            order_received_date = sp_order.get("created_at")
+            if order_received_date:
+                parsed = _parse_iso_local(order_received_date)
+                order_received_date = parsed.isoformat() if parsed else current_time
+            else:
+                order_received_date = current_time
+
+            delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else 0.0
+            tax_amount = 0.0
+
+            payload: Dict[str, Any] = {
+                "order_number": target_order_number,
+                "courier": courier,
+                "tracking_number": tracking_number,
+                "order_status": order_status,
+                "piece_received": (existing_order.get("piece_received") if existing_order else "Pending") or "Pending",
+                "delivery_status": existing_order.get("delivery_status") if existing_order else None,
+                "total_amount": total_amount,
+                "advance_amount": advance_amount,
+                "delivery_charge": float(existing_order.get("delivery_charge") or 0) if existing_order else delivery_charge,
+                "tax_amount": float(existing_order.get("tax_amount") or 0) if existing_order else tax_amount,
+                "cost_price": 0.0 if is_replacement_order else float(cost_price or 0.0),
+                "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
+                "items": items,
+                "replacement_of_order_no": replacement_of,
+                "updated_at": current_time,
+            }
+            if existing_order:
+                payload["id"] = existing_order["id"]
+                updated_order_numbers.append(target_order_number)
+            else:
+                payload["created_at"] = current_time
+                created_order_numbers.append(target_order_number)
+
+            upserts.append(payload)
+
+        if upserts:
+            batch_size = 500
+            for i in range(0, len(upserts), batch_size):
+                batch = upserts[i:i + batch_size]
+                supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
+
+        return {
+            "requested_count": len(order_numbers_input),
+            "processed_count": len(upserts),
+            "created_count": len(created_order_numbers),
+            "updated_count": len(updated_order_numbers),
+            "created_order_numbers": created_order_numbers,
+            "updated_order_numbers": updated_order_numbers,
+            "shopify_fetch_failed_count": len(shopify_fetch_failed),
+            "shopify_fetch_failed_order_numbers": shopify_fetch_failed,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/recalculate-totals", response_model=dict)
