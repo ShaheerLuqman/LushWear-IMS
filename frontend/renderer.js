@@ -60,7 +60,6 @@ const ORDERS_MORE_ACTION_IDS = [
     'ordersMoreActionCreateReplacement',
     'ordersMoreActionUploadPostEx',
     'ordersMoreActionGenerateLoadSheet',
-    'ordersMoreActionGenerateInvoice',
 ];
 
 function setOrdersMoreToolbarButtonsVisible(show) {
@@ -69,6 +68,16 @@ function setOrdersMoreToolbarButtonsVisible(show) {
         const el = document.getElementById(id);
         if (el) el.style.display = disp;
     });
+}
+
+function syncOrdersBottomActionsWidth() {
+    const topActions = document.getElementById('headerOrdersAppActions');
+    const bottomActions = document.getElementById('headerOrdersBottomActions');
+    if (!topActions || !bottomActions) return;
+    const width = Math.ceil(topActions.getBoundingClientRect().width || 0);
+    if (width > 0) {
+        bottomActions.style.width = `${width}px`;
+    }
 }
 
 /** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: locked on open. */
@@ -3099,7 +3108,10 @@ function switchView(viewName) {
 
     const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
     const headerOrdersAppActions = document.getElementById('headerOrdersAppActions');
+    const headerOrdersBottomActions = document.getElementById('headerOrdersBottomActions');
     const ordersDateRangeBtn = document.getElementById('ordersDateRangeBtn');
+    const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
+    const exportGridExcelBtn = document.getElementById('exportGridExcelBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
             syncProductsBtn.style.display = 'inline-flex';
@@ -3109,8 +3121,11 @@ function switchView(viewName) {
             setOrdersMoreToolbarButtonsVisible(false);
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
+            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
+            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
@@ -3119,9 +3134,13 @@ function switchView(viewName) {
             if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'inline-flex';
+            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'inline-flex';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'inline-flex';
             if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
+            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'inline-flex';
+            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'inline-flex';
+            requestAnimationFrame(() => syncOrdersBottomActionsWidth());
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
             if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
@@ -3135,8 +3154,11 @@ function switchView(viewName) {
             if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
+            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
+            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
@@ -3151,8 +3173,11 @@ function switchView(viewName) {
             if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
             if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
             if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
+            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
+            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
             const deliveryProgress = document.getElementById('deliveryRefreshProgress');
@@ -4976,6 +5001,15 @@ function initForms() {
     if (refreshDeliveryStatusSelectedBtn) {
         refreshDeliveryStatusSelectedBtn.addEventListener('click', () => refreshDeliveryStatusSelected());
     }
+    const exportGridExcelBtn = document.getElementById('exportGridExcelBtn');
+    if (exportGridExcelBtn) {
+        exportGridExcelBtn.addEventListener('click', () => exportCurrentGridToExcel());
+    }
+    window.addEventListener('resize', () => {
+        if (currentView === 'orders') {
+            syncOrdersBottomActionsWidth();
+        }
+    });
 
     // Cashbook actions
     const cashbookDateFilter = document.getElementById('cashbookDateFilter');
@@ -5785,6 +5819,94 @@ function showToast(message, type = 'info') {
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+}
+
+function _collectGridRowsForExport(gridApi) {
+    const rows = [];
+    if (!gridApi) return rows;
+    gridApi.forEachNodeAfterFilterAndSort((node) => {
+        if (!node || !node.data) return;
+        rows.push(node);
+    });
+    return rows;
+}
+
+function _collectGridColumnsForExport(gridApi) {
+    if (!gridApi) return [];
+    const cols = (gridApi.getAllDisplayedColumns && gridApi.getAllDisplayedColumns()) || [];
+    return cols
+        .map((col) => {
+            const colDef = col.getColDef ? col.getColDef() : null;
+            const field = colDef?.field || col.getColId?.();
+            const header = colDef?.headerName || field;
+            if (!header) return null;
+            return { field, header, col };
+        })
+        .filter(Boolean);
+}
+
+function _getExportCellValue(gridApi, column, node) {
+    if (!node) return '';
+    let value = null;
+    if (gridApi?.getValue && column?.col) {
+        value = gridApi.getValue(column.col, node);
+    } else if (column?.field && node.data) {
+        value = node.data[column.field];
+    }
+    if (value == null) return '';
+    if (Array.isArray(value)) return value.join(', ');
+    if (typeof value === 'object') return JSON.stringify(value);
+    return value;
+}
+
+function _buildExportSheetRows(gridApi) {
+    const columns = _collectGridColumnsForExport(gridApi);
+    const sourceNodes = _collectGridRowsForExport(gridApi);
+    return sourceNodes.map((node) => {
+        const out = {};
+        for (const col of columns) {
+            out[col.header] = _getExportCellValue(gridApi, col, node);
+        }
+        return out;
+    });
+}
+
+function exportCurrentGridToExcel() {
+    if (typeof XLSX === 'undefined') {
+        showToast('Excel export library is not loaded', 'error');
+        return;
+    }
+
+    const workbook = XLSX.utils.book_new();
+    let sheetCount = 0;
+    const dateStamp = new Date().toISOString().slice(0, 10);
+
+    if (currentView === 'cashbook') {
+        const incomingRows = _buildExportSheetRows(cashbookIncomingGridApi);
+        const outgoingRows = _buildExportSheetRows(cashbookOutgoingGridApi);
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(incomingRows), 'Incoming');
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(outgoingRows), 'Outgoing');
+        sheetCount = 2;
+    } else if (currentView === 'orders') {
+        const rows = _buildExportSheetRows(ordersGridApi);
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Orders');
+        sheetCount = 1;
+    } else if (currentView === 'products') {
+        const rows = _buildExportSheetRows(productsGridApi);
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Products');
+        sheetCount = 1;
+    } else if (currentView === 'ledgerDetail') {
+        const rows = _buildExportSheetRows(ledgerDetailGridApi);
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Ledger Detail');
+        sheetCount = 1;
+    } else {
+        showToast('No AG Grid is available to export in this view', 'warning');
+        return;
+    }
+
+    const filename = `inventory-${currentView}-${dateStamp}.xlsx`;
+    XLSX.writeFile(workbook, filename);
+    showToast(`Excel exported (${sheetCount} sheet${sheetCount > 1 ? 's' : ''})`, 'success');
 }
 
 /** Fetch delivery status for one order (no modal). Returns data or throws. */

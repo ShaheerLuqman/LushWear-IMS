@@ -517,6 +517,38 @@ body:has(#productsView.active) .header-actions {
     font-size: 1.55rem;
 }
 
+.header-orders-bottom-actions {
+    display: none;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+    box-sizing: border-box;
+    min-height: 36px;
+}
+
+.header-orders-bottom-actions #ordersMoreActionGenerateInvoice.header-orders-bottom-actions-btn {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    padding-left: 10px;
+    padding-right: 10px;
+}
+
+.header-orders-bottom-actions #exportGridExcelBtn.header-toolbar-btn-icon-only {
+    flex: 0 0 36px;
+    width: 36px !important;
+    min-width: 36px !important;
+    max-width: 36px !important;
+    height: 36px !important;
+    min-height: 36px !important;
+    max-height: 36px !important;
+    padding: 0 !important;
+    box-sizing: border-box;
+}
+
 .delivery-refresh-progress {
     font-size: 13px;
     color: var(--text-secondary);
