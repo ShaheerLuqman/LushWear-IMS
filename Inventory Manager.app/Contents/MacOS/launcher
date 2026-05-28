@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Silent launcher for Inventory Manager on macOS.
+# Invoked by LaunchServices when the user double-clicks the .app; no Terminal window is opened.
+# stdout/stderr go to a log file so failures are diagnosable.
+
+set -u
+
+BUNDLE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_DIR="$(cd "$BUNDLE_DIR/.." && pwd)"
+LOG_DIR="$HOME/Library/Logs/InventoryManager"
+mkdir -p "$LOG_DIR"
+LOG_FILE="$LOG_DIR/launcher.log"
+
+exec >>"$LOG_FILE" 2>&1
+echo
+echo "===== $(date) ====="
+echo "Repo: $REPO_DIR"
+
+cd "$REPO_DIR" || { osascript -e "display alert \"Inventory Manager\" message \"Repo not found at $REPO_DIR\"" ; exit 1; }
+
+# Kill anything still bound to the backend port from a prior crashed run.
+cleanup_port() {
+    local pids
+    pids="$(lsof -ti:8000 2>/dev/null || true)"
+    if [ -n "$pids" ]; then
+        echo "Cleaning up port 8000 PIDs: $pids"
+        kill -9 $pids 2>/dev/null || true
+    fi
+}
+
+trap 'echo "Launcher exiting, cleaning up..."; cleanup_port' EXIT INT TERM
+
+cleanup_port
+
+export SHOW_TERMINALS=0
+
+# Run the existing setup + start script. It already activates the venv,
+# installs deps, and runs `npm start` which blocks until Electron quits.
+bash "$REPO_DIR/start-app.command"
+EXIT_CODE=$?
+
+echo "start-app.command exited with code $EXIT_CODE"
+exit $EXIT_CODE
