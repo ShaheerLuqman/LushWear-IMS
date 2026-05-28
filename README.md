@@ -43,9 +43,10 @@ A desktop inventory management application built with FastAPI (Python) backend, 
 
 ### 3. Run the Application
 
-**Option A: Using the startup script (Recommended for Windows)**
+**Option A: Using the startup script**
 
-Double-click `start-app.bat` to launch both backend and frontend.
+- On Windows: double-click `start-app.bat`
+- On macOS: double-click `start-app.command` (or run `chmod +x start-app.command` and then execute it)
 
 **Option B: Manual startup**
 

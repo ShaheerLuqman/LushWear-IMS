@@ -5848,14 +5848,32 @@ function _collectGridColumnsForExport(gridApi) {
 function _getExportCellValue(gridApi, column, node) {
     if (!node) return '';
     let value = null;
-    if (gridApi?.getValue && column?.col) {
-        value = gridApi.getValue(column.col, node);
-    } else if (column?.field && node.data) {
+    if (column?.field && node.data) {
         value = node.data[column.field];
+    } else if (gridApi?.getValue && column?.col) {
+        value = gridApi.getValue(column.col, node);
     }
     if (value == null) return '';
     if (Array.isArray(value)) return value.join(', ');
     if (typeof value === 'object') return JSON.stringify(value);
+    
+    // Apply valueFormatter if it exists in the column definition
+    if (column?.col?.getColDef) {
+        const colDef = column.col.getColDef();
+        if (colDef?.valueFormatter && typeof colDef.valueFormatter === 'function') {
+            value = colDef.valueFormatter({ value, data: node.data });
+        }
+    }
+    
+    // Force text format in Excel for values containing special characters or parentheses
+    // by prefixing with apostrophe - this ensures Excel treats it as text, not a formula
+    const stringValue = String(value);
+    if (stringValue.includes('(') || stringValue.includes('-') || stringValue.includes('=')) {
+        // Prepend space and apostrophe to force text format in Excel
+        // The apostrophe is invisible in Excel but forces text interpretation
+        return `'${stringValue}`;
+    }
+    
     return value;
 }
 
