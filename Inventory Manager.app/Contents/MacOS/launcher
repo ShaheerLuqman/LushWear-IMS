@@ -125,20 +125,20 @@ cleanup_port
 
 export SHOW_TERMINALS=0
 
-# Resolve the system's native architecture. On Apple Silicon this is arm64
-# even when the current shell is running under Rosetta (which would report x86_64
-# via `uname -m`). `arch` returns the native CPU type. Force everything to native
-# so the venv built by .app and by Terminal stay arch-consistent.
-NATIVE_ARCH="$(/usr/bin/arch 2>/dev/null || uname -m)"
-echo "Native arch: $NATIVE_ARCH (uname -m: $(uname -m))"
+# Native arch of this machine. `uname -m` is the right call here:
+#   - On Intel Macs returns x86_64.
+#   - On Apple Silicon returns arm64 when the shell is native, x86_64 if Rosetta.
+# (`/usr/bin/arch` with no args returns the legacy "i386" sentinel, which is
+# not a real arch and breaks `arch -i386`. Don't use it.)
+NATIVE_ARCH="$(uname -m)"
+echo "Native arch: $NATIVE_ARCH"
+export ARCHFLAGS="-arch $NATIVE_ARCH"
 
-# Sanity-check the venv works under the current env. Three failure modes we handle:
+# Sanity-check the venv works under the current env. Failure modes handled:
 #   1. Interpreter symlink broken (python binary unrunnable).
-#   2. Arch mismatch — pydantic_core or other native wheel was built for a
-#      different arch than the interpreter (the bug that caused this rebuild).
+#   2. Arch mismatch — native wheel (pydantic_core etc.) built for the wrong arch.
 #   3. Missing critical packages — uvicorn/fastapi/pydantic not importable.
-# In any of these we delete the venv so start-app.command recreates it from scratch
-# under the .app's environment (which is the same env that will run uvicorn).
+# Any failure -> delete venv so start-app.command rebuilds it under this env.
 VENV_PYTHON="$REPO_DIR/backend/venv/bin/python"
 if [ -x "$VENV_PYTHON" ]; then
     echo "venv python: $VENV_PYTHON"
@@ -154,18 +154,11 @@ if [ -x "$VENV_PYTHON" ]; then
     fi
 fi
 
-# Force the venv-creation and pip-install steps in start-app.command to run under
-# native arch. The exported _PYTHON_HOST_PLATFORM / ARCHFLAGS hints make pip pick
-# the matching wheels for native arch, even if the running shell is x86_64 under
-# Rosetta. Wrapping start-app.command with `arch -<native>` forces the whole
-# subprocess tree (python, pip, npm, electron, uvicorn) to native.
-export ARCHFLAGS="-arch $NATIVE_ARCH"
-
-echo "Running start-app.command under arch -$NATIVE_ARCH ..."
+echo "Running start-app.command..."
 # Tee Electron's stdout/stderr (which includes piped backend output) to a log file.
 ELECTRON_LOG="$LOG_DIR/electron.log"
 echo "(electron+backend output below also tee'd to $ELECTRON_LOG)"
-/usr/bin/arch -"$NATIVE_ARCH" bash "$REPO_DIR/start-app.command" 2>&1 | tee -a "$ELECTRON_LOG"
+bash "$REPO_DIR/start-app.command" 2>&1 | tee -a "$ELECTRON_LOG"
 EXIT_CODE=${PIPESTATUS[0]}
 echo "start-app.command exited with code $EXIT_CODE"
 
