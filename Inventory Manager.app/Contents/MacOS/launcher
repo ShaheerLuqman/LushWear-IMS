@@ -125,9 +125,25 @@ cleanup_port
 
 export SHOW_TERMINALS=0
 
+# The Python interpreter baked into the venv may not match the one .app sees.
+# If venv exists, sanity-check it works under the current PATH/env; if not, rebuild.
+VENV_PYTHON="$REPO_DIR/backend/venv/bin/python"
+if [ -x "$VENV_PYTHON" ]; then
+    echo "venv python: $VENV_PYTHON"
+    if ! "$VENV_PYTHON" -c "import sys; print('venv ok, version:', sys.version)" 2>&1; then
+        echo "venv python is broken in this environment — removing so start-app.command recreates it"
+        rm -rf "$REPO_DIR/backend/venv"
+    elif ! "$VENV_PYTHON" -c "import uvicorn, fastapi" 2>&1; then
+        echo "venv missing uvicorn/fastapi — letting start-app.command reinstall"
+    fi
+fi
+
 echo "Running start-app.command..."
-bash "$REPO_DIR/start-app.command"
-EXIT_CODE=$?
+# Tee Electron's stdout/stderr (which includes piped backend output) to a log file.
+ELECTRON_LOG="$LOG_DIR/electron.log"
+echo "(electron+backend output below also tee'd from start-app.command)"
+bash "$REPO_DIR/start-app.command" 2>&1 | tee -a "$ELECTRON_LOG"
+EXIT_CODE=${PIPESTATUS[0]}
 echo "start-app.command exited with code $EXIT_CODE"
 
 if [ $EXIT_CODE -ne 0 ]; then
