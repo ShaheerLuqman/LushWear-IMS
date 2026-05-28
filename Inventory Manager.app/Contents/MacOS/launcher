@@ -3,10 +3,6 @@
 # Invoked by LaunchServices when the user double-clicks the .app; no Terminal window is opened.
 # stdout/stderr go to a log file so failures are diagnosable.
 
-set -u
-
-BUNDLE_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
-REPO_DIR="$(cd "$BUNDLE_DIR/.." && pwd)"
 LOG_DIR="$HOME/Library/Logs/InventoryManager"
 mkdir -p "$LOG_DIR"
 LOG_FILE="$LOG_DIR/launcher.log"
@@ -14,9 +10,79 @@ LOG_FILE="$LOG_DIR/launcher.log"
 exec >>"$LOG_FILE" 2>&1
 echo
 echo "===== $(date) ====="
+
+# Show an alert and exit. Always reachable from anywhere in the script.
+fail() {
+    local msg="$1"
+    echo "FAIL: $msg"
+    /usr/bin/osascript -e "display alert \"Inventory Manager\" message \"$msg\n\nSee log: $LOG_FILE\" as critical" >/dev/null 2>&1 || true
+    exit 1
+}
+
+# Find the .app bundle location.
+BUNDLE_DIR="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd)" || fail "Cannot resolve bundle directory."
+echo "Bundle: $BUNDLE_DIR"
+
+# Locate the inventory-system repo. Try, in order:
+#   1) Sibling to the .app (the usual case: .app sits inside the repo).
+#   2) ~/inventory-system, ~/Amad/inventory-system, ~/Documents/inventory-system, ~/Developer/inventory-system.
+#   3) An override path stored in ~/.config/inventory-manager/repo-path.
+find_repo() {
+    local candidate
+    # 1) Parent of the .app
+    candidate="$(cd "$BUNDLE_DIR/.." 2>/dev/null && pwd)" || true
+    if [ -n "$candidate" ] && [ -f "$candidate/start-app.command" ] && [ -d "$candidate/frontend" ]; then
+        echo "$candidate"
+        return 0
+    fi
+    # 2) Common locations
+    for p in \
+        "$HOME/inventory-system" \
+        "$HOME/Amad/inventory-system" \
+        "$HOME/Documents/inventory-system" \
+        "$HOME/Developer/inventory-system" \
+        "$HOME/Projects/inventory-system" \
+        "$HOME/Desktop/inventory-system"
+    do
+        if [ -f "$p/start-app.command" ] && [ -d "$p/frontend" ]; then
+            echo "$p"
+            return 0
+        fi
+    done
+    # 3) Override
+    if [ -f "$HOME/.config/inventory-manager/repo-path" ]; then
+        candidate="$(cat "$HOME/.config/inventory-manager/repo-path")"
+        if [ -f "$candidate/start-app.command" ] && [ -d "$candidate/frontend" ]; then
+            echo "$candidate"
+            return 0
+        fi
+    fi
+    return 1
+}
+
+REPO_DIR="$(find_repo)" || REPO_DIR=""
+if [ -z "$REPO_DIR" ]; then
+    fail "Cannot find the inventory-system repo. Searched next to the .app and in common locations under \$HOME. To fix, create the file ~/.config/inventory-manager/repo-path containing the full path to your inventory-system folder."
+fi
 echo "Repo: $REPO_DIR"
 
-cd "$REPO_DIR" || { osascript -e "display alert \"Inventory Manager\" message \"Repo not found at $REPO_DIR\"" ; exit 1; }
+cd "$REPO_DIR" || fail "Failed to cd into $REPO_DIR"
+
+# Sanity checks for required tools.
+command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || \
+    fail "Python is not installed. Install Python 3 from python.org or via Homebrew (brew install python)."
+command -v npm >/dev/null 2>&1 || \
+    fail "Node.js/npm is not installed. Install from nodejs.org or via Homebrew (brew install node)."
+
+# Make sure start-app.command is executable. Git stores +x, but a zip download won't.
+if [ ! -x "$REPO_DIR/start-app.command" ]; then
+    echo "start-app.command is not executable, chmod +x"
+    chmod +x "$REPO_DIR/start-app.command" 2>/dev/null || true
+fi
+
+# Strip quarantine on the .app and the start script if Gatekeeper added it.
+/usr/bin/xattr -dr com.apple.quarantine "$BUNDLE_DIR" 2>/dev/null || true
+/usr/bin/xattr -d com.apple.quarantine "$REPO_DIR/start-app.command" 2>/dev/null || true
 
 # Kill anything still bound to the backend port from a prior crashed run.
 cleanup_port() {
@@ -28,16 +94,21 @@ cleanup_port() {
     fi
 }
 
-trap 'echo "Launcher exiting, cleaning up..."; cleanup_port' EXIT INT TERM
+# Only clean up on EXIT, not on INT/TERM — Electron handles its own shutdown.
+trap 'echo "Launcher exit trap, cleaning up port 8000..."; cleanup_port' EXIT
 
 cleanup_port
 
 export SHOW_TERMINALS=0
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
-# Run the existing setup + start script. It already activates the venv,
-# installs deps, and runs `npm start` which blocks until Electron quits.
+echo "Running start-app.command..."
 bash "$REPO_DIR/start-app.command"
 EXIT_CODE=$?
-
 echo "start-app.command exited with code $EXIT_CODE"
-exit $EXIT_CODE
+
+if [ $EXIT_CODE -ne 0 ]; then
+    fail "Startup failed with code $EXIT_CODE. Open Terminal and run \\\"bash '$REPO_DIR/start-app.command'\\\" to see what went wrong."
+fi
+
+exit 0
