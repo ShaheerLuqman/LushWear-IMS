@@ -68,11 +68,35 @@ echo "Repo: $REPO_DIR"
 
 cd "$REPO_DIR" || fail "Failed to cd into $REPO_DIR"
 
-# Sanity checks for required tools.
+# GUI-launched .app bundles get a minimal PATH from LaunchServices — typically just
+# /usr/bin:/bin:/usr/sbin:/sbin — so node, npm, brew, nvm, etc. are invisible even
+# though they work fine in Terminal. Fix PATH BEFORE running any tool checks.
+#
+# Strategy: start with the common static locations, then ask the user's interactive
+# login shell (zsh on macOS 10.15+) for its real PATH and merge it in. That captures
+# nvm, Volta, asdf, Homebrew on Apple Silicon, and custom rc-file PATH additions.
+export PATH="/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+
+# Pull PATH from the user's login shell. -l -i sources login + interactive rc files
+# (.zprofile, .zshrc, .bash_profile, .bashrc). Suppress stderr so rc-file noise
+# (e.g., welcome banners) doesn't pollute the log.
+LOGIN_SHELL="${SHELL:-/bin/zsh}"
+SHELL_PATH="$("$LOGIN_SHELL" -l -i -c 'printf %s "$PATH"' 2>/dev/null || true)"
+if [ -n "$SHELL_PATH" ]; then
+    export PATH="$SHELL_PATH:$PATH"
+    echo "Merged login-shell PATH"
+fi
+echo "PATH=$PATH"
+
+# Sanity checks for required tools (now that PATH is correct).
 command -v python3 >/dev/null 2>&1 || command -v python >/dev/null 2>&1 || \
-    fail "Python is not installed. Install Python 3 from python.org or via Homebrew (brew install python)."
+    fail "Python is not installed, or not on the login-shell PATH. Install Python 3 from python.org. Resolved PATH:\n$PATH"
 command -v npm >/dev/null 2>&1 || \
-    fail "Node.js/npm is not installed. Install from nodejs.org or via Homebrew (brew install node)."
+    fail "Node.js/npm is not installed, or not on the login-shell PATH. \`which npm\` in Terminal: $(/usr/bin/which npm 2>/dev/null || echo not-found). Resolved PATH:\n$PATH"
+
+echo "node: $(command -v node) ($(node --version 2>/dev/null || echo unknown))"
+echo "npm: $(command -v npm) ($(npm --version 2>/dev/null || echo unknown))"
+echo "python: $(command -v python3 || command -v python)"
 
 # Make sure start-app.command is executable. Git stores +x, but a zip download won't.
 if [ ! -x "$REPO_DIR/start-app.command" ]; then
@@ -100,7 +124,6 @@ trap 'echo "Launcher exit trap, cleaning up port 8000..."; cleanup_port' EXIT
 cleanup_port
 
 export SHOW_TERMINALS=0
-export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 echo "Running start-app.command..."
 bash "$REPO_DIR/start-app.command"
