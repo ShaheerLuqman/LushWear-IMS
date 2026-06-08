@@ -1268,6 +1268,25 @@ body:has(#ledgersView.active) .content-area {
     color: var(--text-secondary);
 }
 
+.cashbook-entry-skip-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.cashbook-entry-skip-toggle input {
+    cursor: pointer;
+}
+
+.cashbook-entry-side-skipped .form-group {
+    opacity: 0.5;
+}
+
 .upload-postex-file-row {
     display: flex;
     align-items: center;

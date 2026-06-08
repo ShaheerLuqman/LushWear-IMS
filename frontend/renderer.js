@@ -3712,6 +3712,26 @@ function refreshCashbookEntryParticularPlaceholders() {
     if (outPart) outPart.placeholder = cashbookEntryParticularPlaceholder('outflow', outLedger ? outLedger.value : '');
 }
 
+// Enables/disables one side of the entry modal. A disabled (skipped) side will not
+// create an entry; its `required` attributes are removed so the form can still submit.
+function setCashbookEntrySideSkipped(side, skipped) {
+    const prefix = side === 'inflow' ? 'cashbookEntryIn' : 'cashbookEntryOut';
+    const ledger = document.getElementById(prefix + 'Ledger');
+    const amount = document.getElementById(prefix + 'Amount');
+    const part = document.getElementById(prefix + 'Particular');
+    [ledger, amount, part].forEach((el) => {
+        if (!el) return;
+        el.disabled = skipped;
+        // required only applies to ledger + amount; particulars is optional anyway.
+        if (el === ledger || el === amount) {
+            if (skipped) el.removeAttribute('required');
+            else el.setAttribute('required', '');
+        }
+    });
+    const fieldset = ledger ? ledger.closest('.cashbook-entry-side') : null;
+    if (fieldset) fieldset.classList.toggle('cashbook-entry-side-skipped', skipped);
+}
+
 function populateCashbookEntryLedgerSelect(select) {
     if (!select) return;
     const current = select.value;
@@ -3743,6 +3763,13 @@ function openCashbookEntryModal() {
     if (inPart) inPart.value = '';
     if (outPart) outPart.value = '';
 
+    const inSkip = document.getElementById('cashbookEntryInSkip');
+    const outSkip = document.getElementById('cashbookEntryOutSkip');
+    if (inSkip) inSkip.checked = false;
+    if (outSkip) outSkip.checked = false;
+    setCashbookEntrySideSkipped('inflow', false);
+    setCashbookEntrySideSkipped('outflow', false);
+
     if (ledgers.length === 0) {
         showToast('No ledgers available. Create a ledger first.', 'error');
     }
@@ -3761,6 +3788,14 @@ async function submitCashbookEntryModal() {
         showToast('Editing is locked', 'error');
         return;
     }
+    const skipIn = document.getElementById('cashbookEntryInSkip').checked;
+    const skipOut = document.getElementById('cashbookEntryOutSkip').checked;
+
+    if (skipIn && skipOut) {
+        showToast('At least one side must be entered', 'error');
+        return;
+    }
+
     const inLedger = document.getElementById('cashbookEntryInLedger').value;
     const outLedger = document.getElementById('cashbookEntryOutLedger').value;
     const inAmount = parseFloat(document.getElementById('cashbookEntryInAmount').value);
@@ -3768,22 +3803,30 @@ async function submitCashbookEntryModal() {
     const inPartEl = document.getElementById('cashbookEntryInParticular');
     const outPartEl = document.getElementById('cashbookEntryOutParticular');
 
-    if (!inLedger) { showToast('Select an incoming ledger', 'error'); return; }
-    if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid incoming amount', 'error'); return; }
-    if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
-    if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
-
-    // If the particulars field is left empty, fall back to the default placeholder text.
-    const inDescription = (inPartEl.value.trim()) || cashbookEntryParticularPlaceholder('inflow', inLedger);
-    const outDescription = (outPartEl.value.trim()) || cashbookEntryParticularPlaceholder('outflow', outLedger);
+    if (!skipIn) {
+        if (!inLedger) { showToast('Select an incoming ledger', 'error'); return; }
+        if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid incoming amount', 'error'); return; }
+    }
+    if (!skipOut) {
+        if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
+        if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+    }
 
     const entryDate = cashbookSelectedDate || getTodayDateString();
+    const requests = [];
+
+    if (!skipIn) {
+        // If the particulars field is left empty, fall back to the default placeholder text.
+        const inDescription = (inPartEl.value.trim()) || cashbookEntryParticularPlaceholder('inflow', inLedger);
+        requests.push(createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger }));
+    }
+    if (!skipOut) {
+        const outDescription = (outPartEl.value.trim()) || cashbookEntryParticularPlaceholder('outflow', outLedger);
+        requests.push(createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger }));
+    }
 
     closeCashbookEntryModal();
-    await Promise.all([
-        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger }),
-        createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger })
-    ]);
+    await Promise.all(requests);
 }
 
 async function createCashbookEntry(payload) {
@@ -5222,6 +5265,22 @@ function initForms() {
     // Update particulars placeholders dynamically as ledgers are chosen.
     document.getElementById('cashbookEntryInLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
     document.getElementById('cashbookEntryOutLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
+    // Single-sided entry toggles: skip a side's entry and disable its fields.
+    // Only one may be ticked at a time.
+    document.getElementById('cashbookEntryInSkip')?.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            const other = document.getElementById('cashbookEntryOutSkip');
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('outflow', false); }
+        }
+        setCashbookEntrySideSkipped('inflow', e.target.checked);
+    });
+    document.getElementById('cashbookEntryOutSkip')?.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            const other = document.getElementById('cashbookEntryInSkip');
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('inflow', false); }
+        }
+        setCashbookEntrySideSkipped('outflow', e.target.checked);
+    });
     // Back to Month Summary button
     const backToMonthSummaryBtn = document.getElementById('backToMonthSummaryBtn');
     if (backToMonthSummaryBtn) {

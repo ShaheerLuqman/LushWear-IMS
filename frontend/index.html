@@ -332,6 +332,10 @@
                                 <div class="cashbook-entry-split">
                                     <fieldset class="cashbook-entry-side">
                                         <legend>Incoming</legend>
+                                        <label class="cashbook-entry-skip-toggle">
+                                            <input type="checkbox" id="cashbookEntryOutSkip">
+                                            <span>Received as Cash</span>
+                                        </label>
                                         <div class="form-group">
                                             <label for="cashbookEntryInLedger">Ledger *</label>
                                             <select id="cashbookEntryInLedger" class="form-input" required>
@@ -349,6 +353,10 @@
                                     </fieldset>
                                     <fieldset class="cashbook-entry-side">
                                         <legend>Outgoing</legend>
+                                        <label class="cashbook-entry-skip-toggle">
+                                            <input type="checkbox" id="cashbookEntryInSkip">
+                                            <span>Paid with Cash</span>
+                                        </label>
                                         <div class="form-group">
                                             <label for="cashbookEntryOutLedger">Ledger *</label>
                                             <select id="cashbookEntryOutLedger" class="form-input" required>
