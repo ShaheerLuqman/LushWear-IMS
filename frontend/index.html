@@ -211,6 +211,7 @@
                         <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
                         <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
+                        <button id="cashbookCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new cashbook entry">Create Entry</button>
                     </div>
                 </div>
             </header>
@@ -312,6 +313,60 @@
                                 </div>
                                 <div class="modal-actions form-actions">
                                     <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
+                                    <button type="submit" class="btn btn-primary">Create</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Create Cashbook Entry Modal -->
+                <div id="cashbookEntryModal" class="modal">
+                    <div class="modal-content cashbook-entry-modal-content">
+                        <div class="modal-header">
+                            <h2>Create Cashbook Entry</h2>
+                            <button type="button" class="modal-close" id="closeCashbookEntryModal" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="cashbookEntryForm" class="ledger-form">
+                                <div class="cashbook-entry-split">
+                                    <fieldset class="cashbook-entry-side">
+                                        <legend>Incoming</legend>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryInLedger">Ledger *</label>
+                                            <select id="cashbookEntryInLedger" class="form-input" required>
+                                                <option value="">Select ledger...</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryInAmount">Amount *</label>
+                                            <input type="number" id="cashbookEntryInAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryInParticular">Particulars</label>
+                                            <input type="text" id="cashbookEntryInParticular" class="form-input" autocomplete="off">
+                                        </div>
+                                    </fieldset>
+                                    <fieldset class="cashbook-entry-side">
+                                        <legend>Outgoing</legend>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryOutLedger">Ledger *</label>
+                                            <select id="cashbookEntryOutLedger" class="form-input" required>
+                                                <option value="">Select ledger...</option>
+                                            </select>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryOutAmount">Amount *</label>
+                                            <input type="number" id="cashbookEntryOutAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
+                                        </div>
+                                        <div class="form-group">
+                                            <label for="cashbookEntryOutParticular">Particulars</label>
+                                            <input type="text" id="cashbookEntryOutParticular" class="form-input" autocomplete="off">
+                                        </div>
+                                    </fieldset>
+                                </div>
+                                <div class="modal-actions form-actions">
+                                    <button type="button" id="cashbookEntryCancelBtn" class="btn btn-secondary">Cancel</button>
                                     <button type="submit" class="btn btn-primary">Create</button>
                                 </div>
                             </form>

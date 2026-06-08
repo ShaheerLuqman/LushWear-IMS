@@ -3686,6 +3686,106 @@ async function addCashbookEntry() {
     if (descInput) descInput.value = '';
 }
 
+// --- Create Cashbook Entry modal ---------------------------------------------
+
+// Tracks whether the user has manually edited the outgoing amount. Until they do,
+// the outgoing amount mirrors whatever is typed in the incoming amount.
+let cashbookEntryOutAmountTouched = false;
+
+function cashbookEntryLedgerName(ledgerId) {
+    const ledger = ledgers.find(l => l.id === ledgerId);
+    return ledger ? ledger.name : '';
+}
+
+function cashbookEntryParticularPlaceholder(side, ledgerId) {
+    const name = cashbookEntryLedgerName(ledgerId);
+    if (!name) return side === 'inflow' ? 'Amount received from...' : 'Amount transferred to...';
+    return side === 'inflow' ? `Amount received from ${name}` : `Amount transferred to ${name}`;
+}
+
+function refreshCashbookEntryParticularPlaceholders() {
+    const inLedger = document.getElementById('cashbookEntryInLedger');
+    const outLedger = document.getElementById('cashbookEntryOutLedger');
+    const inPart = document.getElementById('cashbookEntryInParticular');
+    const outPart = document.getElementById('cashbookEntryOutParticular');
+    if (inPart) inPart.placeholder = cashbookEntryParticularPlaceholder('inflow', inLedger ? inLedger.value : '');
+    if (outPart) outPart.placeholder = cashbookEntryParticularPlaceholder('outflow', outLedger ? outLedger.value : '');
+}
+
+function populateCashbookEntryLedgerSelect(select) {
+    if (!select) return;
+    const current = select.value;
+    const options = ['<option value="">Select ledger...</option>']
+        .concat(ledgers.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`));
+    select.innerHTML = options.join('');
+    if (current && ledgers.some(l => l.id === current)) select.value = current;
+}
+
+function openCashbookEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    cashbookEntryOutAmountTouched = false;
+    const inLedger = document.getElementById('cashbookEntryInLedger');
+    const outLedger = document.getElementById('cashbookEntryOutLedger');
+    const inAmount = document.getElementById('cashbookEntryInAmount');
+    const outAmount = document.getElementById('cashbookEntryOutAmount');
+    const inPart = document.getElementById('cashbookEntryInParticular');
+    const outPart = document.getElementById('cashbookEntryOutParticular');
+
+    populateCashbookEntryLedgerSelect(inLedger);
+    populateCashbookEntryLedgerSelect(outLedger);
+    if (inLedger) inLedger.value = '';
+    if (outLedger) outLedger.value = '';
+    if (inAmount) inAmount.value = '';
+    if (outAmount) outAmount.value = '';
+    if (inPart) inPart.value = '';
+    if (outPart) outPart.value = '';
+
+    if (ledgers.length === 0) {
+        showToast('No ledgers available. Create a ledger first.', 'error');
+    }
+
+    refreshCashbookEntryParticularPlaceholders();
+    document.getElementById('cashbookEntryModal').classList.add('active');
+    if (inLedger) inLedger.focus();
+}
+
+function closeCashbookEntryModal() {
+    document.getElementById('cashbookEntryModal').classList.remove('active');
+}
+
+async function submitCashbookEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const inLedger = document.getElementById('cashbookEntryInLedger').value;
+    const outLedger = document.getElementById('cashbookEntryOutLedger').value;
+    const inAmount = parseFloat(document.getElementById('cashbookEntryInAmount').value);
+    const outAmount = parseFloat(document.getElementById('cashbookEntryOutAmount').value);
+    const inPartEl = document.getElementById('cashbookEntryInParticular');
+    const outPartEl = document.getElementById('cashbookEntryOutParticular');
+
+    if (!inLedger) { showToast('Select an incoming ledger', 'error'); return; }
+    if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid incoming amount', 'error'); return; }
+    if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
+    if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+
+    // If the particulars field is left empty, fall back to the default placeholder text.
+    const inDescription = (inPartEl.value.trim()) || cashbookEntryParticularPlaceholder('inflow', inLedger);
+    const outDescription = (outPartEl.value.trim()) || cashbookEntryParticularPlaceholder('outflow', outLedger);
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+
+    closeCashbookEntryModal();
+    await Promise.all([
+        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger }),
+        createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger })
+    ]);
+}
+
 async function createCashbookEntry(payload) {
     // Optimistic update: add entry to local array immediately
     const tempId = '__temp_' + Date.now();
@@ -5087,6 +5187,41 @@ function initForms() {
     if (createLedgerBtn) {
         createLedgerBtn.addEventListener('click', openCreateLedgerModal);
     }
+
+    // Cashbook: create entry button opens modal
+    document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
+    document.getElementById('closeCashbookEntryModal')?.addEventListener('click', closeCashbookEntryModal);
+    document.getElementById('cashbookEntryCancelBtn')?.addEventListener('click', closeCashbookEntryModal);
+    document.getElementById('cashbookEntryModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'cashbookEntryModal') closeCashbookEntryModal();
+    });
+    document.getElementById('cashbookEntryForm')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitCashbookEntryModal();
+    });
+    // Mirror incoming amount into outgoing until the user edits the outgoing amount.
+    document.getElementById('cashbookEntryInAmount')?.addEventListener('input', (e) => {
+        const outAmount = document.getElementById('cashbookEntryOutAmount');
+        // If both fields are now empty, re-arm mirroring (back to default mode).
+        if (e.target.value === '' && outAmount && outAmount.value === '') {
+            cashbookEntryOutAmountTouched = false;
+        }
+        if (!cashbookEntryOutAmountTouched && outAmount) {
+            outAmount.value = e.target.value;
+        }
+    });
+    document.getElementById('cashbookEntryOutAmount')?.addEventListener('input', (e) => {
+        const inAmount = document.getElementById('cashbookEntryInAmount');
+        // If both fields are now empty, re-arm mirroring (back to default mode).
+        if (e.target.value === '' && inAmount && inAmount.value === '') {
+            cashbookEntryOutAmountTouched = false;
+        } else {
+            cashbookEntryOutAmountTouched = true;
+        }
+    });
+    // Update particulars placeholders dynamically as ledgers are chosen.
+    document.getElementById('cashbookEntryInLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
+    document.getElementById('cashbookEntryOutLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
     // Back to Month Summary button
     const backToMonthSummaryBtn = document.getElementById('backToMonthSummaryBtn');
     if (backToMonthSummaryBtn) {
