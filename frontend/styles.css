@@ -1242,8 +1242,8 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Create Cashbook Entry modal */
-.cashbook-entry-modal-content {
-    max-width: 720px;
+.modal-content.cashbook-entry-modal-content {
+    max-width: 900px;
 }
 
 .cashbook-entry-split {

@@ -3829,6 +3829,92 @@ async function submitCashbookEntryModal() {
     await Promise.all(requests);
 }
 
+// --- Order Advance Amount modal ----------------------------------------------
+
+// The "Orders" ledger that order advances are always posted to (hardcoded).
+const ORDERS_LEDGER_ID = '020dbc00-d5da-4110-89e9-fa22edf002f6';
+
+// Tracks whether the user has manually edited the outgoing amount in the order
+// advance modal. Until they do, it mirrors the advance (incoming) amount.
+let orderAdvanceOutAmountTouched = false;
+
+// Default incoming particulars text for an order advance.
+function orderAdvanceParticularPlaceholder(orderNumber) {
+    const num = String(orderNumber || '').trim().replace(/^#/, '');
+    return num ? `Amount received for Order #${num}` : 'Amount received for Order #...';
+}
+
+function refreshOrderAdvanceParticularPlaceholder() {
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const inPart = document.getElementById('orderAdvanceInParticular');
+    if (inPart) inPart.placeholder = orderAdvanceParticularPlaceholder(orderNumber ? orderNumber.value : '');
+}
+
+function refreshOrderAdvanceOutParticularPlaceholder() {
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const outPart = document.getElementById('orderAdvanceOutParticular');
+    if (outPart) outPart.placeholder = orderAdvanceParticularPlaceholder(orderNumber ? orderNumber.value : '');
+}
+
+function openOrderAdvanceModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const amount = document.getElementById('orderAdvanceAmount');
+    const inPart = document.getElementById('orderAdvanceInParticular');
+    const outLedger = document.getElementById('orderAdvanceOutLedger');
+    const outAmount = document.getElementById('orderAdvanceOutAmount');
+    const outPart = document.getElementById('orderAdvanceOutParticular');
+
+    populateCashbookEntryLedgerSelect(outLedger);
+    if (orderNumber) orderNumber.value = '';
+    if (amount) amount.value = '';
+    if (inPart) inPart.value = '';
+    if (outLedger) outLedger.value = '';
+    if (outAmount) outAmount.value = '';
+    if (outPart) outPart.value = '';
+
+    orderAdvanceOutAmountTouched = false;
+    refreshOrderAdvanceParticularPlaceholder();
+    refreshOrderAdvanceOutParticularPlaceholder();
+    document.getElementById('orderAdvanceModal').classList.add('active');
+    if (orderNumber) orderNumber.focus();
+}
+
+function closeOrderAdvanceModal() {
+    document.getElementById('orderAdvanceModal').classList.remove('active');
+}
+
+async function submitOrderAdvanceModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber').value.trim();
+    const inAmount = parseFloat(document.getElementById('orderAdvanceAmount').value);
+    const inPartEl = document.getElementById('orderAdvanceInParticular');
+    const outLedger = document.getElementById('orderAdvanceOutLedger').value;
+    const outAmount = parseFloat(document.getElementById('orderAdvanceOutAmount').value);
+    const outPartEl = document.getElementById('orderAdvanceOutParticular');
+
+    if (!orderNumber) { showToast('Enter an order number', 'error'); return; }
+    if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid advance amount', 'error'); return; }
+    if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
+    if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const inDescription = (inPartEl.value.trim()) || orderAdvanceParticularPlaceholder(orderNumber);
+    const outDescription = (outPartEl.value.trim()) || orderAdvanceParticularPlaceholder(orderNumber);
+
+    closeOrderAdvanceModal();
+    await Promise.all([
+        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID }),
+        createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger })
+    ]);
+}
+
 async function createCashbookEntry(payload) {
     // Optimistic update: add entry to local array immediately
     const tempId = '__temp_' + Date.now();
@@ -5233,6 +5319,39 @@ function initForms() {
 
     // Cashbook: create entry button opens modal
     document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
+    // Cashbook: order advance amount button opens its modal
+    document.getElementById('cashbookOrderAdvanceBtn')?.addEventListener('click', openOrderAdvanceModal);
+    document.getElementById('closeOrderAdvanceModal')?.addEventListener('click', closeOrderAdvanceModal);
+    document.getElementById('orderAdvanceCancelBtn')?.addEventListener('click', closeOrderAdvanceModal);
+    document.getElementById('orderAdvanceModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'orderAdvanceModal') closeOrderAdvanceModal();
+    });
+    document.getElementById('orderAdvanceForm')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitOrderAdvanceModal();
+    });
+    document.getElementById('orderAdvanceOrderNumber')?.addEventListener('input', () => {
+        refreshOrderAdvanceParticularPlaceholder();
+        refreshOrderAdvanceOutParticularPlaceholder();
+    });
+    // Mirror the advance amount into the outgoing amount until the user edits it.
+    document.getElementById('orderAdvanceAmount')?.addEventListener('input', (e) => {
+        const outAmount = document.getElementById('orderAdvanceOutAmount');
+        if (e.target.value === '' && outAmount && outAmount.value === '') {
+            orderAdvanceOutAmountTouched = false;
+        }
+        if (!orderAdvanceOutAmountTouched && outAmount) {
+            outAmount.value = e.target.value;
+        }
+    });
+    document.getElementById('orderAdvanceOutAmount')?.addEventListener('input', (e) => {
+        const inAmount = document.getElementById('orderAdvanceAmount');
+        if (e.target.value === '' && inAmount && inAmount.value === '') {
+            orderAdvanceOutAmountTouched = false;
+        } else {
+            orderAdvanceOutAmountTouched = true;
+        }
+    });
     document.getElementById('closeCashbookEntryModal')?.addEventListener('click', closeCashbookEntryModal);
     document.getElementById('cashbookEntryCancelBtn')?.addEventListener('click', closeCashbookEntryModal);
     document.getElementById('cashbookEntryModal')?.addEventListener('click', (e) => {
