@@ -5,6 +5,7 @@ from pydantic import BaseModel
 from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
+from app.advance_status import recompute_advance_statuses
 from datetime import datetime, timedelta, timezone
 import asyncio
 import httpx
@@ -951,6 +952,12 @@ async def sync_shopify_orders():
         
         synced_count = created_count + updated_count
         skipped_count = len(orders_to_skip)
+
+        # Shopify advance amounts may have changed; recompute advance statuses for all orders.
+        try:
+            recompute_advance_statuses(supabase)
+        except Exception as e:
+            print(f"[sync-shopify] advance status recompute failed: {e}")
 
         return {
             "message": "Orders synced successfully",
@@ -2575,7 +2582,24 @@ async def update_order(order_id: str, order: OrderUpdate):
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
-        return response.data[0]
+        updated = response.data[0]
+        # If the advance amount changed, recompute this order's advance status.
+        if "advance_amount" in update_data and updated.get("order_number"):
+            try:
+                new_status = recompute_advance_statuses(supabase, [updated["order_number"]])  # noqa: F841
+                # Reflect the recomputed status in the response without a refetch
+                refreshed = (
+                    supabase.table("orders")
+                    .select("advance_status")
+                    .eq("id", order_id)
+                    .limit(1)
+                    .execute()
+                )
+                if refreshed.data:
+                    updated["advance_status"] = refreshed.data[0].get("advance_status")
+            except Exception:
+                pass
+        return updated
     except HTTPException:
         raise
     except Exception as e:

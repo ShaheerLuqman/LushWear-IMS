@@ -87,6 +87,9 @@ class OrderBase(BaseModel):
     cost_price: float = 0.0
     order_receiving_date: Optional[datetime] = None
     items: Optional[List[str]] = None
+    # Advance reconciliation status (computed): 1=no advance, 2=shopify only,
+    # 3=cashbook only, 4=both match, 5=both mismatch
+    advance_status: int = 1
 
 class OrderCreate(OrderBase):
     pass
@@ -124,6 +127,7 @@ class CashbookEntryBase(BaseModel):
     amount: float
     description: Optional[str] = None
     folio: str  # UUID of linked ledger - REQUIRED
+    order_number: Optional[str] = None  # Set only for order-advance entries
 
 class CashbookEntryCreate(CashbookEntryBase):
     pass
@@ -134,6 +138,7 @@ class CashbookEntryUpdate(BaseModel):
     amount: Optional[float] = None
     description: Optional[str] = None
     folio: Optional[str] = None  # Can update folio, but not set to null
+    order_number: Optional[str] = None
 
 class CashbookEntry(CashbookEntryBase):
     id: str

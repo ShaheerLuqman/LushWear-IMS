@@ -21,6 +21,9 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
     amount DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     description TEXT,
     folio UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    -- Set only for order-advance entries (created via the order advance modal).
+    -- Links the entry to an order so advance amounts can be reconciled.
+    order_number VARCHAR(20),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
@@ -28,6 +31,7 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date ON cashbook_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_type ON cashbook_entries(entry_type);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio ON cashbook_entries(folio);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries(order_number);
 
 -- Daily balances: stores opening/closing balance for each day (auto-maintained)
 CREATE TABLE IF NOT EXISTS cashbook_daily_balances (

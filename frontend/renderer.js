@@ -1067,6 +1067,20 @@ PieceReceivedFloatingFilter.prototype.onParentModelChanged = function (parentMod
     }
 };
 
+// Maps an order's advance_status code to a colored indicator + tooltip.
+// Codes (kept in sync with backend app/advance_status.py):
+//   1 = no advance, 2 = Shopify only, 3 = cashbook only, 4 = match, 5 = mismatch
+function advanceStatusMeta(status) {
+    switch (Number(status)) {
+        case 2: return { color: '#f59e0b', title: 'Shopify advance, no cashbook entry' };      // amber
+        case 3: return { color: '#3b82f6', title: 'Cashbook entry, no Shopify advance' };        // blue
+        case 4: return { color: '#22c55e', title: 'Advance matches (Shopify & cashbook)' };      // green
+        case 5: return { color: '#ef4444', title: 'Advance mismatch (Shopify ≠ cashbook)' };     // red
+        case 1:
+        default: return { color: '#d1d5db', title: 'No advance amount' };                        // grey
+    }
+}
+
 function initOrdersGrid() {
     const gridDiv = document.getElementById('ordersGrid');
     if (!gridDiv) return;
@@ -1273,6 +1287,17 @@ function initOrdersGrid() {
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
                 return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            },
+            cellRenderer: (params) => {
+                const val = parseFloat(params.value) || 0;
+                const formatted = val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                // Footer row: no indicator
+                if (params.data && params.data.id === '__footer__') return formatted;
+                const meta = advanceStatusMeta(params.data ? params.data.advance_status : 1);
+                return `<span class="advance-cell">`
+                    + `<span class="advance-dot" style="background:${meta.color}" title="${meta.title}"></span>`
+                    + `<span>${formatted}</span>`
+                    + `</span>`;
             },
             valueSetter: (params) => {
                 if (params.data?.id === '__footer__') return false;
@@ -2483,6 +2508,23 @@ async function saveOrderField(orderId, field, value) {
             throw new Error(`Failed to update ${field}`);
         }
 
+        // When the advance amount changes, the backend recomputes advance_status.
+        // Reflect the recomputed status on the grid row so the indicator updates.
+        if (field === 'advance_amount') {
+            try {
+                const updated = await response.json();
+                if (updated && ordersGridApi) {
+                    const rowNode = ordersGridApi.getRowNode(orderId);
+                    if (rowNode && updated.advance_status !== undefined) {
+                        // advance_status isn't its own column, so set it on row data directly
+                        // and force a re-render of the Advance cell (which draws the indicator).
+                        rowNode.data.advance_status = updated.advance_status;
+                        ordersGridApi.refreshCells({ rowNodes: [rowNode], columns: ['advance_amount'], force: true });
+                    }
+                }
+            } catch (e) { /* non-fatal */ }
+        }
+
         showToast(`Order ${field.replace('_', ' ')} updated`, 'success');
     } catch (error) {
         console.error(`Error saving ${field}:`, error);
@@ -3355,6 +3397,9 @@ async function loadOrders() {
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
+            // advance_status isn't a column field, so a delta rowData update won't
+            // re-render the Advance cell when only the status changed. Force it.
+            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
             setTimeout(() => updateFooterRow(), 0);
         }
     } catch (error) {
@@ -3387,6 +3432,7 @@ async function loadOrdersForPeriod(month, year) {
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
+            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
             setTimeout(() => updateFooterRow(), 0);
         }
     } catch (error) {
@@ -3909,10 +3955,15 @@ async function submitOrderAdvanceModal() {
     const outDescription = (outPartEl.value.trim()) || orderAdvanceParticularPlaceholder(orderNumber);
 
     closeOrderAdvanceModal();
+    // Tag the incoming (advance) entry with the order number so it can be reconciled
+    // against the order's Shopify advance amount.
+    const normalizedOrderNumber = orderNumber.replace(/^#/, '').trim();
     await Promise.all([
-        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID }),
+        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID, order_number: normalizedOrderNumber }),
         createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger })
     ]);
+    // Refresh orders so the advance status indicator updates for this order.
+    if (typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
 }
 
 async function createCashbookEntry(payload) {

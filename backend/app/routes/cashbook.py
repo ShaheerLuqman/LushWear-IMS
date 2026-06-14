@@ -6,6 +6,7 @@ from app.models import (
     CashbookEntryCreate,
     CashbookEntryUpdate,
 )
+from app.advance_status import recompute_advance_statuses
 
 router = APIRouter(prefix="/cashbook", tags=["cashbook"])
 
@@ -25,6 +26,10 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
         # On create, folio cannot be null/empty
         if is_create and not payload.get("folio"):
             raise ValueError("folio is required")
+    # order_number: only set for order-advance entries; normalize empty to null
+    if "order_number" in payload:
+        if payload["order_number"] is not None:
+            payload["order_number"] = str(payload["order_number"]).strip().lstrip("#") or None
     return payload
 
 
@@ -144,7 +149,14 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
         entry_date = payload.get("entry_date")
         if entry_date:
             await _recalculate_balances_from_date(supabase, entry_date)
-        
+
+        # If this is an order-advance entry, recompute that order's advance status
+        if payload.get("order_number"):
+            try:
+                recompute_advance_statuses(supabase, [payload["order_number"]])
+            except Exception:
+                pass
+
         return response.data[0]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -159,11 +171,12 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     try:
         supabase = get_supabase()
         
-        # Get existing entry to know the date(s) affected
-        existing_resp = supabase.table("cashbook_entries").select("entry_date").eq("id", entry_id).limit(1).execute()
+        # Get existing entry to know the date(s) and order(s) affected
+        existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
         if not existing_resp.data:
             raise HTTPException(status_code=404, detail="Cashbook entry not found")
         old_date = existing_resp.data[0]["entry_date"]
+        old_order_number = existing_resp.data[0].get("order_number")
         
         payload = _normalize_entry_payload(entry.model_dump(exclude_unset=True))
         if "entry_type" in payload and payload["entry_type"] not in ENTRY_TYPES:
@@ -181,7 +194,17 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
         new_date = payload.get("entry_date", old_date)
         earliest_date = min(old_date, new_date)
         await _recalculate_balances_from_date(supabase, earliest_date)
-        
+
+        # Recompute advance status for any order whose advance entry changed.
+        # Cover both the old and new order numbers in case it was reassigned.
+        new_order_number = payload.get("order_number", old_order_number)
+        affected_orders = {n for n in [old_order_number, new_order_number] if n}
+        if affected_orders:
+            try:
+                recompute_advance_statuses(supabase, list(affected_orders))
+            except Exception:
+                pass
+
         return response.data[0]
     except HTTPException:
         raise
@@ -194,19 +217,27 @@ async def delete_cashbook_entry(entry_id: str):
     try:
         supabase = get_supabase()
         
-        # Get entry date before deleting
-        existing_resp = supabase.table("cashbook_entries").select("entry_date").eq("id", entry_id).limit(1).execute()
+        # Get entry date and order number before deleting
+        existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
         if not existing_resp.data:
             raise HTTPException(status_code=404, detail="Cashbook entry not found")
         entry_date = existing_resp.data[0]["entry_date"]
-        
+        order_number = existing_resp.data[0].get("order_number")
+
         response = supabase.table("cashbook_entries").delete().eq("id", entry_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Cashbook entry not found")
-        
+
         # Recalculate daily balances from this date onwards
         await _recalculate_balances_from_date(supabase, entry_date)
-        
+
+        # If an order-advance entry was removed, recompute that order's advance status
+        if order_number:
+            try:
+                recompute_advance_statuses(supabase, [order_number])
+            except Exception:
+                pass
+
         return {"status": "deleted", "id": entry_id}
     except HTTPException:
         raise

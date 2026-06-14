@@ -45,6 +45,9 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_status JSONB,
     total_amount DECIMAL(10, 2) NOT NULL,
     advance_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    -- Advance reconciliation status (Shopify advance_amount vs cashbook order-advance entries):
+    -- 1 = no advance, 2 = shopify only, 3 = cashbook only, 4 = both match, 5 = both mismatch
+    advance_status SMALLINT NOT NULL DEFAULT 1,
     delivery_charge DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax_amount DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
