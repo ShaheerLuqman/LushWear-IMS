@@ -3966,6 +3966,223 @@ async function submitOrderAdvanceModal() {
     if (typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
 }
 
+// --- Bulk Text Entry modal ---------------------------------------------------
+
+// Holds the most recent parse result so the submit handler can reuse it.
+let bulkEntryParsed = null;
+
+function openBulkEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    if (ledgers.length === 0) {
+        showToast('No ledgers available. Create a ledger first.', 'error');
+        return;
+    }
+    const input = document.getElementById('bulkEntryInput');
+    if (input) input.value = '';
+    const validation = document.getElementById('bulkEntryValidation');
+    if (validation) { validation.style.display = 'none'; validation.innerHTML = ''; }
+    bulkEntryParsed = null;
+    setBulkEntrySubmitEnabled(false);
+    document.getElementById('bulkEntryModal').classList.add('active');
+    if (input) input.focus();
+}
+
+function closeBulkEntryModal() {
+    document.getElementById('bulkEntryModal').classList.remove('active');
+}
+
+function setBulkEntrySubmitEnabled(enabled) {
+    const btn = document.getElementById('bulkEntrySubmitBtn');
+    if (btn) btn.disabled = !enabled;
+}
+
+// Find a ledger by name (case-insensitive, trimmed). Returns the ledger or null.
+function findLedgerByName(name) {
+    const target = String(name || '').trim().toLowerCase();
+    if (!target) return null;
+    return ledgers.find(l => String(l.name || '').trim().toLowerCase() === target) || null;
+}
+
+/**
+ * Parse one line of bulk-entry text.
+ * Format: <KIND>: <AMOUNT> <PARTICULARS> "<LEDGER1>" ["<LEDGER2>"]
+ * Returns { ok, errors: [str], lineNo, raw, kind, amount, particulars, entries: [{entry_type, amount, description, folio}] }
+ */
+function parseBulkEntryLine(raw, lineNo) {
+    const result = { ok: false, errors: [], lineNo, raw };
+    const line = String(raw || '').trim();
+    if (!line) { result.blank = true; return result; }
+
+    // Find the KIND token (IN / OUT / XFER followed by ':') anywhere in the line and
+    // ignore anything before it. This lets pasted lines keep prefixes like a
+    // WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: IN: 16400 ...".
+    const kindMatch = line.match(/\b(IN|OUT|XFER)\s*:\s*(.*)$/i);
+    if (!kindMatch) {
+        result.errors.push('Missing "<KIND>:" prefix (use IN:, OUT:, or XFER:).');
+        return result;
+    }
+    const kind = kindMatch[1].toUpperCase();
+    const rest = kindMatch[2];
+    result.kind = kind;
+
+    // Extract quoted ledger names (in order).
+    const quoted = [];
+    const quoteRe = /"([^"]*)"/g;
+    let m;
+    while ((m = quoteRe.exec(rest)) !== null) quoted.push(m[1]);
+
+    // The portion before the first quote holds amount + particulars.
+    const firstQuoteIdx = rest.indexOf('"');
+    const head = (firstQuoteIdx === -1 ? rest : rest.slice(0, firstQuoteIdx)).trim();
+
+    // Amount is the first token of head.
+    const headMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s*(.*)$/);
+    if (!headMatch) {
+        result.errors.push('Missing or invalid amount (must come right after the colon).');
+    } else {
+        const amount = parseFloat(headMatch[1].replace(/,/g, ''));
+        if (Number.isNaN(amount) || amount <= 0) {
+            result.errors.push('Amount must be a number greater than 0.');
+        } else {
+            result.amount = amount;
+        }
+        result.particulars = (headMatch[2] || '').trim();
+    }
+
+    // Validate quoted-ledger count per kind.
+    const expected = kind === 'XFER' ? 2 : 1;
+    if (quoted.length < expected) {
+        result.errors.push(`${kind} requires ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
+    } else if (quoted.length > expected) {
+        result.errors.push(`${kind} expects ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
+    }
+
+    // Resolve ledger names against existing ledgers.
+    const resolved = quoted.map(name => ({ name, ledger: findLedgerByName(name) }));
+    resolved.forEach(r => {
+        if (!r.ledger) result.errors.push(`Ledger "${r.name}" not found.`);
+    });
+
+    if (result.errors.length > 0) return result;
+
+    // Build cashbook entries. Particulars default to a placeholder if empty.
+    const description = result.particulars || `${kind} entry`;
+    const entries = [];
+    if (kind === 'IN') {
+        entries.push({ entry_type: 'inflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+    } else if (kind === 'OUT') {
+        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+    } else { // XFER: LEDGER1 in, LEDGER2 out
+        entries.push({ entry_type: 'inflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[1].ledger.id });
+    }
+    result.entries = entries;
+    result.ok = true;
+    return result;
+}
+
+/** Parse the whole textarea. Returns { lines: [parsed], hasError, hasAny }. */
+function parseBulkEntryText(text) {
+    const rawLines = String(text || '').split(/\r?\n/);
+    const lines = [];
+    let hasError = false;
+    let hasAny = false;
+    rawLines.forEach((raw, i) => {
+        const parsed = parseBulkEntryLine(raw, i + 1);
+        if (parsed.blank) return; // ignore blank lines
+        lines.push(parsed);
+        hasAny = true;
+        if (!parsed.ok) hasError = true;
+    });
+    return { lines, hasError, hasAny };
+}
+
+/** Validate the textarea and render results. Returns the parse result. */
+function validateBulkEntry() {
+    const input = document.getElementById('bulkEntryInput');
+    const validation = document.getElementById('bulkEntryValidation');
+    const parsed = parseBulkEntryText(input ? input.value : '');
+    bulkEntryParsed = parsed;
+
+    if (!validation) return parsed;
+    if (!parsed.hasAny) {
+        validation.style.display = 'block';
+        validation.innerHTML = '<div class="bulk-entry-msg bulk-entry-msg-error">No entries to validate.</div>';
+        setBulkEntrySubmitEnabled(false);
+        return parsed;
+    }
+
+    const rows = parsed.lines.map(p => {
+        if (p.ok) {
+            const summary = p.entries
+                .map(e => `${e.entry_type === 'inflow' ? '▲ in' : '▼ out'} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}`)
+                .join(' , ');
+            return `<div class="bulk-entry-line bulk-entry-line-ok">`
+                + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
+                + `<span class="bulk-entry-line-text">${escapeHtml(p.raw)}</span>`
+                + `<span class="bulk-entry-line-detail">${summary}</span>`
+                + `</div>`;
+        }
+        return `<div class="bulk-entry-line bulk-entry-line-error">`
+            + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
+            + `<span class="bulk-entry-line-text">${escapeHtml(p.raw)}</span>`
+            + `<span class="bulk-entry-line-detail">${p.errors.map(escapeHtml).join(' ')}</span>`
+            + `</div>`;
+    }).join('');
+
+    validation.style.display = 'block';
+    validation.innerHTML = rows;
+    setBulkEntrySubmitEnabled(!parsed.hasError);
+    return parsed;
+}
+
+function ledgerNameById(id) {
+    const l = ledgers.find(x => x.id === id);
+    return l ? l.name : '(unknown)';
+}
+
+function formatBulkAmount(val) {
+    const n = parseFloat(val) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function submitBulkEntry() {
+    if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }
+    // Re-validate to be safe (the textarea may have changed since last validate).
+    const parsed = validateBulkEntry();
+    if (!parsed.hasAny) { showToast('No entries to create', 'error'); return; }
+    if (parsed.hasError) { showToast('Fix the highlighted entries first', 'error'); return; }
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const payloads = [];
+    parsed.lines.forEach(p => {
+        p.entries.forEach(e => payloads.push({ ...e, entry_date: entryDate }));
+    });
+
+    setBulkEntrySubmitEnabled(false);
+    closeBulkEntryModal();
+    try {
+        // Create sequentially so daily-balance recalculation stays consistent.
+        for (const payload of payloads) {
+            const response = await fetch(`${API_BASE}/cashbook/entries`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            if (!response.ok) throw new Error('Failed to create entry');
+        }
+        await reloadCashbookForCurrentDate(true);
+        showToast(`Created ${payloads.length} entr${payloads.length === 1 ? 'y' : 'ies'}`, 'success');
+    } catch (error) {
+        console.error('Error creating bulk entries:', error);
+        showToast('Some entries failed to create', 'error');
+        await reloadCashbookForCurrentDate(true);
+    }
+}
+
 async function createCashbookEntry(payload) {
     // Optimistic update: add entry to local array immediately
     const tempId = '__temp_' + Date.now();
@@ -5402,6 +5619,21 @@ function initForms() {
         } else {
             orderAdvanceOutAmountTouched = true;
         }
+    });
+    // Cashbook: bulk text entry modal
+    document.getElementById('cashbookBulkEntryBtn')?.addEventListener('click', openBulkEntryModal);
+    document.getElementById('closeBulkEntryModal')?.addEventListener('click', closeBulkEntryModal);
+    document.getElementById('bulkEntryCancelBtn')?.addEventListener('click', closeBulkEntryModal);
+    document.getElementById('bulkEntryModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'bulkEntryModal') closeBulkEntryModal();
+    });
+    document.getElementById('bulkEntryValidateBtn')?.addEventListener('click', validateBulkEntry);
+    document.getElementById('bulkEntrySubmitBtn')?.addEventListener('click', submitBulkEntry);
+    // Re-validate as the user types (debounced lightly) and reset submit state.
+    document.getElementById('bulkEntryInput')?.addEventListener('input', () => {
+        setBulkEntrySubmitEnabled(false);
+        clearTimeout(window.__bulkEntryDebounce);
+        window.__bulkEntryDebounce = setTimeout(validateBulkEntry, 300);
     });
     document.getElementById('closeCashbookEntryModal')?.addEventListener('click', closeCashbookEntryModal);
     document.getElementById('cashbookEntryCancelBtn')?.addEventListener('click', closeCashbookEntryModal);

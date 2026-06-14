@@ -3636,3 +3636,109 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
     cursor: help;
 }
+
+/* Bulk Text Entry modal */
+.bulk-entry-modal-content {
+    max-width: 720px;
+    width: 92%;
+}
+
+.bulk-entry-help {
+    background: var(--bg-secondary, #f7f8fa);
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    font-size: 12.5px;
+    color: var(--text-muted, #555);
+}
+
+.bulk-entry-help p { margin: 0 0 6px; }
+
+.bulk-entry-help ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
+
+.bulk-entry-help li { margin: 3px 0; }
+
+.bulk-entry-help code {
+    background: rgba(0, 0, 0, 0.06);
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 12px;
+}
+
+.bulk-entry-textarea {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+    resize: vertical;
+    width: 100%;
+}
+
+.bulk-entry-validation {
+    margin-top: 12px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid var(--border-color, #e5e7eb);
+    border-radius: 6px;
+}
+
+.bulk-entry-line {
+    display: grid;
+    grid-template-columns: 32px 1fr;
+    grid-template-rows: auto auto;
+    gap: 2px 8px;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--border-color, #eee);
+    font-size: 12.5px;
+}
+
+.bulk-entry-line:last-child { border-bottom: none; }
+
+.bulk-entry-line-no {
+    grid-row: 1 / span 2;
+    color: var(--text-muted, #999);
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+}
+
+.bulk-entry-line-text {
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+    word-break: break-word;
+}
+
+.bulk-entry-line-detail {
+    grid-column: 2;
+    font-size: 12px;
+}
+
+.bulk-entry-line-ok {
+    background: rgba(34, 197, 94, 0.06);
+}
+
+.bulk-entry-line-ok .bulk-entry-line-detail {
+    color: #16a34a;
+}
+
+.bulk-entry-line-error {
+    background: rgba(239, 68, 68, 0.08);
+}
+
+.bulk-entry-line-error .bulk-entry-line-text {
+    color: #b91c1c;
+}
+
+.bulk-entry-line-error .bulk-entry-line-detail {
+    color: #ef4444;
+    font-weight: 500;
+}
+
+.bulk-entry-msg {
+    padding: 10px 12px;
+    font-size: 13px;
+}
+
+.bulk-entry-msg-error { color: #ef4444; }

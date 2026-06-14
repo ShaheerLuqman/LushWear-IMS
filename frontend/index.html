@@ -212,6 +212,7 @@
                         <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
                         <button id="cashbookOrderAdvanceBtn" class="btn btn-primary btn-sm" title="Record an order advance amount">Order Advance Amount</button>
+                        <button id="cashbookBulkEntryBtn" class="btn btn-primary btn-sm" title="Create multiple entries from text">Bulk Text Entry</button>
                         <button id="cashbookCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new cashbook entry">Create Entry</button>
                     </div>
                 </div>
@@ -431,6 +432,37 @@
                                     <button type="submit" class="btn btn-primary">Create</button>
                                 </div>
                             </form>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bulk Text Entry Modal -->
+                <div id="bulkEntryModal" class="modal">
+                    <div class="modal-content bulk-entry-modal-content">
+                        <div class="modal-header">
+                            <h2>Bulk Text Entry</h2>
+                            <button type="button" class="modal-close" id="closeBulkEntryModal" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <div class="bulk-entry-help">
+                                <p>One entry per line. Format:</p>
+                                <code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;PARTICULARS&gt; "&lt;LEDGER1&gt;" ["&lt;LEDGER2&gt;"]</code>
+                                <ul>
+                                    <li><strong>IN</strong> — incoming to LEDGER1. e.g. <code>IN: 5147 Received For Order# 9269 "Meezan Bank"</code></li>
+                                    <li><strong>OUT</strong> — outgoing from LEDGER1. e.g. <code>OUT: 9910 Cash Paid For Expense "Ad Expense"</code></li>
+                                    <li><strong>XFER</strong> — into LEDGER1, out of LEDGER2. e.g. <code>XFER: 20000 Transferred To Nayapay From Meezan "Meezan Bank" "Nayapay"</code></li>
+                                </ul>
+                            </div>
+                            <div class="form-group">
+                                <label for="bulkEntryInput">Entries</label>
+                                <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="10" spellcheck="false" placeholder='IN: 5147 Received For Order# 9269 "Meezan Bank"'></textarea>
+                            </div>
+                            <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
+                            <div class="modal-actions form-actions">
+                                <button type="button" id="bulkEntryCancelBtn" class="btn btn-secondary">Cancel</button>
+                                <button type="button" id="bulkEntryValidateBtn" class="btn btn-secondary">Validate</button>
+                                <button type="button" id="bulkEntrySubmitBtn" class="btn btn-primary" disabled>Create entries</button>
+                            </div>
                         </div>
                     </div>
                 </div>
