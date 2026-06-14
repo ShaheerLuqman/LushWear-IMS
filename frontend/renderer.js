@@ -113,6 +113,7 @@ function applyEditLockState() {
         'ordersMoreActionUploadPostEx',
         'ordersMoreActionGenerateLoadSheet',
         'ordersMoreActionGenerateInvoice',
+        'ordersMoreActionGeneratePackagingList',
         'syncShopifyBtn',
         'syncOrdersBtn',
         'submitReplacementOrder',
@@ -2626,6 +2627,12 @@ function invoicePdfFilename() {
     return `invoice_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`;
 }
 
+function packagingListPdfFilename() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `packaging_list_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`;
+}
+
 function parseLoadSheetOrderNumbersFromBox() {
     const textarea = document.getElementById('loadSheetOrderNumbers');
     if (!textarea) return [];
@@ -3153,6 +3160,7 @@ function switchView(viewName) {
     const headerOrdersBottomActions = document.getElementById('headerOrdersBottomActions');
     const ordersDateRangeBtn = document.getElementById('ordersDateRangeBtn');
     const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
+    const ordersMoreActionGeneratePackagingList = document.getElementById('ordersMoreActionGeneratePackagingList');
     const exportGridExcelBtn = document.getElementById('exportGridExcelBtn');
     if (syncProductsBtn && syncOrdersBtn) {
         if (viewName === 'products') {
@@ -3167,6 +3175,7 @@ function switchView(viewName) {
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
             if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
         } else if (viewName === 'orders') {
@@ -3181,6 +3190,7 @@ function switchView(viewName) {
             if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'inline-flex';
+            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'inline-flex';
             if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'inline-flex';
             requestAnimationFrame(() => syncOrdersBottomActionsWidth());
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -3200,6 +3210,7 @@ function switchView(viewName) {
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
             if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
             if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -3219,6 +3230,7 @@ function switchView(viewName) {
             if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
             if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
             if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
+            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
             if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
             const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -3981,16 +3993,23 @@ function openBulkEntryModal() {
         return;
     }
     const input = document.getElementById('bulkEntryInput');
-    if (input) input.value = '';
+    if (input) { input.value = ''; input.disabled = false; }
     const validation = document.getElementById('bulkEntryValidation');
     if (validation) { validation.style.display = 'none'; validation.innerHTML = ''; }
+    const cancelBtn = document.getElementById('bulkEntryCancelBtn');
+    if (cancelBtn) cancelBtn.disabled = false;
+    setBulkEntryProgress('');
     bulkEntryParsed = null;
     setBulkEntrySubmitEnabled(false);
     document.getElementById('bulkEntryModal').classList.add('active');
     if (input) input.focus();
 }
 
+// True while bulk entries are being created; blocks closing the modal mid-run.
+let bulkEntryCreating = false;
+
 function closeBulkEntryModal() {
+    if (bulkEntryCreating) return;
     document.getElementById('bulkEntryModal').classList.remove('active');
 }
 
@@ -4004,6 +4023,23 @@ function findLedgerByName(name) {
     const target = String(name || '').trim().toLowerCase();
     if (!target) return null;
     return ledgers.find(l => String(l.name || '').trim().toLowerCase() === target) || null;
+}
+
+/**
+ * Extract an order number from particulars text. Looks for "order" and/or "#"
+ * followed by a 4–5 digit number, allowing spaces between the tokens.
+ * Examples matched: "Order #9865", "order# 9865", "Order  9865", "#9865".
+ * Returns the digits as a string, or null if none found.
+ */
+function extractOrderNumberFromText(text) {
+    const s = String(text || '');
+    // "order" then optional "#", then 4-5 digits (spaces allowed between tokens)
+    let m = s.match(/order\s*#?\s*(\d{4,5})\b/i);
+    if (m) return m[1];
+    // bare "#" then 4-5 digits
+    m = s.match(/#\s*(\d{4,5})\b/);
+    if (m) return m[1];
+    return null;
 }
 
 /**
@@ -4027,6 +4063,9 @@ function parseBulkEntryLine(raw, lineNo) {
     const kind = kindMatch[1].toUpperCase();
     const rest = kindMatch[2];
     result.kind = kind;
+    // The cleaned line (from KIND: onward) without any pasted prefix such as a
+    // WhatsApp timestamp. Shown in the validation list instead of the raw line.
+    result.cleaned = `${kind}: ${rest.trim()}`;
 
     // Extract quoted ledger names (in order).
     const quoted = [];
@@ -4070,16 +4109,27 @@ function parseBulkEntryLine(raw, lineNo) {
 
     // Build cashbook entries. Particulars default to a placeholder if empty.
     const description = result.particulars || `${kind} entry`;
+
+    // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
+    // order number parsed from the particulars so advance reconciliation works.
+    const orderNumber = extractOrderNumberFromText(result.particulars);
+    const makeInflow = (ledger) => {
+        const entry = { entry_type: 'inflow', amount: result.amount, description, folio: ledger.id };
+        if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
+        return entry;
+    };
+
     const entries = [];
     if (kind === 'IN') {
-        entries.push({ entry_type: 'inflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+        entries.push(makeInflow(resolved[0].ledger));
     } else if (kind === 'OUT') {
         entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[0].ledger.id });
     } else { // XFER: LEDGER1 in, LEDGER2 out
-        entries.push({ entry_type: 'inflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+        entries.push(makeInflow(resolved[0].ledger));
         entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[1].ledger.id });
     }
     result.entries = entries;
+    result.orderNumber = orderNumber || null;
     result.ok = true;
     return result;
 }
@@ -4116,19 +4166,26 @@ function validateBulkEntry() {
     }
 
     const rows = parsed.lines.map(p => {
+        // Show the cleaned line (KIND: onward) so pasted prefixes like WhatsApp
+        // timestamps don't appear; fall back to raw when there's no KIND token.
+        const displayText = p.cleaned || p.raw;
         if (p.ok) {
             const summary = p.entries
-                .map(e => `${e.entry_type === 'inflow' ? '▲ in' : '▼ out'} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}`)
+                .map(e => {
+                    const dir = e.entry_type === 'inflow' ? '▲ in' : '▼ out';
+                    const tag = e.order_number ? ` [Order #${escapeHtml(e.order_number)}]` : '';
+                    return `${dir} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}${tag}`;
+                })
                 .join(' , ');
             return `<div class="bulk-entry-line bulk-entry-line-ok">`
                 + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
-                + `<span class="bulk-entry-line-text">${escapeHtml(p.raw)}</span>`
+                + `<span class="bulk-entry-line-text">${escapeHtml(displayText)}</span>`
                 + `<span class="bulk-entry-line-detail">${summary}</span>`
                 + `</div>`;
         }
         return `<div class="bulk-entry-line bulk-entry-line-error">`
             + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
-            + `<span class="bulk-entry-line-text">${escapeHtml(p.raw)}</span>`
+            + `<span class="bulk-entry-line-text">${escapeHtml(displayText)}</span>`
             + `<span class="bulk-entry-line-detail">${p.errors.map(escapeHtml).join(' ')}</span>`
             + `</div>`;
     }).join('');
@@ -4162,25 +4219,73 @@ async function submitBulkEntry() {
         p.entries.forEach(e => payloads.push({ ...e, entry_date: entryDate }));
     });
 
+    const total = payloads.length;
+    const submitBtn = document.getElementById('bulkEntrySubmitBtn');
+    const cancelBtn = document.getElementById('bulkEntryCancelBtn');
+    const input = document.getElementById('bulkEntryInput');
+
+    // Lock the modal while creating so the user can't edit or close mid-run.
+    bulkEntryCreating = true;
     setBulkEntrySubmitEnabled(false);
-    closeBulkEntryModal();
-    try {
-        // Create sequentially so daily-balance recalculation stays consistent.
-        for (const payload of payloads) {
+    if (cancelBtn) cancelBtn.disabled = true;
+    if (input) input.disabled = true;
+
+    let created = 0;
+    let failed = 0;
+    // Create sequentially so daily-balance recalculation stays consistent, and so
+    // a single failure doesn't abort the remaining entries.
+    for (const payload of payloads) {
+        setBulkEntryProgress(`Creating entries… ${created + failed + 1} of ${total}`);
+        try {
             const response = await fetch(`${API_BASE}/cashbook/entries`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(payload)
             });
             if (!response.ok) throw new Error('Failed to create entry');
+            created += 1;
+        } catch (error) {
+            console.error('Error creating bulk entry:', error, payload);
+            failed += 1;
         }
-        await reloadCashbookForCurrentDate(true);
-        showToast(`Created ${payloads.length} entr${payloads.length === 1 ? 'y' : 'ies'}`, 'success');
-    } catch (error) {
-        console.error('Error creating bulk entries:', error);
-        showToast('Some entries failed to create', 'error');
-        await reloadCashbookForCurrentDate(true);
     }
+
+    // If any order-advance entries were created, refresh orders so the advance
+    // status indicators update.
+    const createdOrderAdvance = payloads.some(p => p.order_number);
+
+    if (failed === 0) {
+        // All entries created: show the count, reload, then close the popup.
+        setBulkEntryProgress(`Created ${created} of ${total} entries.`, 'ok');
+        showToast(`Created ${created} entr${created === 1 ? 'y' : 'ies'}`, 'success');
+        await reloadCashbookForCurrentDate(true);
+        if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
+        bulkEntryCreating = false;
+        if (input) input.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        closeBulkEntryModal();
+    } else {
+        // Some failed: keep the popup open so the user can review/retry.
+        setBulkEntryProgress(`Created ${created} of ${total}. ${failed} failed — review and retry.`, 'error');
+        showToast(`${created} created, ${failed} failed`, 'error');
+        await reloadCashbookForCurrentDate(true);
+        if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
+        bulkEntryCreating = false;
+        if (input) input.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        setBulkEntrySubmitEnabled(true);
+    }
+}
+
+// Show a progress/result message in the bulk-entry modal footer area.
+function setBulkEntryProgress(text, kind) {
+    const el = document.getElementById('bulkEntryProgress');
+    if (!el) return;
+    el.style.display = text ? 'block' : 'none';
+    el.textContent = text || '';
+    el.className = 'bulk-entry-progress'
+        + (kind === 'ok' ? ' bulk-entry-progress-ok' : '')
+        + (kind === 'error' ? ' bulk-entry-progress-error' : '');
 }
 
 async function createCashbookEntry(payload) {
@@ -5377,6 +5482,52 @@ function initForms() {
                 }
             } catch (e) {
                 showToast(e.message || 'Failed to generate invoice', 'error');
+            }
+        });
+    }
+
+    // Generate Packaging List (combined product/variant counts across selected orders)
+    const ordersMoreActionGeneratePackagingList = document.getElementById('ordersMoreActionGeneratePackagingList');
+    if (ordersMoreActionGeneratePackagingList) {
+        ordersMoreActionGeneratePackagingList.addEventListener('click', async () => {
+            if (!ordersGridApi) {
+                showToast('Orders grid not initialized', 'error');
+                return;
+            }
+            const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+            if (selectedRows.length === 0) {
+                showToast('Please select at least one order', 'error');
+                return;
+            }
+            const orderIds = selectedRows.map(row => row.id).filter(Boolean);
+            if (orderIds.length === 0) {
+                showToast('Selected orders have no ID', 'error');
+                return;
+            }
+            try {
+                const res = await fetch(`${API_BASE}/orders/generate-packaging-list`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(orderIds)
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Failed to generate packaging list');
+                }
+                const blob = await res.blob();
+                const filename = packagingListPdfFilename();
+                // Save (download) the PDF directly, without opening a preview.
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                showToast(`Packaging list saved (${orderIds.length} order(s))`, 'success');
+            } catch (e) {
+                showToast(e.message || 'Failed to generate packaging list', 'error');
             }
         });
     }

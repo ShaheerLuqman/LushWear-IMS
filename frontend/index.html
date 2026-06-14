@@ -195,6 +195,7 @@
                         </button>
                     </div>
                     <div id="headerOrdersBottomActions" class="header-orders-bottom-actions" style="display: none;" role="group" aria-label="Invoice and export actions">
+                        <button type="button" id="ordersMoreActionGeneratePackagingList" class="btn btn-secondary header-toolbar-btn header-orders-bottom-actions-btn" style="display: none;" title="Generate combined packaging list for selected orders">Packaging List</button>
                         <button type="button" id="ordersMoreActionGenerateInvoice" class="btn btn-secondary header-toolbar-btn header-orders-bottom-actions-btn" style="display: none;" title="Generate invoice PDF for selected orders">Generate Invoice</button>
                         <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-bottom-actions-btn" style="display: none;" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
                             <i class="fas fa-file-export" aria-hidden="true"></i>
@@ -458,6 +459,7 @@
                                 <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="10" spellcheck="false" placeholder='IN: 5147 Received For Order# 9269 "Meezan Bank"'></textarea>
                             </div>
                             <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
+                            <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
                             <div class="modal-actions form-actions">
                                 <button type="button" id="bulkEntryCancelBtn" class="btn btn-secondary">Cancel</button>
                                 <button type="button" id="bulkEntryValidateBtn" class="btn btn-secondary">Validate</button>

@@ -3493,6 +3493,141 @@ async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
         raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
 
 
+def _split_item_name(item: str) -> Tuple[str, str]:
+    """Split an order item string 'Product - Variant' into (product, variant).
+    Falls back to (item, '-') when there is no ' - ' separator."""
+    s = str(item or "").strip()
+    if " - " in s:
+        product, variant = s.rsplit(" - ", 1)
+        return product.strip(), (variant.strip() or "-")
+    return s, "-"
+
+
+def _aggregate_packaging_items(orders: List[dict]) -> List[dict]:
+    """
+    Combine items across orders into a per-product, per-variant count.
+    Returns a sorted list of:
+      { product, total, variants: [{ variant, count }, ...] }
+    Each item string in orders[*]['items'] represents one unit (repeated per quantity).
+    """
+    # product -> variant -> count
+    products: Dict[str, Dict[str, int]] = {}
+    for o in orders:
+        for item in (o.get("items") or []):
+            product, variant = _split_item_name(item)
+            if not product:
+                continue
+            products.setdefault(product, {})
+            products[product][variant] = products[product].get(variant, 0) + 1
+
+    result: List[dict] = []
+    for product in sorted(products.keys(), key=lambda s: s.lower()):
+        variant_counts = products[product]
+        variants = [
+            {"variant": v, "count": variant_counts[v]}
+            for v in sorted(variant_counts.keys(), key=lambda s: s.lower())
+        ]
+        total = sum(variant_counts.values())
+        result.append({"product": product, "total": total, "variants": variants})
+    return result
+
+
+def _generate_pdf_packaging_list(aggregated: List[dict], order_count: int) -> BytesIO:
+    """Generate a packaging list PDF: one row per product with per-variant counts."""
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(
+        buffer, pagesize=A4,
+        rightMargin=15 * mm, leftMargin=15 * mm,
+        topMargin=15 * mm, bottomMargin=15 * mm,
+    )
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle("PkgTitle", parent=styles["Title"], fontSize=16, spaceAfter=4, textColor=colors.black)
+    sub_style = ParagraphStyle("PkgSub", parent=styles["Normal"], fontSize=9, textColor=colors.black, spaceAfter=10)
+    cell_style = ParagraphStyle("PkgCell", parent=styles["Normal"], fontSize=10)
+    cell_bold = ParagraphStyle("PkgCellBold", parent=styles["Normal"], fontSize=10, fontName="Helvetica-Bold")
+
+    def _esc(s: str) -> str:
+        return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    generated_on = datetime.now(PKT_TIMEZONE).strftime("%Y-%m-%d %H:%M")
+    grand_total = sum(p["total"] for p in aggregated)
+
+    elements = [
+        Paragraph("Packaging List", title_style),
+        Paragraph(
+            f"{order_count} order(s) &middot; {len(aggregated)} product(s) &middot; "
+            f"{grand_total} item(s) &middot; Generated {generated_on} PKT",
+            sub_style,
+        ),
+    ]
+
+    header = [
+        Paragraph("Product", cell_bold),
+        Paragraph("Variants (count)", cell_bold),
+        Paragraph("Total", cell_bold),
+    ]
+    table_data = [header]
+    for p in aggregated:
+        variants_text = ",  ".join(f"{_esc(v['variant'])}: <b>{v['count']}</b>" for v in p["variants"])
+        table_data.append([
+            Paragraph(_esc(p["product"]), cell_style),
+            Paragraph(variants_text or "-", cell_style),
+            Paragraph(str(p["total"]), cell_bold),
+        ])
+
+    if len(table_data) == 1:
+        table_data.append([Paragraph("No items found in the selected orders.", cell_style), "", ""])
+
+    table = Table(table_data, colWidths=[55 * mm, 100 * mm, 20 * mm], repeatRows=1)
+    # Black & white print friendly: white header fill, black text, black grid lines,
+    # no alternating row shading.
+    table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, 0), colors.white),
+        ("TEXTCOLOR", (0, 0), (-1, -1), colors.black),
+        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.black),
+        ("LINEBELOW", (0, 0), (-1, 0), 1, colors.black),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("ALIGN", (2, 0), (2, -1), "CENTER"),
+        ("TOPPADDING", (0, 0), (-1, -1), 5),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+        ("LEFTPADDING", (0, 0), (-1, -1), 6),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+    ]))
+    elements.append(table)
+    doc.build(elements)
+    buffer.seek(0)
+    return buffer
+
+
+@router.post("/generate-packaging-list")
+async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False)):
+    """
+    Generate a combined packaging list PDF for the selected orders.
+    Combines identical products across orders and counts each variant, so all
+    products for a batch of orders can be fetched at once.
+    """
+    try:
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="No orders selected")
+        supabase = get_supabase()
+        orders_response = supabase.table("orders").select("id, order_number, items").in_("id", order_ids).execute()
+        orders = orders_response.data or []
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found")
+        aggregated = _aggregate_packaging_items(orders)
+        pdf_buffer = _generate_pdf_packaging_list(aggregated, len(orders))
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": "attachment; filename=packaging_list.pdf"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating packaging list: {str(e)}")
+
+
 @router.post("/generate-load-sheet")
 async def generate_load_sheet(order_ids: List[str]):
     """Generate a PDF load sheet from template for selected orders"""
