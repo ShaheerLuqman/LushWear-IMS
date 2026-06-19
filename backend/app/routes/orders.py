@@ -39,6 +39,20 @@ PRICE_REDUCTION_DISCOUNT_CODES = {
 }
 
 
+def _order_number_sort_key(order_number) -> Tuple[int, int]:
+    """Numeric sort key for an order_number stored as a string.
+
+    order_number is a VARCHAR column, so a plain string sort puts "10000" before
+    "9999". Sort by the integer value instead, and keep a replacement order
+    ("9865-R") immediately after its parent ("9865") via the secondary key.
+    Unparseable values sort first (key 0)."""
+    s = str(order_number or "").strip()
+    m = re.match(r"^(\d+)(-R)?$", s, re.IGNORECASE)
+    if not m:
+        return (0, 0)
+    return (int(m.group(1)), 1 if m.group(2) else 0)
+
+
 def _compute_shopify_tax(order: dict) -> float:
     """Compute tax for a Shopify order using the same precedence as sync logic."""
     if "current_total_tax_set" in order and order["current_total_tax_set"]:
@@ -227,7 +241,7 @@ async def get_all_orders(
                 if o["id"] not in seen_ids:
                     merged.append(o)
                     seen_ids.add(o["id"])
-            merged.sort(key=lambda x: (x.get("order_number") or ""), reverse=True)
+            merged.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
             return merged
         
         # Fetch all orders without filter (paginated)
@@ -245,6 +259,8 @@ async def get_all_orders(
             if len(response.data) < page_size:
                 break
             offset += page_size
+        # DB sort on a VARCHAR column is lexicographic ("10000" < "9999"); re-sort numerically.
+        all_orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
         return all_orders
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -2001,7 +2017,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
 
 @router.get("/by-number/{order_number}")
 async def get_order_by_number(order_number: str):
-    """Get a single order by order_number (e.g. 4-digit number). Used when order is not in current grid (e.g. different period)."""
+    """Get a single order by order_number. Used when order is not in current grid (e.g. different period)."""
     try:
         num = order_number.strip()
         if not num:
@@ -2887,8 +2903,8 @@ def _generate_pdf_load_sheet(
         elements.append(Paragraph(f"<b>Rider:</b> {rider_name}", normal_style))
     elements.append(Spacer(1, 5*mm))
     
-    # Sort orders by order_number
-    orders.sort(key=lambda x: x.get("order_number", ""))
+    # Sort orders by order_number (numerically; order_number is a VARCHAR column)
+    orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")))
     
     # Prepare table data
     table_data = [

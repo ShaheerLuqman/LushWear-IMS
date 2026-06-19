@@ -51,7 +51,7 @@ const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
 /** Orders grid date column id (for header date range filter). */
 const ORDERS_DATE_COLUMN_ID = 'order_receiving_date';
-/** Guard: when Order# filter is 4 digits and 0 results, we fetch from DB; avoid duplicate requests */
+/** Guard: when Order# filter is a full order number (4+ digits) and 0 results, we fetch from DB; avoid duplicate requests */
 let ordersFetchByNumberInFlight = null;
 /** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */
 let ordersFetchedByNumberIds = new Set();
@@ -1886,7 +1886,8 @@ function initOrdersGrid() {
             const filterModel = params.api.getFilterModel() || {};
             const orderNumCol = filterModel.order_number;
             const filterValue = orderNumCol && (orderNumCol.filter != null) ? String(orderNumCol.filter).trim() : '';
-            const is4Digits = /^\d{4}$/.test(filterValue);
+            // Order numbers start at 1000, so a full order number is 4 or more digits.
+            const isFullOrderNumber = /^\d{4,}$/.test(filterValue);
 
             function removeFetchedByNumberRows() {
                 if (ordersFetchedByNumberIds.size === 0) return;
@@ -1903,17 +1904,17 @@ function initOrdersGrid() {
                 ordersFetchedByNumberIds.clear();
             }
 
-            // Clear or non-4-digit: remove any temporarily added order and stop
-            if (!is4Digits) {
+            // Clear or partial number: remove any temporarily added order and stop
+            if (!isFullOrderNumber) {
                 removeFetchedByNumberRows();
                 return;
             }
 
             const displayedCount = params.api.getDisplayedRowCount();
-            // Same 4-digit filter but we already have a temporary row for it (e.g. re-apply): no-op
+            // Same filter but we already have a temporary row for it (e.g. re-apply): no-op
             if (displayedCount > 0) return;
 
-            // New 4-digit search with 0 results: remove any previous temporary row(s) then fetch this number
+            // New order-number search with 0 results: remove any previous temporary row(s) then fetch this number
             removeFetchedByNumberRows();
 
             (async () => {
@@ -4027,17 +4028,18 @@ function findLedgerByName(name) {
 
 /**
  * Extract an order number from particulars text. Looks for "order" and/or "#"
- * followed by a 4–5 digit number, allowing spaces between the tokens.
- * Examples matched: "Order #9865", "order# 9865", "Order  9865", "#9865".
+ * followed by a number of 4 or more digits, allowing spaces between the tokens.
+ * Order numbers start at 1000 and can grow beyond 9999 (10000+).
+ * Examples matched: "Order #9865", "order# 9865", "Order  9865", "#9865", "#12345".
  * Returns the digits as a string, or null if none found.
  */
 function extractOrderNumberFromText(text) {
     const s = String(text || '');
-    // "order" then optional "#", then 4-5 digits (spaces allowed between tokens)
-    let m = s.match(/order\s*#?\s*(\d{4,5})\b/i);
+    // "order" then optional "#", then 4+ digits (spaces allowed between tokens)
+    let m = s.match(/order\s*#?\s*(\d{4,})\b/i);
     if (m) return m[1];
-    // bare "#" then 4-5 digits
-    m = s.match(/#\s*(\d{4,5})\b/);
+    // bare "#" then 4+ digits
+    m = s.match(/#\s*(\d{4,})\b/);
     if (m) return m[1];
     return null;
 }
