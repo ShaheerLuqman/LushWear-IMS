@@ -1334,6 +1334,13 @@ body:has(#ledgersView.active) .content-area {
     flex-wrap: wrap;
 }
 
+/* Equal-width buttons in the Bulk update order modal */
+#bulkUpdateOrderForm .bulk-update-actions .btn {
+    flex: 0 0 200px;
+    width: 200px;
+    white-space: nowrap;
+}
+
 .bulk-update-results .bulk-update-results-title {
     margin: 0 0 12px;
     font-size: 16px;

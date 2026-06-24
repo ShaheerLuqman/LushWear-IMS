@@ -5389,6 +5389,7 @@ function initForms() {
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
+    document.getElementById('bulkUpdateSelectInGrid')?.addEventListener('click', bulkUpdateSelectInGrid);
     document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
 
     // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet, Create Replacement
@@ -6358,6 +6359,43 @@ function parseOrderNumbersFromTextarea() {
         if (!Number.isNaN(n) && n > 0) results.push(String(n));
     }
     return [...new Set(results)];
+}
+
+function bulkUpdateSelectInGrid() {
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    if (!ordersGridApi) {
+        showToast('Orders grid is not available', 'error');
+        return;
+    }
+    const wanted = new Set(orderNumbers.map(String));
+    const matched = new Set();
+    ordersGridApi.deselectAll();
+    ordersGridApi.forEachNode(node => {
+        const data = node.data;
+        if (!data || data.id === '__footer__') return;
+        const num = String(data.order_number);
+        if (wanted.has(num)) {
+            node.setSelected(true);
+            matched.add(num);
+        }
+    });
+    const selectedRows = ordersGridApi.getSelectedRows();
+    if (selectedRows.length > 0) {
+        ordersGridApi.ensureNodeVisible(selectedRows[0], 'middle');
+    }
+    if (typeof updateFooterRow === 'function') updateFooterRow();
+
+    const notFound = [...wanted].filter(n => !matched.has(n));
+    closeBulkUpdateOrderModal();
+    if (notFound.length > 0) {
+        showToast(`Selected ${matched.size} order(s). Not in grid: ${notFound.join(', ')}`, matched.size > 0 ? 'info' : 'error');
+    } else {
+        showToast(`Selected ${matched.size} order(s) in grid`, 'success');
+    }
 }
 
 async function bulkUpdateOrderStatus(orderStatus) {
