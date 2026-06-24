@@ -6,6 +6,7 @@ from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
 from app.advance_status import recompute_advance_statuses
+from app.order_pdf import extract_order_numbers
 from datetime import datetime, timedelta, timezone
 import asyncio
 import httpx
@@ -3699,6 +3700,64 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
             headers={"Content-Disposition": "attachment; filename=packaging_list.pdf"},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generating packaging list: {str(e)}")
+
+
+@router.post("/extract-order-numbers-from-pdf")
+async def extract_order_numbers_from_pdf(file: UploadFile = File(...)):
+    """Extract order numbers (#XXXX, 4-5 digits) from an uploaded labels PDF."""
+    if not file.filename or not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Please upload a PDF file.")
+    try:
+        content = await file.read()
+        order_numbers = extract_order_numbers(content)
+        return {"order_numbers": order_numbers, "count": len(order_numbers)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Could not read PDF: {str(e)}")
+
+
+class PackagingListByNumbersBody(BaseModel):
+    order_numbers: List[str]
+
+
+@router.post("/generate-packaging-list-by-numbers")
+async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
+    """
+    Generate a combined packaging list PDF for orders identified by order_number
+    (rather than by id). Mirrors /generate-packaging-list.
+    """
+    try:
+        order_numbers = [str(n).strip() for n in (body.order_numbers or []) if str(n).strip()]
+        if not order_numbers:
+            raise HTTPException(status_code=400, detail="No order numbers provided")
+        supabase = get_supabase()
+        orders_response = (
+            supabase.table("orders")
+            .select("id, order_number, items")
+            .in_("order_number", order_numbers)
+            .execute()
+        )
+        orders = orders_response.data or []
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found for the given order numbers")
+        aggregated, sizes = _aggregate_packaging_items(orders)
+        pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
+        found = {str(o.get("order_number")) for o in orders}
+        not_found = sorted(set(order_numbers) - found, key=_order_number_sort_key)
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": "attachment; filename=packaging_list.pdf",
+                "X-Matched-Count": str(len(orders)),
+                "X-Not-Found": ",".join(not_found),
+            },
         )
     except HTTPException:
         raise

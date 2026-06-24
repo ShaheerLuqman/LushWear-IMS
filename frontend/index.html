@@ -616,6 +616,26 @@
         </div>
     </div>
 
+    <!-- Packaging List Modal -->
+    <div id="packagingListModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Packaging List</h2>
+                <button type="button" class="modal-close" id="closePackagingListModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">Enter order numbers (one per line), or upload a labels PDF to fill them automatically:</p>
+                <p id="packagingListOrderCount" class="bulk-update-order-count">0 orders</p>
+                <textarea id="packagingListOrderNumbers" class="bulk-update-textarea" rows="10" placeholder="e.g. 7848&#10;7871&#10;7887"></textarea>
+                <input type="file" id="packagingListPdfInput" accept="application/pdf,.pdf" style="display: none;">
+                <div class="bulk-update-actions" style="margin-top: 16px;">
+                    <button type="button" id="packagingListUploadPdfBtn" class="btn btn-secondary">Upload PDF</button>
+                    <button type="button" id="packagingListGenerateBtn" class="btn btn-primary">Generate packaging list</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Bulk Update Delivery Charges Modal (orders) -->
     <div id="bulkUpdateDeliveryChargesModal" class="modal">
         <div class="modal-content">

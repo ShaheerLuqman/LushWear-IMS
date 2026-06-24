@@ -2634,6 +2634,145 @@ function packagingListPdfFilename() {
     return `packaging_list_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`;
 }
 
+// --- Packaging List modal (enter order numbers or upload labels PDF) ---
+function parsePackagingListOrderNumbers() {
+    const textarea = document.getElementById('packagingListOrderNumbers');
+    if (!textarea) return [];
+    const lines = textarea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+    const results = [];
+    for (const line of lines) {
+        const replMatch = line.match(/^(\d+)-R$/i);
+        if (replMatch) {
+            results.push(`${replMatch[1]}-R`);
+            continue;
+        }
+        const n = parseInt(line, 10);
+        if (!Number.isNaN(n) && n > 0) results.push(String(n));
+    }
+    return [...new Set(results)];
+}
+
+function updatePackagingListOrderCount() {
+    const count = parsePackagingListOrderNumbers().length;
+    const countEl = document.getElementById('packagingListOrderCount');
+    if (countEl) countEl.textContent = count === 1 ? '1 order' : `${count} orders`;
+}
+
+function openPackagingListModal() {
+    const textarea = document.getElementById('packagingListOrderNumbers');
+    if (textarea) {
+        // Prefill from current grid selection (order numbers), like Bulk update order
+        let orderNumbersText = '';
+        if (ordersGridApi) {
+            const selectedRows = ordersGridApi.getSelectedRows();
+            if (selectedRows.length > 0) {
+                const orderNumbers = selectedRows
+                    .filter(row => row && row.id !== '__footer__' && row.order_number)
+                    .map(row => row.order_number)
+                    .filter(Boolean);
+                const uniqueOrderNumbers = [...new Set(orderNumbers)].sort((a, b) => {
+                    const numA = parseInt(a, 10);
+                    const numB = parseInt(b, 10);
+                    if (!isNaN(numA) && !isNaN(numB)) return numA - numB;
+                    return String(a).localeCompare(String(b));
+                });
+                orderNumbersText = uniqueOrderNumbers.join('\n');
+            }
+        }
+        textarea.value = orderNumbersText;
+        textarea.focus();
+        updatePackagingListOrderCount();
+    }
+    document.getElementById('packagingListModal')?.classList.add('active');
+}
+
+function closePackagingListModal() {
+    document.getElementById('packagingListModal')?.classList.remove('active');
+}
+
+async function handlePackagingListPdfUpload(event) {
+    const input = event.target;
+    const file = input?.files?.[0];
+    if (!file) return;
+    const uploadBtn = document.getElementById('packagingListUploadPdfBtn');
+    const prevText = uploadBtn ? uploadBtn.textContent : '';
+    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = 'Reading PDF…'; }
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+        const res = await fetch(`${API_BASE}/orders/extract-order-numbers-from-pdf`, {
+            method: 'POST',
+            body: formData
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to read PDF');
+        }
+        const data = await res.json();
+        const orderNumbers = data.order_numbers || [];
+        if (orderNumbers.length === 0) {
+            showToast('No order numbers found in PDF', 'error');
+        } else {
+            const textarea = document.getElementById('packagingListOrderNumbers');
+            if (textarea) {
+                textarea.value = orderNumbers.join('\n');
+                updatePackagingListOrderCount();
+            }
+            showToast(`Found ${orderNumbers.length} order number(s) in PDF`, 'success');
+        }
+    } catch (e) {
+        showToast(e.message || 'Failed to read PDF', 'error');
+    } finally {
+        if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = prevText; }
+        if (input) input.value = '';  // allow re-uploading the same file
+    }
+}
+
+async function generatePackagingListFromNumbers() {
+    const orderNumbers = parsePackagingListOrderNumbers();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const generateBtn = document.getElementById('packagingListGenerateBtn');
+    const prevText = generateBtn ? generateBtn.textContent : '';
+    if (generateBtn) { generateBtn.disabled = true; generateBtn.textContent = 'Generating…'; }
+    try {
+        const res = await fetch(`${API_BASE}/orders/generate-packaging-list-by-numbers`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ order_numbers: orderNumbers })
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to generate packaging list');
+        }
+        const matchedCount = parseInt(res.headers.get('X-Matched-Count') || '0', 10);
+        const notFoundHeader = res.headers.get('X-Not-Found') || '';
+        const blob = await res.blob();
+        const filename = packagingListPdfFilename();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+        closePackagingListModal();
+        const notFound = notFoundHeader ? notFoundHeader.split(',').filter(Boolean) : [];
+        if (notFound.length > 0) {
+            showToast(`Packaging list saved (${matchedCount} order(s)). Not found: ${notFound.join(', ')}`, 'info');
+        } else {
+            showToast(`Packaging list saved (${matchedCount} order(s))`, 'success');
+        }
+    } catch (e) {
+        showToast(e.message || 'Failed to generate packaging list', 'error');
+    } finally {
+        if (generateBtn) { generateBtn.disabled = false; generateBtn.textContent = prevText; }
+    }
+}
+
 function parseLoadSheetOrderNumbersFromBox() {
     const textarea = document.getElementById('loadSheetOrderNumbers');
     if (!textarea) return [];
@@ -5489,51 +5628,21 @@ function initForms() {
         });
     }
 
-    // Generate Packaging List (combined product/variant counts across selected orders)
+    // Generate Packaging List (opens modal: enter order numbers or upload labels PDF)
     const ordersMoreActionGeneratePackagingList = document.getElementById('ordersMoreActionGeneratePackagingList');
     if (ordersMoreActionGeneratePackagingList) {
-        ordersMoreActionGeneratePackagingList.addEventListener('click', async () => {
-            if (!ordersGridApi) {
-                showToast('Orders grid not initialized', 'error');
-                return;
-            }
-            const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
-            if (selectedRows.length === 0) {
-                showToast('Please select at least one order', 'error');
-                return;
-            }
-            const orderIds = selectedRows.map(row => row.id).filter(Boolean);
-            if (orderIds.length === 0) {
-                showToast('Selected orders have no ID', 'error');
-                return;
-            }
-            try {
-                const res = await fetch(`${API_BASE}/orders/generate-packaging-list`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(orderIds)
-                });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Failed to generate packaging list');
-                }
-                const blob = await res.blob();
-                const filename = packagingListPdfFilename();
-                // Save (download) the PDF directly, without opening a preview.
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                document.body.appendChild(a);
-                a.click();
-                document.body.removeChild(a);
-                setTimeout(() => window.URL.revokeObjectURL(url), 60000);
-                showToast(`Packaging list saved (${orderIds.length} order(s))`, 'success');
-            } catch (e) {
-                showToast(e.message || 'Failed to generate packaging list', 'error');
-            }
-        });
+        ordersMoreActionGeneratePackagingList.addEventListener('click', openPackagingListModal);
     }
+    document.getElementById('closePackagingListModal')?.addEventListener('click', closePackagingListModal);
+    document.getElementById('packagingListModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'packagingListModal') closePackagingListModal();
+    });
+    document.getElementById('packagingListOrderNumbers')?.addEventListener('input', updatePackagingListOrderCount);
+    document.getElementById('packagingListUploadPdfBtn')?.addEventListener('click', () => {
+        document.getElementById('packagingListPdfInput')?.click();
+    });
+    document.getElementById('packagingListPdfInput')?.addEventListener('change', handlePackagingListPdfUpload);
+    document.getElementById('packagingListGenerateBtn')?.addEventListener('click', generatePackagingListFromNumbers);
 
     // Create Replacement Order
     const ordersMoreActionCreateReplacement = document.getElementById('ordersMoreActionCreateReplacement');
