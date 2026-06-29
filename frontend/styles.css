@@ -195,6 +195,22 @@ body {
     font-size: 15px;
 }
 
+.pin-gate-submit .btn-spinner {
+    display: inline-block;
+    width: 15px;
+    height: 15px;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-top-color: #fff;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    vertical-align: -2px;
+    margin-right: 9px;
+}
+
+.pin-gate-submit:disabled {
+    cursor: progress;
+}
+
 .pin-change-modal-content {
     max-width: 440px;
 }

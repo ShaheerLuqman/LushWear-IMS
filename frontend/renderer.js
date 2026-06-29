@@ -351,6 +351,9 @@ function runPinGate() {
                 return;
             }
             submitBtn.disabled = true;
+            const submitLabel = submitBtn.textContent;
+            submitBtn.innerHTML =
+                `<span class="btn-spinner"></span>${configured ? 'Verifying…' : 'Creating PIN…'}`;
             try {
                 if (!configured) {
                     const r = await fetch(`${API_BASE}/app-pin/setup`, {
@@ -394,6 +397,7 @@ function runPinGate() {
                     errEl.textContent = ex.message || 'Something went wrong';
                 }
             } finally {
+                submitBtn.textContent = submitLabel;
                 submitBtn.disabled = false;
             }
         };
@@ -2692,39 +2696,70 @@ function closePackagingListModal() {
 
 async function handlePackagingListPdfUpload(event) {
     const input = event.target;
-    const file = input?.files?.[0];
-    if (!file) return;
+    const files = input?.files ? Array.from(input.files) : [];
+    if (files.length === 0) return;
     const uploadBtn = document.getElementById('packagingListUploadPdfBtn');
     const prevText = uploadBtn ? uploadBtn.textContent : '';
-    if (uploadBtn) { uploadBtn.disabled = true; uploadBtn.textContent = 'Reading PDF…'; }
-    try {
-        const formData = new FormData();
-        formData.append('file', file);
-        const res = await fetch(`${API_BASE}/orders/extract-order-numbers-from-pdf`, {
-            method: 'POST',
-            body: formData
-        });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to read PDF');
-        }
-        const data = await res.json();
-        const orderNumbers = data.order_numbers || [];
-        if (orderNumbers.length === 0) {
-            showToast('No order numbers found in PDF', 'error');
-        } else {
-            const textarea = document.getElementById('packagingListOrderNumbers');
-            if (textarea) {
-                textarea.value = orderNumbers.join('\n');
-                updatePackagingListOrderCount();
+    if (uploadBtn) { uploadBtn.disabled = true; }
+
+    // Start from order numbers already entered so multiple uploads accumulate.
+    const merged = [];
+    const seen = new Set();
+    const addNumbers = (nums) => {
+        for (const n of nums) {
+            const key = String(n).trim();
+            if (key && !seen.has(key)) {
+                seen.add(key);
+                merged.push(key);
             }
-            showToast(`Found ${orderNumbers.length} order number(s) in PDF`, 'success');
         }
-    } catch (e) {
-        showToast(e.message || 'Failed to read PDF', 'error');
+    };
+    addNumbers(parsePackagingListOrderNumbers());
+
+    const failed = [];
+    try {
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (uploadBtn) {
+                uploadBtn.textContent =
+                    files.length > 1 ? `Reading PDF ${i + 1}/${files.length}…` : 'Reading PDF…';
+            }
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const res = await fetch(`${API_BASE}/orders/extract-order-numbers-from-pdf`, {
+                    method: 'POST',
+                    body: formData
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || 'Failed to read PDF');
+                }
+                const data = await res.json();
+                addNumbers(data.order_numbers || []);
+            } catch (e) {
+                failed.push(file.name);
+                console.error(`Failed to read ${file.name}:`, e);
+            }
+        }
+
+        const textarea = document.getElementById('packagingListOrderNumbers');
+        if (textarea) {
+            textarea.value = merged.join('\n');
+            updatePackagingListOrderCount();
+        }
+
+        if (failed.length) {
+            showToast(`Could not read ${failed.length} PDF(s): ${failed.join(', ')}`, 'error');
+        } else if (merged.length === 0) {
+            showToast('No order numbers found in the selected PDF(s)', 'error');
+        } else {
+            const label = files.length > 1 ? `${files.length} PDFs` : 'PDF';
+            showToast(`Found ${merged.length} order number(s) from ${label}`, 'success');
+        }
     } finally {
         if (uploadBtn) { uploadBtn.disabled = false; uploadBtn.textContent = prevText; }
-        if (input) input.value = '';  // allow re-uploading the same file
+        if (input) input.value = '';  // allow re-uploading the same file(s)
     }
 }
 
@@ -3318,6 +3353,10 @@ function switchView(viewName) {
             if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
             if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
             exitOrdersFullScreen();
+            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
+            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
+            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
+            if (deliveryProgress) deliveryProgress.style.display = 'none';
         } else if (viewName === 'orders') {
             syncProductsBtn.style.display = 'none';
             syncOrdersBtn.style.display = 'inline-flex';
