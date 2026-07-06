@@ -6779,10 +6779,13 @@ function _collectGridColumnsForExport(gridApi) {
 function _getExportCellValue(gridApi, column, node) {
     if (!node) return '';
     let value = null;
-    if (column?.field && node.data) {
-        value = node.data[column.field];
-    } else if (gridApi?.getValue && column?.col) {
+    // Prefer the grid's computed value so columns backed by a valueGetter
+    // (e.g. Net Profit, Profit %) export correctly instead of reading a raw
+    // field that was never stored on node.data.
+    if (gridApi?.getValue && column?.col) {
         value = gridApi.getValue(column.col, node);
+    } else if (column?.field && node.data) {
+        value = node.data[column.field];
     }
     if (value == null) return '';
     if (Array.isArray(value)) return value.join(', ');
