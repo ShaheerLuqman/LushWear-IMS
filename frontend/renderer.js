@@ -3272,12 +3272,8 @@ function initOrdersDateRangeButton() {
 
     document.body.appendChild(menu);
 
-    // Close menu when clicking outside
-    document.addEventListener('click', (e) => {
-        if (menu.style.display !== 'none' && !menu.contains(e.target) && e.target !== triggerBtn) {
-            menu.style.display = 'none';
-        }
-    });
+    // Menu only closes via Apply, Clear, or toggling the trigger button —
+    // clicking elsewhere (including the flatpickr calendar) leaves it open.
 
     // Expose so onFilterChanged can update button label
     window._ordersDateRangeUpdateButtonLabel = updateButtonLabel;
