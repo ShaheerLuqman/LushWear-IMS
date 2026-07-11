@@ -452,56 +452,82 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         prefix = f"{pname} - "
         after = body.created_after.isoformat()
         now_iso = datetime.utcnow().isoformat()
-        page, offset = 500, 0
+        page = 500
+        select_cols = "id, order_number, replacement_of_order_no, items, cost_price, discount_amount"
+
+        # Collect orders whose effective date is on/after the cutoff. The effective date
+        # is order_receiving_date (the date shown in the orders grid), falling back to
+        # created_at when the receiving date is null. Each query is ordered by the unique
+        # order_number so OFFSET pagination stays stable: many orders can share the same
+        # created_at down to the microsecond (bulk sync), and ordering by a non-unique
+        # column previously let rows on a page boundary be silently skipped.
+        order_rows: List[Dict] = []
+        seen_ids = set()
+
+        def _collect(query):
+            offset = 0
+            while True:
+                rows = (
+                    query()
+                    .order("order_number")
+                    .range(offset, offset + page - 1)
+                    .execute()
+                    .data
+                    or []
+                )
+                if not rows:
+                    break
+                for r in rows:
+                    if r["id"] not in seen_ids:
+                        seen_ids.add(r["id"])
+                        order_rows.append(r)
+                if len(rows) < page:
+                    break
+                offset += page
+
+        # 1) order_receiving_date on/after cutoff
+        _collect(lambda: supabase.table("orders").select(select_cols).gte("order_receiving_date", after))
+        # 2) order_receiving_date is null, fall back to created_at
+        _collect(lambda: supabase.table("orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
+
         scanned = updated = 0
         updated_order_numbers: List[str] = []
+        for row in order_rows:
+            scanned += 1
+            items = row.get("items") if isinstance(row.get("items"), list) else []
+            if not any(isinstance(x, str) and x.startswith(prefix) for x in items):
+                continue
 
-        while True:
-            rows = (
-                supabase.table("orders")
-                .select("id, order_number, replacement_of_order_no, items, cost_price")
-                .gte("created_at", after)
-                .order("created_at")
-                .range(offset, offset + page - 1)
-                .execute()
-                .data
-                or []
-            )
-            if not rows:
-                break
-
-            for row in rows:
-                scanned += 1
-                items = row.get("items") if isinstance(row.get("items"), list) else []
-                if not any(isinstance(x, str) and x.startswith(prefix) for x in items):
-                    continue
-
-                if _is_replacement_order(row):
-                    new_cost = 0.0
-                else:
-                    new_cost = 0.0
-                    for line in items:
-                        if not isinstance(line, str):
-                            continue
-                        base = line.split(" - ", 1)[0].strip().lower()
-                        if base in costs:
-                            new_cost += costs[base]
-
+            if _is_replacement_order(row):
+                new_cost = 0.0
+            else:
+                new_cost = 0.0
+                for line in items:
+                    if not isinstance(line, str):
+                        continue
+                    base = line.split(" - ", 1)[0].strip().lower()
+                    if base in costs:
+                        new_cost += costs[base]
+                # Net against any price-reduction discount code applied to the order,
+                # same treatment as total_amount during sync (see PRICE_REDUCTION_DISCOUNT_CODES).
                 try:
-                    old = float(row.get("cost_price") or 0)
+                    discount_amount = float(row.get("discount_amount") or 0)
                 except (TypeError, ValueError):
-                    old = 0.0
-                if abs(old - new_cost) < 0.01:
-                    continue
-                supabase.table("orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
-                updated += 1
-                num = row.get("order_number")
-                if num is not None:
-                    updated_order_numbers.append(str(num))
+                    discount_amount = 0.0
+                if discount_amount:
+                    new_cost = max(0.0, new_cost - discount_amount)
 
-            if len(rows) < page:
-                break
-            offset += page
+            try:
+                old = float(row.get("cost_price") or 0)
+            except (TypeError, ValueError):
+                old = 0.0
+            if abs(old - new_cost) < 0.01:
+                continue
+            supabase.table("orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
+            updated += 1
+            num = row.get("order_number")
+            if num is not None:
+                updated_order_numbers.append(str(num))
 
         print(f"[recalculate-order-costs] updated {updated} order(s): {updated_order_numbers}")
 

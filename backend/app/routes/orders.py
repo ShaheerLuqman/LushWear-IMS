@@ -381,6 +381,7 @@ async def sync_shopify_orders():
             existing_orders_response = (
                 supabase.table("orders")
                 .select(existing_orders_select)
+                .order("order_number")
                 .range(offset, offset + limit - 1)
                 .execute()
             )
@@ -861,6 +862,10 @@ async def sync_shopify_orders():
                 existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
                 courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
                 freeze_amounts_items_cost = existing_status != "unfulfilled"
+                # advance_amount keeps syncing from Shopify through "fulfilled" (payment/financial_status can
+                # still change post-fulfillment); it only freezes once the order reaches delivered/returned
+                # (handled above via early continue) or another terminal-ish status.
+                freeze_advance = existing_status not in ("unfulfilled", "fulfilled")
                 existing_items_list = existing_order.get("items") if isinstance(existing_order.get("items"), list) else []
                 items_changed = sorted(str(x) for x in items) != sorted(str(x) for x in existing_items_list)
 
@@ -903,10 +908,11 @@ async def sync_shopify_orders():
                 # After it changes from unfulfilled, freeze these fields.
                 if freeze_amounts_items_cost:
                     order_data["total_amount"] = existing_order.get("total_amount")
-                    order_data["advance_amount"] = existing_order.get("advance_amount")
+                    order_data["advance_amount"] = existing_order.get("advance_amount") if freeze_advance else advance_amount
                     # Replacement orders (XXXX-R) always have 0 cost price
                     order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
+                    order_data["discount_amount"] = existing_order.get("discount_amount") or 0.0
                     skip_fields = True
                 else:
                     order_data["total_amount"] = total_amount
@@ -920,6 +926,7 @@ async def sync_shopify_orders():
                     else:
                         order_data["cost_price"] = cost_price
                     order_data["items"] = items
+                    order_data["discount_amount"] = order_discount_amount
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
 
@@ -1147,7 +1154,7 @@ async def upload_postex_csv(
         limit = 1000
         offset = 0
         while True:
-            resp = supabase.table("orders").select("id, order_number, total_amount, advance_amount, order_status").range(offset, offset + limit - 1).execute()
+            resp = supabase.table("orders").select("id, order_number, total_amount, advance_amount, order_status").order("order_number").range(offset, offset + limit - 1).execute()
             if not resp.data:
                 break
             all_orders.extend(resp.data)
@@ -1355,6 +1362,7 @@ async def fix_voided_order_totals(
                 supabase.table("orders")
                 .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
                 .gte("order_receiving_date", start_iso)
+                .order("order_number")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -1376,6 +1384,7 @@ async def fix_voided_order_totals(
                 .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
                 .is_("order_receiving_date", "null")
                 .gte("created_at", start_iso)
+                .order("order_number")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -1842,6 +1851,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 "cost_price": 0.0 if is_replacement_order else float(cost_price or 0.0),
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
                 "items": items,
+                "discount_amount": total_discounts if has_price_reduction_discount_code else 0.0,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
             }
@@ -3812,6 +3822,7 @@ async def get_month_summary_list():
             response = (
                 supabase.table("orders")
                 .select("order_receiving_date, created_at")
+                .order("id")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -3890,6 +3901,7 @@ async def get_month_summary_detail(month: int, year: int):
                 .select("*")
                 .gte("order_receiving_date", start_iso)
                 .lt("order_receiving_date", end_iso)
+                .order("order_number")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
@@ -3908,6 +3920,7 @@ async def get_month_summary_detail(month: int, year: int):
                 .is_("order_receiving_date", "null")
                 .gte("created_at", start_iso)
                 .lt("created_at", end_iso)
+                .order("order_number")
                 .range(offset, offset + page_size - 1)
                 .execute()
             )
