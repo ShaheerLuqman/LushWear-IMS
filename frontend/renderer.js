@@ -1,5 +1,64 @@
 // API Configuration
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = (typeof window !== 'undefined' && window.API_BASE) || 'http://127.0.0.1:8000/api';
+
+// ============================================
+// Session-token auth
+// The PIN gate exchanges the PIN for a token (see runPinGate). We store it for the
+// session and attach it to every API request via a fetch wrapper. A 401 from a
+// protected route means the token is missing/expired -> re-open the PIN gate.
+// ============================================
+const AUTH_TOKEN_KEY = 'lushwear_auth_token';
+
+function getAuthToken() {
+    try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (e) { return ''; }
+}
+function setAuthToken(token) {
+    _authExpiredHandling = false;
+    try { if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) { /* ignore */ }
+}
+function clearAuthToken() {
+    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) { /* ignore */ }
+}
+
+/** True while we are already re-opening the PIN gate after a 401, to avoid repeats. */
+let _authExpiredHandling = false;
+
+function isAuthBootstrapUrl(url) {
+    // app-pin endpoints are the login itself; their 401s are handled locally (wrong PIN).
+    return url.indexOf(API_BASE + '/app-pin/') === 0;
+}
+
+function onAuthExpired() {
+    if (_authExpiredHandling) return;
+    _authExpiredHandling = true;
+    clearAuthToken();
+    try { showToast('Session expired. Please enter your PIN.', 'warning'); } catch (e) { /* ignore */ }
+    try { lockApp(); } catch (e) { /* ignore */ }
+}
+
+// Wrap fetch: inject the token on API calls and catch auth failures globally.
+(function installAuthFetch() {
+    const origFetch = window.fetch.bind(window);
+    window.fetch = function (input, init) {
+        const url = typeof input === 'string' ? input : (input && input.url) || '';
+        const isApi = typeof url === 'string' && url.indexOf(API_BASE) === 0;
+        if (isApi) {
+            init = Object.assign({}, init);
+            const headers = new Headers((init && init.headers) || {});
+            const token = getAuthToken();
+            if (token && !headers.has('Authorization')) {
+                headers.set('Authorization', 'Bearer ' + token);
+            }
+            init.headers = headers;
+        }
+        return origFetch(input, init).then((res) => {
+            if (isApi && res.status === 401 && !isAuthBootstrapUrl(url)) {
+                onAuthExpired();
+            }
+            return res;
+        });
+    };
+})();
 
 function formatApiErrorDetail(payload) {
     if (!payload || typeof payload !== 'object') {
@@ -295,15 +354,8 @@ function runPinGate() {
                         throw new Error(formatApiErrorDetail(data));
                     }
 
-                    // Backend is ready — start prefetching data immediately while user types PIN
-                    if (!_prefetchProductsPromise) {
-                        _prefetchProductsPromise = loadProducts().catch((err) => {
-                            console.error('Prefetch products error:', err);
-                        });
-                        _prefetchOrdersPromise = loadOrders().catch((err) => {
-                            console.error('Prefetch orders error:', err);
-                        });
-                    }
+                    // Backend is ready. (Data is loaded after PIN verify, once we hold a
+                    // token — protected routes reject unauthenticated prefetches.)
 
                     // Hide connecting state, reveal form
                     if (waitingEl) waitingEl.style.display = 'none';
@@ -365,6 +417,7 @@ function runPinGate() {
                     if (!r.ok) {
                         throw new Error(formatApiErrorDetail(data));
                     }
+                    setAuthToken(data.token);
                     root.hidden = true;
                     pinInput.value = '';
                     confirmInput.value = '';
@@ -387,6 +440,7 @@ function runPinGate() {
                     pinInput.focus();
                     return;
                 }
+                setAuthToken(data.token);
                 root.hidden = true;
                 pinInput.value = '';
                 confirmInput.value = '';
@@ -2911,27 +2965,15 @@ async function confirmGenerateLoadSheet() {
         if (!pdfRes.ok) throw new Error('Failed to generate PDF');
         const blob = await pdfRes.blob();
         const filename = loadSheetFilenameFromDateAndRider(new Date(), riderName);
-        if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
-            const arrayBuffer = await blob.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            const base64String = btoa(String.fromCharCode(...uint8Array));
-            const result = await window.electronAPI.saveLoadSheetPDF(base64String, filename);
-            if (result && result.success) {
-                showToast(`Load sheet saved to app folder and opened (${orderNumbers.length} order(s))`, 'success');
-            } else {
-                showToast(result?.error || 'Failed to save PDF', 'error');
-            }
-        } else {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            showToast(`Load sheet saved and PDF downloaded (${orderNumbers.length} order(s))`, 'success');
-        }
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        showToast(`Load sheet saved and PDF downloaded (${orderNumbers.length} order(s))`, 'success');
         if (currentView === 'loadSheetLogs') {
             loadLoadSheetLogs();
         } else {
@@ -3072,27 +3114,15 @@ async function downloadLoadSheetLogPdf(logId, riderName, createdAt) {
         if (!response.ok) throw new Error('Failed to generate PDF');
         const blob = await response.blob();
         const filename = loadSheetFilenameFromDateAndRider(createdAt || new Date(), riderName);
-        if (window.electronAPI && window.electronAPI.saveLoadSheetPDF) {
-            const arrayBuffer = await blob.arrayBuffer();
-            const uint8Array = new Uint8Array(arrayBuffer);
-            const base64String = btoa(String.fromCharCode(...uint8Array));
-            const result = await window.electronAPI.saveLoadSheetPDF(base64String, filename);
-            if (result && result.success) {
-                showToast('PDF saved to Load Sheets folder and opened', 'success');
-            } else {
-                showToast(result?.error || 'Failed to save PDF', 'error');
-            }
-        } else {
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            showToast('PDF downloaded', 'success');
-        }
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        showToast('PDF downloaded', 'success');
     } catch (error) {
         showToast(error.message || 'Failed to download PDF', 'error');
     }
@@ -5633,30 +5663,18 @@ function initForms() {
                 }
                 const blob = await res.blob();
                 const filename = invoicePdfFilename();
-                if (window.electronAPI && window.electronAPI.saveInvoicePDF) {
-                    const arrayBuffer = await blob.arrayBuffer();
-                    const uint8Array = new Uint8Array(arrayBuffer);
-                    const base64String = btoa(String.fromCharCode(...uint8Array));
-                    const result = await window.electronAPI.saveInvoicePDF(base64String, filename);
-                    if (result && result.success) {
-                        showToast(`Invoice saved and opened (${orderIds.length} order(s))`, 'success');
-                    } else {
-                        showToast(result?.error || 'Failed to save invoice PDF', 'error');
-                    }
-                } else {
-                    const url = window.URL.createObjectURL(blob);
-                    const opened = window.open(url, '_blank', 'noopener,noreferrer');
-                    if (!opened) {
-                        const a = document.createElement('a');
-                        a.href = url;
-                        a.download = filename;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                    }
-                    setTimeout(() => window.URL.revokeObjectURL(url), 60000);
-                    showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
+                const url = window.URL.createObjectURL(blob);
+                const opened = window.open(url, '_blank', 'noopener,noreferrer');
+                if (!opened) {
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
                 }
+                setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+                showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
             } catch (e) {
                 showToast(e.message || 'Failed to generate invoice', 'error');
             }
@@ -5774,22 +5792,6 @@ function initForms() {
 
     // Load Sheet Logs page
     document.getElementById('loadSheetLogsRefreshBtn')?.addEventListener('click', () => loadLoadSheetLogs());
-    document.getElementById('loadSheetLogsOpenFolderBtn')?.addEventListener('click', async () => {
-        if (window.electronAPI && window.electronAPI.openLoadSheetsFolder) {
-            try {
-                const result = await window.electronAPI.openLoadSheetsFolder();
-                if (result && result.success) {
-                    showToast('Load Sheets folder opened', 'success');
-                } else {
-                    showToast(result?.error || 'Failed to open folder', 'error');
-                }
-            } catch (e) {
-                showToast(e?.message || 'Failed to open folder', 'error');
-            }
-        } else {
-            showToast('Open folder is only available in the desktop app', 'warning');
-        }
-    });
 
     // Refresh delivery status for selected orders
     const refreshDeliveryStatusSelectedBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
@@ -6065,11 +6067,12 @@ function initForms() {
             exitOrdersFullScreen();
         }
     });
-    if (window.electronAPI && window.electronAPI.onFullScreenChange) {
-        window.electronAPI.onFullScreenChange((isFullScreen) => {
-            if (!isFullScreen) syncOrdersFullScreenExit();
-        });
-    }
+    // Sync the UI when the browser leaves fullscreen (e.g. user pressed Esc / F11)
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && document.body.classList.contains('orders-table-fullscreen')) {
+            syncOrdersFullScreenExit();
+        }
+    });
 }
 
 function toggleOrdersFullScreen() {
@@ -6077,8 +6080,8 @@ function toggleOrdersFullScreen() {
         exitOrdersFullScreen();
     } else {
         document.body.classList.add('orders-table-fullscreen');
-        if (window.electronAPI && window.electronAPI.setFullScreen) {
-            window.electronAPI.setFullScreen(true);
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(() => {});
         }
         setTimeout(() => {
             if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
@@ -6086,7 +6089,7 @@ function toggleOrdersFullScreen() {
     }
 }
 
-/** Sync UI when fullscreen was exited by ESC or native leave-full-screen. Do not call setFullScreen(false). */
+/** Sync UI when fullscreen was exited by the browser (Esc/F11). Do not call exitFullscreen again. */
 function syncOrdersFullScreenExit() {
     document.body.classList.remove('orders-table-fullscreen');
     setTimeout(() => {
@@ -6094,11 +6097,11 @@ function syncOrdersFullScreenExit() {
     }, 100);
 }
 
-/** Exit fullscreen when user clicks the fullscreen button (we tell Electron to leave fullscreen). */
+/** Exit fullscreen when the user clicks the fullscreen button. */
 function exitOrdersFullScreen() {
     document.body.classList.remove('orders-table-fullscreen');
-    if (window.electronAPI && window.electronAPI.setFullScreen) {
-        window.electronAPI.setFullScreen(false);
+    if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
     }
     setTimeout(() => {
         if (ordersGridApi) ordersGridApi.sizeColumnsToFit();

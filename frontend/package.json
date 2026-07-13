@@ -1,36 +1,11 @@
 {
-  "name": "inventory-management-system",
+  "name": "lushwear-ims-frontend",
   "version": "1.0.0",
-  "description": "Desktop Inventory Management System",
-  "main": "main.js",
-  "scripts": {
-    "start": "electron .",
-    "build": "electron-builder",
-    "dev": "electron . --dev"
-  },
-  "author": "",
+  "description": "LushWear Inventory Management System — static web frontend",
+  "private": true,
   "license": "MIT",
-  "devDependencies": {
-    "electron": "^28.1.0",
-    "electron-builder": "^24.9.1"
-  },
-  "build": {
-    "appId": "com.inventory.management",
-    "productName": "Inventory Manager",
-    "directories": {
-      "output": "dist"
-    },
-    "win": {
-      "target": "nsis",
-      "icon": "assets/icon.ico"
-    },
-    "files": [
-      "**/*",
-      "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}",
-      "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}",
-      "!**/node_modules/*.d.ts",
-      "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
-    ]
+  "scripts": {
+    "dev": "npx --yes serve -l 8080 .",
+    "start": "npx --yes serve -l 8080 ."
   }
 }
-

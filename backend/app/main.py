@@ -1,6 +1,7 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import products, orders, cashbook, ledger, app_pin
+from app.auth import require_auth
 
 app = FastAPI(
     title="Inventory Management System",
@@ -17,11 +18,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
-app.include_router(products.router, prefix="/api")
-app.include_router(orders.router, prefix="/api")
-app.include_router(cashbook.router, prefix="/api")
-app.include_router(ledger.router, prefix="/api")
+# Protected routers — every route requires a valid session token (issued on PIN verify)
+_auth = [Depends(require_auth)]
+app.include_router(products.router, prefix="/api", dependencies=_auth)
+app.include_router(orders.router, prefix="/api", dependencies=_auth)
+app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
+app.include_router(ledger.router, prefix="/api", dependencies=_auth)
+
+# Open router — bootstraps login (status/verify/setup/change gate themselves via the PIN)
 app.include_router(app_pin.router, prefix="/api")
 
 @app.get("/")

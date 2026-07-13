@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from passlib.context import CryptContext
 from app.database import get_supabase
+from app.auth import create_token
 
 router = APIRouter(prefix="/app-pin", tags=["app-pin"])
 
@@ -84,7 +85,7 @@ async def pin_verify(body: PinVerifyBody):
         raise HTTPException(status_code=400, detail="No PIN has been set yet")
     if not _pwd_context.verify(pin, stored):
         raise HTTPException(status_code=401, detail="Incorrect PIN")
-    return {"ok": True}
+    return {"ok": True, "token": create_token()}
 
 
 @router.post("/setup")
@@ -104,7 +105,7 @@ async def pin_setup(body: PinSetupBody):
     supabase.table("app_pin").insert(
         {"id": APP_PIN_ROW_ID, "pin_hash": pin_hash, "updated_at": now}
     ).execute()
-    return {"ok": True}
+    return {"ok": True, "token": create_token()}
 
 
 @router.post("/change")
