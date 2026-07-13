@@ -912,7 +912,6 @@ async def sync_shopify_orders():
                     # Replacement orders (XXXX-R) always have 0 cost price
                     order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
-                    order_data["discount_amount"] = existing_order.get("discount_amount") or 0.0
                     skip_fields = True
                 else:
                     order_data["total_amount"] = total_amount
@@ -926,7 +925,6 @@ async def sync_shopify_orders():
                     else:
                         order_data["cost_price"] = cost_price
                     order_data["items"] = items
-                    order_data["discount_amount"] = order_discount_amount
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
 
@@ -1851,7 +1849,6 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 "cost_price": 0.0 if is_replacement_order else float(cost_price or 0.0),
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
                 "items": items,
-                "discount_amount": total_discounts if has_price_reduction_discount_code else 0.0,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
             }
