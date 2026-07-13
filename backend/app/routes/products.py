@@ -453,7 +453,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         after = body.created_after.isoformat()
         now_iso = datetime.utcnow().isoformat()
         page = 500
-        select_cols = "id, order_number, replacement_of_order_no, items, cost_price, discount_amount"
+        select_cols = "id, order_number, replacement_of_order_no, items, cost_price"
 
         # Collect orders whose effective date is on/after the cutoff. The effective date
         # is order_receiving_date (the date shown in the orders grid), falling back to
@@ -508,14 +508,6 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                     base = line.split(" - ", 1)[0].strip().lower()
                     if base in costs:
                         new_cost += costs[base]
-                # Net against any price-reduction discount code applied to the order,
-                # same treatment as total_amount during sync (see PRICE_REDUCTION_DISCOUNT_CODES).
-                try:
-                    discount_amount = float(row.get("discount_amount") or 0)
-                except (TypeError, ValueError):
-                    discount_amount = 0.0
-                if discount_amount:
-                    new_cost = max(0.0, new_cost - discount_amount)
 
             try:
                 old = float(row.get("cost_price") or 0)
