@@ -53,6 +53,10 @@ CREATE TABLE IF NOT EXISTS orders (
     cost_price DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     order_receiving_date TIMESTAMP WITH TIME ZONE,
     items TEXT[],
+    -- Structured order lines (one object per line): replaces the legacy "Name - Variant" strings in items.
+    -- Shape: [{ variant_id, product_id, name, variant_title, qty, unit_price }]
+    -- name/variant_title are snapshots (survive product rename/delete); ids link to products/variants.
+    line_items JSONB,
     piece_received TEXT NOT NULL DEFAULT 'Pending' CHECK (piece_received IN ('Pending', 'Done', 'Received')),
     replacement_of_order_no VARCHAR(20),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),

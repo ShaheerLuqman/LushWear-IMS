@@ -360,13 +360,22 @@ async def sync_shopify_orders():
         supabase = get_supabase()
         
         # Fetch all products with their cost prices for cost calculation
-        products_response = supabase.table("products").select("name, cost_price").execute()
+        products_response = supabase.table("products").select("id, name, cost_price, shopify_product_id").execute()
         products_cost_map = {}
+        # Map Shopify ids -> local ids so line_items can reference our product/variant rows.
+        product_id_by_shopify = {}   # shopify_product_id -> products.id
         for p in products_response.data:
             if p.get("name") and p.get("cost_price") is not None:
                 # Store by lowercase name for case-insensitive matching
                 products_cost_map[p["name"].lower().strip()] = float(p["cost_price"])
-        
+            if p.get("shopify_product_id") is not None and p.get("id"):
+                product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
+
+        variant_id_by_shopify = {}   # shopify_variant_id -> variants.id
+        for v in (supabase.table("variants").select("id, shopify_variant_id").execute().data or []):
+            if v.get("shopify_variant_id") is not None and v.get("id"):
+                variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
+
         existing_orders_map = {}
         existing_orders_all = []
         offset = 0
@@ -374,7 +383,7 @@ async def sync_shopify_orders():
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
-            "cost_price, items, total_amount, advance_amount, order_receiving_date, "
+            "cost_price, items, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no"
         )
         while True:
@@ -607,6 +616,39 @@ async def sync_shopify_orders():
                         item_names.append(name)
             return item_names
 
+        def extract_line_items(order):
+            """Build structured line_items (one object per line, real qty) from Shopify line_items.
+            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title so old orders
+            survive product renames/deletes. Excludes removed lines (current_quantity 0)."""
+            if "line_items" not in order or not order["line_items"]:
+                return []
+            rows = []
+            for item in order["line_items"]:
+                qty = item.get("current_quantity")
+                if qty is None:
+                    qty = item.get("quantity") or 0
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty <= 0:
+                    continue
+                sp_product_id = item.get("product_id")
+                sp_variant_id = item.get("variant_id")
+                try:
+                    unit_price = float(item.get("price") or 0)
+                except (TypeError, ValueError):
+                    unit_price = 0.0
+                rows.append({
+                    "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
+                    "product_id": product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None,
+                    "name": (item.get("title") or item.get("name") or "").strip(),
+                    "variant_title": (item.get("variant_title") or "").strip() or "-",
+                    "qty": qty,
+                    "unit_price": unit_price,
+                })
+            return rows
+
         def subtotal_line_items_excluding_removed(order):
             """Sum line item totals excluding removed items. Uses current_quantity (Shopify's quantity after removals) when present, else quantity. Removed lines have current_quantity=0."""
             if "line_items" not in order or not order["line_items"]:
@@ -768,8 +810,9 @@ async def sync_shopify_orders():
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
             items = extract_items(sp_order)
+            structured_line_items = extract_line_items(sp_order)
             calculated_cost_from_items = calculate_cost_from_items(items, products_cost_map) if items else 0.0
-            
+
             # If cost_price is 0, calculate it from items using products table
             if cost_price == 0.0 and items:
                 cost_price = calculated_cost_from_items
@@ -819,6 +862,7 @@ async def sync_shopify_orders():
                 "cost_price": order_cost_price,
                 "order_receiving_date": order_received_date,
                 "items": items,
+                "line_items": structured_line_items,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time
             }
@@ -912,6 +956,7 @@ async def sync_shopify_orders():
                     # Replacement orders (XXXX-R) always have 0 cost price
                     order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
                     order_data["items"] = existing_order.get("items")
+                    order_data["line_items"] = existing_order.get("line_items")
                     skip_fields = True
                 else:
                     order_data["total_amount"] = total_amount
@@ -925,6 +970,7 @@ async def sync_shopify_orders():
                     else:
                         order_data["cost_price"] = cost_price
                     order_data["items"] = items
+                    order_data["line_items"] = structured_line_items
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
 
@@ -1302,6 +1348,7 @@ async def create_replacement_order(body: ReplacementOrderCreate):
             "cost_price": 0.0,  # Replacement orders always have 0 cost price
             "order_receiving_date": order_receiving_date or now,
             "items": None,
+            "line_items": None,
             "replacement_of_order_no": original_num,
             "created_at": now,
             "updated_at": now,
@@ -1576,15 +1623,22 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
 
         # products cost map for item-based cost calculation fallback
         products_cost_map: Dict[str, float] = {}
-        products_response = supabase.table("products").select("name, cost_price").execute()
+        product_id_by_shopify: Dict[int, str] = {}   # shopify_product_id -> products.id
+        products_response = supabase.table("products").select("id, name, cost_price, shopify_product_id").execute()
         for p in products_response.data or []:
             name = (p.get("name") or "").strip().lower()
-            if not name:
-                continue
-            try:
-                products_cost_map[name] = float(p.get("cost_price") or 0.0)
-            except (TypeError, ValueError):
-                products_cost_map[name] = 0.0
+            if name:
+                try:
+                    products_cost_map[name] = float(p.get("cost_price") or 0.0)
+                except (TypeError, ValueError):
+                    products_cost_map[name] = 0.0
+            if p.get("shopify_product_id") is not None and p.get("id"):
+                product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
+
+        variant_id_by_shopify: Dict[int, str] = {}   # shopify_variant_id -> variants.id
+        for v in (supabase.table("variants").select("id, shopify_variant_id").execute().data or []):
+            if v.get("shopify_variant_id") is not None and v.get("id"):
+                variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
 
         # existing orders map by order_number
         existing_orders_map: Dict[str, Dict[str, Any]] = {}
@@ -1723,6 +1777,36 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                         item_names.append(name)
             return item_names
 
+        def extract_line_items(order):
+            """Structured line_items (one object per line, real qty) from Shopify line_items.
+            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title."""
+            rows: List[Dict[str, Any]] = []
+            for item in order.get("line_items") or []:
+                qty = item.get("current_quantity")
+                if qty is None:
+                    qty = item.get("quantity") or 0
+                try:
+                    qty = int(qty)
+                except (TypeError, ValueError):
+                    qty = 0
+                if qty <= 0:
+                    continue
+                sp_product_id = item.get("product_id")
+                sp_variant_id = item.get("variant_id")
+                try:
+                    unit_price = float(item.get("price") or 0)
+                except (TypeError, ValueError):
+                    unit_price = 0.0
+                rows.append({
+                    "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
+                    "product_id": product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None,
+                    "name": (item.get("title") or item.get("name") or "").strip(),
+                    "variant_title": (item.get("variant_title") or "").strip() or "-",
+                    "qty": qty,
+                    "unit_price": unit_price,
+                })
+            return rows
+
         def calculate_cost_from_items(items):
             if not items:
                 return 0.0
@@ -1804,6 +1888,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 advance_amount = total_amount if financial_status == "paid" else total_discounts
 
             items = extract_items(sp_order)
+            structured_line_items = extract_line_items(sp_order)
             cost_price = extract_cost_price(sp_order)
             if cost_price is None or cost_price == 0.0:
                 cost_price = calculate_cost_from_items(items)
@@ -1849,6 +1934,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 "cost_price": 0.0 if is_replacement_order else float(cost_price or 0.0),
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
                 "items": items,
+                "line_items": structured_line_items,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
             }
@@ -3097,21 +3183,18 @@ def _line_items_from_shopify_order(order: dict) -> List[Dict[str, Any]]:
 
 
 def _line_items_from_db_items(db_order: dict) -> List[Dict[str, Any]]:
-    items = db_order.get("items") or []
+    """Invoice/load-sheet line rows from a stored order. Prefers structured line_items
+    (real quantity/unit_price), falling back to legacy items[] strings."""
     rows: List[Dict[str, Any]] = []
-    for line in items:
-        if not isinstance(line, str):
+    for row in _order_line_rows(db_order):
+        if not row["product"]:
             continue
-        line = line.strip()
-        if not line:
-            continue
-        if " - " in line:
-            title, variant = line.rsplit(" - ", 1)
-            rows.append(
-                {"product": title.strip(), "size": variant.strip(), "quantity": 1, "unit_price": None}
-            )
-        else:
-            rows.append({"product": line, "size": "-", "quantity": 1, "unit_price": None})
+        rows.append({
+            "product": row["product"],
+            "size": row["variant"],
+            "quantity": row["quantity"],
+            "unit_price": row["unit_price"],
+        })
     return rows
 
 
@@ -3183,8 +3266,9 @@ def _build_invoice_order_context(db_order: dict, sp_order: Optional[dict]) -> di
     else:
         ctx["invoice_order_ref"] = f"#{db_order.get('order_number')}"
         ctx["invoice_currency"] = "PKR"
-        ilen = len(db_order.get("items") or [])
-        ctx["invoice_pieces"] = ilen if ilen > 0 else 1
+        # Piece count = total units across lines (real qty from line_items, else legacy array length).
+        pieces = sum(r["quantity"] for r in _order_line_rows(db_order))
+        ctx["invoice_pieces"] = pieces if pieces > 0 else 1
         ctx["invoice_destination"] = (db_order.get("destination") or "").strip() or "-"
         ctx["invoice_origin"] = (db_order.get("origin") or "").strip() or default_origin
         ctx["invoice_return_city"] = (db_order.get("return_city") or "").strip() or default_origin
@@ -3398,8 +3482,8 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
         order_type = "Replacement" if order.get("replacement_of_order_no") else "Normal"
         pieces_val = order.get("invoice_pieces")
         if pieces_val is None:
-            items_list = order.get("items") or []
-            pieces_val = len(items_list) if items_list else 1
+            total_units = sum(r["quantity"] for r in _order_line_rows(order))
+            pieces_val = total_units if total_units else 1
         pieces = str(pieces_val)
         origin = order.get("invoice_origin") or order.get("origin") or "-"
         destination = order.get("invoice_destination") or order.get("destination") or "-"
@@ -3527,6 +3611,45 @@ def _split_item_name(item: str) -> Tuple[str, str]:
     return s, "-"
 
 
+def _order_line_rows(order: dict) -> List[Dict[str, Any]]:
+    """Normalized order lines for readers, preferring structured line_items and falling back
+    to the legacy items[] strings. Each row: {product, variant, product_id, variant_id, quantity, unit_price}.
+    For legacy strings, quantity is 1 per array element (the old repeat-per-unit convention)."""
+    line_items = order.get("line_items")
+    if isinstance(line_items, list) and line_items:
+        rows: List[Dict[str, Any]] = []
+        for li in line_items:
+            if not isinstance(li, dict):
+                continue
+            try:
+                qty = int(li.get("qty") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if qty <= 0:
+                continue
+            rows.append({
+                "product": (li.get("name") or "").strip(),
+                "variant": (li.get("variant_title") or "-").strip() or "-",
+                "product_id": li.get("product_id"),
+                "variant_id": li.get("variant_id"),
+                "quantity": qty,
+                "unit_price": li.get("unit_price"),
+            })
+        return rows
+    # Legacy fallback: one array element per unit.
+    rows = []
+    for item in (order.get("items") or []):
+        product, variant = _split_item_name(item)
+        if not product:
+            continue
+        rows.append({
+            "product": product, "variant": variant,
+            "product_id": None, "variant_id": None,
+            "quantity": 1, "unit_price": None,
+        })
+    return rows
+
+
 # Base size columns always shown on the packaging list, in this order.
 PACKAGING_BASE_SIZES = ["S", "M", "L", "XL"]
 
@@ -3547,19 +3670,21 @@ def _aggregate_packaging_items(orders: List[dict]) -> Tuple[List[dict], List[str
       sizes = ordered list of size columns to show: S, M, L, XL first, then any
               other sizes present in the data (sorted), e.g. XXL or Free Size.
 
-    Each item string in orders[*]['items'] represents one unit (repeated per quantity).
+    Uses structured line_items (real qty per line) when present, else legacy items[] strings
+    (one unit per array element) via _order_line_rows.
     """
     # product -> size -> count
     products: Dict[str, Dict[str, int]] = {}
     seen_sizes: set = set()
     for o in orders:
-        for item in (o.get("items") or []):
-            product, variant = _split_item_name(item)
+        for row in _order_line_rows(o):
+            product = row["product"]
             if not product:
                 continue
-            size = _normalize_size(variant)
+            size = _normalize_size(row["variant"])
+            qty = row["quantity"]
             products.setdefault(product, {})
-            products[product][size] = products[product].get(size, 0) + 1
+            products[product][size] = products[product].get(size, 0) + qty
             seen_sizes.add(size)
 
     # Column order: base sizes first, then any extra sizes present (sorted).
@@ -3697,7 +3822,7 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
         supabase = get_supabase()
-        orders_response = supabase.table("orders").select("id, order_number, items").in_("id", order_ids).execute()
+        orders_response = supabase.table("orders").select("id, order_number, items, line_items").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
@@ -3746,7 +3871,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
         supabase = get_supabase()
         orders_response = (
             supabase.table("orders")
-            .select("id, order_number, items")
+            .select("id, order_number, items, line_items")
             .in_("order_number", order_numbers)
             .execute()
         )
@@ -3980,9 +4105,10 @@ async def get_month_summary_detail(month: int, year: int):
 
         # Products sold by collection (5 collections + Others for products without a collection)
         KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
-        products_resp = supabase.table("products").select("name, collection, price").execute()
+        products_resp = supabase.table("products").select("id, name, collection, price").execute()
         products_list = []  # (name_lower, collection_display, price)
         products_map = {}   # name_lower -> (collection_display, price)
+        products_by_id = {} # products.id -> (collection_display, price)
         for p in (products_resp.data or []):
             name = (p.get("name") or "").strip()
             if not name:
@@ -3993,6 +4119,8 @@ async def get_month_summary_detail(month: int, year: int):
             price = float(p.get("price") or 0)
             products_list.append((name_lower, collection_display, price))
             products_map[name_lower] = (collection_display, price)
+            if p.get("id"):
+                products_by_id[p["id"]] = (collection_display, price)
             if " - " in name:
                 base = name.rsplit(" - ", 1)[0].lower().strip()
                 if base and base not in products_map:
@@ -4015,10 +4143,15 @@ async def get_month_summary_detail(month: int, year: int):
 
         products_agg = {c: {"count": 0, "sum": 0.0} for c in KNOWN_COLLECTIONS + ["Others"]}
         for order in non_cancelled:
-            for item_name in (order.get("items") or []):
-                coll, price = resolve_item_to_collection_and_price(item_name)
-                products_agg[coll]["count"] += 1
-                products_agg[coll]["sum"] += price
+            for row in _order_line_rows(order):
+                qty = row["quantity"]
+                # Resolve via product_id (exact) when present, else fall back to name matching.
+                if row.get("product_id") and row["product_id"] in products_by_id:
+                    coll, price = products_by_id[row["product_id"]]
+                else:
+                    coll, price = resolve_item_to_collection_and_price(row["product"])
+                products_agg[coll]["count"] += qty
+                products_agg[coll]["sum"] += price * qty
         products_sold_by_collection = [
             {"collection": c, "count": products_agg[c]["count"], "sum": round(products_agg[c]["sum"], 2)}
             for c in KNOWN_COLLECTIONS + ["Others"]

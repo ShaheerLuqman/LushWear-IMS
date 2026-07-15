@@ -1620,6 +1620,17 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             valueGetter: (params) => {
+                // Prefer structured line_items (name + variant + qty); fall back to legacy items[] strings.
+                const lineItems = params.data.line_items;
+                if (Array.isArray(lineItems) && lineItems.length > 0) {
+                    return lineItems.map(li => {
+                        const name = li.name || '';
+                        const variant = li.variant_title && li.variant_title !== '-' ? ` - ${li.variant_title}` : '';
+                        const qty = Number(li.qty) || 1;
+                        const qtyStr = qty > 1 ? ` ×${qty}` : '';
+                        return `${name}${variant}${qtyStr}`;
+                    }).join(', ');
+                }
                 const items = params.data.items;
                 if (items && Array.isArray(items) && items.length > 0) {
                     return items.join(', ');
