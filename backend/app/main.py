@@ -1,3 +1,5 @@
+import os
+
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from app.routes import products, orders, cashbook, ledger, app_pin
@@ -9,10 +11,13 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Configure CORS for Electron app
+# CORS. Set ALLOWED_ORIGINS (comma-separated) to the frontend origin(s) in production,
+# e.g. "https://your-app.vercel.app". Defaults to "*" (any origin) for local dev.
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "*")
+_allowed_origins = [o.strip() for o in _raw_origins.split(",") if o.strip()] or ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

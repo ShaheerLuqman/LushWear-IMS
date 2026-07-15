@@ -1,0 +1,46 @@
+# Render Blueprint for the LushWear IMS backend (FastAPI).
+# Deploy: Render Dashboard -> New -> Blueprint -> pick this repo. Render reads this file,
+# creates the service, and prompts for the secret env vars marked `sync: false`.
+services:
+  - type: web
+    name: lushwear-ims-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "uvicorn app.main:app --host 0.0.0.0 --port $PORT"
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+
+      # Auth — Render generates a strong AUTH_SECRET once and keeps it stable across
+      # deploys (so issued session tokens survive restarts).
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: AUTH_TOKEN_TTL_HOURS
+        value: "168"
+
+      # Frontend origin(s) allowed by CORS. Set to your Vercel URL after the frontend
+      # is deployed, e.g. "https://your-app.vercel.app". Left blank -> "*" (dev only).
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+      # Supabase (set the values in the Render dashboard — never commit them).
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_KEY
+        sync: false
+
+      # Shopify integration.
+      - key: SHOPIFY_STORE_URL
+        sync: false
+      - key: SHOPIFY_ADMIN_API_TOKEN
+        sync: false
+      - key: SHOPIFY_API_KEY
+        sync: false
+      - key: SHOPIFY_API_SECRET_KEY
+        sync: false
+      - key: SHOPIFY_API_VERSION
+        value: "2024-07"
