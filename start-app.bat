@@ -26,6 +26,17 @@ exit
 
 :visible
 cd /d "%~dp0"
+REM --- Run the desktop app from the electron-desktop branch ---
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CURBRANCH=%%b"
+if /i not "%CURBRANCH%"=="electron-desktop" (
+    echo Switching to electron-desktop branch...
+    git checkout electron-desktop
+    if errorlevel 1 (
+        echo ERROR: Could not switch to electron-desktop. Commit or stash your changes, then run start-app again.
+        pause
+        exit /b 1
+    )
+)
 git pull
 cd frontend
 
@@ -47,6 +58,12 @@ exit
 
 :hidden
 cd /d "%~dp0"
+REM --- Run the desktop app from the electron-desktop branch (no prompts in hidden mode) ---
+for /f "delims=" %%b in ('git rev-parse --abbrev-ref HEAD 2^>nul') do set "CURBRANCH=%%b"
+if /i not "%CURBRANCH%"=="electron-desktop" (
+    git checkout electron-desktop
+    if errorlevel 1 exit /b 1
+)
 git pull
 cd frontend
 

@@ -4,6 +4,14 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Run the desktop app from the electron-desktop branch
+CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "electron-desktop" ]; then
+  echo "Switching to electron-desktop branch..."
+  git checkout electron-desktop
+  echo
+fi
+
 if [ -d .git ]; then
   echo "Pulling latest repository changes..."
   git pull
