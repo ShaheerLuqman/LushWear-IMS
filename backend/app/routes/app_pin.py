@@ -1,70 +1,142 @@
+import threading
+import time
 from datetime import datetime, timezone
-from typing import Optional
-from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, field_validator
-from passlib.context import CryptContext
+from typing import Annotated, Optional
+
+import bcrypt
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import AfterValidator, BaseModel
+
 from app.database import get_supabase
+from app.auth import create_token
 
 router = APIRouter(prefix="/app-pin", tags=["app-pin"])
 
 APP_PIN_ROW_ID = "default"
-_pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# bcrypt cost factor. A single short PIN cannot be meaningfully protected against
+# offline cracking by hash cost (the keyspace is tiny), so the real brute-force
+# defense is the API-side lockout below. We keep the cost low for a snappy verify.
+_BCRYPT_ROUNDS = 8
 
 
-def _normalize_pin(pin: str) -> str:
+def _hash_pin(pin: str) -> str:
+    return bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt(_BCRYPT_ROUNDS)).decode("ascii")
+
+
+def _verify_pin(pin: str, stored_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(pin.encode("utf-8"), stored_hash.encode("ascii"))
+    except (ValueError, TypeError):
+        # Malformed stored hash — treat as non-match rather than 500.
+        return False
+
+
+def _validate_pin(pin: str) -> str:
     p = (pin or "").strip()
-    if not p:
-        raise HTTPException(status_code=400, detail="PIN is required")
-    if len(p) < 4 or len(p) > 64:
+    if not (4 <= len(p) <= 64):
         raise HTTPException(status_code=400, detail="PIN must be between 4 and 64 characters")
     return p
 
 
-class PinVerifyBody(BaseModel):
-    pin: str = Field(..., min_length=1, max_length=64)
+# A PIN field that is stripped and length-checked during request parsing.
+Pin = Annotated[str, AfterValidator(_validate_pin)]
 
-    @field_validator("pin")
-    @classmethod
-    def strip_pin(cls, v: str) -> str:
-        return (v or "").strip()
+
+class PinVerifyBody(BaseModel):
+    pin: Pin
 
 
 class PinSetupBody(BaseModel):
-    pin: str = Field(..., min_length=1, max_length=64)
-    confirm_pin: str = Field(..., min_length=1, max_length=64)
-
-    @field_validator("pin", "confirm_pin")
-    @classmethod
-    def strip_fields(cls, v: str) -> str:
-        return (v or "").strip()
+    pin: Pin
+    confirm_pin: Pin
 
 
 class PinChangeBody(BaseModel):
-    current_pin: str = Field(..., min_length=1, max_length=64)
-    new_pin: str = Field(..., min_length=1, max_length=64)
-    confirm_pin: str = Field(..., min_length=1, max_length=64)
+    current_pin: Pin
+    new_pin: Pin
+    confirm_pin: Pin
 
-    @field_validator("current_pin", "new_pin", "confirm_pin")
-    @classmethod
-    def strip_fields(cls, v: str) -> str:
-        return (v or "").strip()
+
+class _Lockout:
+    """Per-client brute-force lockout (single-instance, in-memory).
+
+    After ``max_attempts`` failed /verify attempts within ``window`` seconds, the
+    client is locked out for ``window`` seconds. State is process-local, which is
+    correct for the single-instance deployment; a multi-instance setup would need
+    shared state (Supabase/Redis). A successful verify clears the counter.
+    """
+
+    def __init__(self, max_attempts: int = 5, window: int = 15 * 60):
+        self.max_attempts = max_attempts
+        self.window = window
+        self._lock = threading.Lock()
+        self._state: dict[str, dict] = {}  # key -> {"fails", "first_fail", "locked_until"}
+
+    def check(self, key: str) -> None:
+        """Raise 429 if ``key`` is currently locked out."""
+        now = time.time()
+        with self._lock:
+            locked_until = (self._state.get(key) or {}).get("locked_until", 0)
+        if locked_until > now:
+            retry_after = int(locked_until - now) + 1
+            raise HTTPException(
+                status_code=429,
+                detail=f"Too many incorrect attempts. Try again in {retry_after} seconds.",
+                headers={"Retry-After": str(retry_after)},
+            )
+
+    def record_failure(self, key: str) -> None:
+        now = time.time()
+        with self._lock:
+            entry = self._state.get(key)
+            if not entry or (now - entry["first_fail"]) > self.window:
+                entry = {"fails": 0, "first_fail": now, "locked_until": 0}
+            entry["fails"] += 1
+            if entry["fails"] >= self.max_attempts:
+                entry["locked_until"] = now + self.window
+            self._state[key] = entry
+
+    def clear(self, key: str) -> None:
+        with self._lock:
+            self._state.pop(key, None)
+
+
+_lockout = _Lockout()
+
+
+def _client_key(request: Request) -> str:
+    return (request.client.host if request.client else None) or "unknown"
 
 
 def _get_existing_hash() -> Optional[str]:
-    supabase = get_supabase()
-    response = supabase.table("app_pin").select("pin_hash").eq("id", APP_PIN_ROW_ID).limit(1).execute()
-    rows = response.data or []
-    if not rows:
-        return None
-    return rows[0].get("pin_hash")
+    rows = (
+        get_supabase()
+        .table("app_pin")
+        .select("pin_hash")
+        .eq("id", APP_PIN_ROW_ID)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    return rows[0].get("pin_hash") if rows else None
+
+
+def _store_hash(pin: str, *, insert: bool) -> None:
+    row = {"pin_hash": _hash_pin(pin), "updated_at": datetime.now(timezone.utc).isoformat()}
+    table = get_supabase().table("app_pin")
+    if insert:
+        table.insert({"id": APP_PIN_ROW_ID, **row}).execute()
+    else:
+        table.update(row).eq("id", APP_PIN_ROW_ID).execute()
 
 
 @router.get("/status")
 async def pin_status():
     """Whether a PIN has been configured (does not reveal the hash)."""
     try:
-        h = _get_existing_hash()
-        return {"configured": bool(h)}
+        return {"configured": bool(_get_existing_hash())}
     except Exception as e:
         err = str(e).lower()
         if "relation" in err and "app_pin" in err:
@@ -76,57 +148,46 @@ async def pin_status():
 
 
 @router.post("/verify")
-async def pin_verify(body: PinVerifyBody):
-    """Check PIN against stored hash."""
-    pin = _normalize_pin(body.pin)
+async def pin_verify(body: PinVerifyBody, request: Request):
+    """Check PIN against stored hash. Rate-limited to deter brute force."""
+    key = _client_key(request)
+    _lockout.check(key)
+
     stored = _get_existing_hash()
     if not stored:
         raise HTTPException(status_code=400, detail="No PIN has been set yet")
-    if not _pwd_context.verify(pin, stored):
+    if not _verify_pin(body.pin, stored):
+        _lockout.record_failure(key)
         raise HTTPException(status_code=401, detail="Incorrect PIN")
-    return {"ok": True}
+    _lockout.clear(key)
+    return {"ok": True, "token": create_token()}
 
 
 @router.post("/setup")
 async def pin_setup(body: PinSetupBody):
     """First-time PIN creation (only when none exists)."""
-    pin = _normalize_pin(body.pin)
-    confirm = _normalize_pin(body.confirm_pin)
-    if pin != confirm:
+    if body.pin != body.confirm_pin:
         raise HTTPException(status_code=400, detail="PINs do not match")
-
     if _get_existing_hash():
         raise HTTPException(status_code=400, detail="A PIN is already set. Use change PIN instead.")
 
-    pin_hash = _pwd_context.hash(pin)
-    now = datetime.now(timezone.utc).isoformat()
-    supabase = get_supabase()
-    supabase.table("app_pin").insert(
-        {"id": APP_PIN_ROW_ID, "pin_hash": pin_hash, "updated_at": now}
-    ).execute()
-    return {"ok": True}
+    _store_hash(body.pin, insert=True)
+    return {"ok": True, "token": create_token()}
 
 
 @router.post("/change")
 async def pin_change(body: PinChangeBody):
     """Replace PIN; requires current PIN."""
-    current = _normalize_pin(body.current_pin)
-    new_pin = _normalize_pin(body.new_pin)
-    confirm = _normalize_pin(body.confirm_pin)
-    if new_pin != confirm:
+    if body.new_pin != body.confirm_pin:
         raise HTTPException(status_code=400, detail="New PINs do not match")
-    if new_pin == current:
+    if body.new_pin == body.current_pin:
         raise HTTPException(status_code=400, detail="New PIN must be different from the current PIN")
 
     stored = _get_existing_hash()
     if not stored:
         raise HTTPException(status_code=400, detail="No PIN has been set yet")
-
-    if not _pwd_context.verify(current, stored):
+    if not _verify_pin(body.current_pin, stored):
         raise HTTPException(status_code=401, detail="Current PIN is incorrect")
 
-    pin_hash = _pwd_context.hash(new_pin)
-    now = datetime.now(timezone.utc).isoformat()
-    supabase = get_supabase()
-    supabase.table("app_pin").update({"pin_hash": pin_hash, "updated_at": now}).eq("id", APP_PIN_ROW_ID).execute()
+    _store_hash(body.new_pin, insert=False)
     return {"ok": True}
