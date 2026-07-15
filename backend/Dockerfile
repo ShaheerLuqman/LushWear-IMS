@@ -12,5 +12,6 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
+# Bind the port the platform provides ($PORT), falling back to 7860 (HF Spaces default).
 EXPOSE 7860
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7860"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-7860}"]
