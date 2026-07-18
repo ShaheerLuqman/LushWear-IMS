@@ -76,3 +76,40 @@ Steps:
 - [ ] Drop the column from the DB and the canonical schema:
       `ALTER TABLE orders DROP COLUMN items;` and remove `items TEXT[]` from
       `supabase_schema.sql`.
+
+---
+
+# Feature backlog (frontend / UX)
+
+Planned frontend and UX features. Backend-touching features (orgs/users, admin
+portal, caching, notifications API, AI chatbot, audit log, etc.) live in
+[`backend/BACKEND.md`](backend/BACKEND.md) §6; full-stack items appear in both,
+one line each.
+
+## Frontend / UX
+
+- [ ] **Improved responsiveness & mobile view** — make the app usable on smaller
+      screens.
+- [ ] **Better column filtering** — replace the current column filter with a more
+      usable mechanism.
+- [ ] **Per-user view persistence** — remember each user's column widths / layout
+      (cookies or user prefs; ties into Organizations & Users).
+- [ ] **Dark & light theme** — theme toggle with persisted preference.
+- [ ] **Keyboard shortcuts / keybinds** — add shortcuts for common actions.
+
+### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)
+
+- [ ] **Admin Portal (UI)** — screens to manage organizations, users, and roles.
+- [ ] **Live user count** — display currently-active users in the admin portal.
+- [ ] **Notifications section** — UI to view notifications.
+- [ ] **Carrier health in Monthly Summary** — per-carrier delivered/total parcel
+      percentage display.
+- [ ] **Sync-from-Shopify last-updated time** — show when the last sync ran.
+- [ ] **Per-order last-fetched time** — show when each order's delivery status was
+      last refreshed.
+- [ ] **Server status indicator** — show "offline" on a health-check failure or
+      network outage.
+
+## Misc
+
+- [ ] **Pick an app name** — decide on a suitable product name.

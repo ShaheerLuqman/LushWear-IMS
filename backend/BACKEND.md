@@ -4,6 +4,18 @@ A technical overview of the backend as it exists today, followed by a
 production-oriented review: what's implemented, where the risks are, and how to
 improve it. Written for the current state of the `webapp-migration` branch.
 
+> **Recent changes (this hardening pass):**
+> - Backend now authenticates to Supabase with the **Secret** key
+>   (`SUPABASE_SECRET_KEY`); the **Publishable** key is available for future
+>   direct-frontend reads.
+> - **RLS enabled** on all tables (no policies — public path closed).
+> - Database constraints/indexes/trigger added and **verified live** — see
+>   [`DATABASE.md`](DATABASE.md). This supersedes parts of §4.1 below, which are
+>   annotated inline where done.
+> - Orders now carry structured **`line_items`** (JSONB) alongside the legacy
+>   `items` string array (the legacy column is slated for removal — see
+>   [`TODO.md`](../TODO.md)).
+
 ---
 
 ## 1. What this backend is
@@ -79,12 +91,15 @@ backend/
   toward users/orgs/RBAC.
 - Brute-force protection is an **in-memory, per-IP lockout** (5 attempts / 15 min).
 
-### Data model (inferred from queries)
+### Data model
 
 `products` → `variants` (1-N), `orders` (with JSONB `line_items` + legacy `items`
 string array), `cashbook_entries` → `cashbook_daily_balances`, `ledgers`,
-`app_pin`, `load_sheet_logs`. There is no ORM and no migrations dir in this repo —
-schema lives in Supabase and is referenced by string table/column names.
+`app_pin`, `load_sheet_logs`. There is no ORM; tables/columns are referenced by
+string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql)
+and is documented (with the deliberate soft-link/`order_status` design choices) in
+[`DATABASE.md`](DATABASE.md). Adopting versioned migrations is still open
+([`TODO.md`](../TODO.md)).
 
 ### The heavy pieces
 
@@ -124,24 +139,24 @@ Ordered roughly by impact-to-effort.
 
 ### 4.1 Correctness & data integrity (highest priority)
 
-- **Wrap multi-write operations in transactions.** Sync, CSV upload, and
-  replacement creation issue many independent PostgREST calls. A failure halfway
-  through leaves the DB partially updated with no rollback. PostgREST can't do
-  interactive transactions, so move multi-step mutations into **Postgres
-  functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for the
-  write-heavy paths. At minimum, make the sync idempotent (it mostly is) and
-  restartable.
-- **Enforce invariants in the database, not just the app.** Add `CHECK`
-  constraints (`amount > 0`, `entry_type in ('inflow','outflow')`), foreign keys
-  (`cashbook_entries.folio → ledgers.id`, `variants.product_id → products.id`),
-  and `NOT NULL`s. Today `ledger` delete manually checks for references because
-  there's no FK doing it.
-- **Turn on Supabase Row Level Security** and stop relying on the service key
-  from the app as the only gate. Even with a single identity, RLS is your
-  defence-in-depth if the key leaks.
-- **Concurrency on sync.** Two overlapping `/sync-shopify` calls will race on the
-  same rows. Add an advisory lock (Postgres `pg_advisory_lock`) or a simple
-  "sync in progress" flag so the endpoint can't run concurrently.
+- ✅ **DONE — Enforce invariants in the database.** FKs
+  (`variants → products`, `cashbook_entries.folio → ledgers`), `CHECK`s
+  (`amount > 0`, `entry_type`, `piece_received`, `order_status` non-blank,
+  `advance_status BETWEEN 1 AND 5`), and an `updated_at` trigger are in place and
+  verified live. See [`DATABASE.md`](DATABASE.md). (The soft links
+  `orders ↔ cashbook_entries` and JSONB line-item ids are intentionally *not* FKs
+  — documented there.)
+- ✅ **DONE — Supabase Row Level Security** is enabled on all tables; the backend
+  uses the Secret key (bypasses RLS), the public/publishable path is closed.
+- **Wrap multi-write operations in transactions.** *(Still open.)* Sync, CSV
+  upload, and replacement creation issue many independent PostgREST calls. A
+  failure halfway through leaves the DB partially updated with no rollback.
+  PostgREST can't do interactive transactions, so move multi-step mutations into
+  **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for
+  the write-heavy paths. At minimum, keep the sync idempotent and restartable.
+- **Concurrency on sync.** *(Still open.)* Two overlapping `/sync-shopify` calls
+  will race on the same rows. Add an advisory lock (Postgres `pg_advisory_lock`)
+  or a "sync in progress" flag so the endpoint can't run concurrently.
 
 ### 4.2 Break up `orders.py`
 
@@ -172,9 +187,9 @@ maintainability liability.
   parts of sync issue one `UPDATE` per row in a Python loop. Use `upsert` with a
   single batched payload (the sync's insert path already does this — apply it
   everywhere).
-- **Add indexes** on the hot filter/sort columns: `orders(order_receiving_date)`,
-  `orders(order_number)`, `orders(order_status)`, `cashbook_entries(entry_date)`,
-  `cashbook_entries(folio, order_number)`, `variants(product_id)`.
+- ✅ **DONE — indexes** on the hot filter/sort columns (`orders(order_receiving_date)`,
+  `orders(replacement_of_order_no)`, `cashbook_entries(folio, order_number)`, plus
+  the pre-existing ones) are applied. See [`DATABASE.md`](DATABASE.md).
 - **Offload PDF generation.** ReportLab in the request path blocks a worker and
   can be slow for large batches. Consider a background task/queue and stream the
   result, or at least cap batch sizes.
@@ -237,9 +252,13 @@ maintainability liability.
 ## 5. Suggested near-term roadmap
 
 **Phase 1 — de-risk (1–2 weeks)**
-1. Add DB constraints, FKs, and indexes; enable RLS.
+1. ✅ ~~Add DB constraints, FKs, and indexes; enable RLS.~~ **Done** — see
+   [`DATABASE.md`](DATABASE.md).
 2. Require `AUTH_SECRET` in prod; fix CORS `*`+credentials; remove `/debug/routes`.
 3. Structured logging + generic error responses + Sentry.
+
+Steps 2–3 are the natural **starting point now** — small, safe, high-value, and
+step 3 lays the logging foundation for the later refactor.
 
 **Phase 2 — harden the hot paths (2–4 weeks)**
 4. Extract `shopify_sync`, `pdf`, and `postex` services out of `orders.py`.
@@ -250,6 +269,60 @@ maintainability liability.
 7. Move heavy aggregation into SQL views/RPC; add client-facing pagination.
 8. Background-queue PDF generation.
 9. Externalize lockout state; introduce users/orgs/RBAC + per-role auth.
+
+---
+
+## 6. Feature backlog (backend-touching)
+
+Planned features that require backend work. Full-stack items note their frontend
+counterpart, which is tracked in [`../TODO.md`](../TODO.md). §4 above covers
+technical/hardening improvements; this section is product features. One line each;
+expand into a spec when picked up.
+
+### Platform: Auth & multi-tenancy
+- [ ] **Organizations & Users** — real org/user accounts (replaces the single
+      shared PIN). Prerequisite for RBAC, admin portal, and per-user views.
+      Extends `auth.py`, `models.py`, schema, and RLS policies (see §4.4).
+- [ ] **Admin Portal (API)** — endpoints to manage organizations, users, and
+      roles (UI in TODO.md).
+- [ ] **Role-based access to columns** — enforce per-role column visibility/edit
+      server-side (depends on Organizations & Users).
+- [ ] **Live user count** — track/expose currently-active users for the admin
+      portal.
+
+### Performance
+- [ ] **Caching** — cache hot reads (e.g. products, ledgers) to cut Supabase
+      round-trips.
+- [ ] **Optimize the delivery-status fetch** — reduce latency / batch the
+      per-order courier lookups.
+
+### Data & reporting
+- [ ] **Carrier health in Monthly Summary** — per-carrier delivered/total parcel
+      percentage; extend the `month-summary` endpoints in `orders.py`.
+- [ ] **Sync-from-Shopify last-updated time** — persist and expose when the last
+      sync ran.
+- [ ] **Per-order last-fetched time** — persist and expose when each order's
+      delivery status was last refreshed.
+- [ ] **Server status / health** — a health signal the frontend can poll to show
+      online/offline (relates to the `/ready` idea in §4.5).
+- [ ] **Notifications** — endpoints + storage for notifications (UI in TODO.md).
+
+### New capabilities
+- [ ] **AI chatbot** — natural-language querying of the data (API/agent layer).
+
+### Observability
+- [ ] **Activity logging / audit trail** — store and track user activity via logs
+      (pairs with the structured-logging work in §4.5).
+
+### Fixes
+- [ ] **Order recalculation: account for discount codes** — factor discount codes
+      into recalculation (see `PRICE_REDUCTION_DISCOUNT_CODES` and commit
+      `65ed0ce`; clarify intended cost/total behavior).
+
+### Engineering / quality
+- [ ] **Test suite** — stand up automated tests (start with the pure functions in
+      §4.2) and make it policy to add tests covering each new issue/fix so
+      regressions don't recur.
 
 ---
 
