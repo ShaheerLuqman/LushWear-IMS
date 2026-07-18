@@ -1,4 +1,4 @@
+# Runtime deps plus test tooling. Used by CI and by the Dockerfile's `tests` stage;
+# the runtime image installs requirements.txt only, so pytest never ships.
 -r requirements.txt
-# Keep this pin in step with the pytest version installed in the Dockerfile's
-# `tests` stage.
 pytest==9.1.1

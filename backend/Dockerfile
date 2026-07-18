@@ -19,8 +19,10 @@ RUN pip install -r requirements.txt
 FROM base AS tests
 
 ARG SKIP_TESTS=0
-# Runtime deps are already installed in `base`; only the test tooling is added here.
-RUN pip install pytest==9.1.1
+# Reads requirements-dev.txt so the test-tooling pins live in exactly one place.
+# Runtime deps are already satisfied from `base`, so pip only adds the extras.
+COPY requirements-dev.txt .
+RUN pip install -r requirements-dev.txt
 COPY . .
 # Tests are hermetic (Supabase is faked), so no credentials are needed here.
 RUN if [ "$SKIP_TESTS" = "1" ]; then \
