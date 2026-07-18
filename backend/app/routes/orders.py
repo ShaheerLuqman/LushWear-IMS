@@ -6,7 +6,7 @@ from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
 from app import shopify
-from app.db_utils import fetch_all
+from app.db_utils import PAGE_SIZE, fetch_all
 from app.money import money
 from app.advance_status import recompute_advance_statuses
 from app.order_pdf import extract_order_numbers
@@ -55,6 +55,21 @@ def _order_number_sort_key(order_number) -> Tuple[int, int]:
     if not m:
         return (0, 0)
     return (int(m.group(1)), 1 if m.group(2) else 0)
+
+
+def _order_recency_key(order: dict):
+    """Sort key for "newest first" listings.
+
+    Uses order_receiving_date only. Not order_number: it is a VARCHAR, so any
+    DB-side sort is lexicographic ("9999" outranks "11308") and silently returns
+    the wrong rows once a LIMIT is applied. Not created_at either: bulk syncs stamp
+    thousands of rows with an identical value (10307 orders span only 494 distinct
+    created_at values, one cluster holding 3195), so it cannot order rows stably —
+    and a non-unique sort column makes OFFSET pagination skip/duplicate rows.
+    order_number stays as the tiebreaker so a replacement ("9865-R") sits next to
+    its parent.
+    """
+    return (str(order.get("order_receiving_date") or ""), _order_number_sort_key(order.get("order_number")))
 
 
 def _compute_shopify_tax(order: dict) -> float:
@@ -188,50 +203,54 @@ def _period_start_end_dates(month: int, year: int):
     return start_date, end_date
 
 
+RECENT_ORDERS_LIMIT = 1000
+
+
 @router.get("/", response_model=List[Order])
 async def get_all_orders(
     month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
-    year: int = Query(None, ge=2000, le=2100, description="Filter by period year.")
+    year: int = Query(None, ge=2000, le=2100, description="Filter by period year."),
+    limit: int = Query(RECENT_ORDERS_LIMIT, ge=1, le=10000, description="Max orders when no period is given."),
 ):
-    """Get all orders, optionally filtered by month period (month's 22 to next month's 21)."""
+    """Orders for a month period, or the most recent `limit` orders when no period is given."""
     try:
         supabase = get_supabase()
 
         if month is not None and year is not None:
             start_iso, end_iso = _period_start_end(month, year)
-
-            r1_data = fetch_all(
+            period_orders = fetch_all(
                 lambda: supabase.table("orders")
                 .select("*")
                 .gte("order_receiving_date", start_iso)
                 .lt("order_receiving_date", end_iso)
-                .order("order_number", desc=True)
+                .order("order_receiving_date", desc=True)
             )
-            # Orders with no receiving date fall back to created_at for the period.
-            r2_data = fetch_all(
-                lambda: supabase.table("orders")
+            period_orders.sort(key=_order_recency_key, reverse=True)
+            return period_orders
+
+        # Most recent N orders. Ordering must be by date, not order_number: that column
+        # is VARCHAR, so a DB sort is lexicographic and would rank "9999" above "11308"
+        # — a limit on that ordering would return the wrong rows entirely.
+        # PostgREST caps one request at 1000 rows, so page when more is asked for.
+        recent = []
+        offset = 0
+        while len(recent) < limit:
+            page = (
+                supabase.table("orders")
                 .select("*")
-                .is_("order_receiving_date", "null")
-                .gte("created_at", start_iso)
-                .lt("created_at", end_iso)
-                .order("order_number", desc=True)
+                .order("order_receiving_date", desc=True)
+                .range(offset, min(offset + PAGE_SIZE, limit) - 1)
+                .execute()
+                .data
+                or []
             )
+            recent.extend(page)
+            if len(page) < PAGE_SIZE:
+                break
+            offset += PAGE_SIZE
 
-            seen_ids = {o["id"] for o in r1_data}
-            merged = list(r1_data)
-            for o in r2_data:
-                if o["id"] not in seen_ids:
-                    merged.append(o)
-                    seen_ids.add(o["id"])
-            merged.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
-            return merged
-
-        all_orders = fetch_all(
-            lambda: supabase.table("orders").select("*").order("order_number", desc=True)
-        )
-        # DB sort on a VARCHAR column is lexicographic ("10000" < "9999"); re-sort numerically.
-        all_orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
-        return all_orders
+        recent.sort(key=_order_recency_key, reverse=True)
+        return recent
     except HTTPException:
         raise
     except Exception:
@@ -1278,21 +1297,6 @@ async def fix_voided_order_totals(
             .order("order_number")
         )
         logger.info("[fix-voided-totals] fetched by order_receiving_date count=%d", len(orders))
-
-        # Orders with no receiving date fall back to created_at.
-        by_created = fetch_all(
-            lambda: supabase.table("orders")
-            .select(candidate_select)
-            .is_("order_receiving_date", "null")
-            .gte("created_at", start_iso)
-            .order("order_number")
-        )
-        logger.info("[fix-voided-totals] fetched by created_at count=%d", len(by_created))
-        seen_ids = {o["id"] for o in orders}
-        for o in by_created:
-            if o["id"] not in seen_ids:
-                orders.append(o)
-                seen_ids.add(o["id"])
 
         if not orders:
             logger.info("[fix-voided-totals] no candidate orders found in date range")
@@ -3887,32 +3891,13 @@ async def get_month_summary_detail(month: int, year: int):
         
         supabase = get_supabase()
 
-        r1_data = fetch_all(
+        orders = fetch_all(
             lambda: supabase.table("orders")
             .select("*")
             .gte("order_receiving_date", start_iso)
             .lt("order_receiving_date", end_iso)
-            .order("order_number")
+            .order("order_receiving_date", desc=True)
         )
-        # Orders with no receiving date fall back to created_at for the period.
-        r2_data = fetch_all(
-            lambda: supabase.table("orders")
-            .select("*")
-            .is_("order_receiving_date", "null")
-            .gte("created_at", start_iso)
-            .lt("created_at", end_iso)
-            .order("order_number")
-        )
-
-        # Merge results, avoiding duplicates
-        seen_ids = {o["id"] for o in r1_data}
-        merged = list(r1_data)
-        for o in r2_data:
-            if o["id"] not in seen_ids:
-                merged.append(o)
-                seen_ids.add(o["id"])
-        
-        orders = merged
         
         # Exclude cancelled orders from totals and gross sale
         non_cancelled = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]

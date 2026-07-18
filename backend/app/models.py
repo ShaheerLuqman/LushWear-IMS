@@ -95,8 +95,8 @@ class OrderLineItem(BaseModel):
     unit_price: Optional[float] = None
 
 class OrderBase(BaseModel):
-    order_number: str
-    courier: str
+    order_number: NonBlankStr
+    courier: NonBlankStr
     tracking_number: Optional[str] = None
     folio: Optional[str] = None
     # order_status stays open text: live data carries courier codes (CNA/ICA/RFD)
@@ -109,7 +109,7 @@ class OrderBase(BaseModel):
     delivery_charge: float = 0.0
     tax_amount: float = 0.0
     cost_price: float = 0.0
-    order_receiving_date: Optional[datetime] = None
+    order_receiving_date: datetime
     items: Optional[List[str]] = None
     # Structured order lines (replaces the legacy "Name - Variant" strings in items).
     line_items: Optional[List[OrderLineItem]] = None
@@ -125,8 +125,8 @@ class OrderUpdate(BaseModel):
     courier: Optional[str] = None
     tracking_number: Optional[str] = None
     folio: Optional[str] = None
-    order_status: Optional[str] = None
-    piece_received: Optional[str] = None
+    order_status: Optional[NonBlankStr] = None
+    piece_received: Optional[PieceReceived] = None
     delivery_status: Optional[Dict[str, Any]] = None
     total_amount: Optional[float] = None
     advance_amount: Optional[float] = None
@@ -139,7 +139,6 @@ class OrderUpdate(BaseModel):
 
 class Order(OrderBase):
     id: str
-    order_receiving_date: Optional[datetime] = None
     replacement_of_order_no: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

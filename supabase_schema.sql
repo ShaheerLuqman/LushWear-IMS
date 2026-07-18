@@ -61,7 +61,7 @@ CREATE TABLE IF NOT EXISTS orders (
     delivery_charge          DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    order_receiving_date     TIMESTAMPTZ,
+    order_receiving_date     TIMESTAMPTZ NOT NULL,
     items                    TEXT[],                    -- Legacy "Name - Variant" strings
     -- Structured order lines (one object per line): replaces the legacy items strings.
     -- Shape: [{ variant_id, product_id, name, variant_title, qty, unit_price }]

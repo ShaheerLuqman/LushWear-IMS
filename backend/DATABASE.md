@@ -81,6 +81,15 @@ deliberate design choices, and remaining work lives in [`TODO.md`](../TODO.md).
 > against empty/typo writes; the canonical "known status" list belongs in the
 > **app layer** (a Pydantic `Enum`/`Literal` in `models.py`).
 
+> **`orders.order_receiving_date` is `NOT NULL`** — it is the sole ordering key for
+> every order listing. `order_number` can't be used (VARCHAR, so a DB sort is
+> lexicographic: `"9999"` outranks `"11308"`, which returns the wrong rows once a
+> LIMIT applies), and `created_at` can't be a fallback: bulk syncs stamp thousands
+> of rows with an identical value (10,307 orders span only 494 distinct `created_at`
+> values, one cluster holding 3,195), so it orders unstably and makes OFFSET
+> pagination skip/duplicate rows. The column is 100% populated and all write paths
+> fall back to "now", so the constraint is guaranteed by construction.
+
 **Open work items** (direct-frontend publishable policies, versioned migrations)
 are tracked in [`TODO.md`](../TODO.md).
 
