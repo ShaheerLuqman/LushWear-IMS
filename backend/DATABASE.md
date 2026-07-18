@@ -96,13 +96,82 @@ passes `datetime.utcnow()` on every write. Any direct SQL update, or a code path
 that forgets the field, leaves it stale. Add a `BEFORE UPDATE` trigger so the DB
 maintains it regardless of the writer.
 
-### 🟢 2.5 Turn on Row Level Security (defense-in-depth)
+### 🔴 2.5 Row Level Security + direct frontend reads (planned)
 
-RLS appears to be off (the schema only mentions enabling it for `load_sheet_logs`
-as a 500-error workaround). Today the Supabase service key is the **only** gate;
-if it leaks, the database is fully exposed. Even with a single app identity,
-enabling RLS with permissive policies keyed on the service role is a cheap safety
-net, and it's the foundation for the future users/orgs model.
+**Current state:** RLS is **disabled on all tables**. This is safe *today* only
+because the database is reached exclusively through the backend. It stops being
+safe the moment a browser-facing key can hit the public REST API — which is
+exactly the planned direction (fetching order details directly from the frontend).
+
+#### The key model
+
+Supabase exposes two access paths that must use two different keys:
+
+| Path | Key (new system / legacy) | Reaches browser? | RLS applies? | Allowed to do |
+|---|---|---|---|---|
+| **Backend** (FastAPI) | **Secret** `sb_secret_…` / `service_role` | No — server only | **No (bypasses RLS)** | Everything |
+| **Frontend** (browser) | **Publishable** `sb_publishable_…` / `anon` | Yes — safe to expose | **Yes** | Only what a policy explicitly allows |
+
+> **Status:** the backend has been switched to the **Secret** key
+> (`config.py` reads `SUPABASE_SECRET_KEY`, falling back to the legacy
+> `SUPABASE_KEY`). The **Publishable** key is loaded into
+> `settings.SUPABASE_PUBLISHABLE_KEY` for future frontend use but is not used by
+> the backend. Prefer the new Publishable/Secret keys over the legacy anon/
+> service_role JWTs — secret keys can be rotated individually if leaked.
+
+Because the backend uses the Secret key (which ignores RLS), **enabling RLS will
+not break the backend** — it only closes the public/publishable path.
+
+#### Phased plan
+
+**Phase A — close the public hole (safe to do now).**
+Enable RLS on every table with **no policies**. Backend (Secret key) keeps full
+access; the publishable/anon path gets nothing.
+
+```sql
+ALTER TABLE products                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE variants                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE load_sheet_logs         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_pin                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ledgers                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_entries        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_daily_balances ENABLE ROW LEVEL SECURITY;
+```
+
+Verify the app still works after this (it should — the backend bypasses RLS).
+
+**Phase B — expose only what the frontend needs, read-only.**
+When direct-from-frontend reads are built, ship the **Publishable** key to the
+browser and add a narrow policy per table you expose. For order details:
+
+```sql
+-- Browser (publishable/anon) may READ orders — no inserts/updates/deletes.
+CREATE POLICY "anon can read orders"
+    ON orders FOR SELECT
+    TO anon              -- confirm the exact role the publishable key maps to
+    USING (true);
+```
+
+Rules that keep this safe:
+- **`FOR SELECT` only.** All writes stay behind the backend + PIN/JWT. Never add
+  an `INSERT/UPDATE/DELETE` (or blanket `FOR ALL`) policy for the browser role.
+- **One policy per exposed table.** Leave `cashbook_entries`, `ledgers`,
+  `app_pin`, and `cashbook_daily_balances` with **no** anon policy — the browser
+  must never read financials or the PIN hash directly.
+- **`USING (true)` exposes every row.** With a single shared identity there is no
+  per-user filtering, so anyone with the publishable key can read *all* orders.
+  If order rows contain data you would not want enumerated (customer names,
+  amounts, tracking), expose a **view with only safe columns** instead of the raw
+  `orders` table, and point the frontend at the view.
+
+**Phase C (later) — real identities.** When users/orgs/RBAC arrive
+(see [`BACKEND.md`](BACKEND.md) §4.4), replace `USING (true)` with policies keyed
+on the authenticated user/JWT claims.
+
+> **Do not** re-introduce the old `FOR ALL USING (true)` policy that a schema
+> comment once suggested for `load_sheet_logs` — that re-opens the table to the
+> publishable/anon key and defeats the purpose of enabling RLS.
 
 ### 🟢 2.6 Adopt versioned migrations
 
@@ -127,7 +196,19 @@ nothing enforces it.
 ## 3. Suggested SQL (all idempotent / safe to run)
 
 ```sql
+-- 2.5 Enable RLS (Phase A) — safe once the backend uses the Secret key.
+-- No policies = publishable/anon path gets nothing; backend (Secret) keeps full access.
+ALTER TABLE products                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE variants                ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE load_sheet_logs         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE app_pin                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ledgers                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_entries        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_daily_balances ENABLE ROW LEVEL SECURITY;
+
 -- 2.1 Indexes -------------------------------------------------------------
+-- (Already applied to the live DB and to supabase_schema.sql; kept here for reference.)
 CREATE INDEX IF NOT EXISTS idx_orders_order_receiving_date
     ON orders(order_receiving_date);
 
@@ -197,17 +278,27 @@ GROUP BY ce.order_number;
 
 ## 4. Recommended order of work
 
-1. **Add the three missing indexes** (§2.1) — pure win, zero risk, immediate
-   latency improvement on order/period views and advance reconciliation.
-2. **Drop the useless JSONB btree index** (§2.1).
-3. **Add the `order_status` and `advance_status` CHECKs** (§2.2, §2.3) after
+1. ~~**Add the three missing indexes** (§2.1)~~ — ✅ **done** (applied to live DB
+   and reflected in `supabase_schema.sql`).
+2. ~~**Drop the useless JSONB btree index** + redundant folio index (§2.1)~~ —
+   ✅ **done** in the schema file; run `DROP INDEX IF EXISTS
+   idx_cashbook_entries_folio;` against the live DB to fully reconcile.
+3. **Switch backend to the Secret key** (§2.5) — ✅ **done** in `config.py`; still
+   need to set `SUPABASE_SECRET_KEY` in the Northflank environment/secrets before/at
+   deploy.
+4. **Enable RLS on all tables, no policies** (§2.5 Phase A) — safe now that the
+   backend is on the Secret key; closes the public REST hole. **Do before shipping
+   the publishable key anywhere.**
+5. **Add the `order_status` and `advance_status` CHECKs** (§2.2, §2.3) after
    verifying existing data.
-4. **Add the `updated_at` trigger** (§2.4).
-5. **Enable RLS** and **adopt migrations** (§2.5, §2.6) as part of the broader
-   production hardening in [`BACKEND.md`](BACKEND.md) §4.
+6. **Add the `updated_at` trigger** (§2.4).
+7. **Add `FOR SELECT` publishable policies** (§2.5 Phase B) when the direct
+   frontend read is built — consider a safe-columns view instead of the raw table.
+8. **Adopt versioned migrations** (§2.6) alongside the broader app-layer hardening
+   in [`BACKEND.md`](BACKEND.md) §4.
 
-Items 1–4 are safe, high-value, and can ship today. Items 5–6 are process changes
-best done alongside the app-layer work.
+Steps 1–3 are complete. Step 4 (enable RLS) is the next security-critical action
+and is safe to run today.
 
 ---
 

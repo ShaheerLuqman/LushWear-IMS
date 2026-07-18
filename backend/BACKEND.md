@@ -17,7 +17,8 @@ a thin-but-busy API layer sitting between:
 - **PostEx** (courier — CSV upload + delivery-status lookups).
 
 It also generates PDFs server-side (invoices, packaging lists, load sheets) with
-ReportLab, and is deployed as a **Hugging Face Docker Space** on port `7860`.
+ReportLab, and is deployed as a **Docker container on Northflank** (binds the
+platform-provided `$PORT`).
 
 ### Tech stack
 
@@ -29,7 +30,7 @@ ReportLab, and is deployed as a **Hugging Face Docker Space** on port `7860`.
 | Auth | Single shared PIN → signed JWT (HS256) |
 | PDF | ReportLab, openpyxl (template), pypdf, Pillow |
 | HTTP client | httpx (async) for Shopify/PostEx |
-| Deploy | Docker on Hugging Face Spaces |
+| Deploy | Docker on Northflank |
 
 ---
 
@@ -37,9 +38,9 @@ ReportLab, and is deployed as a **Hugging Face Docker Space** on port `7860`.
 
 ```
 backend/
-├── Dockerfile              # HF Space, uvicorn on $PORT (7860 fallback)
+├── Dockerfile              # Northflank, uvicorn on $PORT (7860 local fallback)
 ├── requirements.txt
-├── README.md               # HF Space front-matter + run notes
+├── README.md               # Deploy + run notes
 ├── .env                    # local secrets (untracked)
 └── app/
     ├── main.py             # app factory, CORS, router wiring, auth gate
@@ -184,9 +185,9 @@ maintainability liability.
   restart.** For real production: set `AUTH_SECRET` always (a startup check that
   refuses to boot without it in prod), and move lockout state to Supabase/Redis
   so it survives restarts and works across replicas.
-- **Client IP for lockout is `request.client.host`** — behind HF/Vercel proxies
-  this is often the proxy IP, so one blocked attacker can lock everyone out (or
-  everyone shares one bucket). Read `X-Forwarded-For` (trusted-proxy aware).
+- **Client IP for lockout is `request.client.host`** — behind the Northflank/Vercel
+  proxies this is often the proxy IP, so one blocked attacker can lock everyone out
+  (or everyone shares one bucket). Read `X-Forwarded-For` (trusted-proxy aware).
 - Plan the **users/orgs/RBAC** migration the code already anticipates: add
   `user_id`/`role` claims, per-role dependencies, and RLS policies keyed on the
   JWT. Do it before you have a second user, not after.
