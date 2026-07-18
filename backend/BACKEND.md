@@ -254,11 +254,13 @@ maintainability liability.
 **Phase 1 — de-risk (1–2 weeks)**
 1. ✅ ~~Add DB constraints, FKs, and indexes; enable RLS.~~ **Done** — see
    [`DATABASE.md`](DATABASE.md).
-2. Require `AUTH_SECRET` in prod; fix CORS `*`+credentials; remove `/debug/routes`.
-3. Structured logging + generic error responses + Sentry.
+2. ✅ ~~Require `AUTH_SECRET` in prod; fix CORS `*`+credentials; remove
+   `/debug/routes`.~~ **Done** — `APP_ENV` gates prod strictness in `main.py`.
+3. ✅ ~~Structured logging + generic error responses.~~ **Done** — global
+   exception handler + `logging_config.py`; all `str(e)` leaks and `print()` calls
+   removed. (Sentry still optional/open.)
 
-Steps 2–3 are the natural **starting point now** — small, safe, high-value, and
-step 3 lays the logging foundation for the later refactor.
+Phase 1 is complete. §7 below breaks the remaining work into ordered steps.
 
 **Phase 2 — harden the hot paths (2–4 weeks)**
 4. Extract `shopify_sync`, `pdf`, and `postex` services out of `orders.py`.
@@ -323,6 +325,102 @@ expand into a spec when picked up.
 - [ ] **Test suite** — stand up automated tests (start with the pure functions in
       §4.2) and make it policy to add tests covering each new issue/fix so
       regressions don't recur.
+
+---
+
+## 7. Step-by-step improvement plan
+
+Ordered so that **no step changes business logic until Stage D**. Each stage is
+independently shippable and reviewable. Current sizes: `orders.py` 4280,
+`products.py` 799, `cashbook.py` 296, `ledger.py` 128.
+
+### Stage A — zero-risk hygiene (no behavior change at all)
+
+Mechanical changes a reviewer can verify by inspection.
+
+- [ ] **A1. Replace the 6 bare `except:` clauses** with `except Exception:` (or
+      the specific type). Bare `except` also swallows `KeyboardInterrupt`/
+      `SystemExit`. Locations: `orders.py` (542, 568, 829, 832, 1053),
+      `products.py` (393).
+- [ ] **A2. Replace 25 `datetime.utcnow()` calls** with
+      `datetime.now(timezone.utc)`. `utcnow()` is deprecated in 3.12+ and returns
+      a naive datetime, which is a latent timezone bug.
+      (`orders.py` ×18, `products.py` ×7.)
+- [ ] **A3. Remove unused imports / dead code** across the routers.
+- [ ] **A4. Pin dependencies** in `requirements.txt` (currently all `>=`); add a
+      lockfile so builds are reproducible.
+
+**Verify:** app imports, `/health` responds, one endpoint per router returns the
+same payload as before.
+
+### Stage B — deduplicate (identical behavior, less code)
+
+Same inputs → same outputs; only the call path changes.
+
+- [ ] **B1. Extract the Shopify cursor-pagination loop.** The Link-header/
+      `page_info` parsing is duplicated near-identically in `orders.py` and
+      `products.py` (~17 matching markers each). Pull into one helper
+      (e.g. `app/shopify.py: paginate(url, headers)`), used by both syncs.
+- [ ] **B2. Extract the Supabase offset-pagination loop.** 13 hand-rolled
+      `while True: … .range(offset, offset+N-1)` loops (`orders.py` ×10,
+      `products.py` ×1, `advance_status.py` ×2). One
+      `fetch_all(query_factory, page_size)` helper replaces them all.
+- [ ] **B3. Centralize the Shopify client/config** (store-URL normalization,
+      headers, API version) — currently rebuilt inline in both sync functions.
+
+**Verify:** run both syncs against Shopify and diff the resulting rows/counts
+against a pre-change run.
+
+### Stage C — typing & API contract (no runtime behavior change)
+
+- [ ] **C1. Replace `response_model=List[dict]` / `dict`** (25 occurrences) with
+      the real Pydantic models so OpenAPI docs and validation are accurate.
+      Do this **per router**, smallest first: `ledger` (6) → `cashbook` (7) →
+      `products` (4) → `orders` (8).
+- [ ] **C2. Tighten `models.py`** — `Field` constraints (`amount > 0`, `qty >= 1`),
+      `Enum`/`Literal` for `entry_type` / `piece_received`, and Pydantic v2
+      `ConfigDict` instead of the deprecated `class Config`.
+- [ ] **C3. Consider `Decimal` for money fields** to match the DB's `DECIMAL`
+      columns and remove float-rounding tolerance checks.
+
+> ⚠️ C1–C2 can **surface** existing bad data as validation errors (that's the
+> point, but it changes responses). Roll out one router at a time and watch logs.
+
+### Stage D — structural refactor (touches business logic — do last, after tests)
+
+**Do not start until Stage E tests exist for the pure functions.**
+
+- [ ] **D1. Extract `services/shopify_sync.py`** from `orders.py` (fetch →
+      normalize → reconcile → persist). The ~800-line sync function is the most
+      business-critical code in the repo.
+- [ ] **D2. Extract `services/pdf/`** (invoice, packaging list, load sheet) and
+      `services/postex.py` (CSV parsing/reconciliation).
+- [ ] **D3. Thin the route handlers** to: parse request → call service → return.
+- [ ] **D4. Guard concurrent sync** (`pg_advisory_lock` or a sync-in-progress
+      flag) and batch the per-row updates.
+- [ ] **D5. Wrap multi-write operations** (sync, CSV upload) in Postgres
+      functions/RPC so a mid-run failure rolls back (see §4.1).
+
+### Stage E — tests (start before Stage D)
+
+- [ ] **E1. Unit-test the pure functions** — `compute_advance_status`,
+      `_order_total_from_fulfillments`, `_compute_shopify_tax`,
+      `_order_number_sort_key`, `normalize_order_number`,
+      `parse_tracking_number_14`, `_period_start_end`. All pure, all
+      edge-case-heavy, no DB needed.
+- [ ] **E2. Route smoke tests** with FastAPI `TestClient` + a mocked Supabase
+      client (happy path + 400/404 per router).
+- [ ] **E3. Integration test for the sync** against recorded Shopify fixtures
+      (`sample_orders.json` / `sample_products.json` already exist).
+
+### Recommended order
+
+**A → B → E1 → C → E2/E3 → D.**
+
+Stages A and B are pure cleanup and safe to do immediately. E1 is cheap and buys
+the safety net that makes Stage D sane. C is low-risk but response-visible, so it
+follows tests. D is the only stage that can change behavior — do it last, one
+extraction at a time, with the sync verified against a known-good run.
 
 ---
 

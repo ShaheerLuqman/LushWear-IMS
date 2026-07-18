@@ -1,13 +1,13 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict
 from app.models import (
-    Product, ProductCreate, ProductUpdate, ProductWithVariants,
+    ProductCreate, ProductUpdate,
     ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
-    Variant, VariantCreate, VariantUpdate,
+    VariantCreate, VariantUpdate,
 )
 from app.database import get_supabase
 from app.config import settings
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 import httpx
 import re
@@ -167,7 +167,7 @@ async def sync_shopify_products():
                     break
         
         supabase = get_supabase()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
         
         # Get existing products mapped by shopify_product_id
         existing_products_response = supabase.table("products").select("*").execute()
@@ -388,9 +388,8 @@ async def sync_shopify_products():
     except httpx.HTTPStatusError as e:
         error_text = e.response.text
         try:
-            error_json = e.response.json()
-            error_text = str(error_json)
-        except:
+            error_text = str(e.response.json())
+        except ValueError:
             pass
         raise HTTPException(
             status_code=e.response.status_code,
@@ -408,7 +407,7 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
     """Batch update cost prices for products"""
     try:
         supabase = get_supabase()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
         updated_count = 0
         
         for update in batch_update.updates:
@@ -465,7 +464,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
 
         prefix = f"{pname} - "
         after = body.created_after.isoformat()
-        now_iso = datetime.utcnow().isoformat()
+        now_iso = datetime.now(timezone.utc).isoformat()
         page = 500
         select_cols = "id, order_number, replacement_of_order_no, items, line_items, cost_price"
 
@@ -611,7 +610,7 @@ async def create_product(product: ProductCreate):
     """Create a new product with optional variants"""
     try:
         supabase = get_supabase()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
         
         # Prepare product data (without variants)
         product_data = product.model_dump(exclude={"variants"})
@@ -654,7 +653,7 @@ async def update_product(product_id: str, product: ProductUpdate):
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in product.model_dump().items() if v is not None}
-        update_data["updated_at"] = datetime.utcnow().isoformat()
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         response = supabase.table("products").update(update_data).eq("id", product_id).execute()
         if not response.data:
@@ -746,7 +745,7 @@ async def create_variant(product_id: str, variant: VariantCreate):
     """Create a new variant for a product"""
     try:
         supabase = get_supabase()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
         
         # Verify product exists
         product_response = supabase.table("products").select("id").eq("id", product_id).single().execute()
@@ -772,7 +771,7 @@ async def update_variant(product_id: str, variant_id: str, variant: VariantUpdat
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in variant.model_dump().items() if v is not None}
-        update_data["updated_at"] = datetime.utcnow().isoformat()
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         
         response = supabase.table("variants").update(update_data).eq("id", variant_id).eq("product_id", product_id).execute()
         if not response.data:

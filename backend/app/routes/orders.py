@@ -2,7 +2,7 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Form, Bod
 from fastapi.responses import Response
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
-from app.models import Order, OrderCreate, OrderUpdate
+from app.models import OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
 from app.advance_status import recompute_advance_statuses
@@ -15,7 +15,6 @@ import re
 import csv
 import io
 from io import BytesIO
-import os
 from pathlib import Path
 from urllib.parse import unquote, urlparse, parse_qs
 import json
@@ -299,7 +298,7 @@ async def sync_shopify_orders():
         page_info = None
         page_count = 0
         # Only sync orders from the last 30 days
-        created_since = (datetime.utcnow() - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        created_since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             while True:
@@ -539,7 +538,7 @@ async def sync_shopify_orders():
                     if attr.get("name") in ["advance", "Advance", "advance_amount"]:
                         try:
                             return float(attr.get("value", 0))
-                        except:
+                        except (TypeError, ValueError):
                             return None
             return None
         
@@ -565,7 +564,7 @@ async def sync_shopify_orders():
                     if attr.get("name") in ["cost_price", "Cost Price", "cost"]:
                         try:
                             return float(attr.get("value", 0))
-                        except:
+                        except (TypeError, ValueError):
                             return None
             return None
         
@@ -726,7 +725,7 @@ async def sync_shopify_orders():
         orders_to_update = []
         orders_to_skip = []
         original_orders_to_reset_piece_received = set()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
 
         for sp_order in all_orders:
             order_number = sp_order.get("order_number")
@@ -826,10 +825,10 @@ async def sync_shopify_orders():
             if order_received_date:
                 try:
                     order_received_date = datetime.fromisoformat(order_received_date.replace('Z', '+00:00')).isoformat()
-                except:
+                except (TypeError, ValueError, AttributeError):
                     try:
                         order_received_date = datetime.strptime(order_received_date, "%Y-%m-%dT%H:%M:%S%z").isoformat()
-                    except:
+                    except (TypeError, ValueError):
                         order_received_date = current_time
             else:
                 order_received_date = current_time
@@ -1048,9 +1047,8 @@ async def sync_shopify_orders():
     except httpx.HTTPStatusError as e:
         error_text = e.response.text
         try:
-            error_json = e.response.json()
-            error_text = str(error_json)
-        except:
+            error_text = str(e.response.json())
+        except ValueError:
             pass
         raise HTTPException(
             status_code=e.response.status_code,
@@ -1239,7 +1237,7 @@ async def upload_postex_csv(
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
                 "courier": "PostEx",
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             if r.get("tracking_number"):
                 update_data["tracking_number"] = r["tracking_number"]
@@ -1339,7 +1337,7 @@ async def create_replacement_order(body: ReplacementOrderCreate):
         if original_order.data:
             order_receiving_date = original_order.data[0].get("order_receiving_date")
 
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         courier = (body.courier or "Unassigned").strip()
         delivery_charge = 180.0 if courier.upper() == "SCS" else 0.0
 
@@ -1576,7 +1574,7 @@ async def fix_voided_order_totals(
                 supabase.table("orders").update(
                     {
                         "total_amount": new_total,
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 ).eq("id", db_order["id"]).execute()
                 updated_count += 1
@@ -1628,7 +1626,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
 
     try:
         supabase = get_supabase()
-        current_time = datetime.utcnow().isoformat()
+        current_time = datetime.now(timezone.utc).isoformat()
         order_numbers_input = [str(n).strip() for n in body.order_numbers if str(n).strip()]
         if not order_numbers_input:
             raise HTTPException(status_code=400, detail="No valid order numbers provided")
@@ -2100,7 +2098,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 supabase.table("orders").update(
                     {
                         "total_amount": new_total,
-                        "updated_at": datetime.utcnow().isoformat(),
+                        "updated_at": datetime.now(timezone.utc).isoformat(),
                     }
                 ).eq("id", db_order["id"]).execute()
                 updated_count += 1
@@ -2179,7 +2177,7 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
         if body.order_numbers:
             update_data = {
                 "folio": body.assignment_number.strip(),
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }
             if dc is not None:
                 update_data["delivery_charge"] = float(dc)
@@ -2299,7 +2297,7 @@ async def delete_load_sheet_log(log_id: str):
         if order_numbers:
             supabase.table("orders").update({
                 "folio": None,
-                "updated_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
             }).in_("order_number", order_numbers).execute()
         # Delete the load sheet log
         response = (
@@ -2506,7 +2504,7 @@ async def create_order(order: OrderCreate):
         supabase = get_supabase()
         order_data = order.model_dump()
         order_data["piece_received"] = "Pending"
-        now = datetime.utcnow().isoformat()
+        now = datetime.now(timezone.utc).isoformat()
         order_data["created_at"] = now
         order_data["updated_at"] = now
         if not order_data.get("order_receiving_date"):
@@ -2531,7 +2529,7 @@ def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], orde
         latest_status = "Cancelled"
     else:
         latest_status = ""
-    now_iso = datetime.utcnow().isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     # Start from existing JSONB, keeping only JSON-serializable values
     data: Dict[str, Any] = {}
     if existing:
@@ -2592,7 +2590,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
             .execute()
         )
         orders = response.data or []
-        updated_at = datetime.utcnow().isoformat()
+        updated_at = datetime.now(timezone.utc).isoformat()
         updated_order_numbers = []
         for order in orders:
             order_id = order.get("id")
@@ -2652,7 +2650,7 @@ async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody):
         supabase = get_supabase()
         update_data = {
             "delivery_charge": float(body.delivery_charge),
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = (
             supabase.table("orders")
@@ -2688,7 +2686,7 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
         supabase = get_supabase()
         update_data = {
             "piece_received": "Received",
-            "updated_at": datetime.utcnow().isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = (
             supabase.table("orders")
@@ -2722,7 +2720,7 @@ async def update_order(order_id: str, order: OrderUpdate):
         supabase = get_supabase()
         # Include only fields that were sent (so we can set optional fields like folio to null)
         update_data = {k: v for k, v in order.model_dump(exclude_unset=True).items()}
-        update_data["updated_at"] = datetime.utcnow().isoformat()
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         response = supabase.table("orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
@@ -2823,7 +2821,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                         "order_pickup_date": dist.get("orderPickupDate", ""),
                         "status_history": status_history_sorted,
                         "latest_status": latest_status,
-                        "fetched_at": datetime.utcnow().isoformat()
+                        "fetched_at": datetime.now(timezone.utc).isoformat()
                     }
         elif courier_normalized in ("couriersnext", "couriernext"):
             # Couriers Next API returns a list of status entries.
@@ -2867,7 +2865,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                     "order_pickup_date": "",
                     "status_history": status_history_sorted,
                     "latest_status": latest_status,
-                    "fetched_at": datetime.utcnow().isoformat(),
+                    "fetched_at": datetime.now(timezone.utc).isoformat(),
                 }
         else:
             raise HTTPException(status_code=400, detail="Only PostEx and Couriers Next are supported for delivery status tracking")
@@ -2879,7 +2877,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         if save:
             update_payload = {
                 "delivery_status": delivery_status_data,
-                "updated_at": datetime.utcnow().isoformat()
+                "updated_at": datetime.now(timezone.utc).isoformat()
             }
             # Derive order_status from the LAST courier status instead of using a fixed priority.
             derived_status = _derive_order_status_from_latest(delivery_status_data)
