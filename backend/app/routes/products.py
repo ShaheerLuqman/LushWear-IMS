@@ -8,10 +8,12 @@ from app.models import (
 from app.database import get_supabase
 from app.config import settings
 from datetime import datetime
+import logging
 import httpx
 import re
 from urllib.parse import unquote, urlparse, parse_qs
 
+logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
 
 # Product titles to skip when syncing from Shopify (exact match, case-sensitive)
@@ -68,8 +70,11 @@ async def get_all_products():
         # Sort case-insensitively
         result.sort(key=lambda x: (x.get("name") or "").lower())
         return result
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/sync-shopify")
 async def sync_shopify_products():
@@ -391,10 +396,12 @@ async def sync_shopify_products():
             status_code=e.response.status_code,
             detail=f"Shopify API error: {error_text}\nURL: {api_url if 'api_url' in locals() else 'N/A'}"
         )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to Shopify: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error syncing products: {str(e)}")
+    except httpx.RequestError:
+        logger.exception("Shopify product sync: connection error")
+        raise HTTPException(status_code=502, detail="Failed to connect to Shopify")
+    except Exception:
+        logger.exception("Shopify product sync failed")
+        raise HTTPException(status_code=500, detail="Error syncing products")
 
 @router.put("/batch-update-cost-prices")
 async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
@@ -417,8 +424,11 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
             "message": f"Successfully updated {updated_count} product(s)",
             "updated_count": updated_count
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/recalculate-order-costs")
@@ -557,7 +567,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             if num is not None:
                 updated_order_numbers.append(str(num))
 
-        print(f"[recalculate-order-costs] updated {updated} order(s): {updated_order_numbers}")
+        logger.info("[recalculate-order-costs] updated %d order(s): %s", updated, updated_order_numbers)
 
         return {
             "scanned": scanned,
@@ -566,8 +576,9 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{product_id}")
@@ -591,8 +602,9 @@ async def get_product(product_id: str):
         return product
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/", response_model=dict)
 async def create_product(product: ProductCreate):
@@ -630,8 +642,11 @@ async def create_product(product: ProductCreate):
         created_product["total_quantity"] = sum(v.get("quantity", 0) for v in created_variants)
         
         return created_product
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.put("/{product_id}")
 async def update_product(product_id: str, product: ProductUpdate):
@@ -654,8 +669,9 @@ async def update_product(product_id: str, product: ProductUpdate):
         return updated_product
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{product_id}")
 async def delete_product(product_id: str):
@@ -664,8 +680,11 @@ async def delete_product(product_id: str):
         supabase = get_supabase()
         response = supabase.table("products").delete().eq("id", product_id).execute()
         return {"message": "Product deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/search/{query}")
 async def search_products(query: str):
@@ -701,8 +720,11 @@ async def search_products(query: str):
             product["total_quantity"] = sum(v.get("quantity", 0) for v in product["variants"])
         
         return products
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 # ==================== VARIANT ENDPOINTS ====================
 
@@ -713,8 +735,11 @@ async def get_product_variants(product_id: str):
         supabase = get_supabase()
         response = supabase.table("variants").select("*").eq("product_id", product_id).order("title").execute()
         return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/{product_id}/variants", response_model=dict)
 async def create_variant(product_id: str, variant: VariantCreate):
@@ -737,8 +762,9 @@ async def create_variant(product_id: str, variant: VariantCreate):
         return response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.put("/{product_id}/variants/{variant_id}")
 async def update_variant(product_id: str, variant_id: str, variant: VariantUpdate):
@@ -755,8 +781,9 @@ async def update_variant(product_id: str, variant_id: str, variant: VariantUpdat
         return response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{product_id}/variants/{variant_id}")
 async def delete_variant(product_id: str, variant_id: str):
@@ -765,5 +792,8 @@ async def delete_variant(product_id: str, variant_id: str):
         supabase = get_supabase()
         response = supabase.table("variants").delete().eq("id", variant_id).eq("product_id", product_id).execute()
         return {"message": "Variant deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")

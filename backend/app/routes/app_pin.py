@@ -144,7 +144,7 @@ async def pin_status():
                 status_code=503,
                 detail='Database table "app_pin" is missing. Run supabase_app_pin.sql in Supabase.',
             )
-        raise HTTPException(status_code=500, detail=str(e))
+        raise
 
 
 @router.post("/verify")

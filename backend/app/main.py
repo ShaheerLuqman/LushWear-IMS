@@ -1,10 +1,16 @@
+import logging
 import os
 
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import products, orders, cashbook, ledger, app_pin
 from app.auth import require_auth
+from app.logging_config import configure_logging
+
+configure_logging()
+logger = logging.getLogger("app")
 
 IS_PROD = os.getenv("APP_ENV", "development").strip().lower() == "production"
 
@@ -36,6 +42,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 _auth = [Depends(require_auth)]
 app.include_router(products.router, prefix="/api", dependencies=_auth)

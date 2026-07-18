@@ -110,139 +110,118 @@ async def get_cashbook_entries(
     start_date: Optional[date] = Query(None, description="Filter from entry_date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter to entry_date (YYYY-MM-DD)"),
 ):
-    try:
-        supabase = get_supabase()
-        query = (
-            supabase.table("cashbook_entries")
-            .select("*")
-            .order("entry_date", desc=False)
-            .order("created_at", desc=False)
-        )
-        if start_date:
-            query = query.gte("entry_date", start_date.isoformat())
-        if end_date:
-            query = query.lte("entry_date", end_date.isoformat())
-        response = query.execute()
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = get_supabase()
+    query = (
+        supabase.table("cashbook_entries")
+        .select("*")
+        .order("entry_date", desc=False)
+        .order("created_at", desc=False)
+    )
+    if start_date:
+        query = query.gte("entry_date", start_date.isoformat())
+    if end_date:
+        query = query.lte("entry_date", end_date.isoformat())
+    response = query.execute()
+    return response.data
 
 
 @router.post("/entries", response_model=dict)
 async def create_cashbook_entry(entry: CashbookEntryCreate):
     try:
         payload = _normalize_entry_payload(entry.model_dump(), is_create=True)
-        entry_type = payload.get("entry_type")
-        if entry_type not in ENTRY_TYPES:
-            raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
-        if payload.get("amount") is None or float(payload["amount"]) <= 0:
-            raise HTTPException(status_code=400, detail="amount must be greater than 0")
-        if not payload.get("folio"):
-            raise HTTPException(status_code=400, detail="folio (ledger) is required")
-
-        supabase = get_supabase()
-        response = supabase.table("cashbook_entries").insert(payload).execute()
-        if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to create cashbook entry")
-        
-        # Recalculate daily balances from this date onwards
-        entry_date = payload.get("entry_date")
-        if entry_date:
-            await _recalculate_balances_from_date(supabase, entry_date)
-
-        # If this is an order-advance entry, recompute that order's advance status
-        if payload.get("order_number"):
-            try:
-                recompute_advance_statuses(supabase, [payload["order_number"]])
-            except Exception:
-                pass
-
-        return response.data[0]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+
+    entry_type = payload.get("entry_type")
+    if entry_type not in ENTRY_TYPES:
+        raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
+    if payload.get("amount") is None or float(payload["amount"]) <= 0:
+        raise HTTPException(status_code=400, detail="amount must be greater than 0")
+    if not payload.get("folio"):
+        raise HTTPException(status_code=400, detail="folio (ledger) is required")
+
+    supabase = get_supabase()
+    response = supabase.table("cashbook_entries").insert(payload).execute()
+    if not response.data:
+        raise HTTPException(status_code=500, detail="Failed to create cashbook entry")
+
+    entry_date = payload.get("entry_date")
+    if entry_date:
+        await _recalculate_balances_from_date(supabase, entry_date)
+
+    if payload.get("order_number"):
+        try:
+            recompute_advance_statuses(supabase, [payload["order_number"]])
+        except Exception:
+            pass
+
+    return response.data[0]
 
 
 @router.put("/entries/{entry_id}", response_model=dict)
 async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
+    supabase = get_supabase()
+
+    existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
+    if not existing_resp.data:
+        raise HTTPException(status_code=404, detail="Cashbook entry not found")
+    old_date = existing_resp.data[0]["entry_date"]
+    old_order_number = existing_resp.data[0].get("order_number")
+
     try:
-        supabase = get_supabase()
-        
-        # Get existing entry to know the date(s) and order(s) affected
-        existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
-        if not existing_resp.data:
-            raise HTTPException(status_code=404, detail="Cashbook entry not found")
-        old_date = existing_resp.data[0]["entry_date"]
-        old_order_number = existing_resp.data[0].get("order_number")
-        
         payload = _normalize_entry_payload(entry.model_dump(exclude_unset=True))
-        if "entry_type" in payload and payload["entry_type"] not in ENTRY_TYPES:
-            raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
-        if "amount" in payload and (payload["amount"] is None or float(payload["amount"]) <= 0):
-            raise HTTPException(status_code=400, detail="amount must be greater than 0")
-        if not payload:
-            raise HTTPException(status_code=400, detail="No fields to update")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if "entry_type" in payload and payload["entry_type"] not in ENTRY_TYPES:
+        raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
+    if "amount" in payload and (payload["amount"] is None or float(payload["amount"]) <= 0):
+        raise HTTPException(status_code=400, detail="amount must be greater than 0")
+    if not payload:
+        raise HTTPException(status_code=400, detail="No fields to update")
 
-        response = supabase.table("cashbook_entries").update(payload).eq("id", entry_id).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Cashbook entry not found")
-        
-        # Recalculate balances from the earliest affected date
-        new_date = payload.get("entry_date", old_date)
-        earliest_date = min(old_date, new_date)
-        await _recalculate_balances_from_date(supabase, earliest_date)
+    response = supabase.table("cashbook_entries").update(payload).eq("id", entry_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Cashbook entry not found")
 
-        # Recompute advance status for any order whose advance entry changed.
-        # Cover both the old and new order numbers in case it was reassigned.
-        new_order_number = payload.get("order_number", old_order_number)
-        affected_orders = {n for n in [old_order_number, new_order_number] if n}
-        if affected_orders:
-            try:
-                recompute_advance_statuses(supabase, list(affected_orders))
-            except Exception:
-                pass
+    new_date = payload.get("entry_date", old_date)
+    earliest_date = min(old_date, new_date)
+    await _recalculate_balances_from_date(supabase, earliest_date)
 
-        return response.data[0]
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    # Cover both old and new order numbers in case the entry was reassigned.
+    new_order_number = payload.get("order_number", old_order_number)
+    affected_orders = {n for n in [old_order_number, new_order_number] if n}
+    if affected_orders:
+        try:
+            recompute_advance_statuses(supabase, list(affected_orders))
+        except Exception:
+            pass
+
+    return response.data[0]
 
 
 @router.delete("/entries/{entry_id}", response_model=dict)
 async def delete_cashbook_entry(entry_id: str):
-    try:
-        supabase = get_supabase()
-        
-        # Get entry date and order number before deleting
-        existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
-        if not existing_resp.data:
-            raise HTTPException(status_code=404, detail="Cashbook entry not found")
-        entry_date = existing_resp.data[0]["entry_date"]
-        order_number = existing_resp.data[0].get("order_number")
+    supabase = get_supabase()
 
-        response = supabase.table("cashbook_entries").delete().eq("id", entry_id).execute()
-        if not response.data:
-            raise HTTPException(status_code=404, detail="Cashbook entry not found")
+    existing_resp = supabase.table("cashbook_entries").select("entry_date, order_number").eq("id", entry_id).limit(1).execute()
+    if not existing_resp.data:
+        raise HTTPException(status_code=404, detail="Cashbook entry not found")
+    entry_date = existing_resp.data[0]["entry_date"]
+    order_number = existing_resp.data[0].get("order_number")
 
-        # Recalculate daily balances from this date onwards
-        await _recalculate_balances_from_date(supabase, entry_date)
+    response = supabase.table("cashbook_entries").delete().eq("id", entry_id).execute()
+    if not response.data:
+        raise HTTPException(status_code=404, detail="Cashbook entry not found")
 
-        # If an order-advance entry was removed, recompute that order's advance status
-        if order_number:
-            try:
-                recompute_advance_statuses(supabase, [order_number])
-            except Exception:
-                pass
+    await _recalculate_balances_from_date(supabase, entry_date)
 
-        return {"status": "deleted", "id": entry_id}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    if order_number:
+        try:
+            recompute_advance_statuses(supabase, [order_number])
+        except Exception:
+            pass
+
+    return {"status": "deleted", "id": entry_id}
 
 
 @router.get("/daily-balances", response_model=List[dict])
@@ -251,83 +230,67 @@ async def get_daily_balances(
     end_date: Optional[date] = Query(None, description="Filter to date (YYYY-MM-DD)"),
 ):
     """Get daily balance summaries."""
-    try:
-        supabase = get_supabase()
-        query = (
-            supabase.table("cashbook_daily_balances")
-            .select("*")
-            .order("balance_date", desc=False)
-        )
-        if start_date:
-            query = query.gte("balance_date", start_date.isoformat())
-        if end_date:
-            query = query.lte("balance_date", end_date.isoformat())
-        response = query.execute()
-        return response.data
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = get_supabase()
+    query = (
+        supabase.table("cashbook_daily_balances")
+        .select("*")
+        .order("balance_date", desc=False)
+    )
+    if start_date:
+        query = query.gte("balance_date", start_date.isoformat())
+    if end_date:
+        query = query.lte("balance_date", end_date.isoformat())
+    response = query.execute()
+    return response.data
 
 
 @router.get("/daily-balance/{target_date}", response_model=dict)
 async def get_daily_balance(target_date: date):
     """Get balance for a specific date."""
-    try:
-        supabase = get_supabase()
-        response = (
-            supabase.table("cashbook_daily_balances")
-            .select("*")
-            .eq("balance_date", target_date.isoformat())
-            .limit(1)
-            .execute()
-        )
-        
-        if response.data:
-            return response.data[0]
-        
-        # If no balance record exists, calculate opening from previous day
-        prev_date = (target_date - timedelta(days=1)).isoformat()
-        prev_resp = (
-            supabase.table("cashbook_daily_balances")
-            .select("closing_balance")
-            .eq("balance_date", prev_date)
-            .limit(1)
-            .execute()
-        )
-        
-        opening = float(prev_resp.data[0]["closing_balance"]) if prev_resp.data else 0.0
-        
-        return {
-            "balance_date": target_date.isoformat(),
-            "opening_balance": opening,
-            "total_inflow": 0.0,
-            "total_outflow": 0.0,
-            "closing_balance": opening,
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = get_supabase()
+    response = (
+        supabase.table("cashbook_daily_balances")
+        .select("*")
+        .eq("balance_date", target_date.isoformat())
+        .limit(1)
+        .execute()
+    )
+    if response.data:
+        return response.data[0]
+
+    # No record yet: derive opening from the previous day's closing.
+    prev_date = (target_date - timedelta(days=1)).isoformat()
+    prev_resp = (
+        supabase.table("cashbook_daily_balances")
+        .select("closing_balance")
+        .eq("balance_date", prev_date)
+        .limit(1)
+        .execute()
+    )
+    opening = float(prev_resp.data[0]["closing_balance"]) if prev_resp.data else 0.0
+    return {
+        "balance_date": target_date.isoformat(),
+        "opening_balance": opening,
+        "total_inflow": 0.0,
+        "total_outflow": 0.0,
+        "closing_balance": opening,
+    }
 
 
 @router.post("/recalculate-all", response_model=dict)
 async def recalculate_all_balances():
     """Recalculate all daily balances from the earliest entry. Use after migration."""
-    try:
-        supabase = get_supabase()
-        
-        # Get the earliest entry date
-        earliest_resp = (
-            supabase.table("cashbook_entries")
-            .select("entry_date")
-            .order("entry_date", desc=False)
-            .limit(1)
-            .execute()
-        )
-        
-        if not earliest_resp.data:
-            return {"status": "no entries to recalculate"}
-        
-        earliest_date = earliest_resp.data[0]["entry_date"]
-        await _recalculate_balances_from_date(supabase, earliest_date)
-        
-        return {"status": "recalculated", "from_date": earliest_date}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    supabase = get_supabase()
+    earliest_resp = (
+        supabase.table("cashbook_entries")
+        .select("entry_date")
+        .order("entry_date", desc=False)
+        .limit(1)
+        .execute()
+    )
+    if not earliest_resp.data:
+        return {"status": "no entries to recalculate"}
+
+    earliest_date = earliest_resp.data[0]["entry_date"]
+    await _recalculate_balances_from_date(supabase, earliest_date)
+    return {"status": "recalculated", "from_date": earliest_date}

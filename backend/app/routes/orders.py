@@ -9,6 +9,7 @@ from app.advance_status import recompute_advance_statuses
 from app.order_pdf import extract_order_numbers
 from datetime import datetime, timedelta, timezone
 import asyncio
+import logging
 import httpx
 import re
 import csv
@@ -26,6 +27,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT
 from reportlab.lib.utils import ImageReader
 
+logger = logging.getLogger("app.orders")
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 # Pakistan Time (PKT) is UTC+5
@@ -263,8 +265,11 @@ async def get_all_orders(
         # DB sort on a VARCHAR column is lexicographic ("10000" < "9999"); re-sort numerically.
         all_orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
         return all_orders
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/sync-shopify")
 async def sync_shopify_orders():
@@ -1025,7 +1030,7 @@ async def sync_shopify_orders():
         try:
             recompute_advance_statuses(supabase)
         except Exception as e:
-            print(f"[sync-shopify] advance status recompute failed: {e}")
+            logger.warning("[sync-shopify] advance status recompute failed: %s", e)
 
         return {
             "message": "Orders synced successfully",
@@ -1051,10 +1056,12 @@ async def sync_shopify_orders():
             status_code=e.response.status_code,
             detail=f"Shopify API error: {error_text}\nURL: {api_url if 'api_url' in locals() else 'N/A'}"
         )
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to connect to Shopify: {str(e)}")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error syncing orders: {str(e)}")
+    except httpx.RequestError:
+        logger.exception("Shopify order sync: connection error")
+        raise HTTPException(status_code=502, detail="Failed to connect to Shopify")
+    except Exception:
+        logger.exception("Shopify order sync failed")
+        raise HTTPException(status_code=500, detail="Error syncing orders")
 
 
 def _parse_float(val: Any, default: float = 0.0) -> float:
@@ -1288,7 +1295,8 @@ async def upload_postex_csv(
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error processing CSV: {str(e)}")
+        logger.exception("Error processing CSV")
+        raise HTTPException(status_code=500, detail="Error processing CSV")
 
 
 class ReplacementOrderCreate(BaseModel):
@@ -1369,8 +1377,9 @@ async def create_replacement_order(body: ReplacementOrderCreate):
         return response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/fix-voided-totals", response_model=dict)
@@ -1390,7 +1399,7 @@ async def fix_voided_order_totals(
     """
     try:
         supabase = get_supabase()
-        print(f"[fix-voided-totals] started | only_returned_status={only_returned_status}")
+        logger.info(f"[fix-voided-totals] started | only_returned_status={only_returned_status}")
 
         # Start from 22 Jan 2025 (inclusive). Uses order_receiving_date if present, else created_at.
         start_iso = "2026-01-22T00:00:00"
@@ -1415,7 +1424,7 @@ async def fix_voided_order_totals(
             if not batch:
                 break
             orders.extend(batch)
-            print(f"[fix-voided-totals] fetched by order_receiving_date batch size={len(batch)} offset={offset}")
+            logger.info(f"[fix-voided-totals] fetched by order_receiving_date batch size={len(batch)} offset={offset}")
             if len(batch) < page_size:
                 break
             offset += page_size
@@ -1436,7 +1445,7 @@ async def fix_voided_order_totals(
             batch = resp_created.data or []
             if not batch:
                 break
-            print(f"[fix-voided-totals] fetched by created_at batch size={len(batch)} offset={offset}")
+            logger.info(f"[fix-voided-totals] fetched by created_at batch size={len(batch)} offset={offset}")
             for o in batch:
                 if o["id"] not in seen_ids:
                     orders.append(o)
@@ -1446,7 +1455,7 @@ async def fix_voided_order_totals(
             offset += page_size
 
         if not orders:
-            print("[fix-voided-totals] no candidate orders found in date range")
+            logger.info("[fix-voided-totals] no candidate orders found in date range")
             return {
                 "updated_count": 0,
                 "checked_count": 0,
@@ -1456,7 +1465,7 @@ async def fix_voided_order_totals(
                 "only_returned_status": only_returned_status,
             }
 
-        print(f"[fix-voided-totals] total candidates={len(orders)}")
+        logger.info(f"[fix-voided-totals] total candidates={len(orders)}")
         updated_count = 0
         checked_count = 0
         voided_in_shopify_count = 0
@@ -1470,19 +1479,19 @@ async def fix_voided_order_totals(
         for db_order in orders:
             order_number = str(db_order.get("order_number") or "").strip()
             if not order_number:
-                print(f"[fix-voided-totals] skip row id={db_order.get('id')} reason=missing_order_number")
+                logger.info(f"[fix-voided-totals] skip row id={db_order.get('id')} reason=missing_order_number")
                 continue
 
             if only_returned_status:
                 status = (db_order.get("order_status") or "").strip().lower()
                 if status != "returned":
-                    print(f"[fix-voided-totals] skip order={order_number} reason=status_not_returned status={status}")
+                    logger.info(f"[fix-voided-totals] skip order={order_number} reason=status_not_returned status={status}")
                     continue
 
             candidate_rows.append((order_number, db_order))
 
         eligible_candidates_count = len(candidate_rows)
-        print(
+        logger.info(
             f"[fix-voided-totals] eligible local candidates={eligible_candidates_count} "
             f"batch_size={fetch_batch_size}"
         )
@@ -1492,7 +1501,7 @@ async def fix_voided_order_totals(
             checked_count += len(chunk)
             chunk_start = i + 1
             chunk_end = i + len(chunk)
-            print(f"[fix-voided-totals] processing chunk {chunk_start}-{chunk_end}")
+            logger.info(f"[fix-voided-totals] processing chunk {chunk_start}-{chunk_end}")
 
             fetch_tasks = [
                 _fetch_shopify_order_by_order_number(order_number)
@@ -1503,7 +1512,7 @@ async def fix_voided_order_totals(
             for (order_number, db_order), sp_order_result in zip(chunk, fetch_results):
                 if isinstance(sp_order_result, Exception):
                     shopify_fetch_failed_count += 1
-                    print(
+                    logger.info(
                         f"[fix-voided-totals] skip order={order_number} "
                         f"reason=shopify_fetch_exception err={sp_order_result}"
                     )
@@ -1512,13 +1521,13 @@ async def fix_voided_order_totals(
                 sp_order = sp_order_result
                 if not sp_order:
                     shopify_fetch_failed_count += 1
-                    print(f"[fix-voided-totals] skip order={order_number} reason=shopify_fetch_failed")
+                    logger.info(f"[fix-voided-totals] skip order={order_number} reason=shopify_fetch_failed")
                     continue
 
                 financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
                 if financial_status_peek != "voided":
                     skipped_not_voided_count += 1
-                    print(
+                    logger.info(
                         f"[fix-voided-totals] skip order={order_number} "
                         f"reason=not_voided financial_status={financial_status_peek}"
                     )
@@ -1531,7 +1540,7 @@ async def fix_voided_order_totals(
                 voided_from_fulfillments = _order_total_from_fulfillments(sp_order)
                 if voided_from_fulfillments is not None:
                     new_total = voided_from_fulfillments + shopify_tax
-                    print(
+                    logger.info(
                         f"[fix-voided-totals] order={order_number} calc=fulfillments_plus_shipping "
                         f"base={voided_from_fulfillments:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}"
                     )
@@ -1544,13 +1553,13 @@ async def fix_voided_order_totals(
                     total_price_val = sp_order.get("total_price")
                     if total_price_val is not None and str(total_price_val).strip() != "":
                         new_total = float(total_price_val)
-                        print(
+                        logger.info(
                             f"[fix-voided-totals] order={order_number} calc=fallback_total_price "
                             f"new_total={new_total:.2f}"
                         )
                     else:
                         new_total = total_line_items_price + shopify_tax
-                        print(
+                        logger.info(
                             f"[fix-voided-totals] order={order_number} calc=fallback_line_items_plus_tax "
                             f"line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}"
                         )
@@ -1558,7 +1567,7 @@ async def fix_voided_order_totals(
                 # Preserve advance_amount from DB; only fix total_amount
                 existing_total = float(db_order.get("total_amount") or 0.0)
                 if abs(existing_total - new_total) < 0.01:
-                    print(
+                    logger.info(
                         f"[fix-voided-totals] skip order={order_number} reason=no_change "
                         f"existing_total={existing_total:.2f} new_total={new_total:.2f}"
                     )
@@ -1572,12 +1581,12 @@ async def fix_voided_order_totals(
                 ).eq("id", db_order["id"]).execute()
                 updated_count += 1
                 updated_order_numbers.append(str(order_number))
-                print(
+                logger.info(
                     f"[fix-voided-totals] updated order={order_number} "
                     f"existing_total={existing_total:.2f} new_total={new_total:.2f}"
                 )
 
-        print(
+        logger.info(
             f"[fix-voided-totals] completed | checked={checked_count} updated={updated_count} "
             f"voided_in_shopify={voided_in_shopify_count} fetch_failed={shopify_fetch_failed_count} "
             f"not_voided={skipped_not_voided_count} eligible_candidates={eligible_candidates_count}"
@@ -1593,8 +1602,11 @@ async def fix_voided_order_totals(
             "only_returned_status": only_returned_status,
             "updated_order_numbers": updated_order_numbers,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class RecalculateTotalsBody(BaseModel):
@@ -1965,8 +1977,9 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/recalculate-totals", response_model=dict)
@@ -1986,7 +1999,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
         if not order_numbers_input:
             raise HTTPException(status_code=400, detail="No valid order numbers provided")
         
-        print(f"[recalculate-totals] started | order_numbers={order_numbers_input}")
+        logger.info(f"[recalculate-totals] started | order_numbers={order_numbers_input}")
         
         # Fetch the orders from DB
         db_orders_map: Dict[str, Dict[str, Any]] = {}
@@ -2003,7 +2016,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
         
         not_found_in_db = [n for n in order_numbers_input if n not in db_orders_map]
         if not_found_in_db:
-            print(f"[recalculate-totals] orders not found in DB: {not_found_in_db}")
+            logger.info(f"[recalculate-totals] orders not found in DB: {not_found_in_db}")
         
         updated_count = 0
         checked_count = 0
@@ -2027,13 +2040,13 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
             for (order_number, db_order), sp_order_result in zip(chunk, fetch_results):
                 if isinstance(sp_order_result, Exception):
                     shopify_fetch_failed_count += 1
-                    print(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_exception err={sp_order_result}")
+                    logger.info(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_exception err={sp_order_result}")
                     continue
                 
                 sp_order = sp_order_result
                 if not sp_order:
                     shopify_fetch_failed_count += 1
-                    print(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_failed")
+                    logger.info(f"[recalculate-totals] skip order={order_number} reason=shopify_fetch_failed")
                     continue
                 
                 # Calculate new total using the same logic as fix-voided-totals
@@ -2042,7 +2055,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 
                 if voided_from_fulfillments is not None:
                     new_total = voided_from_fulfillments + shopify_tax
-                    print(f"[recalculate-totals] order={order_number} calc=fulfillments_plus_shipping base={voided_from_fulfillments:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
+                    logger.info(f"[recalculate-totals] order={order_number} calc=fulfillments_plus_shipping base={voided_from_fulfillments:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
                 else:
                     total_line_items_price = 0.0
                     try:
@@ -2052,10 +2065,10 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                     total_price_val = sp_order.get("total_price")
                     if total_price_val is not None and str(total_price_val).strip() != "":
                         new_total = float(total_price_val)
-                        print(f"[recalculate-totals] order={order_number} calc=fallback_total_price new_total={new_total:.2f}")
+                        logger.info(f"[recalculate-totals] order={order_number} calc=fallback_total_price new_total={new_total:.2f}")
                     else:
                         new_total = total_line_items_price + shopify_tax
-                        print(f"[recalculate-totals] order={order_number} calc=fallback_line_items_plus_tax line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
+                        logger.info(f"[recalculate-totals] order={order_number} calc=fallback_line_items_plus_tax line_items={total_line_items_price:.2f} tax={shopify_tax:.2f} new_total={new_total:.2f}")
 
                 # Keep recalculation behavior aligned with sync logic: only configured
                 # discount codes reduce selling price instead of being treated as advance.
@@ -2072,7 +2085,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
                 if has_price_reduction_discount_code:
                     discounted_total = max(0.0, new_total - total_discounts)
-                    print(
+                    logger.info(
                         f"[recalculate-totals] order={order_number} apply_price_reduction_discount "
                         f"pre_discount_total={new_total:.2f} discounts={total_discounts:.2f} new_total={discounted_total:.2f}"
                     )
@@ -2081,7 +2094,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 # Update the order
                 existing_total = float(db_order.get("total_amount") or 0.0)
                 if abs(existing_total - new_total) < 0.01:
-                    print(f"[recalculate-totals] skip order={order_number} reason=no_change existing_total={existing_total:.2f} new_total={new_total:.2f}")
+                    logger.info(f"[recalculate-totals] skip order={order_number} reason=no_change existing_total={existing_total:.2f} new_total={new_total:.2f}")
                     continue
                 
                 supabase.table("orders").update(
@@ -2092,9 +2105,9 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                 ).eq("id", db_order["id"]).execute()
                 updated_count += 1
                 updated_order_numbers.append(str(order_number))
-                print(f"[recalculate-totals] updated order={order_number} existing_total={existing_total:.2f} new_total={new_total:.2f}")
+                logger.info(f"[recalculate-totals] updated order={order_number} existing_total={existing_total:.2f} new_total={new_total:.2f}")
         
-        print(f"[recalculate-totals] completed | checked={checked_count} updated={updated_count} fetch_failed={shopify_fetch_failed_count}")
+        logger.info(f"[recalculate-totals] completed | checked={checked_count} updated={updated_count} fetch_failed={shopify_fetch_failed_count}")
         
         return {
             "updated_count": updated_count,
@@ -2105,8 +2118,9 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/by-number/{order_number}")
@@ -2124,8 +2138,9 @@ async def get_order_by_number(order_number: str):
         return response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class LoadSheetLogCreate(BaseModel):
@@ -2172,8 +2187,9 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
         return response.data[0]
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/load-sheet-logs", response_model=List[dict])
@@ -2264,8 +2280,9 @@ async def get_load_sheet_log_pdf(log_id: str):
         )
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.delete("/load-sheet-logs/{log_id}")
@@ -2296,8 +2313,9 @@ async def delete_load_sheet_log(log_id: str):
         return {"message": "Load sheet log deleted"}
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/returned-delivery-charges-sum")
@@ -2313,8 +2331,11 @@ async def get_returned_delivery_charges_sum():
         )
         total = sum(float(row.get("delivery_charge") or 0) for row in (response.data or []))
         return {"sum": total}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/{order_id}")
@@ -2328,8 +2349,9 @@ async def get_order(order_id: str):
         return response.data
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 def _delivery_status_is_final(delivery_status_data: dict) -> bool:
     """True if latest status is final (Delivered to Customer or Returned at Merchant Warehouse). No need to fetch from PostEx again."""
@@ -2491,8 +2513,11 @@ async def create_order(order: OrderCreate):
             order_data["order_receiving_date"] = now
         response = supabase.table("orders").insert(order_data).execute()
         return response.data[0]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], order_status: str) -> Dict[str, Any]:
     """Build delivery_status JSONB with latest_status set for bulk 'delivered', 'returned', or 'cancelled'.
@@ -2600,8 +2625,11 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
             "updated_order_numbers": sorted(updated_order_numbers),
             "not_found_order_numbers": not_found_order_numbers,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 class BulkUpdatePieceReceivedBody(BaseModel):
@@ -2644,8 +2672,11 @@ async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody):
             "updated_order_numbers": sorted(updated_order_numbers),
             "not_found_order_numbers": not_found_order_numbers,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/bulk-update-piece-received")
@@ -2677,8 +2708,11 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
             "updated_order_numbers": sorted(updated_order_numbers),
             "not_found_order_numbers": not_found_order_numbers,
         }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.put("/{order_id}")
@@ -2712,8 +2746,9 @@ async def update_order(order_id: str, order: OrderUpdate):
         return updated
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/{order_id}/delivery-status")
 async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status")):
@@ -2848,19 +2883,19 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             }
             # Derive order_status from the LAST courier status instead of using a fixed priority.
             derived_status = _derive_order_status_from_latest(delivery_status_data)
-            print(f"[delivery-status] order_id={order_id} latest_status={delivery_status_data.get('latest_status')!r} derived_status={derived_status!r}")
+            logger.info(f"[delivery-status] order_id={order_id} latest_status={delivery_status_data.get('latest_status')!r} derived_status={derived_status!r}")
             if derived_status:
                 update_payload["order_status"] = derived_status
-                print(f"[delivery-status] Updating order_status to {derived_status}")
+                logger.info(f"[delivery-status] Updating order_status to {derived_status}")
                 if derived_status == "delivered":
                     # Set piece_received to Done only when still Pending (first time delivered). Do not overwrite if user already changed it.
                     current_piece = (order.get("piece_received") or "").strip().lower()
                     if current_piece == "pending":
                         update_payload["piece_received"] = "Done"
             else:
-                print(f"[delivery-status] No derived_status, order_status not updated")
+                logger.info(f"[delivery-status] No derived_status, order_status not updated")
             supabase.table("orders").update(update_payload).eq("id", order_id).execute()
-            print(f"[delivery-status] Update payload: {update_payload.keys()}")
+            logger.info(f"[delivery-status] Update payload: {update_payload.keys()}")
 
         return delivery_status_data
         
@@ -2876,7 +2911,8 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error fetching delivery status: {str(e)}")
+        logger.exception("Error fetching delivery status")
+        raise HTTPException(status_code=500, detail="Error fetching delivery status")
 
 @router.delete("/{order_id}")
 async def delete_order(order_id: str):
@@ -2885,8 +2921,11 @@ async def delete_order(order_id: str):
         supabase = get_supabase()
         response = supabase.table("orders").delete().eq("id", order_id).execute()
         return {"message": "Order deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 def _generate_pdf_load_sheet(
     orders: List[dict],
@@ -2978,10 +3017,10 @@ def _generate_pdf_load_sheet(
         except Exception as e:
             # If image loading fails, continue without logo
             import traceback
-            print(f"Warning: Could not load logo image: {e}")
+            logger.warning("Could not load logo image: %s", e)
             traceback.print_exc()
     else:
-        print(f"Warning: Logo file not found at {logo_absolute_path}")
+        logger.warning("Logo file not found at %s", logo_absolute_path)
     
     # Title
     elements.append(Paragraph("Load Sheet", title_style))
@@ -3598,7 +3637,8 @@ async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating invoice: {str(e)}")
+        logger.exception("Error generating invoice")
+        raise HTTPException(status_code=500, detail="Error generating invoice")
 
 
 def _split_item_name(item: str) -> Tuple[str, str]:
@@ -3836,7 +3876,8 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating packaging list: {str(e)}")
+        logger.exception("Error generating packaging list")
+        raise HTTPException(status_code=500, detail="Error generating packaging list")
 
 
 @router.post("/extract-order-numbers-from-pdf")
@@ -3851,7 +3892,8 @@ async def extract_order_numbers_from_pdf(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Could not read PDF: {str(e)}")
+        logger.exception("Could not read PDF")
+        raise HTTPException(status_code=400, detail="Could not read PDF")
 
 
 class PackagingListByNumbersBody(BaseModel):
@@ -3894,7 +3936,8 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating packaging list: {str(e)}")
+        logger.exception("Error generating packaging list")
+        raise HTTPException(status_code=500, detail="Error generating packaging list")
 
 
 @router.post("/generate-load-sheet")
@@ -3927,7 +3970,8 @@ async def generate_load_sheet(order_ids: List[str]):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generating PDF load sheet: {str(e)}")
+        logger.exception("Error generating PDF load sheet")
+        raise HTTPException(status_code=500, detail="Error generating PDF load sheet")
 
 
 @router.get("/month-summary/list")
@@ -3994,8 +4038,11 @@ async def get_month_summary_list():
         months_list = sorted(months_set, key=lambda x: (x[1], x[0]), reverse=True)
         
         return [{"month": m, "year": y} for m, y in months_list]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.get("/month-summary/{month}/{year}")
@@ -4227,6 +4274,7 @@ async def get_month_summary_detail(month: int, year: int):
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
