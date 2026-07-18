@@ -1,6 +1,18 @@
-from pydantic import BaseModel
-from typing import Optional, List, Dict, Any
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, date
+
+
+def _lower(v):
+    return v.strip().lower() if isinstance(v, str) else v
+
+
+# entry_type is case-normalised before matching so existing clients sending
+# "INFLOW"/"Inflow" keep working (the route used to lower() it after parsing).
+EntryType = Annotated[Literal["inflow", "outflow"], BeforeValidator(_lower)]
+PieceReceived = Literal["Pending", "Done", "Received"]
+# Rejects "" and whitespace-only, which the routes strip and 400 on anyway.
+NonBlankStr = Annotated[str, Field(min_length=1), BeforeValidator(lambda v: v.strip() if isinstance(v, str) else v)]
 
 # ==================== VARIANT MODELS ====================
 
@@ -22,9 +34,8 @@ class Variant(VariantBase):
     product_id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 # ==================== PRODUCT MODELS ====================
 
@@ -51,12 +62,13 @@ class Product(ProductBase):
     id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 class ProductWithVariants(Product):
     variants: List[Variant] = []
+    # Computed server-side (sum of variant quantities); the grid and stock totals rely on it.
+    total_quantity: int = 0
 
 class ProductCostPriceUpdate(BaseModel):
     id: str
@@ -87,8 +99,10 @@ class OrderBase(BaseModel):
     courier: str
     tracking_number: Optional[str] = None
     folio: Optional[str] = None
-    order_status: str
-    piece_received: str = "Pending"  # Pending | Done | Received
+    # order_status stays open text: live data carries courier codes (CNA/ICA/RFD)
+    # beyond the core lifecycle set. See DATABASE.md.
+    order_status: NonBlankStr
+    piece_received: PieceReceived = "Pending"
     delivery_status: Optional[Dict[str, Any]] = None
     total_amount: float
     advance_amount: float = 0.0
@@ -129,18 +143,17 @@ class Order(OrderBase):
     replacement_of_order_no: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
+
+    model_config = ConfigDict(from_attributes=True)
 
 # ==================== CASHBOOK MODELS ====================
 
 class CashbookEntryBase(BaseModel):
     entry_date: date
-    entry_type: str  # inflow | outflow
-    amount: float
+    entry_type: EntryType
+    amount: float = Field(gt=0)
     description: Optional[str] = None
-    folio: str  # UUID of linked ledger - REQUIRED
+    folio: NonBlankStr  # UUID of the linked ledger
     order_number: Optional[str] = None  # Set only for order-advance entries
 
 class CashbookEntryCreate(CashbookEntryBase):
@@ -148,8 +161,8 @@ class CashbookEntryCreate(CashbookEntryBase):
 
 class CashbookEntryUpdate(BaseModel):
     entry_date: Optional[date] = None
-    entry_type: Optional[str] = None
-    amount: Optional[float] = None
+    entry_type: Optional[EntryType] = None
+    amount: Optional[float] = Field(default=None, gt=0)
     description: Optional[str] = None
     folio: Optional[str] = None  # Can update folio, but not set to null
     order_number: Optional[str] = None
@@ -159,8 +172,7 @@ class CashbookEntry(CashbookEntryBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class CashbookDailyBalance(BaseModel):
     id: Optional[str] = None
@@ -172,16 +184,15 @@ class CashbookDailyBalance(BaseModel):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 # ==================== LEDGER MODELS ====================
 # Note: Ledger entries are no longer stored separately.
 # Ledgers now show summaries derived from cashbook_entries where folio = ledger.id
 
 class LedgerBase(BaseModel):
-    name: str
-    section: str  # free text, e.g. Cash/Bank, Expense, Vendors, Sales
+    name: NonBlankStr
+    section: NonBlankStr  # free text, e.g. Cash/Bank, Expense, Vendors, Sales
 
 class LedgerCreate(LedgerBase):
     pass
@@ -195,5 +206,4 @@ class Ledger(LedgerBase):
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

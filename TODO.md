@@ -96,6 +96,16 @@ one line each.
       (cookies or user prefs; ties into Organizations & Users).
 - [ ] **Dark & light theme** — theme toggle with persisted preference.
 - [ ] **Keyboard shortcuts / keybinds** — add shortcuts for common actions.
+- [ ] **De-duplicate the net-profit formula** — `total - (delivery + tax + cost)`
+      (with the returned/`-delivery` and delivered-only rules) is repeated in the
+      `net_profit` valueGetter, again inside `profit_percent`, and in the footer
+      aggregation (`frontend/renderer.js` ~1443, ~1515, ~1544, ~1783-1835).
+      Extract one `computeNetProfit(row)` helper and call it from all three so the
+      definition can't drift. Keep per-row profit/receivable **computed in the
+      browser** (valueGetters recalc instantly on inline edits and cost nothing);
+      period totals stay backend-side in `month-summary`. Note: the frontend helper
+      and the backend `month-summary` profit calc must stay in agreement — comment
+      each pointing at the other.
 
 ### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)
 

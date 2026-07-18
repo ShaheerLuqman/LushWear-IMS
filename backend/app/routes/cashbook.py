@@ -3,6 +3,8 @@ from typing import List, Optional
 from datetime import date, timedelta
 from app.database import get_supabase
 from app.models import (
+    CashbookDailyBalance,
+    CashbookEntry,
     CashbookEntryCreate,
     CashbookEntryUpdate,
 )
@@ -105,7 +107,7 @@ async def _recalculate_balances_from_date(supabase, from_date: str):
         await _recalculate_daily_balance(supabase, d)
 
 
-@router.get("/entries", response_model=List[dict])
+@router.get("/entries", response_model=List[CashbookEntry])
 async def get_cashbook_entries(
     start_date: Optional[date] = Query(None, description="Filter from entry_date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter to entry_date (YYYY-MM-DD)"),
@@ -125,7 +127,7 @@ async def get_cashbook_entries(
     return response.data
 
 
-@router.post("/entries", response_model=dict)
+@router.post("/entries", response_model=CashbookEntry)
 async def create_cashbook_entry(entry: CashbookEntryCreate):
     try:
         payload = _normalize_entry_payload(entry.model_dump(), is_create=True)
@@ -158,7 +160,7 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
     return response.data[0]
 
 
-@router.put("/entries/{entry_id}", response_model=dict)
+@router.put("/entries/{entry_id}", response_model=CashbookEntry)
 async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     supabase = get_supabase()
 
@@ -224,7 +226,7 @@ async def delete_cashbook_entry(entry_id: str):
     return {"status": "deleted", "id": entry_id}
 
 
-@router.get("/daily-balances", response_model=List[dict])
+@router.get("/daily-balances", response_model=List[CashbookDailyBalance])
 async def get_daily_balances(
     start_date: Optional[date] = Query(None, description="Filter from date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter to date (YYYY-MM-DD)"),
@@ -244,7 +246,7 @@ async def get_daily_balances(
     return response.data
 
 
-@router.get("/daily-balance/{target_date}", response_model=dict)
+@router.get("/daily-balance/{target_date}", response_model=CashbookDailyBalance)
 async def get_daily_balance(target_date: date):
     """Get balance for a specific date."""
     supabase = get_supabase()

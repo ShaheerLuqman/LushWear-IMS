@@ -2,11 +2,12 @@ from fastapi import APIRouter, HTTPException, UploadFile, File, Query, Form, Bod
 from fastapi.responses import Response
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
-from app.models import OrderCreate, OrderUpdate
+from app.models import Order, OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
 from app import shopify
 from app.db_utils import fetch_all
+from app.money import money
 from app.advance_status import recompute_advance_statuses
 from app.order_pdf import extract_order_numbers
 from datetime import datetime, timedelta, timezone
@@ -187,7 +188,7 @@ def _period_start_end_dates(month: int, year: int):
     return start_date, end_date
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=List[Order])
 async def get_all_orders(
     month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
     year: int = Query(None, ge=2000, le=2100, description="Filter by period year.")
@@ -1118,16 +1119,17 @@ async def upload_postex_csv(
             tax_amount = float(r["tax_amount"])
             order_status = (order.get("order_status") or "").strip().lower()
             if order_status == "returned":
-                receivable = -delivery_charge
+                receivable = money(-delivery_charge)
             else:
-                receivable = total_amount - advance_amount - delivery_charge - tax_amount
+                receivable = money(total_amount - advance_amount - delivery_charge - tax_amount)
             csv_net = r.get("csv_net_amount")
             if csv_net is not None:
-                if round(receivable, 2) != round(float(csv_net), 2):
+                csv_net_rounded = money(csv_net)
+                if receivable != csv_net_rounded:
                     amount_mismatches.append({
                         "order_number": order_num,
-                        "receivable": round(receivable, 2),
-                        "csv_net_amount": round(float(csv_net), 2),
+                        "receivable": receivable,
+                        "csv_net_amount": csv_net_rounded,
                         "total_amount": total_amount,
                         "advance_amount": advance_amount,
                         "delivery_charge": delivery_charge,
@@ -1403,8 +1405,9 @@ async def fix_voided_order_totals(
                         )
 
                 # Preserve advance_amount from DB; only fix total_amount
-                existing_total = float(db_order.get("total_amount") or 0.0)
-                if abs(existing_total - new_total) < 0.01:
+                new_total = money(new_total)
+                existing_total = money(db_order.get("total_amount"))
+                if existing_total == new_total:
                     logger.info(
                         f"[fix-voided-totals] skip order={order_number} reason=no_change "
                         f"existing_total={existing_total:.2f} new_total={new_total:.2f}"
@@ -1930,8 +1933,9 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                     new_total = discounted_total
                 
                 # Update the order
-                existing_total = float(db_order.get("total_amount") or 0.0)
-                if abs(existing_total - new_total) < 0.01:
+                new_total = money(new_total)
+                existing_total = money(db_order.get("total_amount"))
+                if existing_total == new_total:
                     logger.info(f"[recalculate-totals] skip order={order_number} reason=no_change existing_total={existing_total:.2f} new_total={new_total:.2f}")
                     continue
                 

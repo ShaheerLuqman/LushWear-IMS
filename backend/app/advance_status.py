@@ -16,6 +16,7 @@ advance_status (stored on orders.advance_status) reconciles the two:
 from typing import Dict
 
 from app.db_utils import fetch_all
+from app.money import money
 
 # The "Orders" ledger that order advances are always posted to (mirrors the
 # ORDERS_LEDGER_ID constant in the frontend).
@@ -28,24 +29,20 @@ ADV_CASHBOOK_ONLY = 3
 ADV_MATCH = 4
 ADV_MISMATCH = 5
 
-# Amounts within this tolerance are treated as equal (currency rounding).
-_TOLERANCE = 0.01
-
-
 def compute_advance_status(shopify_advance: float, cashbook_advance: float) -> int:
     """Return the advance_status code for one order given the two advance amounts."""
-    has_shopify = abs(float(shopify_advance or 0)) > _TOLERANCE
-    has_cashbook = abs(float(cashbook_advance or 0)) > _TOLERANCE
+    # Rounding to cents first makes these exact comparisons; sub-cent float noise
+    # (e.g. 1522.1999999999998) is normalised away rather than absorbed by a tolerance.
+    shopify = money(shopify_advance)
+    cashbook = money(cashbook_advance)
 
-    if not has_shopify and not has_cashbook:
+    if not shopify and not cashbook:
         return ADV_NONE
-    if has_shopify and not has_cashbook:
+    if shopify and not cashbook:
         return ADV_SHOPIFY_ONLY
-    if not has_shopify and has_cashbook:
+    if not shopify and cashbook:
         return ADV_CASHBOOK_ONLY
-    if abs(float(shopify_advance) - float(cashbook_advance)) <= _TOLERANCE:
-        return ADV_MATCH
-    return ADV_MISMATCH
+    return ADV_MATCH if shopify == cashbook else ADV_MISMATCH
 
 
 def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:

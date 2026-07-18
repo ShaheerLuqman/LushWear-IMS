@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException
 from typing import List
 from app.database import get_supabase
 from app.models import (
+    Ledger,
     LedgerCreate,
     LedgerUpdate,
 )
@@ -9,7 +10,7 @@ from app.models import (
 router = APIRouter(prefix="/ledgers", tags=["ledgers"])
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=List[Ledger])
 async def list_ledgers():
     response = (
         get_supabase()
@@ -21,7 +22,7 @@ async def list_ledgers():
     return response.data
 
 
-@router.post("/", response_model=dict)
+@router.post("/", response_model=Ledger)
 async def create_ledger(ledger: LedgerCreate):
     name = (ledger.name or "").strip()
     if not name:
@@ -36,7 +37,7 @@ async def create_ledger(ledger: LedgerCreate):
     return response.data[0]
 
 
-@router.get("/{ledger_id}", response_model=dict)
+@router.get("/{ledger_id}", response_model=Ledger)
 async def get_ledger(ledger_id: str):
     response = (
         get_supabase()
@@ -50,7 +51,7 @@ async def get_ledger(ledger_id: str):
     return response.data[0]
 
 
-@router.put("/{ledger_id}", response_model=dict)
+@router.put("/{ledger_id}", response_model=Ledger)
 async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
     payload = ledger.model_dump(exclude_unset=True)
     if "name" in payload:

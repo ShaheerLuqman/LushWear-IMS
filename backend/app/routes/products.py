@@ -1,13 +1,14 @@
 from fastapi import APIRouter, HTTPException
 from typing import List, Dict
 from app.models import (
-    ProductCreate, ProductUpdate,
+    ProductCreate, ProductUpdate, ProductWithVariants,
     ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
-    VariantCreate, VariantUpdate,
+    Variant, VariantCreate, VariantUpdate,
 )
 from app.database import get_supabase
 from app import shopify
 from app.db_utils import fetch_all
+from app.money import money
 from datetime import datetime, timezone
 import logging
 import httpx
@@ -31,7 +32,7 @@ def _is_replacement_order(row: dict) -> bool:
     return bool(re.match(r"^\d+-R$", on, re.IGNORECASE))
 
 
-@router.get("/", response_model=List[dict])
+@router.get("/", response_model=List[ProductWithVariants])
 async def get_all_products():
     """Get all products with their variants"""
     try:
@@ -455,11 +456,11 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                     if base in costs:
                         new_cost += costs[base]
 
-            try:
-                old = float(row.get("cost_price") or 0)
-            except (TypeError, ValueError):
-                old = 0.0
-            if abs(old - new_cost) < 0.01:
+            # Round the accumulated cost to cents so the comparison is exact and the
+            # stored value can't carry float noise (e.g. 1522.1999999999998).
+            new_cost = money(new_cost)
+            old = money(row.get("cost_price"))
+            if old == new_cost:
                 continue
             supabase.table("orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
             updated += 1
@@ -628,7 +629,7 @@ async def search_products(query: str):
 
 # ==================== VARIANT ENDPOINTS ====================
 
-@router.get("/{product_id}/variants", response_model=List[dict])
+@router.get("/{product_id}/variants", response_model=List[Variant])
 async def get_product_variants(product_id: str):
     """Get all variants for a product"""
     try:
@@ -641,7 +642,7 @@ async def get_product_variants(product_id: str):
         logger.exception("products endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/{product_id}/variants", response_model=dict)
+@router.post("/{product_id}/variants", response_model=Variant)
 async def create_variant(product_id: str, variant: VariantCreate):
     """Create a new variant for a product"""
     try:
