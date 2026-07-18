@@ -11,14 +11,15 @@ improve it. Written for the current state of the `webapp-migration` branch.
 A **FastAPI** service that powers the LushWear Inventory Management System. It is
 a thin-but-busy API layer sitting between:
 
-- a **Vercel-hosted frontend** (static),
+- an **Electron desktop frontend** (`frontend/`, launched via the `start-*`
+  scripts),
 - **Supabase** (Postgres) as the system of record,
 - **Shopify Admin API** (product/order source of truth), and
 - **PostEx** (courier — CSV upload + delivery-status lookups).
 
 It also generates PDFs server-side (invoices, packaging lists, load sheets) with
-ReportLab, and is deployed as a **Docker container on Northflank** (binds the
-platform-provided `$PORT`).
+ReportLab. On this branch the backend runs **locally** alongside the Electron app
+(started by `start-backend.bat`), not as a hosted service.
 
 ### Tech stack
 
@@ -30,7 +31,7 @@ platform-provided `$PORT`).
 | Auth | Single shared PIN → signed JWT (HS256) |
 | PDF | ReportLab, openpyxl (template), pypdf, Pillow |
 | HTTP client | httpx (async) for Shopify/PostEx |
-| Deploy | Docker on Northflank |
+| Runs as | Local Uvicorn process alongside the Electron app |
 
 ---
 
@@ -38,9 +39,7 @@ platform-provided `$PORT`).
 
 ```
 backend/
-├── Dockerfile              # Northflank, uvicorn on $PORT (7860 local fallback)
 ├── requirements.txt
-├── README.md               # Deploy + run notes
 ├── .env                    # local secrets (untracked)
 └── app/
     ├── main.py             # app factory, CORS, router wiring, auth gate
@@ -185,9 +184,10 @@ maintainability liability.
   restart.** For real production: set `AUTH_SECRET` always (a startup check that
   refuses to boot without it in prod), and move lockout state to Supabase/Redis
   so it survives restarts and works across replicas.
-- **Client IP for lockout is `request.client.host`** — behind the Northflank/Vercel
-  proxies this is often the proxy IP, so one blocked attacker can lock everyone out
-  (or everyone shares one bucket). Read `X-Forwarded-For` (trusted-proxy aware).
+- **Client IP for lockout is `request.client.host`** — fine for the local desktop
+  setup, but if this backend is ever put behind a reverse proxy the value becomes
+  the proxy IP (one blocked attacker locks everyone out). Read `X-Forwarded-For`
+  (trusted-proxy aware) if that ever applies.
 - Plan the **users/orgs/RBAC** migration the code already anticipates: add
   `user_id`/`role` claims, per-role dependencies, and RLS policies keyed on the
   JWT. Do it before you have a second user, not after.
@@ -216,9 +216,10 @@ maintainability liability.
   somewhere real.
 - **Pin dependencies** (currently all `>=`). Use a lockfile (`pip-tools`/`uv`/
   Poetry) so builds are reproducible; add Dependabot.
-- **Dockerfile**: run as a non-root user, add a `HEALTHCHECK`, and consider a
-  multi-worker Uvicorn/Gunicorn setup (`--workers`) — but note that multi-worker
-  breaks the in-memory lockout (see 4.4) until that state is externalized.
+- **If this backend is ever containerized/hosted** (this branch runs it locally):
+  run as a non-root user, add a `HEALTHCHECK`, and note that a multi-worker
+  Uvicorn/Gunicorn setup breaks the in-memory lockout (see 4.4) until that state
+  is externalized.
 - **`ALLOWED_ORIGINS` defaults to `*` with `allow_credentials=True`.** That
   combination is invalid per the CORS spec and browsers reject it; make prod
   require an explicit origin list and fail if it's `*` while credentials are on.

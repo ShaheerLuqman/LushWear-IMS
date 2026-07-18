@@ -102,10 +102,9 @@ GROUP BY ce.order_number;
 
 ## 4. Status
 
-**Done:** performance indexes, backend on the Secret key (set in both local
-`.env` and the Northflank environment), RLS enabled on all tables (no policies),
-the `updated_at` trigger, and the `order_status` / `advance_status` CHECK
-constraints.
+**Done:** performance indexes, backend on the Secret key (from `.env`), RLS
+enabled on all tables (no policies), the `updated_at` trigger, and the
+`order_status` / `advance_status` CHECK constraints.
 
 **Remaining** (non-urgent, tracked in [`TODO.md`](../TODO.md)): direct-frontend
 publishable `FOR SELECT` policies, and adopting versioned migrations.
