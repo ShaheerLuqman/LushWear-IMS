@@ -1,2 +1,4 @@
 -r requirements.txt
+# Keep this pin in step with the pytest version installed in the Dockerfile's
+# `tests` stage.
 pytest==9.1.1
