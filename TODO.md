@@ -50,6 +50,13 @@ matches the live database. Move to **Supabase migrations** (or Alembic) so the
 live schema is reproducible, diffable, and reviewable. Do this alongside the
 broader app-layer hardening in [`backend/BACKEND.md`](backend/BACKEND.md) §4.
 
+> **Settled — do not "fix" these.** Recurring schema questions that were
+> investigated and deliberately closed (rationale in
+> [`backend/DATABASE.md`](backend/DATABASE.md) §2): `order_number` stays `VARCHAR`
+> (the `NNNN-R` replacement convention needs it); `order_status` stays open text
+> (live courier codes CNA/ICA/RFD); orders ↔ cashbook and JSONB line-item ids stay
+> soft links, not FKs; money stays `float` at the API boundary, not `Decimal`.
+
 ---
 
 ## Cleanup / migration

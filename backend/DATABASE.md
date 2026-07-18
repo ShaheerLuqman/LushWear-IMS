@@ -75,6 +75,17 @@ deliberate design choices, and remaining work lives in [`TODO.md`](../TODO.md).
 > rename/delete. Hard FKs would reject these legitimate cases (and JSONB can't
 > take a FK at all), so this is by design — not a gap.
 
+> **`orders.order_number` stays `VARCHAR(20)`, not an integer** — replacement
+> orders are numbered `NNNN-R` (`f"{original_num}-R"` in `create-replacement`, and
+> five code paths match `^\d+-R$`), which an integer column cannot store. It is
+> also an external Shopify identifier that is only displayed and matched on, never
+> used in arithmetic, so a numeric type buys nothing and would break if Shopify
+> ever prefixes numbers. The known cost — lexicographic sorting, where `"9999"`
+> outranks `"11308"` — is why listings order by `order_receiving_date` instead,
+> with `_order_number_sort_key` used only as a Python-side tiebreaker.
+> `replacement_of_order_no` and `cashbook_entries.order_number` are `VARCHAR(20)`
+> for the same reason and must stay in step, since they are compared against it.
+
 > **`orders.order_status`** stays open `VARCHAR` on purpose — the live data holds
 > courier-style codes (`CNA`, `ICA`, `RFD`) beyond the core lifecycle set, and
 > more statuses are expected, so no whitelist/enum. A non-blank `CHECK` guards
