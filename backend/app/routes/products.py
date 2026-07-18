@@ -6,12 +6,12 @@ from app.models import (
     VariantCreate, VariantUpdate,
 )
 from app.database import get_supabase
-from app.config import settings
+from app import shopify
+from app.db_utils import fetch_all
 from datetime import datetime, timezone
 import logging
 import httpx
 import re
-from urllib.parse import unquote, urlparse, parse_qs
 
 logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
@@ -80,92 +80,8 @@ async def get_all_products():
 async def sync_shopify_products():
     """Sync products and variants from Shopify"""
     try:
-        store_url = settings.shopify_store_url
-        access_token = settings.shopify_access_token
-        
-        if not store_url or not access_token:
-            raise HTTPException(
-                status_code=400, 
-                detail="Shopify credentials not configured. Please set SHOPIFY_STORE_URL (or SHOPIFY_API_KEY) and SHOPIFY_ADMIN_API_TOKEN environment variables."
-            )
-        
-        store_url = store_url.strip().rstrip('/')
-        if store_url.startswith('http://'):
-            store_url = store_url[7:]
-        elif store_url.startswith('https://'):
-            store_url = store_url[8:]
-        
-        base_url = f"https://{store_url}/admin/api/{settings.SHOPIFY_API_VERSION}/products.json"
-        headers = {
-            "X-Shopify-Access-Token": access_token,
-            "Content-Type": "application/json"
-        }
-        
-        all_products = []
-        page_info = None
-        page_count = 0
-        
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            while True:
-                if page_info:
-                    api_url = f"{base_url}?page_info={page_info}"
-                else:
-                    api_url = f"{base_url}?limit=250"
-                
-                response = await client.get(api_url, headers=headers)
-                if response.status_code == 404:
-                    error_detail = f"Shopify API endpoint not found. Please verify:\n"
-                    error_detail += f"1. Store URL is correct: {store_url}\n"
-                    error_detail += f"2. API version is valid: {settings.SHOPIFY_API_VERSION}\n"
-                    error_detail += f"3. Access token has correct permissions\n"
-                    error_detail += f"4. Full URL attempted: {api_url}\n"
-                    error_detail += f"Response: {response.text}"
-                    raise HTTPException(status_code=404, detail=error_detail)
-                response.raise_for_status()
-                shopify_data = response.json()
-                
-                if "products" not in shopify_data:
-                    raise HTTPException(status_code=500, detail="Invalid response from Shopify API")
-                
-                page_products = shopify_data["products"]
-                if not page_products:
-                    break
-                
-                all_products.extend(page_products)
-                page_count += 1
-                
-                link_header = response.headers.get("Link", "")
-                next_page_info = None
-                
-                if link_header:
-                    next_link_match = re.search(r'<([^>]+)>;\s*rel=["\']next["\']', link_header, re.IGNORECASE)
-                    if next_link_match:
-                        url = next_link_match.group(1)
-                        parsed_url = urlparse(url)
-                        if parsed_url.query:
-                            query_params = parse_qs(parsed_url.query, keep_blank_values=True)
-                            if 'page_info' in query_params:
-                                next_page_info = query_params['page_info'][0]
-                            else:
-                                page_info_match = re.search(r'[?&]page_info=([^&]+)', url)
-                                if page_info_match:
-                                    next_page_info = unquote(page_info_match.group(1))
-                        else:
-                            page_info_match = re.search(r'page_info=([^&>]+)', url)
-                            if page_info_match:
-                                next_page_info = unquote(page_info_match.group(1))
-                    
-                    if next_page_info:
-                        page_info = next_page_info
-                        continue
-                    else:
-                        break
-                else:
-                    break
-                
-                if len(page_products) < 250:
-                    break
-        
+        all_products, page_count = await shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}")
+
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
         
@@ -478,25 +394,10 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         seen_ids = set()
 
         def _collect(query):
-            offset = 0
-            while True:
-                rows = (
-                    query()
-                    .order("order_number")
-                    .range(offset, offset + page - 1)
-                    .execute()
-                    .data
-                    or []
-                )
-                if not rows:
-                    break
-                for r in rows:
-                    if r["id"] not in seen_ids:
-                        seen_ids.add(r["id"])
-                        order_rows.append(r)
-                if len(rows) < page:
-                    break
-                offset += page
+            for r in fetch_all(lambda: query().order("order_number"), page_size=page):
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    order_rows.append(r)
 
         # 1) order_receiving_date on/after cutoff
         _collect(lambda: supabase.table("orders").select(select_cols).gte("order_receiving_date", after))

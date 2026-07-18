@@ -15,6 +15,8 @@ advance_status (stored on orders.advance_status) reconciles the two:
 """
 from typing import Dict
 
+from app.db_utils import fetch_all
+
 # The "Orders" ledger that order advances are always posted to (mirrors the
 # ORDERS_LEDGER_ID constant in the frontend).
 ORDERS_LEDGER_ID = "020dbc00-d5da-4110-89e9-fa22edf002f6"
@@ -54,33 +56,24 @@ def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
     Returns a map of order_number (str) -> total advance amount from the cashbook.
     """
     totals: Dict[str, float] = {}
-    page_size = 1000
-    offset = 0
-    while True:
-        resp = (
-            supabase.table("cashbook_entries")
-            .select("order_number, amount, entry_type")
-            .eq("folio", ORDERS_LEDGER_ID)
-            .eq("entry_type", "inflow")
-            .not_.is_("order_number", "null")
-            .range(offset, offset + page_size - 1)
-            .execute()
-        )
-        rows = resp.data or []
-        for row in rows:
-            num = row.get("order_number")
-            if num is None:
-                continue
-            key = str(num).strip()
-            if not key:
-                continue
-            try:
-                totals[key] = totals.get(key, 0.0) + float(row.get("amount") or 0)
-            except (TypeError, ValueError):
-                continue
-        if len(rows) < page_size:
-            break
-        offset += page_size
+    rows = fetch_all(
+        lambda: supabase.table("cashbook_entries")
+        .select("order_number, amount, entry_type")
+        .eq("folio", ORDERS_LEDGER_ID)
+        .eq("entry_type", "inflow")
+        .not_.is_("order_number", "null")
+    )
+    for row in rows:
+        num = row.get("order_number")
+        if num is None:
+            continue
+        key = str(num).strip()
+        if not key:
+            continue
+        try:
+            totals[key] = totals.get(key, 0.0) + float(row.get("amount") or 0)
+        except (TypeError, ValueError):
+            continue
     return totals
 
 
@@ -99,20 +92,11 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
     if order_numbers is not None:
         scoped = {str(n).strip() for n in order_numbers if str(n).strip()}
 
-    # Fetch the relevant orders (number, current advance_amount and advance_status).
-    orders = []
-    page_size = 1000
-    offset = 0
-    while True:
+    def _orders_query():
         query = supabase.table("orders").select("id, order_number, advance_amount, advance_status")
-        if scoped is not None:
-            query = query.in_("order_number", list(scoped))
-        resp = query.range(offset, offset + page_size - 1).execute()
-        rows = resp.data or []
-        orders.extend(rows)
-        if len(rows) < page_size:
-            break
-        offset += page_size
+        return query.in_("order_number", list(scoped)) if scoped is not None else query
+
+    orders = fetch_all(_orders_query)
 
     updated = 0
     for o in orders:

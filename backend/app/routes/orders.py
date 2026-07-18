@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from app.models import OrderCreate, OrderUpdate
 from app.database import get_supabase
 from app.config import settings
+from app import shopify
+from app.db_utils import fetch_all
 from app.advance_status import recompute_advance_statuses
 from app.order_pdf import extract_order_numbers
 from datetime import datetime, timedelta, timezone
@@ -16,7 +18,6 @@ import csv
 import io
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import unquote, urlparse, parse_qs
 import json
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -194,49 +195,27 @@ async def get_all_orders(
     """Get all orders, optionally filtered by month period (month's 22 to next month's 21)."""
     try:
         supabase = get_supabase()
-        page_size = 1000
-        
+
         if month is not None and year is not None:
             start_iso, end_iso = _period_start_end(month, year)
-            
-            # Fetch all orders with order_receiving_date in range (paginated)
-            r1_data = []
-            offset = 0
-            while True:
-                response = (
-                    supabase.table("orders")
-                    .select("*")
-                    .gte("order_receiving_date", start_iso)
-                    .lt("order_receiving_date", end_iso)
-                    .order("order_number", desc=True)
-                    .range(offset, offset + page_size - 1)
-                    .execute()
-                )
-                r1_data.extend(response.data)
-                if len(response.data) < page_size:
-                    break
-                offset += page_size
-            
-            # Fetch all orders with null order_receiving_date but created_at in range (paginated)
-            r2_data = []
-            offset = 0
-            while True:
-                response = (
-                    supabase.table("orders")
-                    .select("*")
-                    .is_("order_receiving_date", "null")
-                    .gte("created_at", start_iso)
-                    .lt("created_at", end_iso)
-                    .order("order_number", desc=True)
-                    .range(offset, offset + page_size - 1)
-                    .execute()
-                )
-                r2_data.extend(response.data)
-                if len(response.data) < page_size:
-                    break
-                offset += page_size
-            
-            # Merge results, avoiding duplicates
+
+            r1_data = fetch_all(
+                lambda: supabase.table("orders")
+                .select("*")
+                .gte("order_receiving_date", start_iso)
+                .lt("order_receiving_date", end_iso)
+                .order("order_number", desc=True)
+            )
+            # Orders with no receiving date fall back to created_at for the period.
+            r2_data = fetch_all(
+                lambda: supabase.table("orders")
+                .select("*")
+                .is_("order_receiving_date", "null")
+                .gte("created_at", start_iso)
+                .lt("created_at", end_iso)
+                .order("order_number", desc=True)
+            )
+
             seen_ids = {o["id"] for o in r1_data}
             merged = list(r1_data)
             for o in r2_data:
@@ -245,22 +224,10 @@ async def get_all_orders(
                     seen_ids.add(o["id"])
             merged.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
             return merged
-        
-        # Fetch all orders without filter (paginated)
-        all_orders = []
-        offset = 0
-        while True:
-            response = (
-                supabase.table("orders")
-                .select("*")
-                .order("order_number", desc=True)
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            all_orders.extend(response.data)
-            if len(response.data) < page_size:
-                break
-            offset += page_size
+
+        all_orders = fetch_all(
+            lambda: supabase.table("orders").select("*").order("order_number", desc=True)
+        )
         # DB sort on a VARCHAR column is lexicographic ("10000" < "9999"); re-sort numerically.
         all_orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")), reverse=True)
         return all_orders
@@ -273,94 +240,12 @@ async def get_all_orders(
 @router.post("/sync-shopify")
 async def sync_shopify_orders():
     try:
-        store_url = settings.shopify_store_url
-        access_token = settings.shopify_access_token
-        
-        if not store_url or not access_token:
-            raise HTTPException(
-                status_code=400, 
-                detail="Shopify credentials not configured. Please set SHOPIFY_STORE_URL (or SHOPIFY_API_KEY) and SHOPIFY_ADMIN_API_TOKEN environment variables."
-            )
-            
-        store_url = store_url.strip().rstrip('/')
-        if store_url.startswith('http://'):
-            store_url = store_url[7:]
-        elif store_url.startswith('https://'):
-            store_url = store_url[8:]
-        
-        base_url = f"https://{store_url}/admin/api/{settings.SHOPIFY_API_VERSION}/orders.json"
-        headers = {
-            "X-Shopify-Access-Token": access_token,
-            "Content-Type": "application/json"
-        }
-        
-        all_orders = []
-        page_info = None
-        page_count = 0
         # Only sync orders from the last 30 days
         created_since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
+        all_orders, page_count = await shopify.fetch_all(
+            "orders", f"status=any&limit={shopify.PAGE_LIMIT}&created_at_min={created_since}"
+        )
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            while True:
-                if page_info:
-                    api_url = f"{base_url}?page_info={page_info}"
-                else:
-                    api_url = f"{base_url}?status=any&limit=250&created_at_min={created_since}"
-                
-                response = await client.get(api_url, headers=headers)
-                if response.status_code == 404:
-                    error_detail = f"Shopify API endpoint not found. Please verify:\n"
-                    error_detail += f"1. Store URL is correct: {store_url}\n"
-                    error_detail += f"2. API version is valid: {settings.SHOPIFY_API_VERSION}\n"
-                    error_detail += f"3. Access token has correct permissions\n"
-                    error_detail += f"4. Full URL attempted: {api_url}\n"
-                    error_detail += f"Response: {response.text}"
-                    raise HTTPException(status_code=404, detail=error_detail)
-                response.raise_for_status()
-                shopify_data = response.json()
-                
-                if "orders" not in shopify_data:
-                    raise HTTPException(status_code=500, detail="Invalid response from Shopify API")
-                
-                page_orders = shopify_data["orders"]
-                if not page_orders:
-                    break
-                
-                all_orders.extend(page_orders)
-                page_count += 1
-                
-                link_header = response.headers.get("Link", "")
-                next_page_info = None
-                
-                if link_header:
-                    next_link_match = re.search(r'<([^>]+)>;\s*rel=["\']next["\']', link_header, re.IGNORECASE)
-                    if next_link_match:
-                        url = next_link_match.group(1)
-                        parsed_url = urlparse(url)
-                        if parsed_url.query:
-                            query_params = parse_qs(parsed_url.query, keep_blank_values=True)
-                            if 'page_info' in query_params:
-                                next_page_info = query_params['page_info'][0]
-                            else:
-                                page_info_match = re.search(r'[?&]page_info=([^&]+)', url)
-                                if page_info_match:
-                                    next_page_info = unquote(page_info_match.group(1))
-                        else:
-                            page_info_match = re.search(r'page_info=([^&>]+)', url)
-                            if page_info_match:
-                                next_page_info = unquote(page_info_match.group(1))
-                    
-                    if next_page_info:
-                        page_info = next_page_info
-                        continue
-                    else:
-                        break
-                else:
-                    break
-                
-                if len(page_orders) < 250:
-                    break
-        
         supabase = get_supabase()
         
         # Fetch all products with their cost prices for cost calculation
@@ -381,30 +266,16 @@ async def sync_shopify_orders():
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
 
         existing_orders_map = {}
-        existing_orders_all = []
-        offset = 0
-        limit = 1000
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
             "cost_price, items, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no"
         )
-        while True:
-            existing_orders_response = (
-                supabase.table("orders")
-                .select(existing_orders_select)
-                .order("order_number")
-                .range(offset, offset + limit - 1)
-                .execute()
-            )
-            if not existing_orders_response.data:
-                break
-            existing_orders_all.extend(existing_orders_response.data)
-            if len(existing_orders_response.data) < limit:
-                break
-            offset += limit
-        
+        existing_orders_all = fetch_all(
+            lambda: supabase.table("orders").select(existing_orders_select).order("order_number")
+        )
+
         for o in existing_orders_all:
             order_num = o.get("order_number")
             if order_num is not None:
@@ -1198,18 +1069,11 @@ async def upload_postex_csv(
         if not rows:
             return {"updated": 0, "message": "No valid rows with ORDER_REF_NUMBER in CSV."}
         supabase = get_supabase()
-        # Fetch all orders (we need to match by order_number)
-        all_orders = []
-        limit = 1000
-        offset = 0
-        while True:
-            resp = supabase.table("orders").select("id, order_number, total_amount, advance_amount, order_status").order("order_number").range(offset, offset + limit - 1).execute()
-            if not resp.data:
-                break
-            all_orders.extend(resp.data)
-            if len(resp.data) < limit:
-                break
-            offset += limit
+        all_orders = fetch_all(
+            lambda: supabase.table("orders")
+            .select("id, order_number, total_amount, advance_amount, order_status")
+            .order("order_number")
+        )
         order_number_to_order = {}
         db_order_numbers = []
         for o in all_orders:
@@ -1403,54 +1267,30 @@ async def fix_voided_order_totals(
         start_iso = "2026-01-22T00:00:00"
         fetch_batch_size = 50
 
-        # Fetch ALL candidate orders from DB (Supabase defaults to limit 1000, so we paginate).
-        page_size = 1000
-        orders: List[Dict[str, Any]] = []
+        candidate_select = "id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at"
 
-        # 1) Orders with order_receiving_date on/after start_iso
-        offset = 0
-        while True:
-            resp = (
-                supabase.table("orders")
-                .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
-                .gte("order_receiving_date", start_iso)
-                .order("order_number")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            batch = resp.data or []
-            if not batch:
-                break
-            orders.extend(batch)
-            logger.info(f"[fix-voided-totals] fetched by order_receiving_date batch size={len(batch)} offset={offset}")
-            if len(batch) < page_size:
-                break
-            offset += page_size
+        orders: List[Dict[str, Any]] = fetch_all(
+            lambda: supabase.table("orders")
+            .select(candidate_select)
+            .gte("order_receiving_date", start_iso)
+            .order("order_number")
+        )
+        logger.info("[fix-voided-totals] fetched by order_receiving_date count=%d", len(orders))
 
-        # 2) Orders where order_receiving_date is null but created_at on/after start_iso
-        offset = 0
+        # Orders with no receiving date fall back to created_at.
+        by_created = fetch_all(
+            lambda: supabase.table("orders")
+            .select(candidate_select)
+            .is_("order_receiving_date", "null")
+            .gte("created_at", start_iso)
+            .order("order_number")
+        )
+        logger.info("[fix-voided-totals] fetched by created_at count=%d", len(by_created))
         seen_ids = {o["id"] for o in orders}
-        while True:
-            resp_created = (
-                supabase.table("orders")
-                .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at")
-                .is_("order_receiving_date", "null")
-                .gte("created_at", start_iso)
-                .order("order_number")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            batch = resp_created.data or []
-            if not batch:
-                break
-            logger.info(f"[fix-voided-totals] fetched by created_at batch size={len(batch)} offset={offset}")
-            for o in batch:
-                if o["id"] not in seen_ids:
-                    orders.append(o)
-                    seen_ids.add(o["id"])
-            if len(batch) < page_size:
-                break
-            offset += page_size
+        for o in by_created:
+            if o["id"] not in seen_ids:
+                orders.append(o)
+                seen_ids.add(o["id"])
 
         if not orders:
             logger.info("[fix-voided-totals] no candidate orders found in date range")
@@ -3977,24 +3817,10 @@ async def get_month_summary_list():
     """Get list of all available months with order data"""
     try:
         supabase = get_supabase()
-        page_size = 1000
-        
-        # Get all orders to determine which months have data (paginated)
-        orders = []
-        offset = 0
-        while True:
-            response = (
-                supabase.table("orders")
-                .select("order_receiving_date, created_at")
-                .order("id")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            orders.extend(response.data)
-            if len(response.data) < page_size:
-                break
-            offset += page_size
-        
+        orders = fetch_all(
+            lambda: supabase.table("orders").select("order_receiving_date, created_at").order("id")
+        )
+
         # Extract unique months from orders
         months_set = set()
         for order in orders:
@@ -4056,46 +3882,24 @@ async def get_month_summary_detail(month: int, year: int):
         start_iso, end_iso = _period_start_end(month, year)
         
         supabase = get_supabase()
-        page_size = 1000
-        
-        # Get orders for this period (paginated to handle >1000 orders)
-        # Orders with order_receiving_date in range
-        r1_data = []
-        offset = 0
-        while True:
-            response = (
-                supabase.table("orders")
-                .select("*")
-                .gte("order_receiving_date", start_iso)
-                .lt("order_receiving_date", end_iso)
-                .order("order_number")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            r1_data.extend(response.data)
-            if len(response.data) < page_size:
-                break
-            offset += page_size
-        
-        # Orders with null order_receiving_date but created_at in range
-        r2_data = []
-        offset = 0
-        while True:
-            response = (
-                supabase.table("orders")
-                .select("*")
-                .is_("order_receiving_date", "null")
-                .gte("created_at", start_iso)
-                .lt("created_at", end_iso)
-                .order("order_number")
-                .range(offset, offset + page_size - 1)
-                .execute()
-            )
-            r2_data.extend(response.data)
-            if len(response.data) < page_size:
-                break
-            offset += page_size
-        
+
+        r1_data = fetch_all(
+            lambda: supabase.table("orders")
+            .select("*")
+            .gte("order_receiving_date", start_iso)
+            .lt("order_receiving_date", end_iso)
+            .order("order_number")
+        )
+        # Orders with no receiving date fall back to created_at for the period.
+        r2_data = fetch_all(
+            lambda: supabase.table("orders")
+            .select("*")
+            .is_("order_receiving_date", "null")
+            .gte("created_at", start_iso)
+            .lt("created_at", end_iso)
+            .order("order_number")
+        )
+
         # Merge results, avoiding duplicates
         seen_ids = {o["id"] for o in r1_data}
         merged = list(r1_data)
