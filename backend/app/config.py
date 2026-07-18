@@ -5,7 +5,8 @@ load_dotenv()
 
 class Settings:
     SUPABASE_URL: str = os.getenv("SUPABASE_URL", "")
-    SUPABASE_KEY: str = os.getenv("SUPABASE_KEY", "")
+    SUPABASE_KEY: str = os.getenv("SUPABASE_SECRET_KEY")
+    SUPABASE_PUBLISHABLE_KEY: str = os.getenv("SUPABASE_PUBLISHABLE_KEY", "")
     # Shopify configuration
     SHOPIFY_STORE_URL: str = os.getenv("SHOPIFY_STORE_URL", "staginglushwear.myshopify.com")
     SHOPIFY_ADMIN_API_TOKEN: str = os.getenv("SHOPIFY_ADMIN_API_TOKEN", "")
