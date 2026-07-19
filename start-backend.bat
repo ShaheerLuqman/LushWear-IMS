@@ -31,7 +31,7 @@ call venv\Scripts\activate
 
 REM Install dependencies
 echo Installing dependencies...
-@REM pip install -r requirements.txt
+pip install -r requirements.txt
 
 REM Check for .env file
 if not exist ".env" (
