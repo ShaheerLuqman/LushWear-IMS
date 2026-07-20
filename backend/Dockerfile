@@ -1,9 +1,10 @@
 # Backend container, deployed on Northflank (Docker).
 # Northflank injects $PORT and routes external traffic to it; we bind that port below.
 #
-# Multi-stage: the `tests` stage runs the suite during the build, so a failing test
-# aborts the build and nothing is deployed. Test dependencies stay out of the final
-# image. Skip the gate with --build-arg SKIP_TESTS=1 (use sparingly).
+# Multi-stage: the `tests` stage can run the suite during the build (test deps stay
+# out of the final image either way). Tests are skipped by default here — GitHub
+# Actions (.github/workflows/backend-tests.yml) is the test gate; pass
+# --build-arg SKIP_TESTS=0 to also run the suite as part of this build.
 
 FROM python:3.11-slim AS base
 
@@ -18,7 +19,7 @@ RUN pip install -r requirements.txt
 
 FROM base AS tests
 
-ARG SKIP_TESTS=0
+ARG SKIP_TESTS=1
 # Reads requirements-dev.txt so the test-tooling pins live in exactly one place.
 # Runtime deps are already satisfied from `base`, so pip only adds the extras.
 COPY requirements-dev.txt .
@@ -35,7 +36,9 @@ RUN if [ "$SKIP_TESTS" = "1" ]; then \
 FROM base AS runtime
 
 # Copying from `tests` makes that stage a build dependency, so BuildKit cannot skip
-# it — a failing suite fails the build before this image is produced.
+# it. With SKIP_TESTS=0 that means a failing suite fails the build before this
+# image is produced; with the default SKIP_TESTS=1 it's just plumbing for
+# pytest.ini and doesn't gate anything.
 COPY --from=tests /app/pytest.ini /app/pytest.ini
 COPY . .
 
