@@ -214,6 +214,21 @@ one line each.
       period totals stay backend-side in `month-summary`. Note: the frontend helper
       and the backend `month-summary` profit calc must stay in agreement — comment
       each pointing at the other.
+- [ ] **`updateCashInHand()` re-fetches full ledger history on every cashbook
+      mutation** (`frontend/renderer.js:4639`). For every Bank-section ledger it
+      calls `GET /ledgers/{id}/entries` with no date filter — the entire
+      transaction history, every time — then sums a running balance client-side.
+      It runs on every `reloadCashbookForCurrentDate()` call, which fires after
+      *each* individual create/update/delete, so deleting N entries in a row
+      re-fetches all Bank ledgers' full history N times over. Confirmed live via
+      backend logs: cleaning up 7 test entries fired the 5-ledger fetch 7 times.
+      Two fixes, increasing effort:
+      (a) cheap: only refetch the one Bank ledger the changed entry's `folio`
+      belongs to, not all of them — no backend change;
+      (b) more correct: move the running-balance computation server-side (one
+      aggregate query per ledger, same pattern as the cashbook daily-balance
+      trigger work) so the browser stops downloading full transaction histories
+      at all. Not urgent — revisit when ledger history volume makes it visible.
 
 ### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)
 
