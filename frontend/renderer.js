@@ -4437,7 +4437,6 @@ async function submitBulkEntry() {
     });
 
     const total = payloads.length;
-    const submitBtn = document.getElementById('bulkEntrySubmitBtn');
     const cancelBtn = document.getElementById('bulkEntryCancelBtn');
     const input = document.getElementById('bulkEntryInput');
 
@@ -4447,46 +4446,32 @@ async function submitBulkEntry() {
     if (cancelBtn) cancelBtn.disabled = true;
     if (input) input.disabled = true;
 
-    let created = 0;
-    let failed = 0;
-    // Create sequentially so daily-balance recalculation stays consistent, and so
-    // a single failure doesn't abort the remaining entries.
-    for (const payload of payloads) {
-        setBulkEntryProgress(`Creating entries… ${created + failed + 1} of ${total}`);
-        try {
-            const response = await fetch(`${API_BASE}/cashbook/entries`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            if (!response.ok) throw new Error('Failed to create entry');
-            created += 1;
-        } catch (error) {
-            console.error('Error creating bulk entry:', error, payload);
-            failed += 1;
-        }
-    }
-
-    // If any order-advance entries were created, refresh orders so the advance
-    // status indicators update.
+    // One INSERT for the whole batch. All-or-nothing, but everything reaching
+    // this point already passed validateBulkEntry() — amount > 0 and each
+    // ledger name resolved against the live-loaded ledger list — so a DB-level
+    // rejection here should be rare (e.g. a ledger deleted moments ago).
+    setBulkEntryProgress(`Creating ${total} entr${total === 1 ? 'y' : 'ies'}…`);
     const createdOrderAdvance = payloads.some(p => p.order_number);
+    try {
+        const response = await fetch(`${API_BASE}/cashbook/entries/bulk`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payloads)
+        });
+        if (!response.ok) throw new Error('Failed to create entries');
 
-    if (failed === 0) {
-        // All entries created: show the count, reload, then close the popup.
-        setBulkEntryProgress(`Created ${created} of ${total} entries.`, 'ok');
-        showToast(`Created ${created} entr${created === 1 ? 'y' : 'ies'}`, 'success');
+        setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
+        showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
         await reloadCashbookForCurrentDate(true);
         if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
         bulkEntryCreating = false;
         if (input) input.disabled = false;
         if (cancelBtn) cancelBtn.disabled = false;
         closeBulkEntryModal();
-    } else {
-        // Some failed: keep the popup open so the user can review/retry.
-        setBulkEntryProgress(`Created ${created} of ${total}. ${failed} failed — review and retry.`, 'error');
-        showToast(`${created} created, ${failed} failed`, 'error');
-        await reloadCashbookForCurrentDate(true);
-        if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
+    } catch (error) {
+        console.error('Error creating bulk entries:', error);
+        setBulkEntryProgress('Failed to create entries — nothing was saved. Review and retry.', 'error');
+        showToast('Failed to create entries', 'error');
         bulkEntryCreating = false;
         if (input) input.disabled = false;
         if (cancelBtn) cancelBtn.disabled = false;

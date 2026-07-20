@@ -77,14 +77,6 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    entry_type = payload.get("entry_type")
-    if entry_type not in ENTRY_TYPES:
-        raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
-    if payload.get("amount") is None or float(payload["amount"]) <= 0:
-        raise HTTPException(status_code=400, detail="amount must be greater than 0")
-    if not payload.get("folio"):
-        raise HTTPException(status_code=400, detail="folio (ledger) is required")
-
     supabase = get_supabase()
     response = supabase.table("cashbook_entries").insert(payload).execute()
     if not response.data:
@@ -94,6 +86,34 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
         _safe_recompute_advance_statuses(supabase, [payload["order_number"]])
 
     return response.data[0]
+
+
+@router.post("/entries/bulk", response_model=List[CashbookEntry])
+async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate]):
+    """One INSERT for the whole batch (used by the bulk-text-entry modal).
+    All-or-nothing: relies on the caller having already validated each entry
+    (folio resolved against a real ledger, amount > 0) before submitting."""
+    if not entries:
+        raise HTTPException(status_code=400, detail="No entries provided")
+
+    try:
+        # entry_type/amount/folio are already enforced by CashbookEntryCreate
+        # itself (Literal, Field(gt=0), NonBlankStr), so only normalization is
+        # needed here, not the manual re-checks create_cashbook_entry has.
+        payloads = [_normalize_entry_payload(e.model_dump(), is_create=True) for e in entries]
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    supabase = get_supabase()
+    response = supabase.table("cashbook_entries").insert(payloads).execute()
+    if not response.data:
+        raise HTTPException(status_code=500, detail="Failed to create cashbook entries")
+
+    order_numbers = {row["order_number"] for row in payloads if row.get("order_number")}
+    if order_numbers:
+        _safe_recompute_advance_statuses(supabase, order_numbers)
+
+    return response.data
 
 
 @router.put("/entries/{entry_id}", response_model=CashbookEntry)
