@@ -32,5 +32,6 @@ class Settings:
                 store_url = self.SHOPIFY_API_KEY
         return store_url
     
+# touch: backend-only change to verify Northflank's path ignore rules
 settings = Settings()
 
