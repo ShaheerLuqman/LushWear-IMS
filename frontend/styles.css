@@ -1196,6 +1196,10 @@ body:has(#ledgersView.active) .content-area {
     z-index: 10001;
 }
 
+#createLedgerModal.active {
+    z-index: 10011;
+}
+
 .modal-content {
     position: relative;
     z-index: 1;
@@ -3017,9 +3021,11 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .folio-dropdown-option.selected {
-    background: rgba(139, 92, 246, 0.1);
+    background: rgba(139, 92, 246, 0.15);
     color: var(--accent-primary);
-    font-weight: 500;
+    font-weight: 600;
+    border-left: 3px solid var(--accent-primary);
+    padding-left: 9px;
 }
 
 .folio-dropdown-empty {
@@ -3028,6 +3034,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-muted);
     text-align: center;
     font-style: italic;
+}
+
+.folio-dropdown-create {
+    border-top: 1px solid var(--border-color);
+    color: var(--accent-primary);
+    font-weight: 500;
 }
 
 /* Cashbook required field highlighting */

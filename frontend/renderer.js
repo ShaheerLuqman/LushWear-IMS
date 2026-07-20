@@ -2198,9 +2198,19 @@ function createFolioCellRenderer(params, entryType) {
             if (filtered.length === 0) {
                 const noResults = document.createElement('div');
                 noResults.className = 'folio-dropdown-empty';
-                noResults.textContent = filter ? 'No ledgers found' : 'No ledgers available. Create one first.';
+                noResults.textContent = filter ? 'No ledgers found' : 'No ledgers available.';
                 optionsList.appendChild(noResults);
             }
+
+            // Create new ledger option, always last
+            const createOption = document.createElement('div');
+            createOption.className = 'folio-dropdown-option folio-dropdown-create';
+            createOption.textContent = '+ Create new ledger...';
+            createOption.addEventListener('click', () => {
+                closeDropdown();
+                openCreateLedgerModal((created) => selectOption(created.id, created.name));
+            });
+            optionsList.appendChild(createOption);
         }
 
         function selectOption(id, name) {
@@ -4006,13 +4016,33 @@ function setCashbookEntrySideSkipped(side, skipped) {
     if (fieldset) fieldset.classList.toggle('cashbook-entry-side-skipped', skipped);
 }
 
+const CREATE_LEDGER_OPTION_VALUE = '__create_ledger__';
+
 function populateCashbookEntryLedgerSelect(select) {
     if (!select) return;
     const current = select.value;
     const options = ['<option value="">Select ledger...</option>']
-        .concat(ledgers.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`));
+        .concat(ledgers.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`))
+        .concat([`<option value="${CREATE_LEDGER_OPTION_VALUE}">+ Create new ledger...</option>`]);
     select.innerHTML = options.join('');
     if (current && ledgers.some(l => l.id === current)) select.value = current;
+}
+
+function handleLedgerSelectChange(e) {
+    if (e.target.value === CREATE_LEDGER_OPTION_VALUE) {
+        const selectId = e.target.id;
+        e.target.value = '';
+        openCreateLedgerModal((created) => {
+            ['cashbookEntryInLedger', 'cashbookEntryOutLedger', 'orderAdvanceOutLedger'].forEach((id) => {
+                populateCashbookEntryLedgerSelect(document.getElementById(id));
+            });
+            const select = document.getElementById(selectId);
+            if (select) {
+                select.value = created.id;
+                select.dispatchEvent(new Event('change'));
+            }
+        });
+    }
 }
 
 function openCashbookEntryModal() {
@@ -4812,6 +4842,8 @@ function renderLedgerCards() {
     });
 }
 
+let createLedgerOnCreateCallback = null;
+
 async function createLedger(name, section) {
     try {
         const response = await fetch(`${API_BASE}/ledgers/`, {
@@ -4820,16 +4852,20 @@ async function createLedger(name, section) {
             body: JSON.stringify({ name, section })
         });
         if (!response.ok) throw new Error('Failed to create ledger');
+        const created = await response.json();
+        const onCreated = createLedgerOnCreateCallback;
         showToast('Ledger created', 'success');
         closeCreateLedgerModal();
         await loadLedgers();
+        if (onCreated) onCreated(created);
     } catch (error) {
         console.error('Error creating ledger:', error);
         showToast('Failed to create ledger', 'error');
     }
 }
 
-function openCreateLedgerModal() {
+function openCreateLedgerModal(onCreated) {
+    createLedgerOnCreateCallback = typeof onCreated === 'function' ? onCreated : null;
     document.getElementById('createLedgerName').value = '';
     document.getElementById('createLedgerSection').value = '';
     document.getElementById('createLedgerModal').classList.add('active');
@@ -4837,6 +4873,7 @@ function openCreateLedgerModal() {
 
 function closeCreateLedgerModal() {
     document.getElementById('createLedgerModal').classList.remove('active');
+    createLedgerOnCreateCallback = null;
 }
 
 let editLedgerId = null;
@@ -5878,8 +5915,12 @@ function initForms() {
     // Ledger: create button opens modal
     const createLedgerBtn = document.getElementById('createLedgerBtn');
     if (createLedgerBtn) {
-        createLedgerBtn.addEventListener('click', openCreateLedgerModal);
+        createLedgerBtn.addEventListener('click', () => openCreateLedgerModal());
     }
+    // Cashbook/order advance ledger selects: picking "+ Create new ledger..." opens the create ledger modal
+    ['cashbookEntryInLedger', 'cashbookEntryOutLedger', 'orderAdvanceOutLedger'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', handleLedgerSelectChange);
+    });
 
     // Cashbook: create entry button opens modal
     document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
