@@ -123,16 +123,33 @@ idempotent — re-running finishes the job. Partial ≠ corrupt.
 **There is a real gap, but elsewhere:** two places write a record and then perform a
 *dependent* follow-up, so a failure between them leaves genuinely inconsistent state.
 
-- [ ] **Cashbook entry + balance recalculation** (`routes/cashbook.py`, create /
-      update / delete). The entry is inserted, then `_recalculate_balances_from_date`
-      runs. If the recalculation fails, the entry exists but
-      `cashbook_daily_balances` does not reflect it — and unlike the sync, nothing
-      re-runs automatically to heal it. `/cashbook/recalculate-all` is the manual
-      repair, if you know to call it.
-      Options: (a) accept it — the window is narrow and a repair endpoint exists;
-      (b) derive balances on read instead of storing them, removing the class of
-      bug; (c) one Postgres function doing insert + recalc atomically. (c) is the
-      only place the original §4.1 idea genuinely pays off.
+- [x] **Cashbook entry + balance recalculation** — **Done, 2026-07-20.** Was:
+      `routes/cashbook.py` recalculated `cashbook_daily_balances` in app code after
+      every entry create/update/delete; anything that touched `cashbook_entries`
+      outside those routes (Supabase table editor, raw SQL delete) left balances
+      stale with no self-heal — `/cashbook/recalculate-all` even short-circuited to
+      a no-op once `cashbook_entries` was empty, so it couldn't fix the exact "I
+      cleared everything" case that triggered this.
+      Fixed by moving recalculation into the database: `recalc_cashbook_daily_balances()`
+      plus an `AFTER INSERT OR UPDATE OR DELETE` row trigger and an `AFTER TRUNCATE`
+      statement trigger on `cashbook_entries` (`supabase_schema.sql`, "Triggers"
+      section). Fires for every writer, not just the API. Verified live with a
+      smoke test (insert across 3 days, backdated edit, delete) — cascades and
+      self-cleans correctly. The app-layer functions (`_recalculate_daily_balance`,
+      `_recalculate_balances_from_date`) and their call sites were removed from
+      `cashbook.py`.
+      Rejected: compute-on-read (option (b) from the original writeup) — a DB
+      trigger was just as cheap to add here and keeps `cashbook_daily_balances` as
+      a queryable table (`/daily-balance/{date}` needed no changes), whereas
+      compute-on-read would've required rewriting it around a window-function
+      query. Revisit only if the trigger itself becomes a measured bottleneck.
+      Cleanup: removed `GET /cashbook/daily-balances` (unfiltered list, zero
+      callers) and `POST /cashbook/recalculate-all` (manual repair hook, also zero
+      callers — the trigger fires for every writer now, including restores/bulk
+      loads unless they explicitly disable triggers). Both are cheap to rebuild if
+      ever actually needed; the DB function `recalc_cashbook_daily_balances()`
+      itself stays (the trigger calls it) so a manual-repair endpoint could be
+      re-added as a thin wrapper around it.
 - [ ] **Sync's `piece_received` reset loop** — a read-then-write per replacement
       parent, after the upserts. A partial failure leaves some parents on "Done"
       that should be "Pending". Minor: the next sync corrects it.

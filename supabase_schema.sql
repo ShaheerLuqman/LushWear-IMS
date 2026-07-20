@@ -133,7 +133,8 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
     updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Daily balances: opening/closing balance per day (auto-maintained by the app).
+-- Daily balances: opening/closing balance per day (auto-maintained by a DB
+-- trigger on cashbook_entries — see "Triggers" section below).
 CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     balance_date     DATE NOT NULL UNIQUE,
@@ -181,6 +182,126 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio_order_number
     ON cashbook_entries(folio, order_number);
 CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
+
+
+-- ============================================================================
+-- Triggers: cashbook_daily_balances kept in sync by the database, not the app
+-- ----------------------------------------------------------------------------
+-- Previously an app-layer job (backend/app/routes/cashbook.py) recalculated
+-- cashbook_daily_balances after every entry write. Any write that didn't go
+-- through those FastAPI routes (Supabase table editor, a raw SQL delete, a
+-- restore) left the balances table stale with nothing to self-heal it — the
+-- manual repair endpoint even no-op'd once cashbook_entries was empty. Moving
+-- this into the database means it fires for every writer, not just the API.
+-- ============================================================================
+
+-- Recomputes cashbook_daily_balances for balance_date >= p_from_date, chaining
+-- the running balance forward from the prior day's closing balance, and drops
+-- any balance row left with no entries for its date.
+CREATE OR REPLACE FUNCTION recalc_cashbook_daily_balances(p_from_date DATE)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_opening NUMERIC(12, 2);
+BEGIN
+    SELECT closing_balance INTO v_opening
+    FROM cashbook_daily_balances
+    WHERE balance_date < p_from_date
+    ORDER BY balance_date DESC
+    LIMIT 1;
+
+    v_opening := COALESCE(v_opening, 0);
+
+    -- Drop balance rows on/after from_date that no longer have any entries
+    -- (covers deletes, including "the last entry on that date was removed").
+    DELETE FROM cashbook_daily_balances
+    WHERE balance_date >= p_from_date
+      AND balance_date NOT IN (
+          SELECT DISTINCT entry_date FROM cashbook_entries WHERE entry_date >= p_from_date
+      );
+
+    WITH day_totals AS (
+        SELECT entry_date AS balance_date,
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)  AS total_inflow,
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0) AS total_outflow
+        FROM cashbook_entries
+        WHERE entry_date >= p_from_date
+        GROUP BY entry_date
+    ),
+    running AS (
+        SELECT balance_date,
+               total_inflow,
+               total_outflow,
+               v_opening + SUM(total_inflow - total_outflow)
+                   OVER (ORDER BY balance_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_balance
+        FROM day_totals
+    )
+    INSERT INTO cashbook_daily_balances
+        (balance_date, opening_balance, total_inflow, total_outflow, closing_balance, updated_at)
+    SELECT balance_date,
+           closing_balance - total_inflow + total_outflow,
+           total_inflow,
+           total_outflow,
+           closing_balance,
+           NOW()
+    FROM running
+    ON CONFLICT (balance_date) DO UPDATE SET
+        opening_balance = EXCLUDED.opening_balance,
+        total_inflow     = EXCLUDED.total_inflow,
+        total_outflow    = EXCLUDED.total_outflow,
+        closing_balance  = EXCLUDED.closing_balance,
+        updated_at       = NOW();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_recalc_balances()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_from DATE;
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        v_from := OLD.entry_date;
+    ELSIF TG_OP = 'UPDATE' THEN
+        v_from := LEAST(OLD.entry_date, NEW.entry_date);
+    ELSE
+        v_from := NEW.entry_date;
+    END IF;
+
+    PERFORM recalc_cashbook_daily_balances(v_from);
+
+    IF TG_OP = 'DELETE' THEN
+        RETURN OLD;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_balance_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_balance_trigger
+AFTER INSERT OR UPDATE OF entry_date, entry_type, amount OR DELETE ON cashbook_entries
+FOR EACH ROW
+EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
+
+-- Row-level triggers never fire on TRUNCATE; cover that path explicitly so a
+-- "truncate table" from the SQL editor can't leave balances stale either.
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_truncate_balances()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    TRUNCATE cashbook_daily_balances;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_truncate_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_truncate_trigger
+AFTER TRUNCATE ON cashbook_entries
+FOR EACH STATEMENT
+EXECUTE FUNCTION trg_cashbook_entries_truncate_balances();
 
 
 -- ============================================================================
