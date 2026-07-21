@@ -146,6 +146,15 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Per-ledger running balance (incoming - outgoing), auto-maintained by a DB
+-- trigger on cashbook_entries — see "Triggers" section below. Only ledgers
+-- with at least one cashbook entry have a row; treat a missing row as 0.
+CREATE TABLE IF NOT EXISTS ledger_balances (
+    ledger_id   UUID PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
+    balance     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    updated_at  TIMESTAMPTZ DEFAULT NOW()
+);
+
 
 -- ============================================================================
 -- Indexes
@@ -185,7 +194,8 @@ CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_b
 
 
 -- ============================================================================
--- Triggers: cashbook_daily_balances kept in sync by the database, not the app
+-- Triggers: cashbook_daily_balances / ledger_balances kept in sync by the
+-- database, not the app
 -- ----------------------------------------------------------------------------
 -- Previously an app-layer job (backend/app/routes/cashbook.py) recalculated
 -- cashbook_daily_balances after every entry write. Any write that didn't go
@@ -285,6 +295,64 @@ AFTER INSERT OR UPDATE OF entry_date, entry_type, amount OR DELETE ON cashbook_e
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
+-- Recomputes ledger_balances for a single ledger from scratch. Deletes the row
+-- when the ledger has no entries left (vs. a legitimate zero net balance).
+CREATE OR REPLACE FUNCTION recalc_ledger_balance(p_ledger_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_balance     NUMERIC(12, 2);
+    v_has_entries BOOLEAN;
+BEGIN
+    SELECT
+        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)
+      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0),
+        COUNT(*) > 0
+    INTO v_balance, v_has_entries
+    FROM cashbook_entries
+    WHERE folio = p_ledger_id;
+
+    IF NOT v_has_entries THEN
+        DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
+        RETURN;
+    END IF;
+
+    INSERT INTO ledger_balances (ledger_id, balance, updated_at)
+    VALUES (p_ledger_id, v_balance, NOW())
+    ON CONFLICT (ledger_id) DO UPDATE SET
+        balance    = EXCLUDED.balance,
+        updated_at = NOW();
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_recalc_ledger_balance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        PERFORM recalc_ledger_balance(OLD.folio);
+        RETURN OLD;
+    ELSIF TG_OP = 'UPDATE' THEN
+        PERFORM recalc_ledger_balance(OLD.folio);
+        IF NEW.folio IS DISTINCT FROM OLD.folio THEN
+            PERFORM recalc_ledger_balance(NEW.folio);
+        END IF;
+        RETURN NEW;
+    ELSE
+        PERFORM recalc_ledger_balance(NEW.folio);
+        RETURN NEW;
+    END IF;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_ledger_balance_trigger
+AFTER INSERT OR UPDATE OF folio, entry_type, amount OR DELETE ON cashbook_entries
+FOR EACH ROW
+EXECUTE FUNCTION trg_cashbook_entries_recalc_ledger_balance();
+
 -- Row-level triggers never fire on TRUNCATE; cover that path explicitly so a
 -- "truncate table" from the SQL editor can't leave balances stale either.
 CREATE OR REPLACE FUNCTION trg_cashbook_entries_truncate_balances()
@@ -293,6 +361,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     TRUNCATE cashbook_daily_balances;
+    TRUNCATE ledger_balances;
     RETURN NULL;
 END;
 $$;

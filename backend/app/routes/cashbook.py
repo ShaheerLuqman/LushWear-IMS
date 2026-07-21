@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from app.database import get_supabase
 from app.models import (
     CashbookDailyBalance,
+    CashbookDay,
     CashbookEntry,
     CashbookEntryCreate,
     CashbookEntryUpdate,
@@ -35,11 +36,22 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
     return payload
 
 
-def _get_entry_order_number_or_404(supabase, entry_id: str) -> Optional[str]:
-    resp = supabase.table("cashbook_entries").select("order_number").eq("id", entry_id).limit(1).execute()
+def _get_entry_meta_or_404(supabase, entry_id: str) -> dict:
+    resp = supabase.table("cashbook_entries").select("order_number, folio").eq("id", entry_id).limit(1).execute()
     if not resp.data:
         raise HTTPException(status_code=404, detail="Cashbook entry not found")
-    return resp.data[0].get("order_number")
+    return resp.data[0]
+
+
+def _ledger_balances(supabase, ledger_ids) -> List[dict]:
+    """Current balance for each ledger_id, piggybacked on write responses so
+    the frontend doesn't need a separate fetch to keep Cash In Hand in sync."""
+    ids = {lid for lid in ledger_ids if lid}
+    if not ids:
+        return []
+    resp = supabase.table("ledger_balances").select("ledger_id, balance").in_("ledger_id", list(ids)).execute()
+    found = {row["ledger_id"]: float(row["balance"]) for row in resp.data or []}
+    return [{"ledger_id": lid, "balance": found.get(lid, 0.0)} for lid in ids]
 
 
 def _safe_recompute_advance_statuses(supabase, order_numbers) -> None:
@@ -85,7 +97,9 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
     if payload.get("order_number"):
         _safe_recompute_advance_statuses(supabase, [payload["order_number"]])
 
-    return response.data[0]
+    entry = response.data[0]
+    entry["ledger_balances"] = _ledger_balances(supabase, [payload["folio"]])
+    return entry
 
 
 @router.post("/entries/bulk", response_model=List[CashbookEntry])
@@ -113,13 +127,18 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate]):
     if order_numbers:
         _safe_recompute_advance_statuses(supabase, order_numbers)
 
+    balances = _ledger_balances(supabase, {row["folio"] for row in payloads})
+    for entry in response.data:
+        entry["ledger_balances"] = balances
     return response.data
 
 
 @router.put("/entries/{entry_id}", response_model=CashbookEntry)
 async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     supabase = get_supabase()
-    old_order_number = _get_entry_order_number_or_404(supabase, entry_id)
+    old_meta = _get_entry_meta_or_404(supabase, entry_id)
+    old_order_number = old_meta.get("order_number")
+    old_folio = old_meta.get("folio")
 
     try:
         payload = _normalize_entry_payload(entry.model_dump(exclude_unset=True))
@@ -142,13 +161,19 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     if affected_orders:
         _safe_recompute_advance_statuses(supabase, affected_orders)
 
-    return response.data[0]
+    # Cover both old and new folio in case the entry was moved to another ledger.
+    new_folio = payload.get("folio", old_folio)
+    entry_out = response.data[0]
+    entry_out["ledger_balances"] = _ledger_balances(supabase, {old_folio, new_folio})
+    return entry_out
 
 
 @router.delete("/entries/{entry_id}", response_model=dict)
 async def delete_cashbook_entry(entry_id: str):
     supabase = get_supabase()
-    order_number = _get_entry_order_number_or_404(supabase, entry_id)
+    old_meta = _get_entry_meta_or_404(supabase, entry_id)
+    order_number = old_meta.get("order_number")
+    folio = old_meta.get("folio")
 
     response = supabase.table("cashbook_entries").delete().eq("id", entry_id).execute()
     if not response.data:
@@ -157,13 +182,10 @@ async def delete_cashbook_entry(entry_id: str):
     if order_number:
         _safe_recompute_advance_statuses(supabase, [order_number])
 
-    return {"status": "deleted", "id": entry_id}
+    return {"status": "deleted", "id": entry_id, "ledger_balances": _ledger_balances(supabase, [folio])}
 
 
-@router.get("/daily-balance/{target_date}", response_model=CashbookDailyBalance)
-async def get_daily_balance(target_date: date):
-    """Get balance for a specific date."""
-    supabase = get_supabase()
+def _fetch_daily_balance(supabase, target_date: date) -> dict:
     response = (
         supabase.table("cashbook_daily_balances")
         .select("*")
@@ -190,4 +212,32 @@ async def get_daily_balance(target_date: date):
         "total_inflow": 0.0,
         "total_outflow": 0.0,
         "closing_balance": opening,
+    }
+
+
+def _fetch_entries_for_date(supabase, target_date: date) -> list:
+    response = (
+        supabase.table("cashbook_entries")
+        .select("*")
+        .eq("entry_date", target_date.isoformat())
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return response.data
+
+
+@router.get("/daily-balance/{target_date}", response_model=CashbookDailyBalance)
+async def get_daily_balance(target_date: date):
+    """Get balance for a specific date."""
+    return _fetch_daily_balance(get_supabase(), target_date)
+
+
+@router.get("/day/{target_date}", response_model=CashbookDay)
+async def get_cashbook_day(target_date: date):
+    """Bundles daily-balance + that date's entries — the Cashbook view's two
+    always-together reads — into a single request."""
+    supabase = get_supabase()
+    return {
+        "daily_balance": _fetch_daily_balance(supabase, target_date),
+        "entries": _fetch_entries_for_date(supabase, target_date),
     }

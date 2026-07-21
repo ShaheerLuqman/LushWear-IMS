@@ -166,10 +166,18 @@ class CashbookEntryUpdate(BaseModel):
     folio: Optional[str] = None  # Can update folio, but not set to null
     order_number: Optional[str] = None
 
+class LedgerBalance(BaseModel):
+    ledger_id: str
+    balance: float = 0.0
+
 class CashbookEntry(CashbookEntryBase):
     id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # Balance(s) of the ledger(s) this write affected, piggybacked on the
+    # response so the frontend doesn't need a separate fetch to stay in sync
+    # (see ledger_balances / recalc_ledger_balance in supabase_schema.sql).
+    ledger_balances: Optional[List[LedgerBalance]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -184,6 +192,12 @@ class CashbookDailyBalance(BaseModel):
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class CashbookDay(BaseModel):
+    """Bundles the two reads the Cashbook view always needs together for one
+    date, so the frontend fires one request instead of two in parallel."""
+    daily_balance: CashbookDailyBalance
+    entries: List[CashbookEntry]
 
 # ==================== LEDGER MODELS ====================
 # Note: Ledger entries are no longer stored separately.
@@ -202,6 +216,9 @@ class LedgerUpdate(BaseModel):
 
 class Ledger(LedgerBase):
     id: str
+    # Current running balance (incoming - outgoing), from ledger_balances.
+    # 0 for a ledger with no cashbook entries yet.
+    balance: float = 0.0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

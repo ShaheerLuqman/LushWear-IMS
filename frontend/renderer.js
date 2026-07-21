@@ -3848,14 +3848,22 @@ function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
     return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalOutflow };
 }
 
-async function loadDailyBalance(targetDate) {
+// Bundles daily-balance + that date's entries — always needed together — into
+// the single GET /cashbook/day/{date} request instead of two parallel fetches.
+async function loadCashbookDay(targetDate, showLoading = true) {
+    if (showLoading) {
+        if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
+        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
+    }
     try {
-        const response = await fetch(`${API_BASE}/cashbook/daily-balance/${targetDate}`);
-        if (!response.ok) throw new Error('Failed to load daily balance');
-        cashbookDailyBalance = await response.json();
+        const response = await fetch(`${API_BASE}/cashbook/day/${targetDate}`);
+        if (!response.ok) throw new Error('Failed to load cashbook day');
+        const data = await response.json();
+        cashbookDailyBalance = data.daily_balance;
+        cashbookEntries = normalizeCashbookEntries(data.entries);
     } catch (error) {
-        console.error('Error loading daily balance:', error);
-        // Default to zero if balance can't be loaded
+        console.error('Error loading cashbook day:', error);
+        showToast('Failed to load cashbook entries', 'error');
         cashbookDailyBalance = {
             balance_date: targetDate,
             opening_balance: 0,
@@ -3863,21 +3871,6 @@ async function loadDailyBalance(targetDate) {
             total_outflow: 0,
             closing_balance: 0
         };
-    }
-}
-
-async function loadCashbookEntriesForDate(targetDate, showLoading = true) {
-    if (showLoading) {
-        if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
-        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
-    }
-    try {
-        const response = await fetch(`${API_BASE}/cashbook/entries?start_date=${targetDate}&end_date=${targetDate}`);
-        if (!response.ok) throw new Error('Failed to load cashbook entries');
-        cashbookEntries = normalizeCashbookEntries(await response.json());
-    } catch (error) {
-        console.error('Error loading cashbook entries:', error);
-        showToast('Failed to load cashbook entries', 'error');
         cashbookEntries = [];
     } finally {
         if (showLoading) {
@@ -3917,8 +3910,7 @@ async function loadCashbook() {
     if (dateFilter) dateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate);
     
     await Promise.all([
-        loadDailyBalance(cashbookSelectedDate),
-        loadCashbookEntriesForDate(cashbookSelectedDate),
+        loadCashbookDay(cashbookSelectedDate),
         loadLedgersList()
     ]);
     renderCashbook();
@@ -3927,12 +3919,23 @@ async function loadCashbook() {
 
 async function reloadCashbookForCurrentDate(showLoading = true) {
     const selectedDate = cashbookSelectedDate || getTodayDateString();
-    await Promise.all([
-        loadDailyBalance(selectedDate),
-        loadCashbookEntriesForDate(selectedDate, showLoading)
-    ]);
+    await loadCashbookDay(selectedDate, showLoading);
     renderCashbook();
     updateCashInHand();
+}
+
+let cashbookReloadTimer = null;
+
+// Debounces the full-day reload (GET /cashbook/day/{date} + re-render): each
+// call resets a 500ms timer, so a burst of entry writes (e.g. the two-sided
+// entry / order-advance modals, each firing two creates) collapses into one
+// refetch after the last one settles, instead of one per write.
+function scheduleCashbookReload(showLoading = false) {
+    if (cashbookReloadTimer) clearTimeout(cashbookReloadTimer);
+    cashbookReloadTimer = setTimeout(() => {
+        cashbookReloadTimer = null;
+        reloadCashbookForCurrentDate(showLoading);
+    }, 500);
 }
 
 async function addCashbookEntry() {
@@ -4489,6 +4492,8 @@ async function submitBulkEntry() {
             body: JSON.stringify(payloads)
         });
         if (!response.ok) throw new Error('Failed to create entries');
+        const created = await response.json();
+        applyLedgerBalancePatches(created[0]?.ledger_balances);
 
         setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
         showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
@@ -4540,9 +4545,13 @@ async function createCashbookEntry(payload) {
             body: JSON.stringify(payload)
         });
         if (!response.ok) throw new Error('Failed to add cashbook entry');
-        
-        // Silently refresh in background to get real ID and updated balance
-        await reloadCashbookForCurrentDate(false);
+        const created = await response.json();
+        applyLedgerBalancePatches(created.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: waits to see if another write is on the way (e.g. the
+        // other side of a two-sided entry) before refetching real IDs/grid.
+        scheduleCashbookReload(false);
         showToast('Entry added', 'success');
     } catch (error) {
         console.error('Error adding cashbook entry:', error);
@@ -4597,9 +4606,12 @@ async function updateCashbookEntry(entryId, updates) {
             body: JSON.stringify(updates)
         });
         if (!response.ok) throw new Error('Failed to update cashbook entry');
-        
-        // Silently refresh in background to get updated balance
-        await reloadCashbookForCurrentDate(false);
+        const updated = await response.json();
+        applyLedgerBalancePatches(updated.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: collapses a burst of edits into a single day refetch.
+        scheduleCashbookReload(false);
         showToast('Entry updated', 'success');
     } catch (error) {
         console.error('Error updating cashbook entry:', error);
@@ -4628,9 +4640,12 @@ async function deleteCashbookEntry(entryId) {
             method: 'DELETE'
         });
         if (!response.ok) throw new Error('Failed to delete cashbook entry');
-        
-        // Silently refresh in background to get updated balance
-        await reloadCashbookForCurrentDate(false);
+        const deleted = await response.json();
+        applyLedgerBalancePatches(deleted.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: collapses a burst of deletes into a single day refetch.
+        scheduleCashbookReload(false);
         showToast('Entry deleted', 'success');
     } catch (error) {
         console.error('Error deleting cashbook entry:', error);
@@ -4666,75 +4681,39 @@ async function loadLedgers() {
 
 let bankLedgerBalances = []; // Store individual ledger balances for tooltip
 
-async function updateCashInHand() {
-    try {
-        // Get all Bank section ledgers
-        const bankLedgers = ledgers.filter(l => l.section === 'Bank');
-        
-        if (bankLedgers.length === 0) {
-            const amountEl = document.getElementById('cashInHandAmount');
-            if (amountEl) amountEl.textContent = 'Rs 0.00';
-            bankLedgerBalances = [];
-            updateCashInHandTooltip();
-            return;
-        }
+// Applies balance(s) returned by a cashbook entry write (see ledger_balances
+// in supabase_schema.sql / CashbookEntry.ledger_balances) to the in-memory
+// `ledgers` array, so updateCashInHand() reflects the write with no extra fetch.
+function applyLedgerBalancePatches(patches) {
+    if (!patches) return;
+    (Array.isArray(patches) ? patches : [patches]).forEach(p => {
+        if (!p || !p.ledger_id) return;
+        const ledger = ledgers.find(l => l.id === p.ledger_id);
+        if (ledger) ledger.balance = p.balance;
+    });
+}
 
-        // Fetch entries for all Bank ledgers and calculate balances
-        let totalBalance = 0;
-        bankLedgerBalances = [];
-        
-        for (const ledger of bankLedgers) {
-            try {
-                const response = await fetch(`${API_BASE}/ledgers/${ledger.id}/entries`);
-                if (!response.ok) continue;
-                
-                const entries = await response.json();
-                
-                // Calculate running balance for this ledger
-                const sorted = [...entries].sort((a, b) => {
-                    const dateA = a.entry_date || '';
-                    const dateB = b.entry_date || '';
-                    if (dateA !== dateB) return dateA.localeCompare(dateB);
-                    return String(a.created_at || '').localeCompare(String(b.created_at || ''));
-                });
-                
-                let balance = 0;
-                // Bank ledgers: reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming.
-                sorted.forEach(entry => {
-                    const incoming = parseFloat(entry.incoming) || 0;
-                    const outgoing = parseFloat(entry.outgoing) || 0;
-                    balance += outgoing - incoming;
-                });
-                
-                bankLedgerBalances.push({
-                    name: ledger.name,
-                    balance: balance
-                });
-                
-                totalBalance += balance;
-            } catch (error) {
-                console.error(`Error loading entries for ledger ${ledger.id}:`, error);
-            }
-        }
-        
-        // Update display
-        const amountEl = document.getElementById('cashInHandAmount');
-        if (amountEl) {
-            const formatted = totalBalance.toLocaleString('en-US', { 
-                minimumFractionDigits: 2, 
-                maximumFractionDigits: 2 
-            });
-            amountEl.textContent = `Rs ${formatted}`;
-        }
-        
-        updateCashInHandTooltip();
-    } catch (error) {
-        console.error('Error updating Cash In Hand:', error);
-        const amountEl = document.getElementById('cashInHandAmount');
-        if (amountEl) amountEl.textContent = 'Rs 0.00';
-        bankLedgerBalances = [];
-        updateCashInHandTooltip();
+// Computed entirely from the in-memory `ledgers` array (kept in sync by
+// loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
+// cashbook write) — no network call.
+function updateCashInHand() {
+    const bankLedgers = ledgers.filter(l => l.section === 'Bank');
+
+    // Bank ledgers: reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming,
+    // i.e. the negative of the standard incoming-outgoing balance stored in ledger_balances.
+    bankLedgerBalances = bankLedgers.map(l => ({ name: l.name, balance: -(parseFloat(l.balance) || 0) }));
+    const totalBalance = bankLedgerBalances.reduce((sum, b) => sum + b.balance, 0);
+
+    const amountEl = document.getElementById('cashInHandAmount');
+    if (amountEl) {
+        const formatted = totalBalance.toLocaleString('en-US', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2
+        });
+        amountEl.textContent = `Rs ${formatted}`;
     }
+
+    updateCashInHandTooltip();
 }
 
 function updateCashInHandTooltip() {

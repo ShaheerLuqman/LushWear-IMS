@@ -5,7 +5,8 @@ Open, non-urgent work items for LushWear IMS. Completed database hardening
 CHECK constraints, data cleanup) is recorded in
 [`backend/DATABASE.md`](backend/DATABASE.md). App-layer improvements (breaking up
 `orders.py`, error handling, tests, CORS, etc.) are tracked in
-[`backend/BACKEND.md`](backend/BACKEND.md) §4.
+[`backend/BACKEND.md`](backend/BACKEND.md) §4. Cashbook/ledger work items live in
+[`CASHBOOK_IMPROVEMENTS.md`](CASHBOOK_IMPROVEMENTS.md).
 
 ---
 
@@ -187,81 +188,6 @@ Steps:
 
 ---
 
-## Ledgers
-
-### 7. Optimize cashbook before extending the ledger model
-
-Do this first. The full-history refetch on every cashbook mutation (item under
-**Frontend / UX** below — `updateCashInHand()`, `frontend/renderer.js:4639`) is
-the ledger code path that #8 and #9 would both build on. Adding more ledger
-surface area before fixing the N-refetch behavior means the new code inherits
-the same performance problem.
-
-### 8. Create a ledger inline from the cashbook entry form
-
-Today creating a ledger means leaving the cashbook entry flow, going to the
-Ledgers view, and using `createLedgerModal`. Add a "+ New ledger" option to the
-ledger `<select>`s inside `cashbookEntryForm` (`frontend/index.html` ~334-366)
-and the replacement-order advance form (~396-418) that opens the create-ledger
-modal inline and, on save, selects the new ledger without losing the rest of
-the in-progress entry.
-
-### 9. Replace ledger `section` with `nature`
-
-Ledgers currently carry a free-text `section` (Bank/Expense/Vendors/Sales/
-Investors — `backend/app/models.py:194`, `frontend/index.html` ~308-315).
-Replace it with a `nature` field; the two most prominent values should be
-**Vendor Payable** and **Vendor Receivable** — a per-ledger classification,
-distinct from the per-order receivable reconciliation already in
-`orders.py`/`renderer.js` (see [`backend/BACKEND.md`](backend/BACKEND.md)).
-
-- [ ] Decide the full `nature` value set (Vendor Payable, Vendor Receivable,
-      and whatever the existing Bank/Expense/Sales/Investors sections map to).
-- [ ] Migrate `ledgers.section` → `ledgers.nature` in `supabase_schema.sql` and
-      backfill existing rows.
-- [ ] Update `Ledger`/`LedgerCreate`/`LedgerUpdate` in `backend/app/models.py`
-      and the routes in `backend/app/routes/ledger.py`.
-- [ ] Update the create/edit ledger `<select>` options and any section-based
-      grouping/filtering in `frontend/renderer.js` / `frontend/index.html`.
-- [ ] Check `backend/DATABASE.md` / `backend/BACKEND.md` for references to
-      `section` that need updating.
-
-### 10. Re-examine the Bank section's inverted debit/credit and balance sign
-
-Customer has again asked to "invert" how `Bank`-section ledgers behave. Worth
-scrutinizing before touching it again — this has already been flipped twice:
-
-- Commit "Invert debit and credit for bank" (Feb 19) swapped which raw field
-  the Debit/Credit columns show for Bank ledgers only
-  (`renderLedgerDetailGrid`, `frontend/renderer.js` ~5038-5044: Debit shows
-  `incoming`, Credit shows `outgoing`; every other section is the reverse).
-- A later commit ("changes") also flipped the running-balance sign for Bank to
-  `outgoing - incoming`, both in `renderLedgerDetailGrid` (~5058) and in
-  `updateCashInHand()` (~4702-4706), to match.
-
-Standard bookkeeping treats a bank ledger like any other asset/cash account:
-Debit (incoming/deposit) increases the balance, Credit (outgoing/withdrawal)
-decreases it, so balance = **incoming − outgoing** — exactly the formula every
-non-Bank section already uses. Tracing how entries get created (an `IN:` bulk
-entry or the Incoming side of `cashbookEntryForm` books an *inflow* to the
-named ledger), `incoming` really does mean "money deposited," so the current
-`outgoing − incoming` sign for Bank produces the *negative* of actual cash
-held — it doesn't match the "your own books" convention, and it doesn't match
-the alternative "bank statement" convention either (that one only swaps which
-label a movement sits under, it never negates the balance itself).
-
-Before changing anything, pin down which of the two independent flips the
-customer actually means:
-- [ ] If they mean the **balance sign** (`outgoing - incoming` →
-      `incoming - outgoing` for Bank) — this looks like the one worth
-      restoring; it would make Bank match every other section and fix what
-      currently reads as an inverted cash balance.
-- [ ] If they mean the **Debit/Credit column swap** — that's a labeling/
-      statement-format preference, not a correctness issue; confirm intent
-      before reverting since it doesn't have an obviously "right" answer.
-
----
-
 # Feature backlog (frontend / UX)
 
 Planned frontend and UX features. Backend-touching features (orgs/users, admin
@@ -289,33 +215,6 @@ one line each.
       period totals stay backend-side in `month-summary`. Note: the frontend helper
       and the backend `month-summary` profit calc must stay in agreement — comment
       each pointing at the other.
-- [ ] **`updateCashInHand()` re-fetches full ledger history on every cashbook
-      mutation** (`frontend/renderer.js:4639`). For every Bank-section ledger it
-      calls `GET /ledgers/{id}/entries` with no date filter — the entire
-      transaction history, every time — then sums a running balance client-side.
-      It runs on every `reloadCashbookForCurrentDate()` call, which fires after
-      *each* individual create/update/delete, so deleting N entries in a row
-      re-fetches all Bank ledgers' full history N times over. Confirmed live via
-      backend logs: cleaning up 7 test entries fired the 5-ledger fetch 7 times.
-      Two fixes, increasing effort:
-      (a) cheap: only refetch the one Bank ledger the changed entry's `folio`
-      belongs to, not all of them — no backend change;
-      (b) more correct: move the running-balance computation server-side (one
-      aggregate query per ledger, same pattern as the cashbook daily-balance
-      trigger work) so the browser stops downloading full transaction histories
-      at all. Not urgent — revisit when ledger history volume makes it visible.
-- [ ] **Folio dropdown doesn't highlight the currently-selected ledger** —
-      `.folio-dropdown-option.selected` (`frontend/styles.css` ~3023) is meant to
-      highlight the row matching the cell's current folio when the dropdown
-      reopens, but it isn't showing up visibly in practice. The `l.id ===
-      currentFolio` check it depends on (`renderOptions()` in
-      `createFolioCellRenderer`, `frontend/renderer.js` ~2181-2204) mirrors the
-      comparison used a few lines earlier to compute `displayText`, which does
-      work, so the match itself isn't obviously broken. `currentFolio` is a
-      `const` captured once when the cell renderer function runs (~2112) —
-      worth checking whether it goes stale relative to `params.data.folio`
-      across dropdown reopens without a full cell re-render, before assuming
-      it's a pure CSS issue.
 
 ### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)
 

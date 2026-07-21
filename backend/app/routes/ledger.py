@@ -10,16 +10,24 @@ from app.models import (
 router = APIRouter(prefix="/ledgers", tags=["ledgers"])
 
 
+def _flatten_ledger_balance(row: dict) -> dict:
+    """Collapse the embedded ledger_balances(balance) relation into a flat
+    `balance` field; missing (no entries yet) defaults to 0."""
+    embedded = row.pop("ledger_balances", None)
+    row["balance"] = float(embedded["balance"]) if embedded else 0.0
+    return row
+
+
 @router.get("/", response_model=List[Ledger])
 async def list_ledgers():
     response = (
         get_supabase()
         .table("ledgers")
-        .select("*")
+        .select("*, ledger_balances(balance)")
         .order("name", desc=False)
         .execute()
     )
-    return response.data
+    return [_flatten_ledger_balance(row) for row in response.data]
 
 
 @router.post("/", response_model=Ledger)
