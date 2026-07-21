@@ -129,9 +129,18 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
     -- Set only for order-advance entries (created via the order advance modal);
     -- links the entry to an order so advance amounts can be reconciled.
     order_number  VARCHAR(20),
+    -- Client-generated per submission. A create request replayed with the same
+    -- key (double-click, retry after a dropped response) returns the original
+    -- row instead of inserting a duplicate. NULL for older rows; Postgres UNIQUE
+    -- allows any number of NULLs, so legacy rows don't collide with each other.
+    idempotency_key UUID,
     created_at    TIMESTAMPTZ DEFAULT NOW(),
     updated_at    TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Safe to re-run against an existing table: adds the column if this schema
+-- was applied before idempotency_key existed.
+ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
 
 -- Daily balances: opening/closing balance per day (auto-maintained by a DB
 -- trigger on cashbook_entries — see "Triggers" section below).
@@ -190,6 +199,8 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries
 -- so a standalone idx_cashbook_entries_folio is redundant and intentionally omitted.
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio_order_number
     ON cashbook_entries(folio, order_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
+    ON cashbook_entries(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
 
 

@@ -33,6 +33,8 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
     if "order_number" in payload:
         if payload["order_number"] is not None:
             payload["order_number"] = str(payload["order_number"]).strip().lstrip("#") or None
+    if "idempotency_key" in payload:
+        payload["idempotency_key"] = (str(payload["idempotency_key"]).strip() or None) if payload.get("idempotency_key") else None
     return payload
 
 
@@ -60,6 +62,18 @@ def _safe_recompute_advance_statuses(supabase, order_numbers) -> None:
         recompute_advance_statuses(supabase, list(order_numbers))
     except Exception:
         pass
+
+
+def _split_existing_by_idempotency_key(supabase, payloads: List[dict]) -> tuple:
+    """Looks up which of these payloads' idempotency_keys already have a row
+    (a replayed create). Returns (existing_rows_by_key, payloads_still_to_insert)."""
+    keys = [p["idempotency_key"] for p in payloads if p.get("idempotency_key")]
+    if not keys:
+        return {}, payloads
+    resp = supabase.table("cashbook_entries").select("*").in_("idempotency_key", keys).execute()
+    existing_by_key = {row["idempotency_key"]: row for row in resp.data or []}
+    to_insert = [p for p in payloads if p.get("idempotency_key") not in existing_by_key]
+    return existing_by_key, to_insert
 
 
 @router.get("/entries", response_model=List[CashbookEntry])
@@ -90,6 +104,14 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
         raise HTTPException(status_code=400, detail=str(e))
 
     supabase = get_supabase()
+
+    if payload.get("idempotency_key"):
+        existing_by_key, _ = _split_existing_by_idempotency_key(supabase, [payload])
+        if existing_by_key:
+            entry = next(iter(existing_by_key.values()))
+            entry["ledger_balances"] = _ledger_balances(supabase, [entry["folio"]])
+            return entry
+
     response = supabase.table("cashbook_entries").insert(payload).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create cashbook entry")
@@ -104,9 +126,13 @@ async def create_cashbook_entry(entry: CashbookEntryCreate):
 
 @router.post("/entries/bulk", response_model=List[CashbookEntry])
 async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate]):
-    """One INSERT for the whole batch (used by the bulk-text-entry modal).
-    All-or-nothing: relies on the caller having already validated each entry
-    (folio resolved against a real ledger, amount > 0) before submitting."""
+    """One INSERT for the rows that are actually new (used by the bulk-text-
+    entry modal and the two-sided/order-advance modals, so a paired entry is
+    atomic instead of two racing POSTs). All-or-nothing for that insert:
+    relies on the caller having already validated each entry (folio resolved
+    against a real ledger, amount > 0) before submitting. Rows whose
+    idempotency_key already exists are treated as a replay and returned as-is
+    instead of being inserted again."""
     if not entries:
         raise HTTPException(status_code=400, detail="No entries provided")
 
@@ -119,18 +145,24 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate]):
         raise HTTPException(status_code=400, detail=str(e))
 
     supabase = get_supabase()
-    response = supabase.table("cashbook_entries").insert(payloads).execute()
-    if not response.data:
-        raise HTTPException(status_code=500, detail="Failed to create cashbook entries")
+    existing_by_key, to_insert = _split_existing_by_idempotency_key(supabase, payloads)
 
-    order_numbers = {row["order_number"] for row in payloads if row.get("order_number")}
+    inserted = []
+    if to_insert:
+        response = supabase.table("cashbook_entries").insert(to_insert).execute()
+        if not response.data:
+            raise HTTPException(status_code=500, detail="Failed to create cashbook entries")
+        inserted = response.data
+
+    order_numbers = {row["order_number"] for row in to_insert if row.get("order_number")}
     if order_numbers:
         _safe_recompute_advance_statuses(supabase, order_numbers)
 
+    result_rows = list(existing_by_key.values()) + inserted
     balances = _ledger_balances(supabase, {row["folio"] for row in payloads})
-    for entry in response.data:
+    for entry in result_rows:
         entry["ledger_balances"] = balances
-    return response.data
+    return result_rows
 
 
 @router.put("/entries/{entry_id}", response_model=CashbookEntry)

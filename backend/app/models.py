@@ -156,7 +156,10 @@ class CashbookEntryBase(BaseModel):
     order_number: Optional[str] = None  # Set only for order-advance entries
 
 class CashbookEntryCreate(CashbookEntryBase):
-    pass
+    # Client-generated per submission. Replaying a create with the same key
+    # (double-click, retry after a dropped response) returns the original row
+    # instead of inserting a duplicate.
+    idempotency_key: Optional[str] = None
 
 class CashbookEntryUpdate(BaseModel):
     entry_date: Optional[date] = None

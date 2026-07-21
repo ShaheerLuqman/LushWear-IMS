@@ -4120,20 +4120,21 @@ async function submitCashbookEntryModal() {
     }
 
     const entryDate = cashbookSelectedDate || getTodayDateString();
-    const requests = [];
+    const payloads = [];
 
     if (!skipIn) {
         // If the particulars field is left empty, fall back to the default placeholder text.
         const inDescription = (inPartEl.value.trim()) || cashbookEntryParticularPlaceholder('inflow', inLedger);
-        requests.push(createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger }));
+        payloads.push({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger });
     }
     if (!skipOut) {
         const outDescription = (outPartEl.value.trim()) || cashbookEntryParticularPlaceholder('outflow', outLedger);
-        requests.push(createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger }));
+        payloads.push({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger });
     }
 
     closeCashbookEntryModal();
-    await Promise.all(requests);
+    // Both legs in one atomic bulk request instead of two racing POSTs.
+    await createCashbookEntriesBulk(payloads);
 }
 
 // --- Order Advance Amount modal ----------------------------------------------
@@ -4217,11 +4218,12 @@ async function submitOrderAdvanceModal() {
 
     closeOrderAdvanceModal();
     // Tag the incoming (advance) entry with the order number so it can be reconciled
-    // against the order's Shopify advance amount.
+    // against the order's Shopify advance amount. Both legs go in one atomic
+    // bulk request instead of two racing POSTs.
     const normalizedOrderNumber = orderNumber.replace(/^#/, '').trim();
-    await Promise.all([
-        createCashbookEntry({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID, order_number: normalizedOrderNumber }),
-        createCashbookEntry({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger })
+    await createCashbookEntriesBulk([
+        { entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID, order_number: normalizedOrderNumber },
+        { entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger }
     ]);
     // Refresh orders so the advance status indicator updates for this order.
     if (typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
@@ -4486,14 +4488,7 @@ async function submitBulkEntry() {
     setBulkEntryProgress(`Creating ${total} entr${total === 1 ? 'y' : 'ies'}…`);
     const createdOrderAdvance = payloads.some(p => p.order_number);
     try {
-        const response = await fetch(`${API_BASE}/cashbook/entries/bulk`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payloads)
-        });
-        if (!response.ok) throw new Error('Failed to create entries');
-        const created = await response.json();
-        applyLedgerBalancePatches(created[0]?.ledger_balances);
+        await postCashbookEntriesBulk(payloads);
 
         setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
         showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
@@ -4525,6 +4520,12 @@ function setBulkEntryProgress(text, kind) {
         + (kind === 'error' ? ' bulk-entry-progress-error' : '');
 }
 
+// Per-submission key so a retried/duplicated create request is recognized
+// server-side and returns the original row instead of inserting a duplicate.
+function generateIdempotencyKey() {
+    return crypto.randomUUID();
+}
+
 async function createCashbookEntry(payload) {
     // Optimistic update: add entry to local array immediately
     const tempId = '__temp_' + Date.now();
@@ -4542,7 +4543,7 @@ async function createCashbookEntry(payload) {
         const response = await fetch(`${API_BASE}/cashbook/entries`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
+            body: JSON.stringify({ idempotency_key: generateIdempotencyKey(), ...payload })
         });
         if (!response.ok) throw new Error('Failed to add cashbook entry');
         const created = await response.json();
@@ -4559,6 +4560,53 @@ async function createCashbookEntry(payload) {
         cashbookEntries = cashbookEntries.filter(e => e.id !== tempId);
         renderCashbook();
         showToast('Failed to add entry', 'error');
+    }
+}
+
+// POSTs a batch of cashbook entries as one atomic request (used for two-sided
+// entries so the paired inflow/outflow rows can't half-succeed), applies the
+// returned ledger balance patches, and updates Cash In Hand immediately.
+// Returns the created/replayed entries (each carries ledger_balances).
+async function postCashbookEntriesBulk(payloads) {
+    const withKeys = payloads.map(p => ({ idempotency_key: generateIdempotencyKey(), ...p }));
+    const response = await fetch(`${API_BASE}/cashbook/entries/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(withKeys)
+    });
+    if (!response.ok) throw new Error('Failed to create cashbook entries');
+    const created = await response.json();
+    applyLedgerBalancePatches(created[0]?.ledger_balances);
+    updateCashInHand();
+    return created;
+}
+
+// Optimistic-UI wrapper around postCashbookEntriesBulk for the two-sided
+// entry / order-advance modals: renders temp rows immediately, reverts them
+// on failure. The debounced day reload picks up the real IDs.
+async function createCashbookEntriesBulk(payloads) {
+    if (!payloads || payloads.length === 0) return;
+
+    const tempEntries = payloads.map((payload, i) => ({
+        ...payload,
+        id: `__temp_${Date.now()}_${i}`,
+        entry_date: String(payload.entry_date || '').slice(0, 10),
+        created_at: getPKTISOString(),
+        updated_at: getPKTISOString()
+    }));
+    cashbookEntries.push(...tempEntries);
+    renderCashbook();
+
+    try {
+        await postCashbookEntriesBulk(payloads);
+        scheduleCashbookReload(false);
+        showToast(payloads.length > 1 ? 'Entries added' : 'Entry added', 'success');
+    } catch (error) {
+        console.error('Error adding cashbook entries:', error);
+        const tempIds = new Set(tempEntries.map(e => e.id));
+        cashbookEntries = cashbookEntries.filter(e => !tempIds.has(e.id));
+        renderCashbook();
+        showToast('Failed to add entries', 'error');
     }
 }
 
