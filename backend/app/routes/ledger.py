@@ -18,6 +18,18 @@ def _flatten_ledger_balance(row: dict) -> dict:
     return row
 
 
+def _name_taken(supabase, name: str, exclude_id: str = None) -> bool:
+    """Case-insensitive name clash check (mirrors findLedgerByName in
+    renderer.js). Backstopped by idx_ledgers_name_lower for races/non-API
+    writers; this just gives a friendly error for the common case."""
+    target = name.strip().lower()
+    resp = supabase.table("ledgers").select("id, name").execute()
+    return any(
+        row["id"] != exclude_id and (row.get("name") or "").strip().lower() == target
+        for row in resp.data or []
+    )
+
+
 @router.get("/", response_model=List[Ledger])
 async def list_ledgers():
     response = (
@@ -38,7 +50,11 @@ async def create_ledger(ledger: LedgerCreate):
     if not ledger.type:
         raise HTTPException(status_code=400, detail="Type is required")
 
-    response = get_supabase().table("ledgers").insert({"name": name, "type": ledger.type}).execute()
+    supabase = get_supabase()
+    if _name_taken(supabase, name):
+        raise HTTPException(status_code=400, detail="A ledger with this name already exists")
+
+    response = supabase.table("ledgers").insert({"name": name, "type": ledger.type}).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")
     return response.data[0]
@@ -60,18 +76,21 @@ async def get_ledger(ledger_id: str):
 
 @router.put("/{ledger_id}", response_model=Ledger)
 async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
+    supabase = get_supabase()
     payload = ledger.model_dump(exclude_unset=True)
     if "name" in payload:
         payload["name"] = (payload["name"] or "").strip()
         if not payload["name"]:
             raise HTTPException(status_code=400, detail="Ledger name cannot be empty")
+        if _name_taken(supabase, payload["name"], exclude_id=ledger_id):
+            raise HTTPException(status_code=400, detail="A ledger with this name already exists")
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
 
     response = (
-        get_supabase()
+        supabase
         .table("ledgers")
         .update(payload)
         .eq("id", ledger_id)

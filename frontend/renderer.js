@@ -2125,12 +2125,11 @@ function createFolioCellRenderer(params, entryType) {
     displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '');
     if (currentLedger) {
         displaySpan.textContent = currentLedger.name;
-        displaySpan.style.cursor = 'pointer';
     } else {
         displaySpan.textContent = 'Select ledger... *';
         displaySpan.style.color = 'var(--text-muted)';
-        displaySpan.style.cursor = 'pointer';
     }
+    displaySpan.style.cursor = isEditingAllowed() ? 'pointer' : 'default';
 
     // Main button that shows current selection (hidden, used for dropdown positioning)
     const button = document.createElement('button');
@@ -2139,9 +2138,11 @@ function createFolioCellRenderer(params, entryType) {
     button.style.display = 'none';
     button.innerHTML = `<span class="folio-dropdown-text">${escapeHtml(displayText)}</span><span class="folio-dropdown-arrow">▼</span>`;
     
-    // Click on display text opens dropdown
+    // Click on display text opens dropdown (locked: read-only, same as the
+    // Description/Amount cells which silently refuse edits while locked)
     displaySpan.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (!isEditingAllowed()) return;
         openDropdown();
     });
 
@@ -2288,6 +2289,7 @@ function createFolioCellRenderer(params, entryType) {
 
     button.addEventListener('click', (e) => {
         e.stopPropagation();
+        if (!isEditingAllowed()) return;
         if (isOpen) {
             closeDropdown();
         } else {
@@ -4872,13 +4874,20 @@ function renderLedgerCards() {
 let createLedgerOnCreateCallback = null;
 
 async function createLedger(name, type) {
+    if (findLedgerByName(name)) {
+        showToast('A ledger with this name already exists', 'error');
+        return;
+    }
     try {
         const response = await fetch(`${API_BASE}/ledgers/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, type })
         });
-        if (!response.ok) throw new Error('Failed to create ledger');
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to create ledger');
+        }
         const created = await response.json();
         const onCreated = createLedgerOnCreateCallback;
         showToast('Ledger created', 'success');
@@ -4887,7 +4896,7 @@ async function createLedger(name, type) {
         if (onCreated) onCreated(created);
     } catch (error) {
         console.error('Error creating ledger:', error);
-        showToast('Failed to create ledger', 'error');
+        showToast(error.message || 'Failed to create ledger', 'error');
     }
 }
 
@@ -4960,6 +4969,11 @@ async function saveEditLedger() {
         showToast('Name and type are required', 'error');
         return;
     }
+    const existing = findLedgerByName(name);
+    if (existing && existing.id !== editLedgerId) {
+        showToast('A ledger with this name already exists', 'error');
+        return;
+    }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
     if (!confirmed) return;
     try {
@@ -4968,13 +4982,16 @@ async function saveEditLedger() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ name, type })
         });
-        if (!response.ok) throw new Error('Failed to update ledger');
+        if (!response.ok) {
+            const err = await response.json().catch(() => ({}));
+            throw new Error(err.detail || 'Failed to update ledger');
+        }
         showToast('Ledger updated', 'success');
         closeEditLedgerModal();
         await loadLedgers();
     } catch (error) {
         console.error('Error updating ledger:', error);
-        showToast('Failed to update ledger', 'error');
+        showToast(error.message || 'Failed to update ledger', 'error');
     }
 }
 

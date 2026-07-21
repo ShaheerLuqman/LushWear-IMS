@@ -1401,7 +1401,9 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: var(--shadow-lg);
     color: var(--text-primary);
     font-size: 14px;
-    z-index: 1001;
+    /* Above every modal/dropdown/tooltip layer (highest in use: #createLedgerModal.active
+       at 10011) so a toast fired while a popup is open is never hidden behind it. */
+    z-index: 20000;
     transform: translateY(100px);
     opacity: 0;
     transition: var(--transition);

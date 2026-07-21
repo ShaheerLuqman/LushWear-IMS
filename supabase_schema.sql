@@ -241,6 +241,27 @@ CREATE INDEX IF NOT EXISTS idx_orders_replacement_of_order_no ON orders(replacem
 -- Load sheet logs
 CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at    ON load_sheet_logs(created_at DESC);
 
+-- Ledgers: case-insensitive uniqueness so "Bank" and "bank" can't both exist
+-- (matches the case-insensitive name match already used by the bulk-entry
+-- ledger lookup, frontend/renderer.js findLedgerByName). If this fails to
+-- create, an existing pair of ledgers already differs only by case —
+-- rename or merge them first.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_name_lower ON ledgers (lower(name));
+
+-- Promotes the index above into a real named constraint (Postgres can't put
+-- a UNIQUE constraint directly on an expression like lower(name), only on
+-- plain columns — this attaches the constraint to the existing index instead
+-- of creating a second one). ADD CONSTRAINT has no IF NOT EXISTS, so guard
+-- manually for idempotency.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'ledgers_name_unique'
+    ) THEN
+        ALTER TABLE ledgers ADD CONSTRAINT ledgers_name_unique UNIQUE USING INDEX idx_ledgers_name_lower;
+    END IF;
+END $$;
+
 -- Cashbook
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON cashbook_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_type         ON cashbook_entries(entry_type);
