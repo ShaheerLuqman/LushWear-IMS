@@ -27,9 +27,11 @@ Postgres on Supabase, UUID primary keys (`uuid-ossp`), `TIMESTAMPTZ` everywhere.
 | `orders` | Orders (Shopify-synced + manual) | `order_number` UNIQUE, `items` TEXT[], `line_items` JSONB, `delivery_status` JSONB |
 | `load_sheet_logs` | Courier load-sheet records | `order_numbers` JSONB, `delivery_charge` |
 | `app_pin` | Single-row app unlock PIN | `id='default'`, `pin_hash` (bcrypt) |
-| `ledgers` | Accounts (vendors, expense heads…) | `name`, `section` |
-| `cashbook_entries` | All cash transactions | FK `folio → ledgers ON DELETE RESTRICT`, `order_number` |
+| `ledgers` | Accounts (vendors, expense heads…) | `name`, `type` (CHECK'd closed set: Bank/Expense/Payable Vendors/Receivable Vendors/Sales/Investors) |
+| `cashbook_entries` | All cash transactions | FK `folio → ledgers ON DELETE RESTRICT`, `order_number`, `idempotency_key` UNIQUE |
 | `cashbook_daily_balances` | Per-day opening/closing balances | `balance_date` UNIQUE |
+| `ledger_balances` | Per-ledger running balance | PK `ledger_id → ledgers ON DELETE CASCADE` |
+| `cashbook_entry_audit_log` | Deleted cashbook entries (what/when, not who) | `entry_id`, `deleted_at` |
 
 ### Relationships
 

@@ -58,7 +58,7 @@ class TestLedgers:
         assert r.status_code == 404
 
     def test_create_rejects_blank_name(self, make_client):
-        r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "section": "Bank"})
+        r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Bank"})
         assert r.status_code == 422
 
     def test_delete_blocked_while_cashbook_entries_reference_it(self, make_client, ledger_row):

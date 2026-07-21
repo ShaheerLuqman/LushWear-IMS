@@ -6,6 +6,7 @@ from app.models import (
     CashbookDailyBalance,
     CashbookDay,
     CashbookEntry,
+    CashbookEntryAuditLog,
     CashbookEntryCreate,
     CashbookEntryUpdate,
 )
@@ -215,6 +216,31 @@ async def delete_cashbook_entry(entry_id: str):
         _safe_recompute_advance_statuses(supabase, [order_number])
 
     return {"status": "deleted", "id": entry_id, "ledger_balances": _ledger_balances(supabase, [folio])}
+
+
+@router.get("/entries/audit-log", response_model=List[CashbookEntryAuditLog])
+async def get_cashbook_entry_audit_log(
+    entry_id: Optional[str] = Query(None, description="Filter to deletions of one entry"),
+    start_date: Optional[date] = Query(None, description="Filter from entry_date (YYYY-MM-DD)"),
+    end_date: Optional[date] = Query(None, description="Filter to entry_date (YYYY-MM-DD)"),
+):
+    """Deleted cashbook entries, snapshotted by a DB trigger — see
+    cashbook_entry_audit_log in supabase_schema.sql. Records what was deleted
+    and when, not who (no per-user identity exists yet)."""
+    query = (
+        get_supabase()
+        .table("cashbook_entry_audit_log")
+        .select("*")
+        .order("deleted_at", desc=True)
+    )
+    if entry_id:
+        query = query.eq("entry_id", entry_id)
+    if start_date:
+        query = query.gte("entry_date", start_date.isoformat())
+    if end_date:
+        query = query.lte("entry_date", end_date.isoformat())
+    response = query.execute()
+    return response.data
 
 
 def _fetch_daily_balance(supabase, target_date: date) -> dict:

@@ -11,6 +11,9 @@ def _lower(v):
 # "INFLOW"/"Inflow" keep working (the route used to lower() it after parsing).
 EntryType = Annotated[Literal["inflow", "outflow"], BeforeValidator(_lower)]
 PieceReceived = Literal["Pending", "Done", "Received"]
+# Drives both display grouping and balance-sign behavior (see the Bank-only
+# special case in cashbook.py/renderer.js) — closed set, not free text.
+LedgerType = Literal["Bank", "Expense", "Payable Vendors", "Receivable Vendors", "Sales", "Investors"]
 # Rejects "" and whitespace-only, which the routes strip and 400 on anyway.
 NonBlankStr = Annotated[str, Field(min_length=1), BeforeValidator(lambda v: v.strip() if isinstance(v, str) else v)]
 
@@ -202,20 +205,35 @@ class CashbookDay(BaseModel):
     daily_balance: CashbookDailyBalance
     entries: List[CashbookEntry]
 
+class CashbookEntryAuditLog(BaseModel):
+    """A deleted cashbook_entries row, snapshotted by a DB trigger (see
+    supabase_schema.sql). No "who" field — no per-user identity exists yet."""
+    id: str
+    entry_id: str
+    entry_date: date
+    entry_type: EntryType
+    amount: float
+    description: Optional[str] = None
+    folio: str
+    order_number: Optional[str] = None
+    deleted_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
 # ==================== LEDGER MODELS ====================
 # Note: Ledger entries are no longer stored separately.
 # Ledgers now show summaries derived from cashbook_entries where folio = ledger.id
 
 class LedgerBase(BaseModel):
     name: NonBlankStr
-    section: NonBlankStr  # free text, e.g. Cash/Bank, Expense, Vendors, Sales
+    type: LedgerType
 
 class LedgerCreate(LedgerBase):
     pass
 
 class LedgerUpdate(BaseModel):
     name: Optional[str] = None
-    section: Optional[str] = None
+    type: Optional[LedgerType] = None
 
 class Ledger(LedgerBase):
     id: str

@@ -4745,7 +4745,7 @@ function applyLedgerBalancePatches(patches) {
 // loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
 // cashbook write) — no network call.
 function updateCashInHand() {
-    const bankLedgers = ledgers.filter(l => l.section === 'Bank');
+    const bankLedgers = ledgers.filter(l => l.type === 'Bank');
 
     // Bank ledgers: reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming,
     // i.e. the negative of the standard incoming-outgoing balance stored in ledger_balances.
@@ -4808,32 +4808,32 @@ function renderLedgerCards() {
         return;
     }
 
-    // Group ledgers by section
+    // Group ledgers by type
     const groupedLedgers = {};
     ledgers.forEach(l => {
-        const section = l.section || 'Uncategorized';
-        if (!groupedLedgers[section]) {
-            groupedLedgers[section] = [];
+        const type = l.type || 'Uncategorized';
+        if (!groupedLedgers[type]) {
+            groupedLedgers[type] = [];
         }
-        groupedLedgers[section].push(l);
+        groupedLedgers[type].push(l);
     });
 
-    // Sort sections alphabetically
-    const sortedSections = Object.keys(groupedLedgers).sort((a, b) => {
+    // Sort types alphabetically
+    const sortedTypes = Object.keys(groupedLedgers).sort((a, b) => {
         if (a === 'Uncategorized') return 1;
         if (b === 'Uncategorized') return -1;
         return a.localeCompare(b);
     });
 
-    // Build HTML with sections
+    // Build HTML grouped by type
     let html = '';
-    sortedSections.forEach(section => {
-        const sectionLedgers = groupedLedgers[section];
+    sortedTypes.forEach(type => {
+        const typeLedgers = groupedLedgers[type];
         html += `
             <div class="ledger-section">
-                <h3 class="ledger-section-header">${escapeHtml(section)}</h3>
+                <h3 class="ledger-section-header">${escapeHtml(type)}</h3>
                 <div class="ledger-section-cards">
-                    ${sectionLedgers.map(l => `
+                    ${typeLedgers.map(l => `
                         <div class="ledger-card" data-id="${l.id}">
                             <div class="ledger-card-info">
                                 <span class="ledger-card-name">${escapeHtml(l.name)}</span>
@@ -4871,12 +4871,12 @@ function renderLedgerCards() {
 
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, section) {
+async function createLedger(name, type) {
     try {
         const response = await fetch(`${API_BASE}/ledgers/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, section })
+            body: JSON.stringify({ name, type })
         });
         if (!response.ok) throw new Error('Failed to create ledger');
         const created = await response.json();
@@ -4894,7 +4894,7 @@ async function createLedger(name, section) {
 function openCreateLedgerModal(onCreated) {
     createLedgerOnCreateCallback = typeof onCreated === 'function' ? onCreated : null;
     document.getElementById('createLedgerName').value = '';
-    document.getElementById('createLedgerSection').value = '';
+    document.getElementById('createLedgerType').value = '';
     document.getElementById('createLedgerModal').classList.add('active');
 }
 
@@ -4921,13 +4921,13 @@ async function openEditLedgerModal(ledgerId) {
         editLedgerHasEntries = Array.isArray(entries) && entries.length > 0;
 
         const nameInput = document.getElementById('editLedgerName');
-        const sectionSelect = document.getElementById('editLedgerSection');
+        const typeSelect = document.getElementById('editLedgerType');
         if (nameInput) {
             nameInput.value = ledger.name || '';
             nameInput.removeAttribute('readonly');
             nameInput.removeAttribute('disabled');
         }
-        if (sectionSelect) sectionSelect.value = ledger.section || '';
+        if (typeSelect) typeSelect.value = ledger.type || '';
 
         const deleteBtn = document.getElementById('editLedgerDeleteBtn');
         const deleteWrap = document.getElementById('editLedgerDeleteWrap');
@@ -4955,9 +4955,9 @@ function closeEditLedgerModal() {
 async function saveEditLedger() {
     if (!editLedgerId) return;
     const name = (document.getElementById('editLedgerName').value || '').trim();
-    const section = (document.getElementById('editLedgerSection').value || '').trim();
-    if (!name || !section) {
-        showToast('Name and section are required', 'error');
+    const type = (document.getElementById('editLedgerType').value || '').trim();
+    if (!name || !type) {
+        showToast('Name and type are required', 'error');
         return;
     }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
@@ -4966,7 +4966,7 @@ async function saveEditLedger() {
         const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, section })
+            body: JSON.stringify({ name, type })
         });
         if (!response.ok) throw new Error('Failed to update ledger');
         showToast('Ledger updated', 'success');
@@ -5055,14 +5055,14 @@ async function loadLedgerEntries(ledgerId) {
 function renderLedgerDetailGrid() {
     if (!ledgerDetailGridApi) return;
 
-    // Check if this is a Bank section ledger (invert debit/credit)
-    const isBankSection = currentLedger?.section === 'Bank';
+    // Check if this is a Bank-type ledger (invert debit/credit)
+    const isBankType = currentLedger?.type === 'Bank';
 
-    // Update column definitions to swap fields for Bank section
+    // Update column definitions to swap fields for Bank-type ledgers
     const columnDefs = ledgerDetailGridApi.getGridOption('columnDefs');
     if (columnDefs && columnDefs.length >= 4) {
-        // Swap Debit and Credit column fields for Bank section
-        if (isBankSection) {
+        // Swap Debit and Credit column fields for Bank-type ledgers
+        if (isBankType) {
             columnDefs[2].field = 'incoming'; // Debit shows incoming
             columnDefs[3].field = 'outgoing'; // Credit shows outgoing
         } else {
@@ -5082,7 +5082,7 @@ function renderLedgerDetailGrid() {
 
     let running = 0;
     // Bank ledgers: reversed — add debit side (outgoing in data), subtract credit side (incoming in data) = outgoing - incoming. Non-Bank: incoming - outgoing.
-    const balanceDelta = isBankSection ? (inc, out) => out - inc : (inc, out) => inc - out;
+    const balanceDelta = isBankType ? (inc, out) => out - inc : (inc, out) => inc - out;
     const rowsWithBalance = sorted.map(entry => {
         const incoming = parseFloat(entry.incoming) || 0;
         const outgoing = parseFloat(entry.outgoing) || 0;
@@ -6065,16 +6065,16 @@ function initForms() {
                 return;
             }
             const name = document.getElementById('createLedgerName').value.trim();
-            const section = document.getElementById('createLedgerSection').value;
+            const type = document.getElementById('createLedgerType').value;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
             }
-            if (!section) {
-                showToast('Select a section', 'error');
+            if (!type) {
+                showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, section);
+            createLedger(name, type);
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);

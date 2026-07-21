@@ -35,11 +35,10 @@ async def create_ledger(ledger: LedgerCreate):
     name = (ledger.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Ledger name is required")
-    section = (ledger.section or "").strip()
-    if not section:
-        raise HTTPException(status_code=400, detail="Section is required")
+    if not ledger.type:
+        raise HTTPException(status_code=400, detail="Type is required")
 
-    response = get_supabase().table("ledgers").insert({"name": name, "section": section}).execute()
+    response = get_supabase().table("ledgers").insert({"name": name, "type": ledger.type}).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")
     return response.data[0]
@@ -66,10 +65,8 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
         payload["name"] = (payload["name"] or "").strip()
         if not payload["name"]:
             raise HTTPException(status_code=400, detail="Ledger name cannot be empty")
-    if "section" in payload:
-        payload["section"] = (payload["section"] or "").strip()
-        if not payload["section"]:
-            raise HTTPException(status_code=400, detail="Section cannot be empty")
+    if "type" in payload and not payload["type"]:
+        raise HTTPException(status_code=400, detail="Type cannot be empty")
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
 

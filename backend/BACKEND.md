@@ -291,6 +291,18 @@ expand into a spec when picked up.
 - [ ] **Organizations & Users** — real org/user accounts (replaces the single
       shared PIN). Prerequisite for RBAC, admin portal, and per-user views.
       Extends `auth.py`, `models.py`, schema, and RLS policies (see §4.4).
+- [ ] **Revisit cashbook audit trail scope once Users lands** — today
+      `cashbook_entry_audit_log` (2026-07-21) only records *deletions*
+      (`supabase_schema.sql` triggers), not creates/updates, and has no
+      "who" field since there's no per-user identity yet. Decided at the
+      time: full change history isn't worth it without attribution — a
+      log saying "amount changed from X to Y" is much less useful if it
+      can't say who changed it, and edits are recoverable (re-edit to fix)
+      while deletes aren't (data is just gone), which is why delete-only
+      was the deliberate cut point rather than full CRUD tracking. Once
+      real user accounts exist, re-examine whether full update/create
+      history (with attribution) becomes worth adding — see
+      `CASHBOOK_IMPROVEMENTS.md` for the cashbook/ledger context.
 - [ ] **Admin Portal (API)** — endpoints to manage organizations, users, and
       roles (UI in TODO.md).
 - [ ] **Role-based access to columns** — enforce per-role column visibility/edit

@@ -93,7 +93,7 @@ def ledger_row():
     return {
         "id": "22222222-2222-2222-2222-222222222222",
         "name": "Lushwear MZB",
-        "section": "Bank",
+        "type": "Bank",
         "created_at": "2026-02-13T13:05:03+00:00",
         "updated_at": "2026-02-13T13:05:03+00:00",
     }

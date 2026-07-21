@@ -109,14 +109,46 @@ CREATE TABLE IF NOT EXISTS app_pin (
 -- ============================================================================
 
 -- Ledgers: individual accounts (suppliers, customers, expense heads, …).
--- section: free text (e.g. Cash/Bank, Expense, Vendors, Sales).
+-- type: drives both display grouping and balance-sign behavior (see the
+-- Bank-only special case in cashbook.py/renderer.js) — a fixed, closed set
+-- rather than free text, since a typo here silently creates an untracked
+-- bucket with the wrong balance sign.
 CREATE TABLE IF NOT EXISTS ledgers (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     name        VARCHAR(255) NOT NULL,
-    section     VARCHAR(100) NOT NULL,
+    type        VARCHAR(100) NOT NULL
+                CONSTRAINT ledgers_type_check
+                CHECK (type IN ('Bank', 'Expense', 'Payable Vendors', 'Receivable Vendors', 'Sales', 'Investors')),
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Migrates an existing table that still has the old `section` column: add
+-- `type`, backfill from `section` (legacy "Vendors" defaults to "Payable
+-- Vendors" — the common case for this business; reclassify manually via the
+-- edit-ledger UI if any existing vendor ledger is actually receivable), then
+-- drop `section`. A no-op on a fresh install (no `section` column to find)
+-- or a re-run (already migrated).
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'section'
+    ) THEN
+        ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS type VARCHAR(100);
+        UPDATE ledgers
+        SET type = CASE WHEN section = 'Vendors' THEN 'Payable Vendors' ELSE section END
+        WHERE type IS NULL;
+        ALTER TABLE ledgers ALTER COLUMN type SET NOT NULL;
+        ALTER TABLE ledgers DROP COLUMN section;
+    END IF;
+END $$;
+
+-- Idempotent either way: applies the CHECK constraint after a migration
+-- (the inline CREATE TABLE definition only ran on a fresh install).
+ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_type_check;
+ALTER TABLE ledgers ADD CONSTRAINT ledgers_type_check
+    CHECK (type IN ('Bank', 'Expense', 'Payable Vendors', 'Receivable Vendors', 'Sales', 'Investors'));
 
 -- Cashbook entries: all transactions. folio is required and links to a ledger.
 CREATE TABLE IF NOT EXISTS cashbook_entries (
@@ -164,6 +196,25 @@ CREATE TABLE IF NOT EXISTS ledger_balances (
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
 
+-- Immutable log of cashbook_entries deletions (DELETE /cashbook/entries/{id}
+-- is a hard delete with no other record). Auto-populated by a DB trigger —
+-- see "Triggers" section below — so it captures every deletion path, not
+-- just the API, including a bulk TRUNCATE from the SQL editor. Records what
+-- was deleted and when; not who — there's no per-user identity yet (see
+-- Organizations & Users backlog), so this closes the "what/when" half of the
+-- gap only.
+CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
+    id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    entry_id      UUID NOT NULL,
+    entry_date    DATE NOT NULL,
+    entry_type    VARCHAR(10) NOT NULL,
+    amount        DECIMAL(12, 2) NOT NULL,
+    description   TEXT,
+    folio         UUID NOT NULL,
+    order_number  VARCHAR(20),
+    deleted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 
 -- ============================================================================
 -- Indexes
@@ -202,11 +253,13 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio_order_number
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
     ON cashbook_entries(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON cashbook_entry_audit_log(entry_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON cashbook_entry_audit_log(deleted_at DESC);
 
 
 -- ============================================================================
--- Triggers: cashbook_daily_balances / ledger_balances kept in sync by the
--- database, not the app
+-- Triggers: cashbook_daily_balances / ledger_balances / cashbook_entry_audit_log
+-- kept in sync by the database, not the app
 -- ----------------------------------------------------------------------------
 -- Previously an app-layer job (backend/app/routes/cashbook.py) recalculated
 -- cashbook_daily_balances after every entry write. Any write that didn't go
@@ -382,6 +435,50 @@ CREATE TRIGGER cashbook_entries_truncate_trigger
 AFTER TRUNCATE ON cashbook_entries
 FOR EACH STATEMENT
 EXECUTE FUNCTION trg_cashbook_entries_truncate_balances();
+
+-- Logs every deleted row to cashbook_entry_audit_log — fires for any DELETE,
+-- not just the API, closing the "hard delete with no record" gap.
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_delete()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO cashbook_entry_audit_log
+        (entry_id, entry_date, entry_type, amount, description, folio, order_number)
+    VALUES
+        (OLD.id, OLD.entry_date, OLD.entry_type, OLD.amount, OLD.description, OLD.folio, OLD.order_number);
+    RETURN OLD;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_audit_delete_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_audit_delete_trigger
+AFTER DELETE ON cashbook_entries
+FOR EACH ROW
+EXECUTE FUNCTION trg_cashbook_entries_audit_delete();
+
+-- TRUNCATE is effectively a bulk delete but row-level triggers don't fire for
+-- it and by the time an AFTER TRUNCATE trigger runs the rows are already
+-- gone, so this has to run BEFORE TRUNCATE and snapshot the whole table
+-- while it's still there.
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_before_truncate()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    INSERT INTO cashbook_entry_audit_log
+        (entry_id, entry_date, entry_type, amount, description, folio, order_number)
+    SELECT id, entry_date, entry_type, amount, description, folio, order_number
+    FROM cashbook_entries;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_audit_before_truncate_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_audit_before_truncate_trigger
+BEFORE TRUNCATE ON cashbook_entries
+FOR EACH STATEMENT
+EXECUTE FUNCTION trg_cashbook_entries_audit_before_truncate();
 
 
 -- ============================================================================

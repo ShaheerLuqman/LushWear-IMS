@@ -2966,11 +2966,11 @@ async def get_month_summary_detail(month: int, year: int):
         shopify_expense = 0.0
         ad_expense = 0.0
         other_expense = 0.0
-        ledgers_resp = supabase.table("ledgers").select("id, name, section").execute()
+        ledgers_resp = supabase.table("ledgers").select("id, name, type").execute()
         for ledger in ledgers_resp.data or []:
             name = (ledger.get("name") or "").lower()
-            section = (ledger.get("section") or "").lower()
-            is_expense_section = "expense" in section
+            ledger_type = (ledger.get("type") or "").lower()
+            is_expense_type = "expense" in ledger_type
             if "shopify" in name:
                 entries_resp = (
                     supabase.table("cashbook_entries")
@@ -2995,8 +2995,8 @@ async def get_month_summary_detail(month: int, year: int):
                 for e in entries_resp.data or []:
                     if (e.get("entry_type") or "").strip().lower() == "outflow":
                         ad_expense += float(e.get("amount") or 0)
-            elif is_expense_section:
-                # Other expenses: Expense section ledgers excluding shopify and ad
+            elif is_expense_type:
+                # Other expenses: Expense-type ledgers excluding shopify and ad
                 entries_resp = (
                     supabase.table("cashbook_entries")
                     .select("entry_type, amount")
