@@ -182,6 +182,28 @@ def _period_start_end_dates(month: int, year: int):
 
 RECENT_ORDERS_LIMIT = 1000
 
+# The orders list is the one place `delivery_status` gets fetched at scale (hundreds-1000+
+# rows), and the frontend list view only ever renders `latest_status` from it - the full
+# `status_history` array (the bulk of that column's size) is only needed by the per-order
+# detail modal, which fetches it fresh on its own. Extracting just latest_status via
+# PostgREST's ->> operator cuts payload roughly 10x for this query without changing what
+# the frontend receives (see _reshape_delivery_status_latest below).
+ORDERS_LIST_SELECT = (
+    "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
+    "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
+    "order_receiving_date, items, line_items, advance_status, replacement_of_order_no, "
+    "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
+)
+
+
+def _reshape_delivery_status_latest(rows: List[dict]) -> List[dict]:
+    """Rebuild the `delivery_status` shape the frontend expects ({"latest_status": ...})
+    from the flattened `delivery_status_latest` column ORDERS_LIST_SELECT produces."""
+    for row in rows:
+        latest = row.pop("delivery_status_latest", None)
+        row["delivery_status"] = {"latest_status": latest} if latest else None
+    return rows
+
 
 @router.get("/", response_model=List[Order])
 async def get_all_orders(
@@ -191,18 +213,26 @@ async def get_all_orders(
 ):
     """Orders for a month period, or the most recent `limit` orders when no period is given."""
     try:
+        t_start = time.perf_counter()
         supabase = get_supabase()
 
         if month is not None and year is not None:
             start_iso, end_iso = _period_start_end(month, year)
             period_orders = fetch_all(
                 lambda: supabase.table("orders")
-                .select("*")
+                .select(ORDERS_LIST_SELECT)
                 .gte("order_receiving_date", start_iso)
                 .lt("order_receiving_date", end_iso)
                 .order("order_receiving_date", desc=True)
             )
+            period_orders = _reshape_delivery_status_latest(period_orders)
+            t_query = time.perf_counter()
             period_orders.sort(key=_order_recency_key, reverse=True)
+            t_sort = time.perf_counter()
+            logger.info(
+                "[get_all_orders] period=%s-%s query=%.2fs sort=%.3fs total=%.2fs (rows=%d)",
+                month, year, t_query - t_start, t_sort - t_query, t_sort - t_start, len(period_orders),
+            )
             return period_orders
 
         # Most recent N orders. Ordering must be by date, not order_number: that column
@@ -211,22 +241,31 @@ async def get_all_orders(
         # PostgREST caps one request at 1000 rows, so page when more is asked for.
         recent = []
         offset = 0
+        page_count = 0
         while len(recent) < limit:
             page = (
                 supabase.table("orders")
-                .select("*")
+                .select(ORDERS_LIST_SELECT)
                 .order("order_receiving_date", desc=True)
                 .range(offset, min(offset + PAGE_SIZE, limit) - 1)
                 .execute()
                 .data
                 or []
             )
+            page_count += 1
             recent.extend(page)
             if len(page) < PAGE_SIZE:
                 break
             offset += PAGE_SIZE
+        recent = _reshape_delivery_status_latest(recent)
+        t_query = time.perf_counter()
 
         recent.sort(key=_order_recency_key, reverse=True)
+        t_sort = time.perf_counter()
+        logger.info(
+            "[get_all_orders] recent limit=%d query=%.2fs (%d page(s)) sort=%.3fs total=%.2fs (rows=%d)",
+            limit, t_query - t_start, page_count, t_sort - t_query, t_sort - t_start, len(recent),
+        )
         return recent
     except HTTPException:
         raise
