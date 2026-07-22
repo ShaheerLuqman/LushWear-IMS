@@ -66,8 +66,9 @@ async def create_ledger(ledger: LedgerCreate):
 
 @router.get("/{ledger_id}", response_model=Ledger)
 async def get_ledger(ledger_id: str):
+    supabase = get_supabase()
     response = (
-        get_supabase()
+        supabase
         .table("ledgers")
         .select("*")
         .eq("id", ledger_id)
@@ -75,7 +76,17 @@ async def get_ledger(ledger_id: str):
     )
     if not response.data:
         raise HTTPException(status_code=404, detail="Ledger not found")
-    return response.data[0]
+
+    entries_resp = (
+        supabase.table("cashbook_entries")
+        .select("id")
+        .eq("folio", ledger_id)
+        .limit(1)
+        .execute()
+    )
+    ledger = response.data[0]
+    ledger["has_entries"] = bool(entries_resp.data)
+    return ledger
 
 
 @router.put("/{ledger_id}", response_model=Ledger)

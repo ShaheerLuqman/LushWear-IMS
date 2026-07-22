@@ -4920,15 +4920,10 @@ async function openEditLedgerModal(ledgerId) {
     if (!ledgerId) return;
     editLedgerId = ledgerId;
     try {
-        const [ledgerRes, entriesRes] = await Promise.all([
-            fetch(`${API_BASE}/ledgers/${ledgerId}`),
-            fetch(`${API_BASE}/ledgers/${ledgerId}/entries`)
-        ]);
+        const ledgerRes = await fetch(`${API_BASE}/ledgers/${ledgerId}`);
         if (!ledgerRes.ok) throw new Error('Failed to load ledger');
-        if (!entriesRes.ok) throw new Error('Failed to load entries');
         const ledger = await ledgerRes.json();
-        const entries = await entriesRes.json();
-        editLedgerHasEntries = Array.isArray(entries) && entries.length > 0;
+        editLedgerHasEntries = !!ledger.has_entries;
 
         const nameInput = document.getElementById('editLedgerName');
         const typeSelect = document.getElementById('editLedgerType');

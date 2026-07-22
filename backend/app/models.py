@@ -242,6 +242,10 @@ class Ledger(LedgerBase):
     # Current running balance (incoming - outgoing), from ledger_balances.
     # 0 for a ledger with no cashbook entries yet.
     balance: float = 0.0
+    # Only populated by GET /ledgers/{id} (folded in alongside the row fetch
+    # for the edit-ledger delete-button guard); omitted (None) from list_ledgers,
+    # which would otherwise pay for an extra existence query per row.
+    has_entries: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
