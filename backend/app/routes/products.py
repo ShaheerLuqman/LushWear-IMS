@@ -1,21 +1,40 @@
 from fastapi import APIRouter, HTTPException
-from typing import List, Dict
+from typing import List, Dict, Tuple
 from app.models import (
     ProductCreate, ProductUpdate, ProductWithVariants,
     ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
     Variant, VariantCreate, VariantUpdate,
 )
+from app.config import settings
 from app.database import get_supabase
 from app import shopify
 from app.db_utils import fetch_all
 from app.money import money
 from datetime import datetime, timezone
+from supabase import create_client
+import asyncio
 import logging
 import httpx
 import re
 
 logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
+
+
+async def _fetch_products_and_variants() -> Tuple[List[dict], List[dict]]:
+    """Fetch the full products and variants tables concurrently, each on its own client
+    (sharing one client's connection across concurrent threads crashes) and paginated via
+    fetch_all so a catalog past PostgREST's 1000-row-per-request cap isn't silently
+    truncated - unlikely today (139 products / 579 variants) but not guarded against."""
+    def fetch_products():
+        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        return fetch_all(lambda: client.table("products").select("*"))
+
+    def fetch_variants():
+        client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        return fetch_all(lambda: client.table("variants").select("*"))
+
+    return await asyncio.gather(asyncio.to_thread(fetch_products), asyncio.to_thread(fetch_variants))
 
 # Product titles to skip when syncing from Shopify (exact match, case-sensitive)
 SHOPIFY_SYNC_PRODUCTS_IGNORE: List[str] = [
@@ -36,19 +55,11 @@ def _is_replacement_order(row: dict) -> bool:
 async def get_all_products():
     """Get all products with their variants"""
     try:
-        supabase = get_supabase()
-        
-        # Get all products ordered by name
-        products_response = supabase.table("products").select("*").order("name").execute()
-        products = products_response.data
-        
+        products, variants = await _fetch_products_and_variants()
+
         if not products:
             return []
-        
-        # Get all variants
-        variants_response = supabase.table("variants").select("*").execute()
-        variants = variants_response.data
-        
+
         # Group variants by product_id
         variants_by_product = {}
         for variant in variants:
@@ -81,24 +92,22 @@ async def get_all_products():
 async def sync_shopify_products():
     """Sync products and variants from Shopify"""
     try:
-        all_products, page_count = await shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}")
+        # Shopify fetch and the local DB reads are independent - run them concurrently
+        # instead of paying for both durations back to back.
+        (all_products, page_count), (existing_products, existing_variants) = await asyncio.gather(
+            shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}"),
+            _fetch_products_and_variants(),
+        )
 
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
-        
-        # Get existing products mapped by shopify_product_id
-        existing_products_response = supabase.table("products").select("*").execute()
-        existing_products_map = {}
-        for p in existing_products_response.data:
-            if p.get("shopify_product_id"):
-                existing_products_map[p["shopify_product_id"]] = p
-        
-        # Get existing variants mapped by shopify_variant_id
-        existing_variants_response = supabase.table("variants").select("*").execute()
-        existing_variants_map = {}
-        for v in existing_variants_response.data:
-            if v.get("shopify_variant_id"):
-                existing_variants_map[v["shopify_variant_id"]] = v
+
+        existing_products_map = {
+            p["shopify_product_id"]: p for p in existing_products if p.get("shopify_product_id")
+        }
+        existing_variants_map = {
+            v["shopify_variant_id"]: v for v in existing_variants if v.get("shopify_variant_id")
+        }
         
         def normalize_value(val):
             if val is None:

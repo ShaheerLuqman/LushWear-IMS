@@ -13,14 +13,22 @@ advance_status (stored on orders.advance_status) reconciles the two:
   4 = advance present in both and they match
   5 = advance present in both but they do not match
 """
+from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
 
+from supabase import create_client
+
+from app.config import settings
 from app.db_utils import fetch_all
 from app.money import money
 
 # Cap on order numbers per `.in_()` query - keeps the request URL well under server/proxy
 # length limits when scoped to a large set (e.g. every order Shopify returned for a sync).
 IN_QUERY_CHUNK_SIZE = 200
+
+# Cap on concurrent threads for the chunked reads/updates below - keeps us from opening too
+# many simultaneous connections when scoped to a large set (e.g. a full Shopify sync).
+_CONCURRENCY = 20
 
 # The "Orders" ledger that order advances are always posted to (mirrors the
 # ORDERS_LEDGER_ID constant in the frontend).
@@ -95,22 +103,37 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
 
     orders_select = "id, order_number, advance_amount, advance_status"
     if scoped is not None:
-        orders = []
-        for i in range(0, len(scoped), IN_QUERY_CHUNK_SIZE):
-            chunk = scoped[i:i + IN_QUERY_CHUNK_SIZE]
-            orders.extend(fetch_all(
-                lambda c=chunk: supabase.table("orders").select(orders_select).in_("order_number", c)
-            ))
+        chunks = [scoped[i:i + IN_QUERY_CHUNK_SIZE] for i in range(0, len(scoped), IN_QUERY_CHUNK_SIZE)]
+        if len(chunks) > 1:
+            # Each chunk gets its own client - sharing one client's HTTP/2 connection across
+            # concurrent threads crashes with a stream-read error.
+            def fetch_chunk(chunk):
+                client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                return client.table("orders").select(orders_select).in_("order_number", chunk).execute().data or []
+            with ThreadPoolExecutor(max_workers=min(_CONCURRENCY, len(chunks))) as pool:
+                orders = [row for rows in pool.map(fetch_chunk, chunks) for row in rows]
+        elif chunks:
+            orders = fetch_all(lambda: supabase.table("orders").select(orders_select).in_("order_number", chunks[0]))
+        else:
+            orders = []
     else:
         orders = fetch_all(lambda: supabase.table("orders").select(orders_select))
 
-    updated = 0
+    to_update = []
     for o in orders:
         order_num = str(o.get("order_number") or "").strip()
         shopify_advance = float(o.get("advance_amount") or 0)
         cashbook_advance = cashbook_totals.get(order_num, 0.0)
         new_status = compute_advance_status(shopify_advance, cashbook_advance)
         if o.get("advance_status") != new_status:
-            supabase.table("orders").update({"advance_status": new_status}).eq("id", o["id"]).execute()
-            updated += 1
-    return updated
+            to_update.append((o["id"], new_status))
+
+    if to_update:
+        def do_update(item):
+            order_id, status = item
+            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+            client.table("orders").update({"advance_status": status}).eq("id", order_id).execute()
+        with ThreadPoolExecutor(max_workers=min(_CONCURRENCY, len(to_update))) as pool:
+            list(pool.map(do_update, to_update))
+
+    return len(to_update)
