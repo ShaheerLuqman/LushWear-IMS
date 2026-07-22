@@ -165,6 +165,20 @@ BEGIN
     END IF;
 END $$;
 
+-- Opening balance, set once at ledger creation (rarely changed after). Folded
+-- into ledger_balances by recalc_ledger_balance so the running balance always
+-- starts from this instead of 0 — see the ledgers_opening_balance_trigger
+-- below, which recalculates whenever this column is inserted/updated.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'opening_balance'
+    ) THEN
+        ALTER TABLE ledgers ADD COLUMN opening_balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00;
+    END IF;
+END $$;
+
 -- Cashbook entries: all transactions. folio is required and links to a ledger.
 CREATE TABLE IF NOT EXISTS cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -202,9 +216,10 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Per-ledger running balance (incoming - outgoing), auto-maintained by a DB
--- trigger on cashbook_entries — see "Triggers" section below. Only ledgers
--- with at least one cashbook entry have a row; treat a missing row as 0.
+-- Per-ledger running balance (opening_balance + incoming - outgoing),
+-- auto-maintained by DB triggers on cashbook_entries and on ledgers.opening_balance
+-- — see "Triggers" section below. Only ledgers with a non-zero balance have a
+-- row; treat a missing row as 0.
 CREATE TABLE IF NOT EXISTS ledger_balances (
     ledger_id   UUID PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
     balance     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
@@ -395,25 +410,25 @@ AFTER INSERT OR UPDATE OF entry_date, entry_type, amount OR DELETE ON cashbook_e
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
--- Recomputes ledger_balances for a single ledger from scratch. Deletes the row
--- when the ledger has no entries left (vs. a legitimate zero net balance).
+-- Recomputes ledger_balances for a single ledger from scratch, seeded from
+-- ledgers.opening_balance. Deletes the row on a zero balance (missing row
+-- already means 0, so there's nothing to gain by keeping a zero row around).
 CREATE OR REPLACE FUNCTION recalc_ledger_balance(p_ledger_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_balance     NUMERIC(12, 2);
-    v_has_entries BOOLEAN;
+    v_balance NUMERIC(12, 2);
 BEGIN
     SELECT
-        COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)
-      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0),
-        COUNT(*) > 0
-    INTO v_balance, v_has_entries
+        (SELECT opening_balance FROM ledgers WHERE id = p_ledger_id)
+      + COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)
+      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0)
+    INTO v_balance
     FROM cashbook_entries
     WHERE folio = p_ledger_id;
 
-    IF NOT v_has_entries THEN
+    IF v_balance = 0 THEN
         DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
         RETURN;
     END IF;
@@ -452,6 +467,24 @@ CREATE TRIGGER cashbook_entries_ledger_balance_trigger
 AFTER INSERT OR UPDATE OF folio, entry_type, amount OR DELETE ON cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_ledger_balance();
+
+-- Keeps ledger_balances in sync when a ledger is created with a non-zero
+-- opening_balance, or when opening_balance is edited later.
+CREATE OR REPLACE FUNCTION trg_ledgers_recalc_balance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM recalc_ledger_balance(NEW.id);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS ledgers_opening_balance_trigger ON ledgers;
+CREATE TRIGGER ledgers_opening_balance_trigger
+AFTER INSERT OR UPDATE OF opening_balance ON ledgers
+FOR EACH ROW
+EXECUTE FUNCTION trg_ledgers_recalc_balance();
 
 -- Row-level triggers never fire on TRUNCATE; cover that path explicitly so a
 -- "truncate table" from the SQL editor can't leave balances stale either.

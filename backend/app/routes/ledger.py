@@ -58,6 +58,7 @@ async def create_ledger(ledger: LedgerCreate):
         "name": name,
         "type": ledger.type,
         "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
+        "opening_balance": ledger.opening_balance,
     }).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")

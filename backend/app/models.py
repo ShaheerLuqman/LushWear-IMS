@@ -228,6 +228,10 @@ class LedgerBase(BaseModel):
     name: NonBlankStr
     type: LedgerType
     include_in_cash_in_hand: bool = False
+    # Seeded once at ledger creation; folded into ledger_balances by the
+    # recalc_ledger_balance DB trigger so `balance` starts from this instead
+    # of 0. Rare to change after creation, but editable (see LedgerUpdate).
+    opening_balance: float = 0.0
 
 class LedgerCreate(LedgerBase):
     pass
@@ -236,11 +240,12 @@ class LedgerUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[LedgerType] = None
     include_in_cash_in_hand: Optional[bool] = None
+    opening_balance: Optional[float] = None
 
 class Ledger(LedgerBase):
     id: str
-    # Current running balance (incoming - outgoing), from ledger_balances.
-    # 0 for a ledger with no cashbook entries yet.
+    # Current running balance (opening_balance + incoming - outgoing), from
+    # ledger_balances. 0 for a ledger with no opening balance and no entries.
     balance: float = 0.0
     # Only populated by GET /ledgers/{id} (folded in alongside the row fetch
     # for the edit-ledger delete-button guard); omitted (None) from list_ledgers,

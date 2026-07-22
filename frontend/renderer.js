@@ -4871,9 +4871,22 @@ function renderLedgerCards() {
     });
 }
 
+// Opening balance is stored signed in the same incoming-outgoing convention as
+// ledger_balances (see renderLedgerDetailGrid's Bank-type Debit/Credit column
+// swap) — Debit/Credit means opposite things for Bank vs. non-Bank ledgers.
+function openingBalanceToSigned(amount, side, isBankType) {
+    const magnitude = Math.abs(parseFloat(amount)) || 0;
+    if (!magnitude) return 0;
+    return (side === 'debit') === isBankType ? magnitude : -magnitude;
+}
+
+function signedToOpeningBalanceSide(signedValue, isBankType) {
+    return (signedValue > 0) === isBankType ? 'debit' : 'credit';
+}
+
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type, includeInCashInHand) {
+async function createLedger(name, type, includeInCashInHand, openingBalance) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -4882,7 +4895,7 @@ async function createLedger(name, type, includeInCashInHand) {
         const response = await fetch(`${API_BASE}/ledgers/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type, include_in_cash_in_hand: !!includeInCashInHand })
+            body: JSON.stringify({ name, type, include_in_cash_in_hand: !!includeInCashInHand, opening_balance: openingBalance || 0 })
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -4904,6 +4917,8 @@ function openCreateLedgerModal(onCreated) {
     createLedgerOnCreateCallback = typeof onCreated === 'function' ? onCreated : null;
     document.getElementById('createLedgerName').value = '';
     document.getElementById('createLedgerType').value = '';
+    document.getElementById('createLedgerOpeningBalanceAmount').value = '';
+    document.getElementById('createLedgerOpeningBalanceSide').value = 'debit';
     document.getElementById('createLedgerCashInHand').checked = false;
     document.getElementById('createLedgerModal').classList.add('active');
 }
@@ -4915,6 +4930,7 @@ function closeCreateLedgerModal() {
 
 let editLedgerId = null;
 let editLedgerHasEntries = false;
+let editLedgerOriginalOpeningBalance = 0;
 
 async function openEditLedgerModal(ledgerId) {
     if (!ledgerId) return;
@@ -4933,6 +4949,16 @@ async function openEditLedgerModal(ledgerId) {
             nameInput.removeAttribute('disabled');
         }
         if (typeSelect) typeSelect.value = ledger.type || '';
+        editLedgerOriginalOpeningBalance = parseFloat(ledger.opening_balance) || 0;
+        const isBankType = ledger.type === 'Bank';
+        const openingBalanceAmountInput = document.getElementById('editLedgerOpeningBalanceAmount');
+        const openingBalanceSideSelect = document.getElementById('editLedgerOpeningBalanceSide');
+        if (openingBalanceAmountInput) {
+            openingBalanceAmountInput.value = editLedgerOriginalOpeningBalance ? Math.abs(editLedgerOriginalOpeningBalance) : '';
+        }
+        if (openingBalanceSideSelect) {
+            openingBalanceSideSelect.value = signedToOpeningBalanceSide(editLedgerOriginalOpeningBalance, isBankType);
+        }
         const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
         if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
 
@@ -4964,6 +4990,9 @@ async function saveEditLedger() {
     const name = (document.getElementById('editLedgerName').value || '').trim();
     const type = (document.getElementById('editLedgerType').value || '').trim();
     const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
+    const openingBalanceAmount = document.getElementById('editLedgerOpeningBalanceAmount').value;
+    const openingBalanceSide = document.getElementById('editLedgerOpeningBalanceSide').value;
+    const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide, type === 'Bank');
     if (!name || !type) {
         showToast('Name and type are required', 'error');
         return;
@@ -4975,11 +5004,13 @@ async function saveEditLedger() {
     }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
     if (!confirmed) return;
+    const body = { name, type, include_in_cash_in_hand: includeInCashInHand };
+    if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
     try {
         const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type, include_in_cash_in_hand: includeInCashInHand })
+            body: JSON.stringify(body)
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -5096,18 +5127,30 @@ function renderLedgerDetailGrid() {
         return String(a.created_at || '').localeCompare(String(b.created_at || ''));
     });
 
-    let running = 0;
     // Bank ledgers: reversed — add debit side (outgoing in data), subtract credit side (incoming in data) = outgoing - incoming. Non-Bank: incoming - outgoing.
     const balanceDelta = isBankType ? (inc, out) => out - inc : (inc, out) => inc - out;
-    const rowsWithBalance = sorted.map(entry => {
+    // opening_balance is stored signed in the same incoming-outgoing convention as
+    // ledger_balances, so representing it as incoming/outgoing here reuses the same
+    // Debit/Credit column swap above instead of needing separate display logic.
+    const openingBalance = parseFloat(currentLedger?.opening_balance) || 0;
+    const openingRow = openingBalance ? [{
+        id: 'opening-balance',
+        entry_date: '',
+        particulars: 'Opening Balance',
+        incoming: openingBalance > 0 ? openingBalance : 0,
+        outgoing: openingBalance < 0 ? -openingBalance : 0,
+    }] : [];
+
+    let running = 0;
+    const rowsWithBalance = [...openingRow, ...sorted].map(entry => {
         const incoming = parseFloat(entry.incoming) || 0;
         const outgoing = parseFloat(entry.outgoing) || 0;
         running += balanceDelta(incoming, outgoing);
-        return { 
-            ...entry, 
+        return {
+            ...entry,
             incoming: incoming,
             outgoing: outgoing,
-            balance: running 
+            balance: running
         };
     });
 
@@ -6083,6 +6126,8 @@ function initForms() {
             const name = document.getElementById('createLedgerName').value.trim();
             const type = document.getElementById('createLedgerType').value;
             const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
+            const openingBalanceAmount = document.getElementById('createLedgerOpeningBalanceAmount').value;
+            const openingBalanceSide = document.getElementById('createLedgerOpeningBalanceSide').value;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
@@ -6091,7 +6136,8 @@ function initForms() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type, includeInCashInHand);
+            const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide, type === 'Bank');
+            createLedger(name, type, includeInCashInHand, openingBalance);
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);

@@ -1307,6 +1307,19 @@ body:has(#ledgersView.active) .content-area {
     margin-bottom: 20px;
 }
 
+.opening-balance-row {
+    display: flex;
+    gap: 8px;
+}
+
+.opening-balance-row input {
+    flex: 1;
+}
+
+.opening-balance-row select {
+    flex: 0 0 110px;
+}
+
 .ledger-form-toggle {
     display: flex;
     align-items: center;
