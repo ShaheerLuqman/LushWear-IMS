@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -32,6 +33,10 @@ from app.timezones import PKT_TIMEZONE
 
 logger = logging.getLogger("app.orders")
 router = APIRouter(prefix="/orders", tags=["orders"])
+
+# Cap on values per `.in_()` query - keeps the request URL well under server/proxy length
+# limits when scoping a query to a large set of order numbers.
+IN_QUERY_CHUNK_SIZE = 200
 
 # Discounts applied with these codes reduce the order total and are not treated as advance.
 PRICE_REDUCTION_DISCOUNT_CODES = {
@@ -229,23 +234,142 @@ async def get_all_orders(
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/sync-shopify")
-async def sync_shopify_orders():
-    try:
-        # Only sync orders from the last 30 days
-        created_since = (datetime.now(timezone.utc) - timedelta(days=30)).strftime("%Y-%m-%dT%H:%M:%S")
-        all_orders, page_count = await shopify.fetch_all(
-            "orders", f"status=any&limit={shopify.PAGE_LIMIT}&created_at_min={created_since}"
+SHOPIFY_SYNC_PARTITIONS = 4
+
+
+async def _fetch_shopify_orders_in_range(
+    start: datetime, end: datetime, n_partitions: int = SHOPIFY_SYNC_PARTITIONS
+) -> Tuple[List[dict], int]:
+    """Fetch orders in [start, end) by splitting the range into `n_partitions` date-range
+    chunks and fetching them concurrently. Shopify's cursor pagination is inherently
+    sequential *within* one query (each page's cursor depends on the previous page), but
+    independent date ranges have independent cursor chains and can run in parallel."""
+    if end <= start:
+        return [], 0
+    partition_length = (end - start) / n_partitions
+
+    async def fetch_window(w_start: datetime, w_end: datetime) -> Tuple[List[dict], int]:
+        query = (
+            f"status=any&limit={shopify.PAGE_LIMIT}"
+            f"&created_at_min={w_start.strftime('%Y-%m-%dT%H:%M:%S')}"
+            f"&created_at_max={w_end.strftime('%Y-%m-%dT%H:%M:%S')}"
         )
+        return await shopify.fetch_all("orders", query)
+
+    windows = [
+        (start + i * partition_length, start + (i + 1) * partition_length)
+        for i in range(n_partitions)
+    ]
+    results = await asyncio.gather(*(fetch_window(s, e) for s, e in windows))
+
+    seen_ids = set()
+    all_orders: List[dict] = []
+    total_pages = 0
+    for orders, pages in results:
+        total_pages += pages
+        for o in orders:
+            if o.get("id") not in seen_ids:
+                seen_ids.add(o.get("id"))
+                all_orders.append(o)
+    return all_orders, total_pages
+
+
+SHOPIFY_RECENT_ORDERS_INITIAL_WINDOW_DAYS = 30
+SHOPIFY_RECENT_ORDERS_MAX_WINDOW_DAYS = 120
+
+
+async def _fetch_shopify_orders_recent(limit: int) -> Tuple[List[dict], int]:
+    """Fetch the most recent `limit` orders.
+
+    An open-ended (no created_at_max) query can't be partitioned - there's no date
+    boundary to split on ahead of time - and Shopify also returns noticeably smaller
+    pages for open-ended queries than date-bounded ones, so it's slow on both counts.
+    Instead, estimate a bounded window (starting at 30 days, same as a typical period)
+    and fetch it with the same fast concurrent-partitioned technique as a period sync,
+    widening the window if it doesn't turn up enough orders."""
+    now = datetime.now(timezone.utc)
+    window_days = SHOPIFY_RECENT_ORDERS_INITIAL_WINDOW_DAYS
+    all_orders: List[dict] = []
+    total_pages = 0
+    while True:
+        all_orders, pages = await _fetch_shopify_orders_in_range(now - timedelta(days=window_days), now)
+        total_pages += pages
+        if len(all_orders) >= limit or window_days >= SHOPIFY_RECENT_ORDERS_MAX_WINDOW_DAYS:
+            break
+        window_days *= 2
+
+    all_orders.sort(key=lambda o: o.get("created_at") or "", reverse=True)
+    return all_orders[:limit], total_pages
+
+
+@router.post("/sync-shopify")
+async def sync_shopify_orders(
+    month: int = Query(None, ge=1, le=12, description="Sync only this period (22nd - next 21st) instead of the most recent orders."),
+    year: int = Query(None, ge=2000, le=2100, description="Period year; used together with month."),
+):
+    try:
+        t_start = time.perf_counter()
+        if month is not None and year is not None:
+            start_iso, end_iso = _period_start_end(month, year)
+            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+            end_dt = min(datetime.fromisoformat(end_iso.replace("Z", "+00:00")), datetime.now(timezone.utc))
+            all_orders, page_count = await _fetch_shopify_orders_in_range(start_dt, end_dt)
+        else:
+            all_orders, page_count = await _fetch_shopify_orders_recent(RECENT_ORDERS_LIMIT)
+        t_shopify_fetch = time.perf_counter()
+
+        # Only the orders Shopify actually returned need a DB row to diff against - scoping
+        # existing_orders_all (and the advance recompute below) to these avoids reading the
+        # entire orders table (which grows unboundedly) on every sync.
+        shopify_order_numbers = set()
+        for sp_order in all_orders:
+            raw_number = sp_order.get("order_number")
+            if raw_number:
+                shopify_order_numbers.add(str(int(raw_number)))
 
         supabase = get_supabase()
-        
-        # Fetch all products with their cost prices for cost calculation
-        products_response = supabase.table("products").select("id, name, cost_price, shopify_product_id").execute()
+
+        existing_orders_select = (
+            "id, order_number, order_status, delivery_charge, tax_amount, "
+            "delivery_status, piece_received, courier, tracking_number, "
+            "cost_price, items, line_items, total_amount, advance_amount, order_receiving_date, "
+            "replacement_of_order_no"
+        )
+        shopify_order_numbers_list = list(shopify_order_numbers)
+        order_chunks = [
+            shopify_order_numbers_list[i:i + IN_QUERY_CHUNK_SIZE]
+            for i in range(0, len(shopify_order_numbers_list), IN_QUERY_CHUNK_SIZE)
+        ]
+
+        # Products, variants, and each order-number chunk are independent reads - run them
+        # concurrently (each on its own client; see _update_order_sync for why sharing one
+        # client's connection across concurrent threads isn't safe) instead of one at a time.
+        sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+        async def select_concurrently(table: str, select_cols: str, in_col: str = None, in_vals: List[str] = None):
+            def run():
+                client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+                q = client.table(table).select(select_cols)
+                if in_col is not None:
+                    q = q.in_(in_col, in_vals)
+                return q.execute().data or []
+            async with sem:
+                return await asyncio.to_thread(run)
+
+        products_task = select_concurrently("products", "id, name, cost_price, shopify_product_id")
+        variants_task = select_concurrently("variants", "id, shopify_variant_id")
+        order_chunk_tasks = [
+            select_concurrently("orders", existing_orders_select, "order_number", chunk)
+            for chunk in order_chunks
+        ]
+        products_data, variants_data, *order_chunk_results = await asyncio.gather(
+            products_task, variants_task, *order_chunk_tasks
+        )
+
         products_cost_map = {}
         # Map Shopify ids -> local ids so line_items can reference our product/variant rows.
         product_id_by_shopify = {}   # shopify_product_id -> products.id
-        for p in products_response.data:
+        for p in products_data:
             if p.get("name") and p.get("cost_price") is not None:
                 # Store by lowercase name for case-insensitive matching
                 products_cost_map[p["name"].lower().strip()] = float(p["cost_price"])
@@ -253,20 +377,13 @@ async def sync_shopify_orders():
                 product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
 
         variant_id_by_shopify = {}   # shopify_variant_id -> variants.id
-        for v in (supabase.table("variants").select("id, shopify_variant_id").execute().data or []):
+        for v in variants_data:
             if v.get("shopify_variant_id") is not None and v.get("id"):
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
 
         existing_orders_map = {}
-        existing_orders_select = (
-            "id, order_number, order_status, delivery_charge, tax_amount, "
-            "delivery_status, piece_received, courier, tracking_number, "
-            "cost_price, items, line_items, total_amount, advance_amount, order_receiving_date, "
-            "replacement_of_order_no"
-        )
-        existing_orders_all = fetch_all(
-            lambda: supabase.table("orders").select(existing_orders_select).order("order_number")
-        )
+        existing_orders_all = [row for chunk_rows in order_chunk_results for row in chunk_rows]
+        t_local_reads = time.perf_counter()
 
         for o in existing_orders_all:
             order_num = o.get("order_number")
@@ -851,7 +968,8 @@ async def sync_shopify_orders():
                 # First-time create: sync all fields from Shopify
                 order_data["created_at"] = current_time
                 orders_to_insert.append(order_data)
-        
+        t_diff_loop = time.perf_counter()
+
         created_count = 0
         if orders_to_insert:
             batch_size = 1000
@@ -867,32 +985,51 @@ async def sync_shopify_orders():
                 batch = orders_to_update[i:i + batch_size]
                 supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
                 updated_count += len(batch)
+        t_upserts = time.perf_counter()
 
-        for original_num in original_orders_to_reset_piece_received:
-            orig = (
+        if original_orders_to_reset_piece_received:
+            originals_resp = (
                 supabase.table("orders")
                 .select("id, piece_received")
-                .eq("order_number", original_num)
-                .limit(1)
+                .in_("order_number", list(original_orders_to_reset_piece_received))
                 .execute()
             )
-            if orig.data:
-                row = orig.data[0]
-                piece_received = (row.get("piece_received") or "").strip().lower()
-                if piece_received == "done":
-                    supabase.table("orders").update({
-                        "piece_received": "Pending",
-                        "updated_at": current_time,
-                    }).eq("id", row["id"]).execute()
-        
+            ids_to_reset = [
+                row["id"] for row in (originals_resp.data or [])
+                if (row.get("piece_received") or "").strip().lower() == "done"
+            ]
+            if ids_to_reset:
+                supabase.table("orders").update({
+                    "piece_received": "Pending",
+                    "updated_at": current_time,
+                }).in_("id", ids_to_reset).execute()
+
+        t_reset_piece = time.perf_counter()
+
         synced_count = created_count + updated_count
         skipped_count = len(orders_to_skip)
 
-        # Shopify advance amounts may have changed; recompute advance statuses for all orders.
+        # Shopify advance amounts may have changed; recompute advance statuses, scoped to the
+        # orders Shopify actually returned (same reasoning as existing_orders_all above).
         try:
-            recompute_advance_statuses(supabase)
+            recompute_advance_statuses(supabase, order_numbers=shopify_order_numbers)
         except Exception as e:
             logger.warning("[sync-shopify] advance status recompute failed: %s", e)
+        t_advance_recompute = time.perf_counter()
+
+        logger.info(
+            "[sync-shopify] timing: shopify_fetch=%.2fs local_reads=%.2fs diff_loop=%.2fs "
+            "upserts=%.2fs reset_piece=%.2fs advance_recompute=%.2fs total=%.2fs "
+            "(orders_from_shopify=%d, created=%d, updated=%d, skipped=%d)",
+            t_shopify_fetch - t_start,
+            t_local_reads - t_shopify_fetch,
+            t_diff_loop - t_local_reads,
+            t_upserts - t_diff_loop,
+            t_reset_piece - t_upserts,
+            t_advance_recompute - t_reset_piece,
+            t_advance_recompute - t_start,
+            len(all_orders), created_count, updated_count, skipped_count,
+        )
 
         return {
             "message": "Orders synced successfully",

@@ -1,5 +1,6 @@
+import asyncio
 import re
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from urllib.parse import unquote, urlparse, parse_qs
 
 import httpx
@@ -9,6 +10,7 @@ from app.config import settings
 
 PAGE_LIMIT = 250
 _TIMEOUT = 60.0
+_MAX_RATE_LIMIT_RETRIES = 5
 
 
 def _credentials() -> tuple[str, str]:
@@ -44,10 +46,15 @@ def _next_page_info(link_header: str) -> str | None:
     return unquote(found.group(1)) if found else None
 
 
-async def fetch_all(resource: str, first_page_query: str) -> tuple[List[Dict[str, Any]], int]:
+async def fetch_all(
+    resource: str, first_page_query: str, max_records: Optional[int] = None
+) -> tuple[List[Dict[str, Any]], int]:
     """Page through a Shopify Admin REST collection.
 
     `resource` is the JSON key and endpoint name (e.g. "orders" -> orders.json).
+    `max_records`, if given, stops paging once at least that many records are collected
+    (e.g. "most recent N orders" with a `order=created_at+desc` query - there's no date
+    boundary to filter on ahead of time, so this is the only way to bound the fetch).
     Returns (records, pages_fetched).
     """
     store_url, access_token = _credentials()
@@ -61,7 +68,17 @@ async def fetch_all(resource: str, first_page_query: str) -> tuple[List[Dict[str
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         while True:
             api_url = f"{base_url}?page_info={page_info}" if page_info else f"{base_url}?{first_page_query}"
-            response = await client.get(api_url, headers=headers)
+
+            # Retry on 429 with backoff - concurrent partitioned fetches (see orders.py's
+            # sync-shopify) make hitting the shop's rate-limit bucket more likely than a
+            # single sequential fetch ever did.
+            for attempt in range(_MAX_RATE_LIMIT_RETRIES):
+                response = await client.get(api_url, headers=headers)
+                if response.status_code != 429:
+                    break
+                retry_after = float(response.headers.get("Retry-After", 0) or 0)
+                await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
+
             if response.status_code == 404:
                 raise HTTPException(
                     status_code=404,
@@ -84,6 +101,9 @@ async def fetch_all(resource: str, first_page_query: str) -> tuple[List[Dict[str
                 break
             records.extend(page)
             page_count += 1
+
+            if max_records is not None and len(records) >= max_records:
+                break
 
             page_info = _next_page_info(response.headers.get("Link", ""))
             if not page_info:

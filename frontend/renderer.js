@@ -80,10 +80,9 @@ function formatApiErrorDetail(payload) {
 let pinGateSubmitHandler = null;
 
 /**
- * Prefetch promises started as soon as the backend is confirmed ready (while the user types
- * their PIN). Awaited in DOMContentLoaded instead of starting fresh fetches after PIN entry.
+ * Prefetch promise started as soon as the backend is confirmed ready (while the user types
+ * their PIN). Awaited in DOMContentLoaded instead of starting a fresh fetch after PIN entry.
  */
-let _prefetchProductsPromise = null;
 let _prefetchOrdersPromise = null;
 
 // State
@@ -517,20 +516,11 @@ document.addEventListener('DOMContentLoaded', async () => {
         loadingScreen.style.display = 'flex';
     }
 
-    let productsLoaded = false;
     let ordersLoaded = false;
 
-    // If prefetch was started during PIN entry, await those promises; otherwise fetch now.
-    const loadProductsPromise = (_prefetchProductsPromise || loadProducts())
-        .then(() => {
-            productsLoaded = true;
-        })
-        .catch((error) => {
-            console.error('Error loading products:', error);
-            showToast('Failed to load products', 'error');
-            productsLoaded = true;
-        });
-
+    // If prefetch was started during PIN entry, await that promise; otherwise fetch now.
+    // Products aren't fetched here - nothing on the landing (Orders) view needs them, and
+    // Products/Dashboard fetch their own fresh copy when visited (see switchView).
     const loadOrdersPromise = (_prefetchOrdersPromise || loadOrders())
         .then(() => {
             ordersLoaded = true;
@@ -541,10 +531,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             ordersLoaded = true;
         });
 
-    await Promise.all([loadProductsPromise, loadOrdersPromise]);
+    await loadOrdersPromise;
 
-    if (productsLoaded && ordersLoaded) {
-        switchView('orders');
+    if (ordersLoaded) {
+        // Orders are already freshly loaded above - skip switchView's normal reload so
+        // startup doesn't fetch the same data twice before the background syncs kick off.
+        switchView('orders', { skipReload: true });
         applyEditLockState();
 
         if (loadingScreen) {
@@ -3332,7 +3324,7 @@ function initOrdersDateRangeButton() {
     window._ordersDateRangeUpdateButtonLabel = updateButtonLabel;
 }
 
-function switchView(viewName) {
+function switchView(viewName, { skipReload = false } = {}) {
     currentView = viewName;
 
     // Update nav (ledgerDetail keeps the ledgers nav active)
@@ -3475,7 +3467,7 @@ function switchView(viewName) {
             if (productsGridApi) productsGridApi.sizeColumnsToFit();
         }, 100);
     } else if (viewName === 'orders') {
-        loadOrders();
+        if (!skipReload) loadOrders();
         setTimeout(() => {
             if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
         }, 100);
@@ -3499,7 +3491,9 @@ function switchView(viewName) {
     } else if (viewName === 'monthDetail') {
         // Handled by openMonthDetail
     } else if (viewName === 'dashboard') {
-        loadProducts();
+        // Dashboard-only data is bundled here so it's fetched only when the dashboard is
+        // actually opened, not on every products/orders load elsewhere in the app.
+        loadProducts().then(() => updateDashboard());
     }
 }
 
@@ -3518,9 +3512,7 @@ async function loadProducts() {
             const nameB = (b.name || '').toLowerCase();
             return nameA.localeCompare(nameB);
         });
-        
-        updateDashboard();
-        
+
         // Update AG Grid
         if (productsGridApi) {
             productsGridApi.setGridOption('rowData', products);
@@ -3657,7 +3649,19 @@ async function loadOrders() {
         }
     } finally {
         if (ordersGridApi) ordersGridApi.hideOverlay();
-        void updateDashboard();
+    }
+}
+
+/** Reload orders while preserving whichever period view is currently selected - loadOrders()
+ * always resets the period dropdown to "All orders", which would silently drop a selected
+ * period out from under the user (e.g. after a background sync). */
+async function refreshOrdersView() {
+    const periodVal = document.getElementById('ordersPeriodFilter')?.value;
+    if (periodVal && periodVal !== '__all__') {
+        const [month, year] = periodVal.split('-');
+        await loadOrdersForPeriod(Number(month), Number(year));
+    } else {
+        await loadOrders();
     }
 }
 
@@ -3681,7 +3685,6 @@ async function loadOrdersForPeriod(month, year) {
         if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
     } finally {
         if (ordersGridApi) ordersGridApi.hideOverlay();
-        void updateDashboard();
     }
 }
 
@@ -5278,7 +5281,15 @@ async function syncShopifyOrders() {
     btn.innerHTML = 'Syncing...';
 
     try {
-        const response = await fetch(`${API_BASE}/orders/sync-shopify`, {
+        // Scope the sync to whatever period is currently selected in the orders view -
+        // "All orders" syncs the most recent orders; a specific period syncs only that period.
+        const periodVal = document.getElementById('ordersPeriodFilter')?.value;
+        let url = `${API_BASE}/orders/sync-shopify`;
+        if (periodVal && periodVal !== '__all__') {
+            const [month, year] = periodVal.split('-');
+            url += `?month=${month}&year=${year}`;
+        }
+        const response = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -5293,7 +5304,7 @@ async function syncShopifyOrders() {
             `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
             'success'
         );
-        // Do not auto-reload the grid; user can change period or refresh to see updated data
+        await refreshOrdersView();
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');

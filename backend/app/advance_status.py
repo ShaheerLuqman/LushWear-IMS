@@ -18,6 +18,10 @@ from typing import Dict
 from app.db_utils import fetch_all
 from app.money import money
 
+# Cap on order numbers per `.in_()` query - keeps the request URL well under server/proxy
+# length limits when scoped to a large set (e.g. every order Shopify returned for a sync).
+IN_QUERY_CHUNK_SIZE = 200
+
 # The "Orders" ledger that order advances are always posted to (mirrors the
 # ORDERS_LEDGER_ID constant in the frontend).
 ORDERS_LEDGER_ID = "020dbc00-d5da-4110-89e9-fa22edf002f6"
@@ -87,13 +91,18 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
     # any order referenced by a cashbook entry even if its number wasn't passed in.
     scoped = None
     if order_numbers is not None:
-        scoped = {str(n).strip() for n in order_numbers if str(n).strip()}
+        scoped = list({str(n).strip() for n in order_numbers if str(n).strip()})
 
-    def _orders_query():
-        query = supabase.table("orders").select("id, order_number, advance_amount, advance_status")
-        return query.in_("order_number", list(scoped)) if scoped is not None else query
-
-    orders = fetch_all(_orders_query)
+    orders_select = "id, order_number, advance_amount, advance_status"
+    if scoped is not None:
+        orders = []
+        for i in range(0, len(scoped), IN_QUERY_CHUNK_SIZE):
+            chunk = scoped[i:i + IN_QUERY_CHUNK_SIZE]
+            orders.extend(fetch_all(
+                lambda c=chunk: supabase.table("orders").select(orders_select).in_("order_number", c)
+            ))
+    else:
+        orders = fetch_all(lambda: supabase.table("orders").select(orders_select))
 
     updated = 0
     for o in orders:
