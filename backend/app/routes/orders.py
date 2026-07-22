@@ -8,9 +8,11 @@ import httpx
 from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
+from supabase import create_client
 
 from app import shopify
 from app.advance_status import recompute_advance_statuses
+from app.config import settings
 from app.database import get_supabase
 from app.db_utils import PAGE_SIZE, fetch_all
 from app.models import Order, OrderCreate, OrderUpdate
@@ -2452,6 +2454,165 @@ async def update_order(order_id: str, order: OrderUpdate):
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+def _parse_postex_dist(dist: dict, tracking_number: str) -> dict:
+    """Normalize a PostEx `dist` object (from track-order or track-bulk-order's
+    per-item trackingResponse) into our delivery_status_data shape."""
+    status_history_raw = dist.get("transactionStatusHistory", [])
+    status_history_parsed = [
+        {
+            "status": item.get("transactionStatusMessage", ""),
+            "status_code": item.get("transactionStatusMessageCode", ""),
+            "datetime": item.get("updatedAt", ""),
+        }
+        for item in status_history_raw
+    ]
+    # PostEx returns history in reverse chronological order (newest first); re-sort ascending.
+    status_history_sorted = sorted(status_history_parsed, key=lambda e: e.get("datetime") or "")
+    latest_status = status_history_sorted[-1]["status"] if status_history_sorted else ""
+    return {
+        "courier": "PostEx",
+        "tracking_number": dist.get("trackingNumber", tracking_number),
+        "customer_name": dist.get("customerName", ""),
+        "order_pickup_date": dist.get("orderPickupDate", ""),
+        "status_history": status_history_sorted,
+        "latest_status": latest_status,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _parse_couriersnext_response(data: list, tracking_number: str) -> dict:
+    status_history_raw = [item for item in data if isinstance(item, dict)]
+    status_history_parsed = [
+        {
+            "status": item.get("status", "") or "",
+            "status_code": item.get("title", "") or "",
+            "datetime": item.get("created", "") or "",
+        }
+        for item in status_history_raw
+    ]
+    # Sort by provider timestamp ascending (oldest first, newest last).
+    status_history_sorted = sorted(status_history_parsed, key=lambda x: x.get("datetime", "") or "")
+    latest_status = status_history_sorted[-1].get("status", "") if status_history_sorted else ""
+    first_row = status_history_raw[0] if status_history_raw else {}
+    resolved_tracking = (first_row.get("tracking_no") if isinstance(first_row, dict) else None) or tracking_number
+    return {
+        "courier": "Couriers Next",
+        "tracking_number": resolved_tracking,
+        "customer_name": "",
+        "order_pickup_date": "",
+        "status_history": status_history_sorted,
+        "latest_status": latest_status,
+        "fetched_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+async def _fetch_couriersnext_status(client: httpx.AsyncClient, tracking_number: str) -> dict:
+    api_url = "https://portal.couriersnext.com/API/TrackOrder.php"
+    response = await client.post(
+        api_url,
+        json={"tracking_no": tracking_number},
+        headers={"Content-Type": "application/json"},
+    )
+    response.raise_for_status()
+    data = response.json()
+    if not isinstance(data, list):
+        raise HTTPException(status_code=500, detail="Invalid response from Couriers Next tracking API")
+    return _parse_couriersnext_response(data, tracking_number)
+
+
+# Undocumented cap on track-bulk-order; tested up to 120 tracking numbers in one call with
+# no error, but chunking keeps each request well under whatever the real limit turns out to be.
+POSTEX_BULK_BATCH_SIZE = 100
+
+# Cap on concurrent requests for Couriers Next fetches and DB save writes below - keeps us
+# from opening hundreds of simultaneous connections to either service at once.
+_BULK_CONCURRENCY = 20
+
+
+async def _fetch_couriersnext_bulk(tracking_numbers: List[Tuple[str, str]]) -> Dict[str, dict]:
+    """Fetch delivery status for many Couriers Next tracking numbers concurrently (no bulk
+    API exists for this courier, so this is just many single calls run in parallel)."""
+    results: Dict[str, dict] = {}
+    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+    async def run(client: httpx.AsyncClient, tracking_number: str):
+        async with sem:
+            try:
+                results[tracking_number] = await _fetch_couriersnext_status(client, tracking_number)
+            except Exception as e:
+                results[tracking_number] = {"error": str(e)}
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        await asyncio.gather(*(run(client, tn) for _, tn in tracking_numbers))
+    return results
+
+
+def _update_order_sync(order_id: str, update_payload: dict) -> None:
+    """Runs on its own Supabase client (not the shared singleton) - sharing one client's
+    HTTP/2 connection across concurrent threads crashes with a stream-read error."""
+    client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+    client.table("orders").update(update_payload).eq("id", order_id).execute()
+
+
+async def _save_delivery_status_updates(results: Dict[str, dict], orders_by_id: Dict[str, dict]) -> None:
+    """Persist delivery_status (and derived order_status/piece_received) for many orders
+    concurrently. Partial per-row updates only - never a full-row write - so a stale
+    in-memory snapshot here can't clobber an unrelated field someone else edited meanwhile."""
+    now = datetime.now(timezone.utc).isoformat()
+    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+    async def run(order_id: str, delivery_status_data: dict):
+        order = orders_by_id[order_id]
+        update_payload = {"delivery_status": delivery_status_data, "updated_at": now}
+        derived_status = _derive_order_status_from_latest(delivery_status_data)
+        if derived_status:
+            update_payload["order_status"] = derived_status
+            if derived_status == "delivered":
+                current_piece = (order.get("piece_received") or "").strip().lower()
+                if current_piece == "pending":
+                    update_payload["piece_received"] = "Done"
+        async with sem:
+            try:
+                await asyncio.to_thread(_update_order_sync, order_id, update_payload)
+            except Exception:
+                logger.exception(f"[delivery-status-bulk] Failed to save order_id={order_id}")
+
+    to_save = [oid for oid, data in results.items() if "error" not in data]
+    await asyncio.gather(*(run(oid, results[oid]) for oid in to_save))
+
+
+async def _fetch_postex_bulk(tracking_numbers: List[str]) -> Dict[str, dict]:
+    """Fetch delivery status for many PostEx tracking numbers in as few requests as possible.
+    Returns a dict keyed by tracking number; numbers PostEx has no record of are simply absent."""
+    if not tracking_numbers:
+        return {}
+    if not settings.POSTEX_MERCHANT_TOKEN:
+        raise HTTPException(status_code=400, detail="PostEx credentials not configured. Please set POSTEX_MERCHANT_TOKEN environment variable.")
+
+    url = "https://api.postex.pk/services/integration/api/order/v1/track-bulk-order"
+    results: Dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for i in range(0, len(tracking_numbers), POSTEX_BULK_BATCH_SIZE):
+            batch = tracking_numbers[i:i + POSTEX_BULK_BATCH_SIZE]
+            # Doc says GET; body-less GET is what actually works, tracking numbers as repeated
+            # query params (not the POST+JSON-body shape the doc's example implies).
+            response = await client.get(
+                url,
+                headers={"token": settings.POSTEX_MERCHANT_TOKEN},
+                params=[("TrackingNumbers", tn) for tn in batch],
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data.get("statusCode") != "200":
+                continue
+            for item in data.get("dist") or []:
+                tr = item.get("trackingResponse") or {}
+                tn = tr.get("trackingNumber")
+                if tn:
+                    results[tn] = _parse_postex_dist(tr, tn)
+    return results
+
+
 @router.get("/{order_id}/delivery-status")
 async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status")):
     """Fetch delivery status from courier API. Optionally store in order.delivery_status when save=true."""
@@ -2478,99 +2639,22 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         existing_delivery = order.get("delivery_status")
 
         if courier_normalized in ("postex",):
+            if not settings.POSTEX_MERCHANT_TOKEN:
+                raise HTTPException(status_code=400, detail="PostEx credentials not configured. Please set POSTEX_MERCHANT_TOKEN environment variable.")
             # Always fetch fresh data from PostEx to ensure we have the latest status
             # (Previously we skipped fetch for "final" statuses, but this caused stale data issues)
+            # Uses the merchant-authenticated endpoint (own account rate limit) instead of the
+            # shared public guest endpoint, which required throttling to avoid rate limits.
             async with httpx.AsyncClient(timeout=30.0) as client:
-                api_url = f"https://api.postex.pk/services/courier/api/guest/get-order/{tracking_number}"
-                response = await client.get(api_url)
+                api_url = f"https://api.postex.pk/services/integration/api/order/v1/track-order/{tracking_number}"
+                response = await client.get(api_url, headers={"token": settings.POSTEX_MERCHANT_TOKEN})
                 response.raise_for_status()
                 data = response.json()
                 if data.get("statusCode") == "200" and "dist" in data:
-                    dist = data["dist"]
-                    status_history_raw = dist.get("transactionStatusHistory", [])
-                    
-                    # Build status history list with parsed datetime for sorting
-                    status_history_parsed = []
-                    for item in status_history_raw:
-                        entry = {
-                            "status": item.get("transactionStatusMessage", ""),
-                            "status_code": item.get("transactionStatusMessageCode", ""),
-                            "datetime": item.get("modifiedDatetime", "")
-                        }
-                        status_history_parsed.append(entry)
-                    
-                    # Sort by datetime ascending (oldest first, newest last)
-                    # PostEx returns history in reverse chronological order (newest first)
-                    def parse_datetime_for_sort(entry):
-                        dt_str = entry.get("datetime", "")
-                        if not dt_str:
-                            return ""
-                        try:
-                            # PostEx datetime format: "2024-01-15T10:30:00" or similar ISO format
-                            return dt_str
-                        except Exception:
-                            return ""
-                    
-                    status_history_sorted = sorted(status_history_parsed, key=parse_datetime_for_sort)
-                    
-                    # Latest status is the one with the most recent datetime
-                    latest_status = ""
-                    if status_history_sorted:
-                        latest_status = status_history_sorted[-1].get("status", "")
-                    
-                    delivery_status_data = {
-                        "courier": "PostEx",
-                        "tracking_number": dist.get("trackingNumber", tracking_number),
-                        "customer_name": dist.get("customerName", ""),
-                        "order_pickup_date": dist.get("orderPickupDate", ""),
-                        "status_history": status_history_sorted,
-                        "latest_status": latest_status,
-                        "fetched_at": datetime.now(timezone.utc).isoformat()
-                    }
+                    delivery_status_data = _parse_postex_dist(data["dist"], tracking_number)
         elif courier_normalized in ("couriersnext", "couriernext"):
-            # Couriers Next API returns a list of status entries.
             async with httpx.AsyncClient(timeout=30.0) as client:
-                api_url = "https://portal.couriersnext.com/API/TrackOrder.php"
-                payload = {"tracking_no": tracking_number}
-                headers = {"Content-Type": "application/json"}
-                response = await client.post(api_url, json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-
-                if not isinstance(data, list):
-                    raise HTTPException(status_code=500, detail="Invalid response from Couriers Next tracking API")
-
-                status_history_raw = [item for item in data if isinstance(item, dict)]
-                status_history_parsed = []
-                for item in status_history_raw:
-                    status_history_parsed.append({
-                        "status": item.get("status", "") or "",
-                        "status_code": item.get("title", "") or "",
-                        "datetime": item.get("created", "") or "",
-                    })
-
-                # Sort by provider timestamp ascending (oldest first, newest last)
-                status_history_sorted = sorted(
-                    status_history_parsed,
-                    key=lambda x: x.get("datetime", "") or ""
-                )
-
-                latest_status = status_history_sorted[-1].get("status", "") if status_history_sorted else ""
-                first_row = status_history_raw[0] if status_history_raw else {}
-                resolved_tracking = (
-                    (first_row.get("tracking_no") if isinstance(first_row, dict) else None)
-                    or tracking_number
-                )
-
-                delivery_status_data = {
-                    "courier": "Couriers Next",
-                    "tracking_number": resolved_tracking,
-                    "customer_name": "",
-                    "order_pickup_date": "",
-                    "status_history": status_history_sorted,
-                    "latest_status": latest_status,
-                    "fetched_at": datetime.now(timezone.utc).isoformat(),
-                }
+                delivery_status_data = await _fetch_couriersnext_status(client, tracking_number)
         else:
             raise HTTPException(status_code=400, detail="Only PostEx and Couriers Next are supported for delivery status tracking")
         
@@ -2614,6 +2698,70 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         raise
     except Exception as e:
         logger.exception("Error fetching delivery status")
+        raise HTTPException(status_code=500, detail="Error fetching delivery status")
+
+@router.post("/delivery-status/bulk")
+async def get_delivery_status_bulk(
+    order_ids: List[str] = Body(..., embed=False),
+    save: bool = Query(False, description="If true, store fetched status in each order's delivery_status"),
+):
+    """Fetch delivery status for many orders at once. PostEx orders are fetched in as few
+    requests as possible via track-bulk-order; Couriers Next has no bulk API so those are
+    fetched one at a time, same as the single-order endpoint."""
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders selected")
+    try:
+        supabase = get_supabase()
+        orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
+        orders_by_id = {o["id"]: o for o in orders_response.data or []}
+
+        postex_orders: List[Tuple[str, str]] = []
+        couriersnext_orders: List[Tuple[str, str]] = []
+        results: Dict[str, dict] = {}
+
+        for order_id in order_ids:
+            order = orders_by_id.get(order_id)
+            if not order:
+                results[order_id] = {"error": "Order not found"}
+                continue
+            courier_normalized = _normalize_courier_name(order.get("courier", "").strip())
+            tracking_number = (order.get("tracking_number") or "").strip()
+            if not tracking_number:
+                results[order_id] = {"error": "Tracking number not available"}
+                continue
+            if courier_normalized == "postex":
+                postex_orders.append((order_id, tracking_number))
+            elif courier_normalized in ("couriersnext", "couriernext"):
+                couriersnext_orders.append((order_id, tracking_number))
+            else:
+                results[order_id] = {"error": "Courier not supported for delivery status tracking"}
+
+        if postex_orders:
+            postex_by_tracking = await _fetch_postex_bulk([tn for _, tn in postex_orders])
+            for order_id, tracking_number in postex_orders:
+                data = postex_by_tracking.get(tracking_number)
+                results[order_id] = data if data else {"error": "No PostEx record found for this tracking number"}
+
+        if couriersnext_orders:
+            couriersnext_by_tracking = await _fetch_couriersnext_bulk(couriersnext_orders)
+            for order_id, tracking_number in couriersnext_orders:
+                results[order_id] = couriersnext_by_tracking[tracking_number]
+
+        if save:
+            await _save_delivery_status_updates(results, orders_by_id)
+
+        response_list = []
+        for order_id in order_ids:
+            data = results.get(order_id, {"error": "Unknown error"})
+            if "error" in data:
+                response_list.append({"order_id": order_id, "error": data["error"]})
+            else:
+                response_list.append({"order_id": order_id, "delivery_status": data})
+        return response_list
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error fetching bulk delivery status")
         raise HTTPException(status_code=500, detail="Error fetching delivery status")
 
 @router.delete("/{order_id}")

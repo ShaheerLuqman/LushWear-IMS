@@ -13,7 +13,8 @@ class Settings:
     SHOPIFY_API_KEY: str = os.getenv("SHOPIFY_API_KEY", "")
     SHOPIFY_API_SECRET_KEY: str = os.getenv("SHOPIFY_API_SECRET_KEY", "")
     SHOPIFY_API_VERSION: str = os.getenv("SHOPIFY_API_VERSION", "2024-07")
-    
+    POSTEX_MERCHANT_TOKEN: str = os.getenv("POSTEX_MERCHANT_TOKEN", "")
+
     @property
     def shopify_access_token(self) -> str:
         """Get Shopify access token, preferring ADMIN_API_TOKEN"""

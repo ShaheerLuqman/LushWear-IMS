@@ -6991,10 +6991,14 @@ function exportCurrentGridToExcel() {
     showToast(`Excel exported (${sheetCount} sheet${sheetCount > 1 ? 's' : ''})`, 'success');
 }
 
-/** Fetch delivery status for one order (no modal). Returns data or throws. */
-async function fetchDeliveryStatusForOrder(orderId, courier, trackingNumber) {
-    const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
-    const response = await fetch(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
+/** Fetch delivery status for many orders in one request (PostEx orders are batched
+ * server-side via track-bulk-order). Returns [{order_id, delivery_status} | {order_id, error}]. */
+async function fetchDeliveryStatusBulk(orderIds) {
+    const response = await fetch(`${API_BASE}/orders/delivery-status/bulk?save=true`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(orderIds)
+    });
     if (!response.ok) {
         const error = await response.json().catch(() => ({}));
         const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
@@ -7005,7 +7009,7 @@ async function fetchDeliveryStatusForOrder(orderId, courier, trackingNumber) {
 
 const FETCH_DELIVERY_BTN_DEFAULT_TEXT = 'Fetch Delivery Status';
 
-/** Refresh delivery status for all selected orders: sequential fetch, row-by-row update. Status shown in button; continues in background when user changes page. */
+/** Refresh delivery status for all selected orders in one bulk request, then update rows. */
 async function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows();
@@ -7028,40 +7032,38 @@ async function refreshDeliveryStatusSelected() {
     const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
     if (btn) {
         btn.disabled = true;
-        btn.textContent = `Fetching 0/${toFetch.length}`;
+        btn.textContent = `Fetching ${toFetch.length}`;
     }
     const total = toFetch.length;
-    let fetched = 0;
-    const updateProgress = () => {
-        const b = document.getElementById('refreshDeliveryStatusSelectedBtn');
-        if (b) b.textContent = `Fetching ${fetched}/${total}`;
-    };
     try {
-        for (const order of toFetch) {
-            try {
-                const data = await fetchDeliveryStatusForOrder(order.id, order.courier, order.tracking_number);
-                if (ordersGridApi) {
-                    ordersGridApi.forEachNode(node => {
-                        if (node.data && node.data.id === order.id) {
-                            const updated = { ...node.data, delivery_status: data };
-                            const derivedStatus = deriveOrderStatusFromLatest(data);
-                            if (derivedStatus) {
-                                updated.order_status = derivedStatus;
-                                if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
-                                    updated.piece_received = 'Done';
-                                }
-                            }
-                            node.setData(updated);
-                        }
-                    });
+        const results = await fetchDeliveryStatusBulk(toFetch.map(o => o.id));
+        const resultsById = new Map(results.map(r => [r.order_id, r]));
+        let succeeded = 0;
+        if (ordersGridApi) {
+            ordersGridApi.forEachNode(node => {
+                const result = node.data && resultsById.get(node.data.id);
+                if (!result) return;
+                if (result.error) {
+                    console.warn('Delivery status fetch failed for order', node.data.id, result.error);
+                    return;
                 }
-            } catch (err) {
-                console.warn('Delivery status fetch failed for order', order.id, err.message);
-            }
-            fetched += 1;
-            updateProgress();
+                succeeded += 1;
+                const data = result.delivery_status;
+                const updated = { ...node.data, delivery_status: data };
+                const derivedStatus = deriveOrderStatusFromLatest(data);
+                if (derivedStatus) {
+                    updated.order_status = derivedStatus;
+                    if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                        updated.piece_received = 'Done';
+                    }
+                }
+                node.setData(updated);
+            });
         }
-        showToast(`Updated delivery status for ${fetched} of ${total} selected orders`, 'success');
+        showToast(`Updated delivery status for ${succeeded} of ${total} selected orders`, 'success');
+    } catch (err) {
+        console.error('Bulk delivery status fetch failed:', err);
+        showToast(err.message || 'Failed to fetch delivery status', 'error');
     } finally {
         const b = document.getElementById('refreshDeliveryStatusSelectedBtn');
         if (b) {
