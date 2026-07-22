@@ -54,7 +54,11 @@ async def create_ledger(ledger: LedgerCreate):
     if _name_taken(supabase, name):
         raise HTTPException(status_code=400, detail="A ledger with this name already exists")
 
-    response = supabase.table("ledgers").insert({"name": name, "type": ledger.type}).execute()
+    response = supabase.table("ledgers").insert({
+        "name": name,
+        "type": ledger.type,
+        "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
+    }).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")
     return response.data[0]

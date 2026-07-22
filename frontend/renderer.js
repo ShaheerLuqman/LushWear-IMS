@@ -4747,11 +4747,11 @@ function applyLedgerBalancePatches(patches) {
 // loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
 // cashbook write) — no network call.
 function updateCashInHand() {
-    const bankLedgers = ledgers.filter(l => l.type === 'Bank');
+    const cashInHandLedgers = ledgers.filter(l => l.include_in_cash_in_hand);
 
-    // Bank ledgers: reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming,
+    // Reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming,
     // i.e. the negative of the standard incoming-outgoing balance stored in ledger_balances.
-    bankLedgerBalances = bankLedgers.map(l => ({ name: l.name, balance: -(parseFloat(l.balance) || 0) }));
+    bankLedgerBalances = cashInHandLedgers.map(l => ({ name: l.name, balance: -(parseFloat(l.balance) || 0) }));
     const totalBalance = bankLedgerBalances.reduce((sum, b) => sum + b.balance, 0);
 
     const amountEl = document.getElementById('cashInHandAmount');
@@ -4771,7 +4771,7 @@ function updateCashInHandTooltip() {
     if (!tooltipEl) return;
     
     if (bankLedgerBalances.length === 0) {
-        tooltipEl.innerHTML = '<div class="cash-in-hand-tooltip-empty">No Bank ledgers</div>';
+        tooltipEl.innerHTML = '<div class="cash-in-hand-tooltip-empty">No ledgers included</div>';
         return;
     }
     
@@ -4792,7 +4792,7 @@ function updateCashInHandTooltip() {
         .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     
     tooltipEl.innerHTML = `
-        <div class="cash-in-hand-tooltip-header">Bank Ledgers</div>
+        <div class="cash-in-hand-tooltip-header">Cash In Hand Ledgers</div>
         ${itemsHtml}
         <div class="cash-in-hand-tooltip-footer">
             <span class="cash-in-hand-tooltip-total-label">Total:</span>
@@ -4873,7 +4873,7 @@ function renderLedgerCards() {
 
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type) {
+async function createLedger(name, type, includeInCashInHand) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -4882,7 +4882,7 @@ async function createLedger(name, type) {
         const response = await fetch(`${API_BASE}/ledgers/`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type })
+            body: JSON.stringify({ name, type, include_in_cash_in_hand: !!includeInCashInHand })
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -4904,6 +4904,7 @@ function openCreateLedgerModal(onCreated) {
     createLedgerOnCreateCallback = typeof onCreated === 'function' ? onCreated : null;
     document.getElementById('createLedgerName').value = '';
     document.getElementById('createLedgerType').value = '';
+    document.getElementById('createLedgerCashInHand').checked = false;
     document.getElementById('createLedgerModal').classList.add('active');
 }
 
@@ -4937,6 +4938,8 @@ async function openEditLedgerModal(ledgerId) {
             nameInput.removeAttribute('disabled');
         }
         if (typeSelect) typeSelect.value = ledger.type || '';
+        const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
+        if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
 
         const deleteBtn = document.getElementById('editLedgerDeleteBtn');
         const deleteWrap = document.getElementById('editLedgerDeleteWrap');
@@ -4965,6 +4968,7 @@ async function saveEditLedger() {
     if (!editLedgerId) return;
     const name = (document.getElementById('editLedgerName').value || '').trim();
     const type = (document.getElementById('editLedgerType').value || '').trim();
+    const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
     if (!name || !type) {
         showToast('Name and type are required', 'error');
         return;
@@ -4980,7 +4984,7 @@ async function saveEditLedger() {
         const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type })
+            body: JSON.stringify({ name, type, include_in_cash_in_hand: includeInCashInHand })
         });
         if (!response.ok) {
             const err = await response.json().catch(() => ({}));
@@ -6083,6 +6087,7 @@ function initForms() {
             }
             const name = document.getElementById('createLedgerName').value.trim();
             const type = document.getElementById('createLedgerType').value;
+            const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
@@ -6091,7 +6096,7 @@ function initForms() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type);
+            createLedger(name, type, includeInCashInHand);
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);

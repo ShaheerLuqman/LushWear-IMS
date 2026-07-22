@@ -150,6 +150,21 @@ ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_type_check;
 ALTER TABLE ledgers ADD CONSTRAINT ledgers_type_check
     CHECK (type IN ('Bank', 'Expense', 'Payable Vendors', 'Receivable Vendors', 'Sales', 'Investors'));
 
+-- Whether this ledger's balance is included in the Cash In Hand total (set via
+-- a checkbox on the create/edit ledger UI, not implied by `type`). Backfill
+-- only runs the first time the column is added, so it preserves the
+-- pre-existing Bank-only behavior without clobbering manual toggles on re-run.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'include_in_cash_in_hand'
+    ) THEN
+        ALTER TABLE ledgers ADD COLUMN include_in_cash_in_hand BOOLEAN NOT NULL DEFAULT FALSE;
+        UPDATE ledgers SET include_in_cash_in_hand = TRUE WHERE type = 'Bank';
+    END IF;
+END $$;
+
 -- Cashbook entries: all transactions. folio is required and links to a ledger.
 CREATE TABLE IF NOT EXISTS cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,

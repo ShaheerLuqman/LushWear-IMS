@@ -1302,6 +1302,26 @@ body:has(#ledgersView.active) .content-area {
     cursor: pointer;
 }
 
+#createLedgerModal .form-group,
+#editLedgerModal .form-group {
+    margin-bottom: 20px;
+}
+
+.ledger-form-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 20px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ledger-form-toggle input {
+    cursor: pointer;
+}
+
 .cashbook-entry-side-skipped .form-group {
     opacity: 0.5;
 }

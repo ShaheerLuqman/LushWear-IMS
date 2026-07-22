@@ -227,6 +227,7 @@ class CashbookEntryAuditLog(BaseModel):
 class LedgerBase(BaseModel):
     name: NonBlankStr
     type: LedgerType
+    include_in_cash_in_hand: bool = False
 
 class LedgerCreate(LedgerBase):
     pass
@@ -234,6 +235,7 @@ class LedgerCreate(LedgerBase):
 class LedgerUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[LedgerType] = None
+    include_in_cash_in_hand: Optional[bool] = None
 
 class Ledger(LedgerBase):
     id: str
