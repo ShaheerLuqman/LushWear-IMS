@@ -49,6 +49,64 @@ PRICE_REDUCTION_DISCOUNT_CODES = {
 
 
 
+def _resolve_line_item_cost(
+    name: str, product_id: Optional[str], costs_by_id: Dict[str, float], products_cost_map: Dict[str, float]
+) -> float:
+    """Resolve one line item's unit cost_price: by product_id (reliable - survives product
+    renames), falling back to name matching (exact, then variant-suffix-stripped, then
+    substring) for items that didn't resolve to a product_id. `name` here is Shopify's
+    line-item `title` (bare product name, no variant), which is why the exact-match tier
+    usually suffices - the fallback tiers exist for older/renamed-product edge cases."""
+    if product_id and product_id in costs_by_id:
+        return costs_by_id[product_id]
+    if not name:
+        return 0.0
+    item_lower = name.lower().strip()
+    if item_lower in products_cost_map:
+        return products_cost_map[item_lower]
+    if " - " in name:
+        base_name = name.rsplit(" - ", 1)[0].lower().strip()
+        if base_name in products_cost_map:
+            return products_cost_map[base_name]
+    for product_name, cost in products_cost_map.items():
+        if product_name in item_lower or item_lower in product_name:
+            return cost
+    return 0.0
+
+
+def _cost_from_line_items(line_items: List[dict]) -> float:
+    """Total cost price from structured line items, using each item's own cost_price
+    snapshot (set once at sync time by _resolve_line_item_cost - see extract_line_items).
+    No product lookup needed here since the cost is already embedded per line."""
+    if not line_items:
+        return 0.0
+    total_cost = 0.0
+    for li in line_items:
+        try:
+            qty = int(li.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        try:
+            unit_cost = float(li.get("cost_price") or 0)
+        except (TypeError, ValueError):
+            unit_cost = 0.0
+        total_cost += unit_cost * qty
+    return total_cost
+
+
+def _line_items_signature(line_items) -> List[str]:
+    """Comparable signature for change-detection - sorted (name, variant, qty) triples,
+    replacing the old sorted-flat-name-list comparison now that items[] is gone."""
+    if not isinstance(line_items, list):
+        return []
+    return sorted(
+        f"{li.get('name', '')}|{li.get('variant_title', '')}|{li.get('qty', 0)}"
+        for li in line_items if isinstance(li, dict)
+    )
+
+
 def _compute_shopify_tax(order: dict) -> float:
     """Compute tax for a Shopify order using the same precedence as sync logic."""
     if "current_total_tax_set" in order and order["current_total_tax_set"]:
@@ -191,7 +249,7 @@ RECENT_ORDERS_LIMIT = 1000
 ORDERS_LIST_SELECT = (
     "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
     "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
-    "order_receiving_date, items, line_items, advance_status, replacement_of_order_no, "
+    "order_receiving_date, line_items, advance_status, replacement_of_order_no, "
     "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
 )
 
@@ -371,7 +429,7 @@ async def sync_shopify_orders(
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
-            "cost_price, items, line_items, total_amount, advance_amount, order_receiving_date, "
+            "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no"
         )
         shopify_order_numbers_list = list(shopify_order_numbers)
@@ -406,6 +464,7 @@ async def sync_shopify_orders(
         )
 
         products_cost_map = {}
+        costs_by_id = {}    # products.id -> cost_price, for resolving each line item's cost_price snapshot
         # Map Shopify ids -> local ids so line_items can reference our product/variant rows.
         product_id_by_shopify = {}   # shopify_product_id -> products.id
         for p in products_data:
@@ -414,6 +473,8 @@ async def sync_shopify_orders(
                 products_cost_map[p["name"].lower().strip()] = float(p["cost_price"])
             if p.get("shopify_product_id") is not None and p.get("id"):
                 product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
+            if p.get("id") and p.get("cost_price") is not None:
+                costs_by_id[p["id"]] = float(p["cost_price"])
 
         variant_id_by_shopify = {}   # shopify_variant_id -> variants.id
         for v in variants_data:
@@ -587,62 +648,11 @@ async def sync_shopify_orders(
                             return None
             return None
         
-        def calculate_cost_from_items(items, products_cost_map):
-            """Calculate total cost price by looking up each item in the products table"""
-            if not items:
-                return 0.0
-            
-            total_cost = 0.0
-            for item_name in items:
-                item_lower = item_name.lower().strip()
-                
-                # Try exact match first
-                if item_lower in products_cost_map:
-                    total_cost += products_cost_map[item_lower]
-                    continue
-                
-                # Try matching without variant suffix (e.g., "Product Name - S" -> "Product Name")
-                # Items from Shopify are like "Product Name - Variant"
-                if " - " in item_name:
-                    product_name = item_name.rsplit(" - ", 1)[0].lower().strip()
-                    if product_name in products_cost_map:
-                        total_cost += products_cost_map[product_name]
-                        continue
-                
-                # Try partial match - find products whose name is contained in item name
-                for product_name, cost in products_cost_map.items():
-                    if product_name in item_lower or item_lower in product_name:
-                        total_cost += cost
-                        break
-            
-            return total_cost
-        
-        def extract_items(order):
-            """Build order items list from line_items, excluding removed items (current_quantity 0)."""
-            if "line_items" not in order or not order["line_items"]:
-                return []
-            item_names = []
-            for item in order["line_items"]:
-                qty = item.get("current_quantity")
-                if qty is None:
-                    qty = item.get("quantity") or 0
-                try:
-                    qty = int(qty)
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty <= 0:
-                    continue
-                name = item.get("name", "")
-                if name:
-                    # Append name once per quantity so list reflects actual items in the order
-                    for _ in range(qty):
-                        item_names.append(name)
-            return item_names
-
         def extract_line_items(order):
             """Build structured line_items (one object per line, real qty) from Shopify line_items.
-            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title so old orders
-            survive product renames/deletes. Excludes removed lines (current_quantity 0)."""
+            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price
+            so old orders survive product renames/deletes/cost changes. Excludes removed lines
+            (current_quantity 0)."""
             if "line_items" not in order or not order["line_items"]:
                 return []
             rows = []
@@ -662,13 +672,16 @@ async def sync_shopify_orders(
                     unit_price = float(item.get("price") or 0)
                 except (TypeError, ValueError):
                     unit_price = 0.0
+                resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
+                name = (item.get("title") or item.get("name") or "").strip()
                 rows.append({
                     "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
-                    "product_id": product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None,
-                    "name": (item.get("title") or item.get("name") or "").strip(),
+                    "product_id": resolved_product_id,
+                    "name": name,
                     "variant_title": (item.get("variant_title") or "").strip() or "-",
                     "qty": qty,
                     "unit_price": unit_price,
+                    "cost_price": _resolve_line_item_cost(name, resolved_product_id, costs_by_id, products_cost_map),
                 })
             return rows
 
@@ -705,9 +718,9 @@ async def sync_shopify_orders(
         def has_changed(shopify_data, existing_data, skip_assigned_courier_fields=False):
             """
             skip_assigned_courier_fields: when True, do not compare courier, tracking_number,
-            total_amount, delivery_charge, tax_amount, cost_price, items (used when courier is assigned).
+            total_amount, delivery_charge, tax_amount, cost_price (used when courier is assigned).
             """
-            fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price", "items"]
+            fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]
             if skip_assigned_courier_fields:
                 fields_to_compare = ["order_status", "piece_received", "advance_amount"]
             for field in fields_to_compare:
@@ -717,13 +730,6 @@ async def sync_shopify_orders(
                     shopify_num = float(shopify_val) if shopify_val is not None else 0.0
                     existing_num = float(existing_val) if existing_val is not None else 0.0
                     if abs(shopify_num - existing_num) > 0.01:
-                        return True
-                elif field == "items":
-                    shopify_list = shopify_val if isinstance(shopify_val, list) else []
-                    existing_list = existing_val if isinstance(existing_val, list) else []
-                    # Compare as sorted lists so quantity changes are detected too
-                    # (set() would hide duplicates and miss product count changes).
-                    if sorted(str(x) for x in shopify_list) != sorted(str(x) for x in existing_list):
                         return True
                 elif field == "courier":
                     shopify_str = (shopify_val or "").strip() or "Unassigned"
@@ -832,12 +838,11 @@ async def sync_shopify_orders(
             # Set fixed delivery charge for SCS courier
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
-            items = extract_items(sp_order)
             structured_line_items = extract_line_items(sp_order)
-            calculated_cost_from_items = calculate_cost_from_items(items, products_cost_map) if items else 0.0
+            calculated_cost_from_items = _cost_from_line_items(structured_line_items) if structured_line_items else 0.0
 
             # If cost_price is 0, calculate it from items using products table
-            if cost_price == 0.0 and items:
+            if cost_price == 0.0 and structured_line_items:
                 cost_price = calculated_cost_from_items
             
             order_received_date = sp_order.get("created_at")
@@ -884,7 +889,6 @@ async def sync_shopify_orders(
                 "tax_amount": tax_amount,
                 "cost_price": order_cost_price,
                 "order_receiving_date": order_received_date,
-                "items": items,
                 "line_items": structured_line_items,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time
@@ -933,8 +937,7 @@ async def sync_shopify_orders(
                 # still change post-fulfillment); it only freezes once the order reaches delivered/returned
                 # (handled above via early continue) or another terminal-ish status.
                 freeze_advance = existing_status not in ("unfulfilled", "fulfilled")
-                existing_items_list = existing_order.get("items") if isinstance(existing_order.get("items"), list) else []
-                items_changed = sorted(str(x) for x in items) != sorted(str(x) for x in existing_items_list)
+                items_changed = _line_items_signature(structured_line_items) != _line_items_signature(existing_order.get("line_items"))
 
                 # Compare and update courier and tracking_number from Shopify if they differ
                 shopify_courier = (courier or "").strip()
@@ -971,29 +974,33 @@ async def sync_shopify_orders(
                 # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
                 order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
 
-                # Update total_amount/items/cost_price only while status is unfulfilled.
+                # Update total_amount/line_items/cost_price only while status is unfulfilled.
                 # After it changes from unfulfilled, freeze these fields.
                 if freeze_amounts_items_cost:
                     order_data["total_amount"] = existing_order.get("total_amount")
                     order_data["advance_amount"] = existing_order.get("advance_amount") if freeze_advance else advance_amount
                     # Replacement orders (XXXX-R) always have 0 cost price
                     order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
-                    order_data["items"] = existing_order.get("items")
                     order_data["line_items"] = existing_order.get("line_items")
                     skip_fields = True
                 else:
                     order_data["total_amount"] = total_amount
                     order_data["advance_amount"] = advance_amount
+                    # Only refresh line_items (which snapshots each line's cost_price) when the
+                    # order's own items actually changed - not on every sync just because the
+                    # order is still unfulfilled. Otherwise a product's cost_price changing later
+                    # would silently overwrite an old order's cost snapshot with today's price.
+                    if items_changed:
+                        order_data["line_items"] = structured_line_items
+                    else:
+                        order_data["line_items"] = existing_order.get("line_items")
                     # Replacement orders (XXXX-R) always have 0 cost price.
-                    # For unfulfilled orders, if Shopify items changed, recalculate from current product costs.
                     if is_replacement_order:
                         order_data["cost_price"] = 0.0
                     elif items_changed:
                         order_data["cost_price"] = calculated_cost_from_items
                     else:
-                        order_data["cost_price"] = cost_price
-                    order_data["items"] = items
-                    order_data["line_items"] = structured_line_items
+                        order_data["cost_price"] = existing_order.get("cost_price")
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
 
@@ -1272,7 +1279,6 @@ async def create_replacement_order(body: ReplacementOrderCreate):
             "tax_amount": 0.0,
             "cost_price": 0.0,  # Replacement orders always have 0 cost price
             "order_receiving_date": order_receiving_date or now,
-            "items": None,
             "line_items": None,
             "replacement_of_order_no": original_num,
             "created_at": now,
@@ -1514,6 +1520,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
 
         # products cost map for item-based cost calculation fallback
         products_cost_map: Dict[str, float] = {}
+        costs_by_id: Dict[str, float] = {}    # products.id -> cost_price, for line item cost_price snapshots
         product_id_by_shopify: Dict[int, str] = {}   # shopify_product_id -> products.id
         products_response = supabase.table("products").select("id, name, cost_price, shopify_product_id").execute()
         for p in products_response.data or []:
@@ -1525,6 +1532,11 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                     products_cost_map[name] = 0.0
             if p.get("shopify_product_id") is not None and p.get("id"):
                 product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
+            if p.get("id") and p.get("cost_price") is not None:
+                try:
+                    costs_by_id[p["id"]] = float(p["cost_price"])
+                except (TypeError, ValueError):
+                    pass
 
         variant_id_by_shopify: Dict[int, str] = {}   # shopify_variant_id -> variants.id
         for v in (supabase.table("variants").select("id, shopify_variant_id").execute().data or []):
@@ -1537,7 +1549,8 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             supabase.table("orders")
             .select(
                 "id, order_number, order_status, piece_received, delivery_status, "
-                "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no"
+                "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no, "
+                "cost_price, line_items"
             )
             .in_("order_number", order_numbers_input)
             .execute()
@@ -1650,27 +1663,9 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                         return None
             return None
 
-        def extract_items(order):
-            item_names: List[str] = []
-            for item in order.get("line_items") or []:
-                qty = item.get("current_quantity")
-                if qty is None:
-                    qty = item.get("quantity") or 0
-                try:
-                    qty = int(qty)
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty <= 0:
-                    continue
-                name = item.get("name", "")
-                if name:
-                    for _ in range(qty):
-                        item_names.append(name)
-            return item_names
-
         def extract_line_items(order):
             """Structured line_items (one object per line, real qty) from Shopify line_items.
-            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title."""
+            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price."""
             rows: List[Dict[str, Any]] = []
             for item in order.get("line_items") or []:
                 qty = item.get("current_quantity")
@@ -1688,35 +1683,18 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                     unit_price = float(item.get("price") or 0)
                 except (TypeError, ValueError):
                     unit_price = 0.0
+                resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
+                name = (item.get("title") or item.get("name") or "").strip()
                 rows.append({
                     "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
-                    "product_id": product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None,
-                    "name": (item.get("title") or item.get("name") or "").strip(),
+                    "product_id": resolved_product_id,
+                    "name": name,
                     "variant_title": (item.get("variant_title") or "").strip() or "-",
                     "qty": qty,
                     "unit_price": unit_price,
+                    "cost_price": _resolve_line_item_cost(name, resolved_product_id, costs_by_id, products_cost_map),
                 })
             return rows
-
-        def calculate_cost_from_items(items):
-            if not items:
-                return 0.0
-            total_cost = 0.0
-            for item_name in items:
-                item_lower = item_name.lower().strip()
-                if item_lower in products_cost_map:
-                    total_cost += products_cost_map[item_lower]
-                    continue
-                if " - " in item_name:
-                    base_name = item_name.rsplit(" - ", 1)[0].lower().strip()
-                    if base_name in products_cost_map:
-                        total_cost += products_cost_map[base_name]
-                        continue
-                for product_name, cost in products_cost_map.items():
-                    if product_name in item_lower or item_lower in product_name:
-                        total_cost += cost
-                        break
-            return total_cost
 
         fetch_tasks = [_fetch_shopify_order_by_order_number(n) for n in order_numbers_input]
         fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
@@ -1778,11 +1756,10 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             else:
                 advance_amount = total_amount if financial_status == "paid" else total_discounts
 
-            items = extract_items(sp_order)
             structured_line_items = extract_line_items(sp_order)
             cost_price = extract_cost_price(sp_order)
             if cost_price is None or cost_price == 0.0:
-                cost_price = calculate_cost_from_items(items)
+                cost_price = _cost_from_line_items(structured_line_items)
 
             replacement_of = None
             is_replacement_order = False
@@ -1800,6 +1777,16 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                         replacement_of = m.group(1)
                         is_replacement_order = True
                         break
+
+            # Only refresh line_items/cost_price (which snapshot each line's cost_price) when
+            # the order's own items actually changed - not on every force-sync, so a product's
+            # cost_price changing later doesn't silently overwrite an old order's cost snapshot.
+            if existing_order and _line_items_signature(structured_line_items) == _line_items_signature(existing_order.get("line_items")):
+                final_line_items = existing_order.get("line_items")
+                final_cost_price = 0.0 if is_replacement_order else float(existing_order.get("cost_price") or 0.0)
+            else:
+                final_line_items = structured_line_items
+                final_cost_price = 0.0 if is_replacement_order else float(cost_price or 0.0)
 
             order_received_date = sp_order.get("created_at")
             if order_received_date:
@@ -1822,10 +1809,9 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 "advance_amount": advance_amount,
                 "delivery_charge": float(existing_order.get("delivery_charge") or 0) if existing_order else delivery_charge,
                 "tax_amount": float(existing_order.get("tax_amount") or 0) if existing_order else tax_amount,
-                "cost_price": 0.0 if is_replacement_order else float(cost_price or 0.0),
+                "cost_price": final_cost_price,
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
-                "items": items,
-                "line_items": structured_line_items,
+                "line_items": final_line_items,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
             }
@@ -2998,7 +2984,7 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
         supabase = get_supabase()
-        orders_response = supabase.table("orders").select("id, order_number, items, line_items").in_("id", order_ids).execute()
+        orders_response = supabase.table("orders").select("id, order_number, line_items").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
@@ -3049,7 +3035,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
         supabase = get_supabase()
         orders_response = (
             supabase.table("orders")
-            .select("id, order_number, items, line_items")
+            .select("id, order_number, line_items")
             .in_("order_number", order_numbers)
             .execute()
         )
@@ -3210,7 +3196,10 @@ async def get_month_summary_detail(month: int, year: int):
         # Net sales = gross sales - return sales
         net_sales = total_gross_sale - total_return_amount
 
-        # Net profit only for orders that have delivery_charge set (sum of their net sales minus cost)
+        # Net profit only for orders that have delivery_charge set (sum of their net sales minus cost).
+        # Frontend's computeNetProfit() (renderer.js) computes the same concept per-row for the
+        # grid/footer, over a filtered/selected set rather than the whole period - a different code
+        # path by design, but the definition should stay in agreement; check both if it changes.
         orders_with_delivery_set = [o for o in non_cancelled if o.get("delivery_charge") is not None]
         gross_with_delivery = sum(float(o.get("total_amount", 0) or 0) for o in orders_with_delivery_set)
         return_amount_with_delivery = sum(

@@ -120,8 +120,8 @@ def _line_items_from_shopify_order(order: dict) -> List[Dict[str, Any]]:
 
 
 def _line_items_from_db_items(db_order: dict) -> List[Dict[str, Any]]:
-    """Invoice/load-sheet line rows from a stored order. Prefers structured line_items
-    (real quantity/unit_price), falling back to legacy items[] strings."""
+    """Invoice/load-sheet line rows (real quantity/unit_price) from a stored order's
+    structured line_items."""
     rows: List[Dict[str, Any]] = []
     for row in _order_line_rows(db_order):
         if not row["product"]:
@@ -360,20 +360,7 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
                 details_parts.append(part)
             order_details_str = ", ".join(details_parts)
         else:
-            items_list = order.get("items") or []
-            if items_list:
-                details_parts = []
-                for it in items_list:
-                    q = int(it.get("quantity") or 1)
-                    product = it.get("product_name") or it.get("name") or "-"
-                    size = it.get("size") or ""
-                    part = f"{q} x {product}"
-                    if size:
-                        part += f" - {size}"
-                    details_parts.append(part)
-                order_details_str = ", ".join(details_parts)
-            else:
-                order_details_str = "-"
+            order_details_str = "-"
 
         table_data = [
             [_cell_header("Consignee Information"), "", _cell_header("Shipment Information"), "", _cell_header("Order Information"), ""],

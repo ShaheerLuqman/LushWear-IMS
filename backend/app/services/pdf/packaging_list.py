@@ -18,51 +18,29 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 from app.timezones import PKT_TIMEZONE
 
 
-def _split_item_name(item: str) -> Tuple[str, str]:
-    """Split an order item string 'Product - Variant' into (product, variant).
-    Falls back to (item, '-') when there is no ' - ' separator."""
-    s = str(item or "").strip()
-    if " - " in s:
-        product, variant = s.rsplit(" - ", 1)
-        return product.strip(), (variant.strip() or "-")
-    return s, "-"
-
-
 def _order_line_rows(order: dict) -> List[Dict[str, Any]]:
-    """Normalized order lines for readers, preferring structured line_items and falling back
-    to the legacy items[] strings. Each row: {product, variant, product_id, variant_id, quantity, unit_price}.
-    For legacy strings, quantity is 1 per array element (the old repeat-per-unit convention)."""
+    """Normalized order lines: {product, variant, product_id, variant_id, quantity, unit_price}
+    from structured line_items."""
     line_items = order.get("line_items")
-    if isinstance(line_items, list) and line_items:
-        rows: List[Dict[str, Any]] = []
-        for li in line_items:
-            if not isinstance(li, dict):
-                continue
-            try:
-                qty = int(li.get("qty") or 0)
-            except (TypeError, ValueError):
-                qty = 0
-            if qty <= 0:
-                continue
-            rows.append({
-                "product": (li.get("name") or "").strip(),
-                "variant": (li.get("variant_title") or "-").strip() or "-",
-                "product_id": li.get("product_id"),
-                "variant_id": li.get("variant_id"),
-                "quantity": qty,
-                "unit_price": li.get("unit_price"),
-            })
-        return rows
-    # Legacy fallback: one array element per unit.
-    rows = []
-    for item in (order.get("items") or []):
-        product, variant = _split_item_name(item)
-        if not product:
+    if not isinstance(line_items, list) or not line_items:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for li in line_items:
+        if not isinstance(li, dict):
+            continue
+        try:
+            qty = int(li.get("qty") or 0)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
             continue
         rows.append({
-            "product": product, "variant": variant,
-            "product_id": None, "variant_id": None,
-            "quantity": 1, "unit_price": None,
+            "product": (li.get("name") or "").strip(),
+            "variant": (li.get("variant_title") or "-").strip() or "-",
+            "product_id": li.get("product_id"),
+            "variant_id": li.get("variant_id"),
+            "quantity": qty,
+            "unit_price": li.get("unit_price"),
         })
     return rows
 
@@ -87,8 +65,7 @@ def _aggregate_packaging_items(orders: List[dict]) -> Tuple[List[dict], List[str
       sizes = ordered list of size columns to show: S, M, L, XL first, then any
               other sizes present in the data (sorted), e.g. XXL or Free Size.
 
-    Uses structured line_items (real qty per line) when present, else legacy items[] strings
-    (one unit per array element) via _order_line_rows.
+    Uses structured line_items (real qty per line) via _order_line_rows.
     """
     # product -> size -> count
     products: Dict[str, Dict[str, int]] = {}

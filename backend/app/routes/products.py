@@ -374,7 +374,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         if not pname:
             raise HTTPException(status_code=400, detail="Product has no name")
 
-        # Cost lookup by lowercased product name (legacy items strings) and by product id (line_items).
+        # Cost lookup by product id (preferred) and by lowercased product name (fallback), both against line_items.
         costs: Dict[str, float] = {}
         costs_by_id: Dict[str, float] = {}
         for p in supabase.table("products").select("id, name, cost_price").execute().data or []:
@@ -388,11 +388,10 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             if p.get("id"):
                 costs_by_id[p["id"]] = cost_val
 
-        prefix = f"{pname} - "
         after = body.created_after.isoformat()
         now_iso = datetime.now(timezone.utc).isoformat()
         page = 500
-        select_cols = "id, order_number, replacement_of_order_no, items, line_items, cost_price"
+        select_cols = "id, order_number, replacement_of_order_no, line_items, cost_price"
 
         # Collect orders whose effective date is on/after the cutoff. The effective date
         # is order_receiving_date (the date shown in the orders grid), falling back to
@@ -419,26 +418,22 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         for row in order_rows:
             scanned += 1
             line_items = row.get("line_items") if isinstance(row.get("line_items"), list) else []
-            items = row.get("items") if isinstance(row.get("items"), list) else []
 
             # Does this order include the target product?
-            if line_items:
-                includes_product = any(
-                    isinstance(li, dict) and (
-                        li.get("product_id") == product_id
-                        or (li.get("name") or "").strip().lower() == pname.lower()
-                    )
-                    for li in line_items
+            includes_product = any(
+                isinstance(li, dict) and (
+                    li.get("product_id") == product_id
+                    or (li.get("name") or "").strip().lower() == pname.lower()
                 )
-            else:
-                includes_product = any(isinstance(x, str) and x.startswith(prefix) for x in items)
+                for li in line_items
+            )
             if not includes_product:
                 continue
 
             if _is_replacement_order(row):
                 new_cost = 0.0
-            elif line_items:
-                # Prefer structured line_items: cost by product_id (else name) × qty.
+            else:
+                # Cost by product_id (else name) × qty.
                 new_cost = 0.0
                 for li in line_items:
                     if not isinstance(li, dict):
@@ -456,14 +451,6 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                         base = (li.get("name") or "").strip().lower()
                         if base in costs:
                             new_cost += costs[base] * qty
-            else:
-                new_cost = 0.0
-                for line in items:
-                    if not isinstance(line, str):
-                        continue
-                    base = line.split(" - ", 1)[0].strip().lower()
-                    if base in costs:
-                        new_cost += costs[base]
 
             # Round the accumulated cost to cents so the comparison is exact and the
             # stored value can't carry float noise (e.g. 1522.1999999999998).

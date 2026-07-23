@@ -91,11 +91,12 @@ class OrderLineItem(BaseModel):
     # Nullable links to the live product/variant (null if unmatched or later deleted).
     variant_id: Optional[str] = None
     product_id: Optional[str] = None
-    # Snapshots captured at write time (survive product rename/delete).
+    # Snapshots captured at write time (survive product rename/delete/later cost changes).
     name: str
     variant_title: Optional[str] = None
     qty: int = 1
     unit_price: Optional[float] = None
+    cost_price: Optional[float] = None
 
 class OrderBase(BaseModel):
     order_number: NonBlankStr
@@ -113,8 +114,6 @@ class OrderBase(BaseModel):
     tax_amount: float = 0.0
     cost_price: float = 0.0
     order_receiving_date: datetime
-    items: Optional[List[str]] = None
-    # Structured order lines (replaces the legacy "Name - Variant" strings in items).
     line_items: Optional[List[OrderLineItem]] = None
     # Advance reconciliation status (computed): 1=no advance, 2=shopify only,
     # 3=cashbook only, 4=both match, 5=both mismatch
@@ -137,7 +136,6 @@ class OrderUpdate(BaseModel):
     tax_amount: Optional[float] = None
     cost_price: Optional[float] = None
     order_receiving_date: Optional[datetime] = None
-    items: Optional[List[str]] = None
     line_items: Optional[List[OrderLineItem]] = None
 
 class Order(OrderBase):

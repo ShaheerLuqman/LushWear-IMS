@@ -1132,6 +1132,25 @@ function advanceStatusMeta(status) {
     }
 }
 
+/** Net profit for one order row: total - (delivery + tax + cost), or -delivery for a
+ * returned order. null when not applicable (not delivered/returned, or no delivery_charge
+ * recorded yet). Single source of truth for the net_profit column, profit_percent column,
+ * and the selected-rows footer sum below - keep all three reading from here instead of
+ * recomputing so the definition can't drift between them.
+ * Backend's month-summary net_profit (routes/orders.py, ~line 3161) computes the same
+ * concept as a period aggregate over unfiltered orders - a different code path by design
+ * (see TODO.md), but the definition should stay in agreement; check both if it changes. */
+function computeNetProfit(row) {
+    const status = (row.order_status || '').toLowerCase();
+    const delivery = parseFloat(row.delivery_charge) || 0;
+    if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
+    if (status === 'returned') return -delivery;
+    const total = parseFloat(row.total_amount) || 0;
+    const tax = parseFloat(row.tax_amount) || 0;
+    const cost = parseFloat(row.cost_price) || 0;
+    return total - (delivery + tax + cost);
+}
+
 function initOrdersGrid() {
     const gridDiv = document.getElementById('ordersGrid');
     if (!gridDiv) return;
@@ -1511,15 +1530,7 @@ function initOrdersGrid() {
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.net_profit;
-                const status = (params.data.order_status || '').toLowerCase();
-                const delivery = parseFloat(params.data.delivery_charge) || 0;
-                // Only show net profit for delivered or returned orders with delivery_charge set
-                if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
-                const total = parseFloat(params.data.total_amount) || 0;
-                const tax = parseFloat(params.data.tax_amount) || 0;
-                const cost = parseFloat(params.data.cost_price) || 0;
-                if (status === 'returned') return -delivery;
-                return total - (delivery + tax + cost);
+                return computeNetProfit(params.data);
             },
             valueFormatter: (params) => {
                 if (params.value == null) return '-';
@@ -1540,14 +1551,9 @@ function initOrdersGrid() {
             filterValueGetter: numberFilterValueGetter,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.profit_percent;
-                const status = (params.data.order_status || '').toLowerCase();
-                const delivery = parseFloat(params.data.delivery_charge) || 0;
-                // Only show profit % for delivered or returned orders with delivery_charge set
-                if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
+                const netProfit = computeNetProfit(params.data);
+                if (netProfit == null) return null;
                 const total = parseFloat(params.data.total_amount) || 0;
-                const tax = parseFloat(params.data.tax_amount) || 0;
-                const cost = parseFloat(params.data.cost_price) || 0;
-                let netProfit = status === 'returned' ? -delivery : total - (delivery + tax + cost);
                 if (total > 0) return (netProfit / total) * 100;
                 return 0;
             },
@@ -1612,22 +1618,15 @@ function initOrdersGrid() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             valueGetter: (params) => {
-                // Prefer structured line_items (name + variant + qty); fall back to legacy items[] strings.
                 const lineItems = params.data.line_items;
-                if (Array.isArray(lineItems) && lineItems.length > 0) {
-                    return lineItems.map(li => {
-                        const name = li.name || '';
-                        const variant = li.variant_title && li.variant_title !== '-' ? ` - ${li.variant_title}` : '';
-                        const qty = Number(li.qty) || 1;
-                        const qtyStr = qty > 1 ? ` ×${qty}` : '';
-                        return `${name}${variant}${qtyStr}`;
-                    }).join(', ');
-                }
-                const items = params.data.items;
-                if (items && Array.isArray(items) && items.length > 0) {
-                    return items.join(', ');
-                }
-                return '';
+                if (!Array.isArray(lineItems) || lineItems.length === 0) return '';
+                return lineItems.map(li => {
+                    const name = li.name || '';
+                    const variant = li.variant_title && li.variant_title !== '-' ? ` - ${li.variant_title}` : '';
+                    const qty = Number(li.qty) || 1;
+                    const qtyStr = qty > 1 ? ` ×${qty}` : '';
+                    return `${name}${variant}${qtyStr}`;
+                }).join(', ');
             },
             cellRenderer: (params) => {
                 if (params.value) {
@@ -1805,13 +1804,9 @@ function initOrdersGrid() {
                 }
             }
             
-            // Calculate net profit per row (only for delivered or returned orders with delivery_charge set)
-            if ((status === 'delivered' || status === 'returned') && rowDelivery > 0) {
-                if (status === 'returned') {
-                    net_profit += -rowDelivery;
-                } else {
-                    net_profit += rowTotal - (rowDelivery + rowTax + rowCost);
-                }
+            const rowNetProfit = computeNetProfit(row);
+            if (rowNetProfit != null) {
+                net_profit += rowNetProfit;
             }
         });
         
@@ -1862,7 +1857,6 @@ function initOrdersGrid() {
             net_profit: sums.net_profit,
             profit_percent: sums.total_amount_for_profit > 0 ? (sums.net_profit / sums.total_amount_for_profit) * 100 : null,
             piece_received: null,
-            items: null,
             order_receiving_date: null,
             final_status: null
         };

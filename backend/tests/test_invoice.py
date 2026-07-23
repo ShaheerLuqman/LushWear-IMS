@@ -23,8 +23,7 @@ def _db_order(**overrides):
         "delivery_charge": 180.0,
         "tax_amount": 0.0,
         "order_receiving_date": "2026-07-18T13:23:08+00:00",
-        "items": ["Camisole - M"],
-        "line_items": None,
+        "line_items": [{"name": "Camisole", "variant_title": "M", "qty": 1, "unit_price": 2598.0}],
     }
     row.update(overrides)
     return row
@@ -90,8 +89,12 @@ class TestShopifyShaping:
 
 
 class TestDbFallback:
-    def test_line_items_from_db_items(self):
-        rows = _line_items_from_db_items(_db_order(items=["Camisole - M", "Robe - L"]))
+    def test_line_items_from_db_line_items(self):
+        order = _db_order(line_items=[
+            {"name": "Camisole", "variant_title": "M", "qty": 1, "unit_price": 100},
+            {"name": "Robe", "variant_title": "L", "qty": 1, "unit_price": 200},
+        ])
+        rows = _line_items_from_db_items(order)
         assert [r["product"] for r in rows] == ["Camisole", "Robe"]
 
     def test_context_builds_without_a_shopify_order(self):

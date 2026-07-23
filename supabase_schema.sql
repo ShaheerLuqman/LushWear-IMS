@@ -62,10 +62,9 @@ CREATE TABLE IF NOT EXISTS orders (
     tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     order_receiving_date     TIMESTAMPTZ NOT NULL,
-    items                    TEXT[],                    -- Legacy "Name - Variant" strings
-    -- Structured order lines (one object per line): replaces the legacy items strings.
-    -- Shape: [{ variant_id, product_id, name, variant_title, qty, unit_price }]
-    -- name/variant_title are snapshots (survive product rename/delete); ids link to products/variants.
+    -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
+    -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
+    -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.
     line_items               JSONB,
     piece_received           TEXT NOT NULL DEFAULT 'Pending'
                                  CHECK (piece_received IN ('Pending', 'Done', 'Received')),
@@ -73,6 +72,12 @@ CREATE TABLE IF NOT EXISTS orders (
     created_at               TIMESTAMPTZ DEFAULT NOW(),
     updated_at               TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Legacy items[] (flat "Name - Variant" strings), superseded by structured line_items
+-- (JSONB) above. Verified every order either has line_items populated or has no item
+-- data in either column (see TODO.md §6) before dropping - safe to re-run, no-ops once
+-- the column is gone.
+    ALTER TABLE orders DROP COLUMN IF EXISTS items;
 
 
 -- ============================================================================

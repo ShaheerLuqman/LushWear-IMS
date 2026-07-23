@@ -3,20 +3,7 @@ from app.services.pdf.packaging_list import (
     _generate_pdf_packaging_list,
     _normalize_size,
     _order_line_rows,
-    _split_item_name,
 )
-
-
-class TestSplitItemName:
-    def test_splits_on_the_last_separator(self):
-        assert _split_item_name("Magenta Camisole - Set - M") == ("Magenta Camisole - Set", "M")
-
-    def test_missing_separator_yields_placeholder_variant(self):
-        assert _split_item_name("Plain Product") == ("Plain Product", "-")
-
-    def test_blank_input(self):
-        assert _split_item_name("") == ("", "-")
-        assert _split_item_name(None) == ("", "-")
 
 
 class TestOrderLineRows:
@@ -25,18 +12,11 @@ class TestOrderLineRows:
             "line_items": [
                 {"name": "Camisole", "variant_title": "M", "qty": 3, "product_id": "p1", "unit_price": 100},
             ],
-            "items": ["Should Be Ignored - S"],
         }
         rows = _order_line_rows(order)
         assert len(rows) == 1
         assert rows[0]["product"] == "Camisole"
         assert rows[0]["quantity"] == 3
-
-    def test_falls_back_to_legacy_items_one_unit_each(self):
-        order = {"line_items": None, "items": ["Camisole - M", "Camisole - M", "Robe - L"]}
-        rows = _order_line_rows(order)
-        assert [r["quantity"] for r in rows] == [1, 1, 1]
-        assert rows[0]["product"] == "Camisole"
 
     def test_zero_and_negative_quantities_are_dropped(self):
         order = {"line_items": [

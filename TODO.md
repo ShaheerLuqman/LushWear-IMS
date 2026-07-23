@@ -64,26 +64,48 @@ broader app-layer hardening in [`backend/BACKEND.md`](backend/BACKEND.md) §4.
 
 ### 3. Speed up the Shopify order sync
 
-`/api/orders/sync-shopify` currently takes ~20s: 22 sequential Shopify pages
-(250 orders each, ~1s per page) for the last 30 days, then reconciling ~1,280
-Shopify orders against the full `orders` table.
+**Done, 2026-07-23.** Was ~20-70s depending on scope (22 sequential Shopify
+pages for a 30-day window, then reconciling against the full `orders` table).
+Now ~6-15s. Per-phase timing is logged on every run
+(`[sync-shopify] timing: ...` in `backend/app/routes/orders.py`) so regressions
+are visible instead of guessed at.
 
-Ideas to investigate:
-- [ ] **Stop refetching 30 days every run.** Persist the last successful sync time
-      and use `updated_at_min` so a routine run pulls only what changed. This is
-      likely the single biggest win — most of those 1,280 orders are unchanged
-      (a recent run reported `created=1, skipped=1279`).
-- [ ] **Fetch pages concurrently.** Shopify cursor pagination is sequential by
-      nature (each page's `page_info` comes from the previous response), so this
-      only helps if the window can be split into parallel date ranges.
-- [ ] **Stop loading every existing order into memory.** The reconciliation builds
-      a map of all ~10k orders; fetching only the order numbers present in the
-      Shopify payload would cut both the query and the memory.
-- [ ] **Skip the full advance-status recompute.** `recompute_advance_statuses` runs
-      over all orders at the end of every sync; scope it to the orders actually
-      touched.
-- [ ] Measure first — log per-phase timings (fetch / reconcile / write) before
-      optimising, so the effort goes where the time actually is.
+What landed, against the original ideas:
+- [x] **Fetch pages concurrently.** `_fetch_shopify_orders_in_range` splits the
+      window into 4 date-range partitions and fetches them with `asyncio.gather`.
+      Cursor pagination is still sequential *within* one partition, but the 4
+      partitions' cursor chains overlap. Measured ~5.3x faster than one
+      whole-range sequential fetch for the same order count (22 requests → 11,
+      because narrower bounded ranges also return denser pages from Shopify).
+      Tried 8 partitions too — sometimes faster, but one trial spiked to 20s from
+      hitting Shopify's per-shop rate-limit bucket (`x-shopify-shop-api-call-limit`)
+      and eating the 429-retry backoff. Kept at 4; the added 429 retry/backoff
+      itself (`app/shopify.py: fetch_all`) is a genuine gap-fill — it didn't
+      exist before and any 429 used to abort the whole sync.
+- [x] **Stop loading every existing order into memory.** `existing_orders_all` is
+      now scoped to only the order numbers Shopify actually returned, fetched via
+      chunked `.in_()` queries (200 per chunk) run **concurrently**, each on its
+      own Supabase client (a shared client's connection crashes under concurrent
+      threads — verified).
+- [x] **Skip the full advance-status recompute.** `recompute_advance_statuses` is
+      now called with `order_numbers=shopify_order_numbers` instead of unscoped;
+      its own chunked reads and per-row updates were also parallelized the same
+      way (`backend/app/advance_status.py`).
+- [x] Measure first — done via the timing log mentioned above; it's what
+      surfaced that local DB reads (not the Shopify fetch) were the biggest cost
+      before this work, and after these changes surfaced the Shopify fetch as the
+      next-biggest (now rate-limit-bound, not code-bound).
+- [ ] **Stop refetching 30 days every run** (persist last sync time, use
+      `updated_at_min`) — **not implemented as originally proposed.** Solved the
+      same problem differently instead: the sync is now scoped to whatever period
+      is selected in the UI (a specific accounting period, or the last 1000
+      orders for "All orders") rather than always pulling a fixed 30-day window —
+      see `GET/POST /api/orders/sync-shopify?month=&year=`. This didn't need a
+      persisted timestamp and composes with the partitioning above. A true
+      `updated_at_min` incremental sync would need to reconsider the
+      freeze-after-fulfilled reconciliation rules (an order outside the synced
+      window could still need its `order_status` frozen) — not revisited since
+      the period-scoping already closed the original ~20-70s complaint.
 
 ### 4. Concurrency guard for sync jobs (deferred — decide after #3)
 
@@ -96,6 +118,11 @@ product jobs.
 
 **Deliberately deferred:** a shorter sync (#3) narrows the collision window, and
 may make the guard unnecessary. Revisit once #3 lands.
+
+**#3 landed 2026-07-23** (full sync down to ~6-15s from ~20-70s) — this is now
+ready to revisit per the note above, but not picked up yet. Still an open
+decision, not an open bug: re-evaluate whether the narrower window makes the
+guard unnecessary, or implement the `sync_locks` design below.
 
 If it is still needed, the design was worked out and prototyped:
 - **`pg_advisory_lock` does not work here.** Advisory locks are held by a database
@@ -151,9 +178,18 @@ idempotent — re-running finishes the job. Partial ≠ corrupt.
       ever actually needed; the DB function `recalc_cashbook_daily_balances()`
       itself stays (the trigger calls it) so a manual-repair endpoint could be
       re-added as a thin wrapper around it.
-- [ ] **Sync's `piece_received` reset loop** — a read-then-write per replacement
-      parent, after the upserts. A partial failure leaves some parents on "Done"
-      that should be "Pending". Minor: the next sync corrects it.
+- [x] **Sync's `piece_received` reset loop** — **Resolved as a side effect of
+      §3's sync speedup, 2026-07-23.** Was a read-then-write *per replacement
+      parent* (N separate select+update pairs), so a crash partway left some
+      parents on "Done" that should be "Pending". Now one `.in_("order_number",
+      ...)` select for all flagged parents, then one `.in_("id", ids_to_reset)`
+      update for all of them (`backend/app/routes/orders.py`, around
+      `original_orders_to_reset_piece_received`). The update is a single SQL
+      statement, so Postgres wraps it in an implicit transaction — it's all-or-
+      nothing now, not partial. (The read→write gap itself still exists in
+      principle — a concurrent write could land between the select and the
+      update — but that's the general concurrency question §4 covers, not the
+      partial-failure-on-crash gap this item was about.)
 
 Wrapping the *sync* in transactions would mean moving reconciliation into Postgres
 functions — pushing business logic into SQL and out of the tested Python. Not worth
@@ -165,26 +201,63 @@ it. Revisit if D1 extracts the sync into a service.
 
 ### 6. Drop the legacy `orders.items` column
 
-`orders.items` (the old `TEXT[]` of `"Name - Variant"` strings) was replaced by the
-structured `orders.line_items` (JSONB). During the transition both are written in
-parallel and readers fall back to `items` when `line_items` is absent. Once
-`line_items` is verified in production, remove the legacy field entirely.
+**Done, 2026-07-23.** Was the old `TEXT[]` of `"Name - Variant"` strings,
+replaced by structured `orders.line_items` (JSONB).
 
-**Do this only after** confirming every order has `line_items` populated and the
-app has been running on it without issues for a while.
+Precondition check first: audited all 10,475 orders. Zero rely on the `items`
+fallback (no order has `items` populated while `line_items` is empty — the
+1,251 orders missing `line_items` have *no* item data in either column, an
+unrelated pre-existing gap). Safe to remove with no data loss.
 
-Steps:
-- [ ] Stop writing `items` in the Shopify sync paths (`backend/app/routes/orders.py`:
-      main sync, `sync-shopify-force`, and `create-replacement`).
-- [ ] Remove the legacy fallback branches that read `items`:
-  - `_order_line_rows()` (the `# Legacy fallback` block) in `backend/app/routes/orders.py`
-  - the `items`-based branches in `recalculate-order-costs` (`backend/app/routes/products.py`)
-  - the frontend Items column fallback in `frontend/renderer.js` (`params.data.items` branch)
-- [ ] Drop the model field: `items` on `OrderBase` / `Order` / `OrderUpdate` in
+Turned out bigger than the checklist below suggests: `items` wasn't just a
+display fallback, it was also the **input to cost-price calculation**
+(`calculate_cost_from_items`, matching flat item names against the products
+table to compute `cost_price` when Shopify doesn't supply one) in both the main
+sync and `sync-shopify-force` — two separate near-duplicate copies, neither
+listed here originally. Rebuilt as one shared `_cost_from_line_items()`
+(`backend/app/routes/orders.py`) reading structured `line_items` instead.
+Verified it reproduces the old flat-list calculation exactly across 2,529 real
+orders spanning a full year (0 mismatches) before switching over — this touches
+real cost/profit numbers, so it was checked against production data first, not
+just unit-tested.
+
+Also found and fixed one more undocumented fallback: `invoice.py`'s PDF
+generation had a *second*, nested `items` fallback that was already dead code
+before this change (it read dict-shaped items via `.get()`, but `items` held
+plain strings — it only became reachable, and only in tests, once the first
+fallback in `_order_line_rows` was removed). Removed rather than "fixed", per
+the same reasoning as `has_changed()` below.
+
+What landed, against the original checklist:
+- [x] Stop writing `items` in the Shopify sync paths (main sync,
+      `sync-shopify-force`, `create-replacement`).
+- [x] Remove the legacy fallback branches that read `items`:
+  - `_order_line_rows()` in `backend/app/services/pdf/packaging_list.py` (moved
+    here in an earlier refactor — the checklist's `orders.py` reference was
+    stale) - also removed the now-dead `_split_item_name` helper.
+  - the `items`-based branches in `recalculate-order-costs`
+    (`backend/app/routes/products.py`).
+  - the frontend Items column fallback in `frontend/renderer.js`
+    (`params.data.items` branch).
+  - **Not on the original list:** `invoice.py`'s nested fallback (see above),
+    and `has_changed()`'s `"items"` field comparison in `orders.py` - that one
+    was *already* dead code independent of this change (its value always got
+    stringified by `normalize_value()` before the list-comparison branch could
+    ever see it), so it was deleted as a no-op rather than "fixed" into new,
+    unreviewed behavior. The one working consumer, `items_changed` (drives
+    cost-price recalculation on unfulfilled orders), was rebuilt against
+    `line_items` via a small `_line_items_signature()` helper.
+- [x] Drop the model field: `items` on `OrderBase` / `OrderUpdate` in
       `backend/app/models.py`.
-- [ ] Drop the column from the DB and the canonical schema:
-      `ALTER TABLE orders DROP COLUMN items;` and remove `items TEXT[]` from
-      `supabase_schema.sql`.
+- [x] Drop the column from the DB and the canonical schema: added
+      `ALTER TABLE orders DROP COLUMN IF EXISTS items;` to `supabase_schema.sql`
+      and removed `items TEXT[]` from the table definition. **Not yet run
+      against the live database** - schema changes are applied manually, per
+      standing preference in this project.
+- Verification: full backend test suite (119 tests) passes; live end-to-end
+  run of both `sync-shopify` and `GET /orders/` against production data
+  confirmed correct behavior (no false-positive updates, correct cost figures,
+  no missing-field errors) after the change.
 
 ---
 
@@ -205,16 +278,20 @@ one line each.
       (cookies or user prefs; ties into Organizations & Users).
 - [ ] **Dark & light theme** — theme toggle with persisted preference.
 - [ ] **Keyboard shortcuts / keybinds** — add shortcuts for common actions.
-- [ ] **De-duplicate the net-profit formula** — `total - (delivery + tax + cost)`
-      (with the returned/`-delivery` and delivered-only rules) is repeated in the
-      `net_profit` valueGetter, again inside `profit_percent`, and in the footer
-      aggregation (`frontend/renderer.js` ~1443, ~1515, ~1544, ~1783-1835).
-      Extract one `computeNetProfit(row)` helper and call it from all three so the
-      definition can't drift. Keep per-row profit/receivable **computed in the
-      browser** (valueGetters recalc instantly on inline edits and cost nothing);
-      period totals stay backend-side in `month-summary`. Note: the frontend helper
-      and the backend `month-summary` profit calc must stay in agreement — comment
-      each pointing at the other.
+- [x] **De-duplicate the net-profit formula** — **Done, 2026-07-23.** Extracted
+      `computeNetProfit(row)` (`frontend/renderer.js`, just above `initOrdersGrid`)
+      and pointed the `net_profit` valueGetter, `profit_percent` valueGetter, and
+      the selected-rows footer aggregation at it instead of each repeating
+      `total - (delivery + tax + cost)` (with the returned/`-delivery` and
+      delivered-only rules) independently. Verified the extracted function returns
+      identical output to the three original inline copies across delivered/
+      returned/unfulfilled/cancelled/no-delivery-charge cases before switching over.
+      `receivable` was left alone (different formula, includes `advance_amount`;
+      out of scope). Per-row profit/receivable stay computed in the browser as
+      before; period totals stay backend-side in `month-summary`. Added a comment
+      on each side (`computeNetProfit` in renderer.js, and `net_profit` in
+      `routes/orders.py`'s month-summary route) pointing at the other, per the note
+      below.
 
 ### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)
 
