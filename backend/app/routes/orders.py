@@ -371,48 +371,17 @@ async def _fetch_shopify_orders_in_range(
     return all_orders, total_pages
 
 
-SHOPIFY_RECENT_ORDERS_INITIAL_WINDOW_DAYS = 30
-SHOPIFY_RECENT_ORDERS_MAX_WINDOW_DAYS = 120
-
-
-async def _fetch_shopify_orders_recent(limit: int) -> Tuple[List[dict], int]:
-    """Fetch the most recent `limit` orders.
-
-    An open-ended (no created_at_max) query can't be partitioned - there's no date
-    boundary to split on ahead of time - and Shopify also returns noticeably smaller
-    pages for open-ended queries than date-bounded ones, so it's slow on both counts.
-    Instead, estimate a bounded window (starting at 30 days, same as a typical period)
-    and fetch it with the same fast concurrent-partitioned technique as a period sync,
-    widening the window if it doesn't turn up enough orders."""
-    now = datetime.now(timezone.utc)
-    window_days = SHOPIFY_RECENT_ORDERS_INITIAL_WINDOW_DAYS
-    all_orders: List[dict] = []
-    total_pages = 0
-    while True:
-        all_orders, pages = await _fetch_shopify_orders_in_range(now - timedelta(days=window_days), now)
-        total_pages += pages
-        if len(all_orders) >= limit or window_days >= SHOPIFY_RECENT_ORDERS_MAX_WINDOW_DAYS:
-            break
-        window_days *= 2
-
-    all_orders.sort(key=lambda o: o.get("created_at") or "", reverse=True)
-    return all_orders[:limit], total_pages
+SHOPIFY_SYNC_WINDOW_DAYS = 60
 
 
 @router.post("/sync-shopify")
-async def sync_shopify_orders(
-    month: int = Query(None, ge=1, le=12, description="Sync only this period (22nd - next 21st) instead of the most recent orders."),
-    year: int = Query(None, ge=2000, le=2100, description="Period year; used together with month."),
-):
+async def sync_shopify_orders():
     try:
         t_start = time.perf_counter()
-        if month is not None and year is not None:
-            start_iso, end_iso = _period_start_end(month, year)
-            start_dt = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
-            end_dt = min(datetime.fromisoformat(end_iso.replace("Z", "+00:00")), datetime.now(timezone.utc))
-            all_orders, page_count = await _fetch_shopify_orders_in_range(start_dt, end_dt)
-        else:
-            all_orders, page_count = await _fetch_shopify_orders_recent(RECENT_ORDERS_LIMIT)
+        now = datetime.now(timezone.utc)
+        all_orders, page_count = await _fetch_shopify_orders_in_range(
+            now - timedelta(days=SHOPIFY_SYNC_WINDOW_DAYS), now
+        )
         t_shopify_fetch = time.perf_counter()
 
         # Only the orders Shopify actually returned need a DB row to diff against - scoping

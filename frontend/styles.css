@@ -38,39 +38,9 @@ body {
     overflow: hidden;
 }
 
-/* Title Bar */
-.titlebar {
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 40px;
-    background: var(--bg-primary);
-    display: flex;
-    align-items: center;
-    z-index: 9999;
-}
-
-.titlebar-drag {
-    flex: 1;
-    height: 100%;
-}
-
-.titlebar-title {
-    position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-    letter-spacing: 1px;
-    pointer-events: none;
-}
-
-/* Full-window PIN gate (below custom title bar) */
 .pin-gate-root {
     position: fixed;
-    top: 40px;
+    top: 0;
     left: 0;
     right: 0;
     bottom: 0;
@@ -224,8 +194,7 @@ body {
 
 .app-container {
     display: flex;
-    height: calc(100vh - 40px);
-    margin-top: 40px;
+    height: 100vh;
     background: 
         radial-gradient(ellipse at 20% 20%, rgba(139, 92, 246, 0.03) 0%, transparent 50%),
         radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.02) 0%, transparent 50%),
@@ -1641,6 +1610,124 @@ body:has(#ledgersView.active) .content-area {
     background: var(--bg-tertiary);
 }
 
+/* Fixed-size report box: header/cards stay put, only the order list scrolls. */
+#deliveryStatusReportModal .modal-content {
+    width: 860px;
+    max-width: 95vw;
+    height: 640px;
+    max-height: 90vh;
+}
+
+#deliveryStatusReportModal .modal-body {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+#deliveryStatusReportModal .postex-mismatches-table-wrap {
+    margin: 0;
+}
+
+#deliveryStatusReportModal .postex-mismatches-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--bg-card);
+    z-index: 1;
+}
+
+#deliveryStatusReportModal .modal-description,
+#deliveryStatusReportModal .modal-actions {
+    flex-shrink: 0;
+}
+
+.status-report-view-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--accent-primary);
+    background: transparent;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: var(--transition);
+}
+
+.status-report-view-btn:hover {
+    border-color: var(--accent-primary);
+    background: var(--accent-glow);
+}
+
+/* Detail modal is earlier in the DOM, so it needs a higher stacking order to
+   open on top of the report rather than behind it. */
+#deliveryStatusModal {
+    z-index: 10020;
+}
+
+.status-report-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 10px;
+    margin: 1rem 0;
+    flex-shrink: 0;
+}
+
+.status-report-detail {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.status-report-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    padding: 12px 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-family: inherit;
+    transition: var(--transition);
+}
+
+.status-report-card:hover {
+    border-color: var(--accent-primary);
+}
+
+.status-report-card.active {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.status-report-card__count {
+    font-size: 22px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.status-report-card__label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    text-align: center;
+}
+
+.status-report-card--delivered .status-report-card__count { color: var(--success); }
+.status-report-card--returned .status-report-card__count,
+.status-report-card--failed .status-report-card__count { color: var(--danger); }
+.status-report-card--CNA .status-report-card__count,
+.status-report-card--ICA .status-report-card__count,
+.status-report-card--RFD .status-report-card__count { color: var(--warning); }
+
+.status-report-detail__title {
+    margin-top: 8px;
+    font-size: 15px;
+    color: var(--text-secondary);
+}
+
 .delivery-status-info {
     margin-bottom: 24px;
 }
@@ -2626,15 +2713,9 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Order table full screen mode */
-body.orders-table-fullscreen .titlebar,
 body.orders-table-fullscreen .sidebar,
 body.orders-table-fullscreen .header {
     display: none !important;
-}
-
-body.orders-table-fullscreen .app-container {
-    margin-top: 0;
-    height: 100vh;
 }
 
 body.orders-table-fullscreen .main-content {

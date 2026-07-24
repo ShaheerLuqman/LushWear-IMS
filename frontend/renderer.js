@@ -3181,6 +3181,14 @@ function initOrdersDateRangeButton() {
 
     const toDateInputValue = (val) => (val == null || val === '') ? '' : formatDateDDMMYYYY(val);
 
+    const shiftDays = (yyyymmdd, days) => {
+        if (!yyyymmdd) return '';
+        const d = new Date(`${String(yyyymmdd).slice(0, 10)}T00:00:00`);
+        d.setDate(d.getDate() + days);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    };
+
     const menu = document.createElement('div');
     menu.className = 'date-range-menu';
     menu.style.display = 'none';
@@ -3247,10 +3255,10 @@ function initOrdersDateRangeButton() {
         const currentModel = ordersGridApi.getFilterModel() || {};
         const newModel = { ...currentModel };
         if (fromVal && toVal) {
-            const toDate = new Date(toVal);
-            toDate.setDate(toDate.getDate() + 1);
-            const toPlusOne = toDate.toISOString().slice(0, 10);
-            newModel[ORDERS_DATE_COLUMN_ID] = { filterType: 'date', type: 'inRange', dateFrom: fromVal, dateTo: toPlusOne };
+            // agDateColumnFilter's inRange upper bound is compared against row dates that
+            // carry a time component, so push it to the next day to include the whole end
+            // day - equal from/to then still matches that single day.
+            newModel[ORDERS_DATE_COLUMN_ID] = { filterType: 'date', type: 'inRange', dateFrom: fromVal, dateTo: shiftDays(toVal, 1) };
             triggerBtn.textContent = 'Range set';
         } else if (!fromVal && !toVal) {
             delete newModel[ORDERS_DATE_COLUMN_ID];
@@ -3288,7 +3296,9 @@ function initOrdersDateRangeButton() {
                 const colFilter = filterModel[ORDERS_DATE_COLUMN_ID];
                 if (colFilter && colFilter.type === 'inRange') {
                     const fromStr = toDateInputValue(colFilter.dateFrom);
-                    const toStr = toDateInputValue(colFilter.dateTo);
+                    // dateTo is stored as the day after the picked end date (see updateFilter),
+                    // so shift it back to show the user the date they actually chose.
+                    const toStr = toDateInputValue(shiftDays(colFilter.dateTo, -1));
                     fromInput.value = fromStr;
                     toInput.value = toStr;
                     if (fromPicker) fromPicker.setDate(fromStr || null, false);
@@ -5275,15 +5285,7 @@ async function syncShopifyOrders() {
     btn.innerHTML = 'Syncing...';
 
     try {
-        // Scope the sync to whatever period is currently selected in the orders view -
-        // "All orders" syncs the most recent orders; a specific period syncs only that period.
-        const periodVal = document.getElementById('ordersPeriodFilter')?.value;
-        let url = `${API_BASE}/orders/sync-shopify`;
-        if (periodVal && periodVal !== '__all__') {
-            const [month, year] = periodVal.split('-');
-            url += `?month=${month}&year=${year}`;
-        }
-        const response = await fetch(url, {
+        const response = await fetch(`${API_BASE}/orders/sync-shopify`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }
         });
@@ -7018,30 +7020,41 @@ const FETCH_DELIVERY_BTN_DEFAULT_TEXT = 'Fetch Delivery Status';
 async function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows();
-    const toFetch = selected.filter(row => {
+    // Delivered/returned are terminal - their status can't change, so they're reported
+    // from data already on the row instead of costing a courier API call.
+    const settled = [];
+    const toFetch = [];
+    for (const row of selected) {
         const status = (row.order_status || '').toLowerCase();
-        if (status === 'delivered' || status === 'returned') return false;
-        const courier = (row.courier || '').trim();
+        if (status === 'delivered' || status === 'returned') {
+            settled.push(row);
+            continue;
+        }
         const track = (row.tracking_number || '').trim();
-        const courierNormalized = courier.toUpperCase();
+        const courierNormalized = (row.courier || '').trim().toUpperCase();
         const supportsDeliveryRefresh = (
             courierNormalized === 'POSTEX' ||
             courierNormalized === 'COURIERS NEXT'
         );
-        return supportsDeliveryRefresh && track && track !== '-';
-    });
-    if (toFetch.length === 0) {
-        showToast('Select PostEx/Couriers Next orders with tracking number (delivered and returned are skipped)', 'warning');
+        if (supportsDeliveryRefresh && track && track !== '-') toFetch.push(row);
+    }
+    if (toFetch.length === 0 && settled.length === 0) {
+        showToast('Select PostEx/Couriers Next orders with tracking number', 'warning');
         return;
     }
     const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
     if (btn) {
         btn.disabled = true;
-        btn.textContent = `Fetching ${toFetch.length}`;
+        btn.textContent = toFetch.length ? `Fetching ${toFetch.length}` : 'Building report';
     }
     const total = toFetch.length;
+    const report = { delivered: [], returned: [], transit: [], CNA: [], ICA: [], RFD: [], failed: [] };
+    for (const row of settled) {
+        const bucket = (row.order_status || '').toLowerCase() === 'delivered' ? 'delivered' : 'returned';
+        report[bucket].push({ order: row, note: (row.delivery_status && row.delivery_status.latest_status) || '' });
+    }
     try {
-        const results = await fetchDeliveryStatusBulk(toFetch.map(o => o.id));
+        const results = toFetch.length ? await fetchDeliveryStatusBulk(toFetch.map(o => o.id)) : [];
         const resultsById = new Map(results.map(r => [r.order_id, r]));
         let succeeded = 0;
         if (ordersGridApi) {
@@ -7050,6 +7063,7 @@ async function refreshDeliveryStatusSelected() {
                 if (!result) return;
                 if (result.error) {
                     console.warn('Delivery status fetch failed for order', node.data.id, result.error);
+                    report.failed.push({ order: node.data, note: result.error });
                     return;
                 }
                 succeeded += 1;
@@ -7063,9 +7077,12 @@ async function refreshDeliveryStatusSelected() {
                     }
                 }
                 node.setData(updated);
+                // No derived status means nothing terminal happened yet - still on its way.
+                const bucket = derivedStatus || 'transit';
+                (report[bucket] || report.transit).push({ order: updated, note: (data && data.latest_status) || '' });
             });
         }
-        showToast(`Updated delivery status for ${succeeded} of ${total} selected orders`, 'success');
+        showDeliveryStatusReportModal(report, succeeded, total, settled.length);
     } catch (err) {
         console.error('Bulk delivery status fetch failed:', err);
         showToast(err.message || 'Failed to fetch delivery status', 'error');
@@ -7215,6 +7232,98 @@ function closeDeliveryStatusModal() {
     }
 }
 
+const DELIVERY_REPORT_CATEGORIES = [
+    { key: 'transit', label: 'In transit' },
+    { key: 'delivered', label: 'Delivered' },
+    { key: 'returned', label: 'Returned' },
+    { key: 'CNA', label: 'Issue: CNA' },
+    { key: 'ICA', label: 'Issue: ICA' },
+    { key: 'RFD', label: 'Issue: RFD' },
+    { key: 'failed', label: 'Fetch failed' },
+];
+
+let deliveryStatusReport = null;
+
+function renderDeliveryStatusReportDetail(key) {
+    const detail = document.getElementById('deliveryStatusReportDetail');
+    const cards = document.getElementById('deliveryStatusReportCards');
+    if (!detail || !deliveryStatusReport) return;
+    cards?.querySelectorAll('.status-report-card').forEach(card => {
+        card.classList.toggle('active', card.dataset.category === key);
+    });
+    const entries = deliveryStatusReport[key] || [];
+    const label = (DELIVERY_REPORT_CATEGORIES.find(c => c.key === key) || {}).label || key;
+    if (entries.length === 0) {
+        detail.innerHTML = `<div class="no-status">No orders in ${escapeHtml(label)}.</div>`;
+        return;
+    }
+    const rows = entries.map(({ order, note }, i) => {
+        const courierNormalized = (order.courier || '').trim().toUpperCase();
+        const track = (order.tracking_number || '').trim();
+        // Full details come from the courier API, so only offer it where that call can work.
+        const canViewDetails = (
+            (courierNormalized === 'POSTEX' || courierNormalized === 'COURIERS NEXT') &&
+            track && track !== '-'
+        );
+        return `
+        <tr>
+            <td>${escapeHtml(order.order_number || '')}</td>
+            <td>${escapeHtml(formatCourierForDisplay(order.courier) || '')}</td>
+            <td>${escapeHtml(order.tracking_number || '')}</td>
+            <td>${escapeHtml(note || '')}</td>
+            <td>${canViewDetails ? `<button type="button" class="status-report-view-btn" data-index="${i}">View</button>` : ''}</td>
+        </tr>`;
+    }).join('');
+    detail.innerHTML = `
+        <h3 class="status-report-detail__title">${escapeHtml(label)} (${entries.length})</h3>
+        <div class="postex-mismatches-table-wrap">
+            <table class="postex-mismatches-table">
+                <thead><tr><th>Order #</th><th>Courier</th><th>Tracking</th><th>Latest status</th><th></th></tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+    detail.querySelectorAll('.status-report-view-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const { order } = entries[Number(btn.dataset.index)];
+            fetchDeliveryStatus(order.id, order.courier, order.tracking_number);
+        });
+    });
+}
+
+function showDeliveryStatusReportModal(report, succeeded, total, settledCount = 0) {
+    deliveryStatusReport = report;
+    const modal = document.getElementById('deliveryStatusReportModal');
+    const summary = document.getElementById('deliveryStatusReportSummary');
+    const cards = document.getElementById('deliveryStatusReportCards');
+    if (!modal || !cards) return;
+
+    if (summary) {
+        const parts = [];
+        if (total) parts.push(`Updated delivery status for ${succeeded} of ${total} order${total === 1 ? '' : 's'}.`);
+        if (settledCount) parts.push(`${settledCount} already delivered/returned — included below without refetching.`);
+        summary.textContent = parts.join(' ');
+    }
+
+    const visible = DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'failed' || (report.failed || []).length > 0);
+    cards.innerHTML = visible.map(({ key, label }) => `
+        <button type="button" class="status-report-card status-report-card--${key}" data-category="${key}">
+            <span class="status-report-card__count">${(report[key] || []).length}</span>
+            <span class="status-report-card__label">${escapeHtml(label)}</span>
+        </button>`).join('');
+    cards.querySelectorAll('.status-report-card').forEach(card => {
+        card.addEventListener('click', () => renderDeliveryStatusReportDetail(card.dataset.category));
+    });
+
+    const firstNonEmpty = visible.find(c => (report[c.key] || []).length > 0);
+    renderDeliveryStatusReportDetail((firstNonEmpty || visible[0]).key);
+    modal.style.display = 'flex';
+}
+
+function closeDeliveryStatusReportModal() {
+    const modal = document.getElementById('deliveryStatusReportModal');
+    if (modal) modal.style.display = 'none';
+}
+
 function showPostExAmountMismatchesModal(mismatches) {
     const modal = document.getElementById('postExAmountMismatchesModal');
     const tbody = document.getElementById('postExAmountMismatchesBody');
@@ -7263,6 +7372,15 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (closeMismatchesBtn) closeMismatchesBtn.addEventListener('click', closePostExAmountMismatchesModal);
     if (closeMismatchesBtn2) closeMismatchesBtn2.addEventListener('click', closePostExAmountMismatchesModal);
+
+    const reportModal = document.getElementById('deliveryStatusReportModal');
+    if (reportModal) {
+        reportModal.addEventListener('click', (e) => {
+            if (e.target === reportModal) closeDeliveryStatusReportModal();
+        });
+    }
+    document.getElementById('closeDeliveryStatusReportModal')?.addEventListener('click', closeDeliveryStatusReportModal);
+    document.getElementById('closeDeliveryStatusReportBtn')?.addEventListener('click', closeDeliveryStatusReportModal);
 });
 
 // Make functions globally accessible

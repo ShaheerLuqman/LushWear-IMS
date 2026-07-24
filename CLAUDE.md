@@ -20,3 +20,8 @@ Coding conventions for this repo — follow them when writing or changing code.
 ## Consistency
 - Match the surrounding code's style, naming, and patterns.
 - Reuse existing helpers/utilities instead of reimplementing them.
+
+## Database migrations
+- Schema changes must go through versioned migrations (Supabase migrations or
+  Alembic), not hand-edits to `supabase_schema.sql`. The live schema must stay
+  reproducible, diffable, and reviewable.
