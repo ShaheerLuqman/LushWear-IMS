@@ -156,9 +156,6 @@
                         </select>
                     </div>
                     <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Filter by date range">Date range</button>
-                    <button id="editCostPricesBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
-                        Edit Cost Prices
-                    </button>
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         Sync from Shopify
                     </button>
@@ -171,29 +168,31 @@
                     <button id="recalculateOrderCostsBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Recalculate order cost totals for orders containing the selected product">
                         Recalculate order costs
                     </button>
-                    <button id="bulkUpdateOrderBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update order">
-                        Bulk update order
-                    </button>
-                    <button id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">
-                        Fetch Delivery Status
-                    </button>
-                    <button type="button" id="ordersMoreActionCreateReplacement" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Create replacement order">Create Replacement</button>
-                    <button type="button" id="ordersMoreActionUploadPostEx" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Upload PostEx CSV">Upload PostEx CSV</button>
-                    <button type="button" id="ordersMoreActionGenerateLoadSheet" class="btn btn-secondary header-toolbar-btn" style="display: none; min-width: 12em;" title="Generate load sheet for selected orders">Generate Load Sheet</button>
+                    <button type="button" id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">Fetch Delivery Status</button>
+                    <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
+                        <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded="false" title="More order actions">
+                            <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
+                        </button>
+                        <div id="ordersMoreActionsMenu" class="orders-more-actions__menu" role="menu">
+                            <button type="button" id="bulkUpdateOrderBtn" class="orders-more-actions__item" role="menuitem" title="Bulk update order">Bulk update order</button>
+                            <button type="button" id="ordersMoreActionCreateReplacement" class="orders-more-actions__item" role="menuitem" title="Create replacement order">Create Replacement</button>
+                            <button type="button" id="ordersMoreActionUploadPostEx" class="orders-more-actions__item" role="menuitem" title="Upload PostEx CSV">Upload PostEx CSV</button>
+                            <button type="button" id="ordersMoreActionGenerateLoadSheet" class="orders-more-actions__item" role="menuitem" title="Generate load sheet for selected orders">Generate Load Sheet</button>
+                            <button type="button" id="ordersMoreActionGeneratePackagingList" class="orders-more-actions__item" role="menuitem" title="Generate combined packaging list for selected orders">Generate Packaging List</button>
+                            <button type="button" id="ordersMoreActionGenerateInvoice" class="orders-more-actions__item" role="menuitem" title="Generate invoice PDF for selected orders">Generate Invoice</button>
+                            <div class="orders-more-actions__sep" role="separator"></div>
+                            <button type="button" id="changePinBtn" class="orders-more-actions__item" role="menuitem" title="Change app PIN">Change PIN</button>
+                        </div>
+                    </div>
                     <div id="headerOrdersAppActions" class="header-orders-app-actions" style="display: none;" role="group" aria-label="App security and view">
-                        <button type="button" id="changePinBtn" class="btn btn-secondary header-toolbar-btn header-orders-app-actions-btn" title="Change app PIN">Change PIN</button>
+                        <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
+                            <i class="fas fa-file-export" aria-hidden="true"></i>
+                        </button>
                         <button type="button" id="lockAppBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Lock app (enter PIN to unlock)" aria-label="Lock app">
                             <img src="assets/padlock.png" alt="" class="header-lock-app-img" width="18" height="18" decoding="async" draggable="false">
                         </button>
                         <button type="button" id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Full screen (Esc to exit)">
                             <span class="header-fullscreen-icon" aria-hidden="true">⛶</span>
-                        </button>
-                    </div>
-                    <div id="headerOrdersBottomActions" class="header-orders-bottom-actions" style="display: none;" role="group" aria-label="Invoice and export actions">
-                        <button type="button" id="ordersMoreActionGeneratePackagingList" class="btn btn-secondary header-toolbar-btn header-orders-bottom-actions-btn" style="display: none;" title="Generate combined packaging list for selected orders">Packaging List</button>
-                        <button type="button" id="ordersMoreActionGenerateInvoice" class="btn btn-secondary header-toolbar-btn header-orders-bottom-actions-btn" style="display: none;" title="Generate invoice PDF for selected orders">Generate Invoice</button>
-                        <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-bottom-actions-btn" style="display: none;" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
-                            <i class="fas fa-file-export" aria-hidden="true"></i>
                         </button>
                     </div>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>

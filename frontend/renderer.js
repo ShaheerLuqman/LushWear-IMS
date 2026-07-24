@@ -114,28 +114,40 @@ let ordersFetchByNumberInFlight = null;
 /** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */
 let ordersFetchedByNumberIds = new Set();
 
-const ORDERS_MORE_ACTION_IDS = [
-    'ordersMoreActionCreateReplacement',
-    'ordersMoreActionUploadPostEx',
-    'ordersMoreActionGenerateLoadSheet',
-];
-
-function setOrdersMoreToolbarButtonsVisible(show) {
-    const disp = show ? 'inline-flex' : 'none';
-    ORDERS_MORE_ACTION_IDS.forEach((id) => {
-        const el = document.getElementById(id);
-        if (el) el.style.display = disp;
-    });
+function closeOrdersMoreActionsMenu() {
+    const wrap = document.getElementById('ordersMoreActionsWrap');
+    const btn = document.getElementById('ordersMoreActionsBtn');
+    if (wrap) wrap.classList.remove('open');
+    if (btn) btn.setAttribute('aria-expanded', 'false');
 }
 
-function syncOrdersBottomActionsWidth() {
-    const topActions = document.getElementById('headerOrdersAppActions');
-    const bottomActions = document.getElementById('headerOrdersBottomActions');
-    if (!topActions || !bottomActions) return;
-    const width = Math.ceil(topActions.getBoundingClientRect().width || 0);
-    if (width > 0) {
-        bottomActions.style.width = `${width}px`;
-    }
+function initOrdersMoreActionsMenu() {
+    const wrap = document.getElementById('ordersMoreActionsWrap');
+    const btn = document.getElementById('ordersMoreActionsBtn');
+    const menu = document.getElementById('ordersMoreActionsMenu');
+    if (!wrap || !btn || !menu) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = wrap.classList.toggle('open');
+        btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        if (open) {
+            const rect = btn.getBoundingClientRect();
+            menu.style.top = `${rect.bottom + 4}px`;
+            // Right-align to the button, clamped so the menu can't run off-screen.
+            menu.style.left = `${Math.max(8, rect.right - menu.offsetWidth)}px`;
+        }
+    });
+    // Each item keeps its own handler (bound elsewhere by id); this just dismisses the menu.
+    menu.addEventListener('click', (e) => {
+        if (e.target.closest('.orders-more-actions__item')) closeOrdersMoreActionsMenu();
+    });
+    document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) closeOrdersMoreActionsMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeOrdersMoreActionsMenu();
+    });
 }
 
 /** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: locked on open. */
@@ -166,19 +178,11 @@ function applyEditLockState() {
         'bulkUpdateSetReturned',
         'bulkUpdateSetCancelled',
         'bulkUpdateSetPieceReceived',
-        'refreshDeliveryStatusSelectedBtn',
-        'ordersMoreActionCreateReplacement',
-        'ordersMoreActionUploadPostEx',
-        'ordersMoreActionGenerateLoadSheet',
-        'ordersMoreActionGenerateInvoice',
-        'ordersMoreActionGeneratePackagingList',
         'syncShopifyBtn',
         'syncOrdersBtn',
-        'submitReplacementOrder',
         'bulkUpdateCostPriceSubmit',
         'recalculateOrderCostsSubmit',
         'bulkUpdateDeliveryChargesConfirm',
-        'loadSheetModalConfirm',
     ];
     editButtons.forEach((id) => {
         const el = document.getElementById(id);
@@ -3311,9 +3315,13 @@ function initOrdersDateRangeButton() {
                 }
             }
             const rect = triggerBtn.getBoundingClientRect();
-            menu.style.top = `${rect.bottom + window.scrollY}px`;
-            menu.style.left = `${rect.left + window.scrollX}px`;
             menu.style.display = 'block';
+            // Display first so offsetWidth is measurable, then centre on the button,
+            // clamped so the popup can't hang off either edge of the viewport.
+            const left = rect.left + window.scrollX + (rect.width - menu.offsetWidth) / 2;
+            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
+            menu.style.top = `${rect.bottom + window.scrollY}px`;
+            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
         } else {
             menu.style.display = 'none';
         }
@@ -3359,109 +3367,31 @@ function switchView(viewName, { skipReload = false } = {}) {
     document.getElementById('viewSubtitle').textContent = titles[viewName].subtitle;
 
     // Show/hide buttons based on view
-    const editCostPricesBtn = document.getElementById('editCostPricesBtn');
-    const syncProductsBtn = document.getElementById('syncShopifyBtn');
-    const syncOrdersBtn = document.getElementById('syncOrdersBtn');
-    const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
-    const bulkUpdateCostPriceBtn = document.getElementById('bulkUpdateCostPriceBtn');
-    const recalculateOrderCostsBtn = document.getElementById('recalculateOrderCostsBtn');
-    const cashbookDateFilterWrap = document.getElementById('cashbookDateFilterWrap');
+    const isOrders = viewName === 'orders';
+    const isProducts = viewName === 'products';
+    const show = (id, visible, disp = 'inline-flex') => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = visible ? disp : 'none';
+    };
 
-    if (editCostPricesBtn) {
-        editCostPricesBtn.style.display = 'none'; // Hide since editing is inline now
-    }
+    show('syncShopifyBtn', isProducts);
+    show('bulkUpdateCostPriceBtn', isProducts);
+    show('recalculateOrderCostsBtn', isProducts);
 
-    if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
-    if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
-    if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
+    show('syncOrdersBtn', isOrders);
+    show('ordersPeriodFilterWrap', isOrders, 'flex');
+    show('ordersDateRangeBtn', isOrders);
+    show('refreshDeliveryStatusSelectedBtn', isOrders);
+    show('ordersMoreActionsWrap', isOrders);
+    show('headerOrdersAppActions', isOrders);
+    show('deliveryRefreshProgress', false);
+    show('cashbookDateFilterWrap', viewName === 'cashbook');
 
-    const ordersPeriodFilterWrap = document.getElementById('ordersPeriodFilterWrap');
-    const headerOrdersAppActions = document.getElementById('headerOrdersAppActions');
-    const headerOrdersBottomActions = document.getElementById('headerOrdersBottomActions');
-    const ordersDateRangeBtn = document.getElementById('ordersDateRangeBtn');
-    const ordersMoreActionGenerateInvoice = document.getElementById('ordersMoreActionGenerateInvoice');
-    const ordersMoreActionGeneratePackagingList = document.getElementById('ordersMoreActionGeneratePackagingList');
-    const exportGridExcelBtn = document.getElementById('exportGridExcelBtn');
-    if (syncProductsBtn && syncOrdersBtn) {
-        if (viewName === 'products') {
-            syncProductsBtn.style.display = 'inline-flex';
-            syncOrdersBtn.style.display = 'none';
-            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'inline-flex';
-            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'inline-flex';
-            setOrdersMoreToolbarButtonsVisible(false);
-            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
-            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
-            if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
-            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
-            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
-            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
-            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
-            exitOrdersFullScreen();
-            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
-            if (deliveryProgress) deliveryProgress.style.display = 'none';
-        } else if (viewName === 'orders') {
-            syncProductsBtn.style.display = 'none';
-            syncOrdersBtn.style.display = 'inline-flex';
-            setOrdersMoreToolbarButtonsVisible(true);
-            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'inline-flex';
-            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'flex';
-            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'inline-flex';
-            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'inline-flex';
-            if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'inline-flex';
-            if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
-            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
-            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'inline-flex';
-            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'inline-flex';
-            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'inline-flex';
-            requestAnimationFrame(() => syncOrdersBottomActionsWidth());
-            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'inline-flex';
-            if (deliveryProgress) deliveryProgress.style.display = 'none';
-        } else if (viewName === 'cashbook') {
-            syncProductsBtn.style.display = 'none';
-            syncOrdersBtn.style.display = 'none';
-            setOrdersMoreToolbarButtonsVisible(false);
-            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
-            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
-            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
-            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
-            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
-            if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
-            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'inline-flex';
-            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
-            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
-            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
-            exitOrdersFullScreen();
-            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
-            if (deliveryProgress) deliveryProgress.style.display = 'none';
-        } else {
-            syncProductsBtn.style.display = 'none';
-            syncOrdersBtn.style.display = 'none';
-            setOrdersMoreToolbarButtonsVisible(false);
-            if (bulkUpdateOrderBtn) bulkUpdateOrderBtn.style.display = 'none';
-            if (bulkUpdateCostPriceBtn) bulkUpdateCostPriceBtn.style.display = 'none';
-            if (recalculateOrderCostsBtn) recalculateOrderCostsBtn.style.display = 'none';
-            if (ordersPeriodFilterWrap) ordersPeriodFilterWrap.style.display = 'none';
-            if (headerOrdersAppActions) headerOrdersAppActions.style.display = 'none';
-            if (headerOrdersBottomActions) headerOrdersBottomActions.style.display = 'none';
-            if (ordersDateRangeBtn) ordersDateRangeBtn.style.display = 'none';
-            if (cashbookDateFilterWrap) cashbookDateFilterWrap.style.display = 'none';
-            if (ordersMoreActionGenerateInvoice) ordersMoreActionGenerateInvoice.style.display = 'none';
-            if (ordersMoreActionGeneratePackagingList) ordersMoreActionGeneratePackagingList.style.display = 'none';
-            if (exportGridExcelBtn) exportGridExcelBtn.style.display = 'none';
-            exitOrdersFullScreen();
-            const refreshDeliveryBtn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-            const deliveryProgress = document.getElementById('deliveryRefreshProgress');
-            if (refreshDeliveryBtn) refreshDeliveryBtn.style.display = 'none';
-            if (deliveryProgress) deliveryProgress.style.display = 'none';
-        }
+    if (isOrders) {
+        if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
+    } else {
+        closeOrdersMoreActionsMenu();
+        exitOrdersFullScreen();
     }
 
     // Refresh data and resize grids when switching views
@@ -5845,10 +5775,6 @@ function initForms() {
     if (replacementOrderForm) {
         replacementOrderForm.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!isEditingAllowed()) {
-                showToast('Editing is locked', 'error');
-                return;
-            }
             const submitBtn = document.getElementById('submitReplacementOrder');
             const originalNum = document.getElementById('replOrderNumber').value.trim();
             const courier = document.getElementById('replCourier').value;
@@ -5928,11 +5854,7 @@ function initForms() {
     if (exportGridExcelBtn) {
         exportGridExcelBtn.addEventListener('click', () => exportCurrentGridToExcel());
     }
-    window.addEventListener('resize', () => {
-        if (currentView === 'orders') {
-            syncOrdersBottomActionsWidth();
-        }
-    });
+    initOrdersMoreActionsMenu();
 
     // Cashbook actions
     const cashbookDateFilter = document.getElementById('cashbookDateFilter');

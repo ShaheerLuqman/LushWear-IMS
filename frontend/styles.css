@@ -374,29 +374,96 @@ body {
 
 /* Two rows: items flow column-by-column so buttons split equally between rows, right-aligned */
 .header-actions {
-    display: grid;
-    grid-template-rows: auto auto;
-    grid-auto-flow: column;
-    grid-auto-columns: max-content;
-    gap: 10px 12px;
-    align-items: center;
-    align-content: center;
-    justify-content: flex-end;
-    min-width: 0;
-    margin-left: auto;
-}
-
-/* Products view: keep toolbar buttons on one row */
-body:has(#productsView.active) .header-actions {
     display: flex;
     flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-end;
     gap: 10px;
+    min-width: 0;
+    margin-left: auto;
+}
+
+/* Only the orders toolbar is wide enough to need scrolling; applying this to every
+   view puts a scrollbar under the cashbook row, whose controls can't shrink. */
+body:has(#ordersView.active) .header-actions {
     overflow-x: auto;
-    overflow-y: hidden;
+    overflow-y: visible;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: thin;
+}
+
+.orders-more-actions {
+    position: relative;
+    flex-shrink: 0;
+}
+
+#ordersMoreActionsBtn {
+    overflow: visible;
+}
+
+/* Drawn with borders rather than a "▾" glyph - the character renders
+   inconsistently across fonts and gets clipped by the button's overflow: hidden. */
+.orders-more-actions__caret {
+    flex: 0 0 auto;
+    width: 0;
+    height: 0;
+    margin-left: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid currentColor;
+    transition: transform 0.15s ease;
+}
+
+.orders-more-actions.open .orders-more-actions__caret {
+    transform: rotate(180deg);
+}
+
+/* Fixed, not absolute: .header-actions scrolls horizontally, which would clip an
+   absolutely-positioned menu. Coordinates are set when the menu opens. */
+.orders-more-actions__menu {
+    display: none;
+    position: fixed;
+    min-width: 220px;
+    padding: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 10050;
+}
+
+.orders-more-actions.open .orders-more-actions__menu {
+    display: block;
+}
+
+.orders-more-actions__item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    font-family: inherit;
+    font-size: 13px;
+    color: var(--text-primary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.orders-more-actions__item:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+}
+
+.orders-more-actions__item:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.orders-more-actions__sep {
+    height: 1px;
+    margin: 6px 4px;
+    background: var(--border-color);
 }
 
 /* Consistent toolbar buttons — fixed height across header */
@@ -420,6 +487,18 @@ body:has(#productsView.active) .header-actions {
 
 .header-toolbar-btn .header-toolbar-btn-icon {
     margin-right: 6px;
+}
+
+/* Date range / Sync from Shopify / Fetch Delivery Status / More actions share one
+   width so the orders toolbar reads as an even group instead of label-sized buttons.
+   Fixed width also stops the row shifting when labels swap mid-action
+   ("Syncing...", "Fetching 12", "Range set"). */
+.header-actions #ordersDateRangeBtn,
+.header-actions #syncOrdersBtn,
+.header-actions #refreshDeliveryStatusSelectedBtn,
+.header-actions #ordersMoreActionsBtn {
+    flex: 0 0 auto;
+    width: 11.5em;
 }
 
 
@@ -499,38 +578,6 @@ body:has(#productsView.active) .header-actions {
 
 .header-orders-app-actions #ordersFullScreenBtn .header-fullscreen-icon {
     font-size: 1.55rem;
-}
-
-.header-orders-bottom-actions {
-    display: none;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-items: center;
-    gap: 8px;
-    box-sizing: border-box;
-    min-height: 36px;
-}
-
-.header-orders-bottom-actions #ordersMoreActionGenerateInvoice.header-orders-bottom-actions-btn {
-    flex: 1 1 auto;
-    min-width: 0;
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    padding-left: 10px;
-    padding-right: 10px;
-}
-
-.header-orders-bottom-actions #exportGridExcelBtn.header-toolbar-btn-icon-only {
-    flex: 0 0 36px;
-    width: 36px !important;
-    min-width: 36px !important;
-    max-width: 36px !important;
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    padding: 0 !important;
-    box-sizing: border-box;
 }
 
 .delivery-refresh-progress {
@@ -2266,50 +2313,43 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
 }
 
-/* Active filter icon */
-.ag-theme-alpine .ag-header-cell-filtered .ag-icon-filter {
-    color: #8b5cf6;
+/* Filtering is already visible in the floating filter row, so the header funnel is
+   redundant - the only header indicator is the sort arrow below. */
+.ag-theme-alpine .ag-icon-filter,
+.ag-theme-alpine .ag-filter-icon {
+    display: none !important;
 }
 
-/* Sort icons */
+/* Sort icons - flex-centred rather than line-height aligned, so the glyph sits on
+   the header text's optical centre instead of its baseline. */
 .ag-theme-alpine .ag-icon-asc,
 .ag-theme-alpine .ag-icon-desc {
-    color: #8b5cf6;
-    width: 10px !important;
-    height: 10px !important;
-    line-height: 10px;
-}
-
-.ag-theme-alpine .ag-sort-indicator-icon {
-    margin-left: 2px;
-}
-
-/* Icon fallbacks using unicode symbols */
-.ag-theme-alpine .ag-icon-filter::before {
-    content: "▼";
-    font-family: inherit;
-    font-size: 6px;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 12px !important;
+    height: 12px !important;
     color: #000000;
 }
 
-.ag-theme-alpine .ag-icon-filter {
-    width: 10px !important;
-    height: 10px !important;
-    line-height: 10px;
+.ag-theme-alpine .ag-sort-indicator-icon {
+    margin-left: 3px;
+}
+
+.ag-theme-alpine .ag-icon-asc::before,
+.ag-theme-alpine .ag-icon-desc::before {
+    font-family: inherit;
+    font-size: 9px;
+    line-height: 1;
+    color: #000000;
 }
 
 .ag-theme-alpine .ag-icon-asc::before {
     content: "▲";
-    font-family: inherit;
-    font-size: 6px;
-    color: #8b5cf6;
 }
 
 .ag-theme-alpine .ag-icon-desc::before {
     content: "▼";
-    font-family: inherit;
-    font-size: 6px;
-    color: #8b5cf6;
 }
 
 .ag-theme-alpine .ag-icon-menu::before {
