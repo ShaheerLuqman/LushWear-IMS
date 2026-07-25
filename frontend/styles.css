@@ -796,6 +796,10 @@ body:has(#ordersView.active) .header-actions {
     transform: translateY(0);
 }
 
+.cash-in-hand-tooltip-section + .cash-in-hand-tooltip-section {
+    margin-top: 14px;
+}
+
 .cash-in-hand-tooltip-header {
     font-size: 12px;
     font-weight: 700;

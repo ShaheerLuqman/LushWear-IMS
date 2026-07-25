@@ -33,58 +33,73 @@ function applyLedgerBalancePatches(patches) {
     });
 }
 
-// Computed entirely from the in-memory `ledgers` array (kept in sync by
-// loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
-// cashbook write) — no network call.
+function formatMoney(value) {
+    return (parseFloat(value) || 0).toLocaleString('en-US', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2
+    });
+}
+
+// Physical cash in hand = the last day's net cash movement (closing - opening balance),
+// i.e. cash taken in that hasn't been deposited to a bank ledger yet.
+function getPhysicalCashInHand() {
+    if (!cashbookDailyBalance) return 0;
+    const closing = parseFloat(cashbookDailyBalance.closing_balance) || 0;
+    const opening = parseFloat(cashbookDailyBalance.opening_balance) || 0;
+    return closing - opening;
+}
+
+// Bank-ledger part is computed from the in-memory `ledgers` array (kept in sync by
+// loadLedgersList() on cold loads and applyLedgerBalancePatches() on every cashbook
+// write); the physical part reads the already-loaded `cashbookDailyBalance` — neither
+// needs an extra network call here.
 function updateCashInHand() {
     const cashInHandLedgers = ledgers.filter(l => l.include_in_cash_in_hand);
 
     bankLedgerBalances = cashInHandLedgers.map(l => ({ name: l.name, balance: parseFloat(l.balance) || 0 }));
-    const totalBalance = bankLedgerBalances.reduce((sum, b) => sum + b.balance, 0);
+    const bankTotal = bankLedgerBalances.reduce((sum, b) => sum + b.balance, 0);
+    const physicalCashInHand = getPhysicalCashInHand();
+    const totalBalance = bankTotal + physicalCashInHand;
 
     const amountEl = document.getElementById('cashInHandAmount');
     if (amountEl) {
-        const formatted = totalBalance.toLocaleString('en-US', {
-            minimumFractionDigits: 2,
-            maximumFractionDigits: 2
-        });
-        amountEl.textContent = `Rs ${formatted}`;
+        amountEl.textContent = `Rs ${formatMoney(totalBalance)}`;
     }
 
-    updateCashInHandTooltip();
+    updateCashInHandTooltip(physicalCashInHand);
 }
 
-function updateCashInHandTooltip() {
+function cashInHandTooltipItem(name, balance) {
+    return `
+        <div class="cash-in-hand-tooltip-item">
+            <span class="cash-in-hand-tooltip-name">${escapeHtml(name)}</span>
+            <span class="cash-in-hand-tooltip-balance">Rs ${formatMoney(balance)}</span>
+        </div>
+    `;
+}
+
+function updateCashInHandTooltip(physicalCashInHand) {
     const tooltipEl = document.getElementById('cashInHandTooltip');
     if (!tooltipEl) return;
-    
-    if (bankLedgerBalances.length === 0) {
-        tooltipEl.innerHTML = '<div class="cash-in-hand-tooltip-empty">No ledgers included</div>';
-        return;
-    }
-    
-    const itemsHtml = bankLedgerBalances.map(item => {
-        const formatted = item.balance.toLocaleString('en-US', { 
-            minimumFractionDigits: 2, 
-            maximumFractionDigits: 2 
-        });
-        return `
-            <div class="cash-in-hand-tooltip-item">
-                <span class="cash-in-hand-tooltip-name">${escapeHtml(item.name)}</span>
-                <span class="cash-in-hand-tooltip-balance">Rs ${formatted}</span>
-            </div>
-        `;
-    }).join('');
-    
-    const totalFormatted = bankLedgerBalances.reduce((sum, item) => sum + item.balance, 0)
-        .toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    
+
+    const bankItemsHtml = bankLedgerBalances.length
+        ? bankLedgerBalances.map(item => cashInHandTooltipItem(item.name, item.balance)).join('')
+        : '<div class="cash-in-hand-tooltip-empty">No ledgers included</div>';
+    const bankTotal = bankLedgerBalances.reduce((sum, item) => sum + item.balance, 0);
+    const grandTotal = physicalCashInHand + bankTotal;
+
     tooltipEl.innerHTML = `
-        <div class="cash-in-hand-tooltip-header">Cash In Hand Ledgers</div>
-        ${itemsHtml}
+        <div class="cash-in-hand-tooltip-section">
+            <div class="cash-in-hand-tooltip-header">Cash in Hand:</div>
+            ${cashInHandTooltipItem('Cash', physicalCashInHand)}
+        </div>
+        <div class="cash-in-hand-tooltip-section">
+            <div class="cash-in-hand-tooltip-header">Cash in Bank Ledgers:</div>
+            ${bankItemsHtml}
+        </div>
         <div class="cash-in-hand-tooltip-footer">
             <span class="cash-in-hand-tooltip-total-label">Total:</span>
-            <span class="cash-in-hand-tooltip-total">Rs ${totalFormatted}</span>
+            <span class="cash-in-hand-tooltip-total">Rs ${formatMoney(grandTotal)}</span>
         </div>
     `;
 }
