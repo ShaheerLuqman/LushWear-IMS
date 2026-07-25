@@ -1,6 +1,6 @@
 // Runtime configuration for the web app.
 //
-// Loaded before renderer.js. `window.API_BASE` is the base URL for all backend API
+// Loaded before utils.js and js/*. `window.API_BASE` is the base URL for all backend API
 // calls. It is chosen by environment: on localhost (local dev / Electron) it points
 // at the local backend; anywhere else (e.g. the Vercel deployment) it points at the
 // production backend on Northflank.

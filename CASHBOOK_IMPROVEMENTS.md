@@ -21,7 +21,7 @@ scrutinizing before touching it again — this has already been flipped twice:
 
 - Commit "Invert debit and credit for bank" (Feb 19) swapped which raw field
   the Debit/Credit columns show for Bank ledgers only
-  (`renderLedgerDetailGrid`, `frontend/renderer.js`: Debit shows `incoming`,
+  (`renderLedgerDetailGrid`, `frontend/js/ledgers.js`: Debit shows `incoming`,
   Credit shows `outgoing`; every other type is the reverse).
 - A later commit ("changes") also flipped the running-balance sign for Bank to
   `outgoing - incoming`, both in `renderLedgerDetailGrid` and in
@@ -51,7 +51,7 @@ customer actually means:
 Note: `ledgers.section` was replaced with `ledgers.type` (2026-07-21,
 CHECK-constrained to Bank/Expense/Payable Vendors/Receivable Vendors/Sales/
 Investors) — the `section === 'Bank'` special cases in `updateCashInHand()`
-and `renderLedgerDetailGrid()` (`frontend/renderer.js`) now key off `type`
+and `renderLedgerDetailGrid()` (`frontend/js/ledgers.js`) now key off `type`
 instead, but the formula itself is untouched: `ledger_balances.balance`
 still stores the standard `incoming - outgoing`, and `updateCashInHand()`
 still negates it for Bank ledgers to match current (likely-wrong) display

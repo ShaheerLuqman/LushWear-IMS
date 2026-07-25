@@ -1,0 +1,1006 @@
+// Cashbook: entries grid, day navigation, and the entry/advance/bulk modals.
+
+// ============================================
+// Cashbook
+// ============================================
+
+function normalizeCashbookEntries(entries) {
+    return (entries || []).map((entry) => ({
+        ...entry,
+        entry_date: entry.entry_date ? String(entry.entry_date).slice(0, 10) : ''
+    }));
+}
+
+function getEmptyCashbookRow(entryDate = '', side = '') {
+    // Use a unique ID each time to ensure AG Grid creates a fresh row
+    return {
+        id: '__new_' + side + '_' + Date.now() + '__',
+        entry_date: entryDate,
+        description: '',
+        folio: null,
+        amount: null,
+        running_total: null
+    };
+}
+
+function buildCashbookRows(entries, openingBalance) {
+    const sorted = [...entries].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+
+    let running = parseFloat(openingBalance) || 0;
+    let totalInflow = 0;
+    let totalOutflow = 0;
+    const dailySummary = [];
+    let currentDate = null;
+    let dayOpening = running;
+    let dayInflow = 0;
+    let dayOutflow = 0;
+
+    const rows = sorted.map((entry) => {
+        const entryDate = entry.entry_date || '';
+        if (currentDate !== null && entryDate !== currentDate) {
+            dailySummary.push({
+                date: currentDate,
+                opening: dayOpening,
+                inflow: dayInflow,
+                outflow: dayOutflow,
+                closing: running
+            });
+            dayOpening = running;
+            dayInflow = 0;
+            dayOutflow = 0;
+        }
+
+        if (currentDate !== entryDate) {
+            currentDate = entryDate;
+        }
+
+        const amount = parseFloat(entry.amount) || 0;
+        const inflow = entry.entry_type === 'inflow' ? amount : 0;
+        const outflow = entry.entry_type === 'outflow' ? amount : 0;
+        totalInflow += inflow;
+        totalOutflow += outflow;
+        running += inflow - outflow;
+        dayInflow += inflow;
+        dayOutflow += outflow;
+
+        return {
+            ...entry,
+            inflow,
+            outflow,
+            running_balance: running
+        };
+    });
+
+    if (currentDate !== null) {
+        dailySummary.push({
+            date: currentDate,
+            opening: dayOpening,
+            inflow: dayInflow,
+            outflow: dayOutflow,
+            closing: running
+        });
+    }
+
+    return {
+        rows,
+        dailySummary,
+        totals: {
+            totalInflow,
+            totalOutflow,
+            closingBalance: running
+        }
+    };
+}
+
+function buildCashbookSideRows(entries, side) {
+    const filtered = (entries || []).filter((entry) => entry.entry_type === side);
+    const sorted = [...filtered].sort((a, b) => {
+        const dateA = a.entry_date || '';
+        const dateB = b.entry_date || '';
+        if (dateA !== dateB) return dateA.localeCompare(dateB);
+        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
+    });
+    return sorted.map((entry) => ({
+        ...entry,
+        amount: parseFloat(entry.amount) || 0
+    }));
+}
+
+function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
+    const opening = parseFloat(carryForward) || 0;
+    const rows = buildCashbookSideRows(entries, 'inflow');
+    const totalInflow = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    const openingRow = {
+        id: '__opening__',
+        description: "Opening Balance",
+        amount: opening,
+        _isSystemRow: true
+    };
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'inflow');
+    const totalRow = {
+        id: '__total_in__',
+        description: 'Total',
+        amount: opening + totalInflow,
+        _isFooter: true
+    };
+    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalInflow };
+}
+
+function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
+    const inflowEntries = (entries || []).filter((e) => e.entry_type === 'inflow');
+    const outflowEntries = (entries || []).filter((e) => e.entry_type === 'outflow');
+    const totalInflow = inflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const totalOutflow = outflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const opening = parseFloat(carryForward) || 0;
+    const closingBalance = opening + totalInflow - totalOutflow;
+    const rows = buildCashbookSideRows(entries, 'outflow');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'outflow');
+    const closingRow = {
+        id: '__closing__',
+        description: 'Closing Balance',
+        amount: closingBalance,
+        _isSystemRow: true
+    };
+    const totalRow = {
+        id: '__total_out__',
+        description: 'Total',
+        amount: totalOutflow + closingBalance,
+        _isFooter: true
+    };
+    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalOutflow };
+}
+
+// Bundles daily-balance + that date's entries — always needed together — into
+// the single GET /cashbook/day/{date} request instead of two parallel fetches.
+async function loadCashbookDay(targetDate, showLoading = true) {
+    if (showLoading) {
+        if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
+        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
+    }
+    try {
+        const data = await apiJson(`/cashbook/day/${targetDate}`, { fallback: 'Failed to load cashbook day' });
+        cashbookDailyBalance = data.daily_balance;
+        cashbookEntries = normalizeCashbookEntries(data.entries);
+    } catch (error) {
+        console.error('Error loading cashbook day:', error);
+        showToast('Failed to load cashbook entries', 'error');
+        cashbookDailyBalance = {
+            balance_date: targetDate,
+            opening_balance: 0,
+            total_inflow: 0,
+            total_outflow: 0,
+            closing_balance: 0
+        };
+        cashbookEntries = [];
+    } finally {
+        if (showLoading) {
+            if (cashbookIncomingGridApi) cashbookIncomingGridApi.hideOverlay();
+            if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.hideOverlay();
+        }
+    }
+}
+
+function renderCashbook() {
+    const selectedDate = cashbookSelectedDate || getTodayDateString();
+    const openingBalance = cashbookDailyBalance ? parseFloat(cashbookDailyBalance.opening_balance) || 0 : 0;
+    const filteredEntries = cashbookEntries.filter((entry) => entry.entry_date === selectedDate);
+
+    const { rowData: incomingRowData, pinnedBottomRowData: incomingPinnedBottom } = buildCashbookIncomingWithOpening(filteredEntries, openingBalance, selectedDate);
+    const { rowData: outgoingRowData, pinnedBottomRowData: outgoingPinnedBottom } = buildCashbookOutgoingWithClosing(filteredEntries, openingBalance, selectedDate);
+
+    if (cashbookIncomingGridApi) {
+        cashbookIncomingGridApi.setGridOption('rowData', incomingRowData);
+        cashbookIncomingGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookIncomingGridApi.setGridOption('pinnedBottomRowData', incomingPinnedBottom);
+        cashbookIncomingGridApi.setGridOption('pagination', false);
+    }
+    if (cashbookOutgoingGridApi) {
+        cashbookOutgoingGridApi.setGridOption('rowData', outgoingRowData);
+        cashbookOutgoingGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookOutgoingGridApi.setGridOption('pinnedBottomRowData', outgoingPinnedBottom);
+        cashbookOutgoingGridApi.setGridOption('pagination', false);
+    }
+}
+
+async function loadCashbook() {
+    const dateFilter = document.getElementById('cashbookDateFilter');
+    if (!cashbookSelectedDate) {
+        cashbookSelectedDate = getTodayDateString();
+    }
+    if (dateFilter) dateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate);
+    
+    await Promise.all([
+        loadCashbookDay(cashbookSelectedDate),
+        loadLedgersList()
+    ]);
+    renderCashbook();
+    updateCashInHand();
+}
+
+async function reloadCashbookForCurrentDate(showLoading = true) {
+    const selectedDate = cashbookSelectedDate || getTodayDateString();
+    await loadCashbookDay(selectedDate, showLoading);
+    renderCashbook();
+    updateCashInHand();
+}
+
+let cashbookReloadTimer = null;
+
+// Debounces the full-day reload (GET /cashbook/day/{date} + re-render): each
+// call resets a 500ms timer, so a burst of entry writes (e.g. the two-sided
+// entry / order-advance modals, each firing two creates) collapses into one
+// refetch after the last one settles, instead of one per write.
+function scheduleCashbookReload(showLoading = false) {
+    if (cashbookReloadTimer) clearTimeout(cashbookReloadTimer);
+    cashbookReloadTimer = setTimeout(() => {
+        cashbookReloadTimer = null;
+        reloadCashbookForCurrentDate(showLoading);
+    }, 500);
+}
+
+async function addCashbookEntry() {
+    const dateInput = document.getElementById('cashbookEntryDate');
+    const typeInput = document.getElementById('cashbookEntryType');
+    const amountInput = document.getElementById('cashbookEntryAmount');
+    const descInput = document.getElementById('cashbookEntryDescription');
+    if (!dateInput || !typeInput || !amountInput) return;
+
+    const entryDate = String(dateInput.value || '').trim();
+    const entryType = String(typeInput.value || '').trim();
+    const amount = parseFloat(amountInput.value);
+    const description = descInput ? String(descInput.value || '').trim() : '';
+
+    if (!entryDate) {
+        showToast('Select an entry date', 'error');
+        return;
+    }
+    if (!entryType || (entryType !== 'inflow' && entryType !== 'outflow')) {
+        showToast('Select a valid entry type', 'error');
+        return;
+    }
+    if (Number.isNaN(amount) || amount <= 0) {
+        showToast('Enter a valid amount', 'error');
+        return;
+    }
+
+    await createCashbookEntry({
+        entry_date: entryDate,
+        entry_type: entryType,
+        amount,
+        description
+    });
+    if (amountInput) amountInput.value = '';
+    if (descInput) descInput.value = '';
+}
+
+// --- Create Cashbook Entry modal ---------------------------------------------
+
+// Tracks whether the user has manually edited the outgoing amount. Until they do,
+// the outgoing amount mirrors whatever is typed in the incoming amount.
+let cashbookEntryOutAmountTouched = false;
+
+function cashbookEntryLedgerName(ledgerId) {
+    const ledger = ledgers.find(l => l.id === ledgerId);
+    return ledger ? ledger.name : '';
+}
+
+function cashbookEntryParticularPlaceholder(side, ledgerId) {
+    const name = cashbookEntryLedgerName(ledgerId);
+    if (!name) return side === 'inflow' ? 'Amount received from...' : 'Amount transferred to...';
+    return side === 'inflow' ? `Amount received from ${name}` : `Amount transferred to ${name}`;
+}
+
+function refreshCashbookEntryParticularPlaceholders() {
+    const inLedger = document.getElementById('cashbookEntryInLedger');
+    const outLedger = document.getElementById('cashbookEntryOutLedger');
+    const inPart = document.getElementById('cashbookEntryInParticular');
+    const outPart = document.getElementById('cashbookEntryOutParticular');
+    if (inPart) inPart.placeholder = cashbookEntryParticularPlaceholder('inflow', inLedger ? inLedger.value : '');
+    if (outPart) outPart.placeholder = cashbookEntryParticularPlaceholder('outflow', outLedger ? outLedger.value : '');
+}
+
+// Enables/disables one side of the entry modal. A disabled (skipped) side will not
+// create an entry; its `required` attributes are removed so the form can still submit.
+function setCashbookEntrySideSkipped(side, skipped) {
+    const prefix = side === 'inflow' ? 'cashbookEntryIn' : 'cashbookEntryOut';
+    const ledger = document.getElementById(prefix + 'Ledger');
+    const amount = document.getElementById(prefix + 'Amount');
+    const part = document.getElementById(prefix + 'Particular');
+    [ledger, amount, part].forEach((el) => {
+        if (!el) return;
+        el.disabled = skipped;
+        // required only applies to ledger + amount; particulars is optional anyway.
+        if (el === ledger || el === amount) {
+            if (skipped) el.removeAttribute('required');
+            else el.setAttribute('required', '');
+        }
+    });
+    const fieldset = ledger ? ledger.closest('.cashbook-entry-side') : null;
+    if (fieldset) fieldset.classList.toggle('cashbook-entry-side-skipped', skipped);
+}
+
+const CREATE_LEDGER_OPTION_VALUE = '__create_ledger__';
+
+function populateCashbookEntryLedgerSelect(select) {
+    if (!select) return;
+    const current = select.value;
+    const options = ['<option value="">Select ledger...</option>']
+        .concat(ledgers.map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`))
+        .concat([`<option value="${CREATE_LEDGER_OPTION_VALUE}">+ Create new ledger...</option>`]);
+    select.innerHTML = options.join('');
+    if (current && ledgers.some(l => l.id === current)) select.value = current;
+}
+
+function handleLedgerSelectChange(e) {
+    if (e.target.value === CREATE_LEDGER_OPTION_VALUE) {
+        const selectId = e.target.id;
+        e.target.value = '';
+        openCreateLedgerModal((created) => {
+            ['cashbookEntryInLedger', 'cashbookEntryOutLedger', 'orderAdvanceOutLedger'].forEach((id) => {
+                populateCashbookEntryLedgerSelect(document.getElementById(id));
+            });
+            const select = document.getElementById(selectId);
+            if (select) {
+                select.value = created.id;
+                select.dispatchEvent(new Event('change'));
+            }
+        });
+    }
+}
+
+function openCashbookEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    cashbookEntryOutAmountTouched = false;
+    const inLedger = document.getElementById('cashbookEntryInLedger');
+    const outLedger = document.getElementById('cashbookEntryOutLedger');
+    const inAmount = document.getElementById('cashbookEntryInAmount');
+    const outAmount = document.getElementById('cashbookEntryOutAmount');
+    const inPart = document.getElementById('cashbookEntryInParticular');
+    const outPart = document.getElementById('cashbookEntryOutParticular');
+
+    populateCashbookEntryLedgerSelect(inLedger);
+    populateCashbookEntryLedgerSelect(outLedger);
+    if (inLedger) inLedger.value = '';
+    if (outLedger) outLedger.value = '';
+    if (inAmount) inAmount.value = '';
+    if (outAmount) outAmount.value = '';
+    if (inPart) inPart.value = '';
+    if (outPart) outPart.value = '';
+
+    const inSkip = document.getElementById('cashbookEntryInSkip');
+    const outSkip = document.getElementById('cashbookEntryOutSkip');
+    if (inSkip) inSkip.checked = false;
+    if (outSkip) outSkip.checked = false;
+    setCashbookEntrySideSkipped('inflow', false);
+    setCashbookEntrySideSkipped('outflow', false);
+
+    if (ledgers.length === 0) {
+        showToast('No ledgers available. Create a ledger first.', 'error');
+    }
+
+    refreshCashbookEntryParticularPlaceholders();
+    document.getElementById('cashbookEntryModal').classList.add('active');
+    if (inLedger) inLedger.focus();
+}
+
+function closeCashbookEntryModal() {
+    document.getElementById('cashbookEntryModal').classList.remove('active');
+}
+
+async function submitCashbookEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const skipIn = document.getElementById('cashbookEntryInSkip').checked;
+    const skipOut = document.getElementById('cashbookEntryOutSkip').checked;
+
+    if (skipIn && skipOut) {
+        showToast('At least one side must be entered', 'error');
+        return;
+    }
+
+    const inLedger = document.getElementById('cashbookEntryInLedger').value;
+    const outLedger = document.getElementById('cashbookEntryOutLedger').value;
+    const inAmount = parseFloat(document.getElementById('cashbookEntryInAmount').value);
+    const outAmount = parseFloat(document.getElementById('cashbookEntryOutAmount').value);
+    const inPartEl = document.getElementById('cashbookEntryInParticular');
+    const outPartEl = document.getElementById('cashbookEntryOutParticular');
+
+    if (!skipIn) {
+        if (!inLedger) { showToast('Select an incoming ledger', 'error'); return; }
+        if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid incoming amount', 'error'); return; }
+    }
+    if (!skipOut) {
+        if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
+        if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+    }
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const payloads = [];
+
+    if (!skipIn) {
+        // If the particulars field is left empty, fall back to the default placeholder text.
+        const inDescription = (inPartEl.value.trim()) || cashbookEntryParticularPlaceholder('inflow', inLedger);
+        payloads.push({ entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger });
+    }
+    if (!skipOut) {
+        const outDescription = (outPartEl.value.trim()) || cashbookEntryParticularPlaceholder('outflow', outLedger);
+        payloads.push({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger });
+    }
+
+    closeCashbookEntryModal();
+    // Both legs in one atomic bulk request instead of two racing POSTs.
+    await createCashbookEntriesBulk(payloads);
+}
+
+// --- Order Advance Amount modal ----------------------------------------------
+
+// The "Orders" ledger that order advances are always posted to (hardcoded).
+const ORDERS_LEDGER_ID = '020dbc00-d5da-4110-89e9-fa22edf002f6';
+
+// Tracks whether the user has manually edited the outgoing amount in the order
+// advance modal. Until they do, it mirrors the advance (incoming) amount.
+let orderAdvanceOutAmountTouched = false;
+
+// Default incoming particulars text for an order advance.
+function orderAdvanceParticularPlaceholder(orderNumber) {
+    const num = String(orderNumber || '').trim().replace(/^#/, '');
+    return num ? `Amount received for Order #${num}` : 'Amount received for Order #...';
+}
+
+function refreshOrderAdvanceParticularPlaceholder() {
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const inPart = document.getElementById('orderAdvanceInParticular');
+    if (inPart) inPart.placeholder = orderAdvanceParticularPlaceholder(orderNumber ? orderNumber.value : '');
+}
+
+function refreshOrderAdvanceOutParticularPlaceholder() {
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const outPart = document.getElementById('orderAdvanceOutParticular');
+    if (outPart) outPart.placeholder = orderAdvanceParticularPlaceholder(orderNumber ? orderNumber.value : '');
+}
+
+function openOrderAdvanceModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber');
+    const amount = document.getElementById('orderAdvanceAmount');
+    const inPart = document.getElementById('orderAdvanceInParticular');
+    const outLedger = document.getElementById('orderAdvanceOutLedger');
+    const outAmount = document.getElementById('orderAdvanceOutAmount');
+    const outPart = document.getElementById('orderAdvanceOutParticular');
+
+    populateCashbookEntryLedgerSelect(outLedger);
+    if (orderNumber) orderNumber.value = '';
+    if (amount) amount.value = '';
+    if (inPart) inPart.value = '';
+    if (outLedger) outLedger.value = '';
+    if (outAmount) outAmount.value = '';
+    if (outPart) outPart.value = '';
+
+    orderAdvanceOutAmountTouched = false;
+    refreshOrderAdvanceParticularPlaceholder();
+    refreshOrderAdvanceOutParticularPlaceholder();
+    document.getElementById('orderAdvanceModal').classList.add('active');
+    if (orderNumber) orderNumber.focus();
+}
+
+function closeOrderAdvanceModal() {
+    document.getElementById('orderAdvanceModal').classList.remove('active');
+}
+
+async function submitOrderAdvanceModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const orderNumber = document.getElementById('orderAdvanceOrderNumber').value.trim();
+    const inAmount = parseFloat(document.getElementById('orderAdvanceAmount').value);
+    const inPartEl = document.getElementById('orderAdvanceInParticular');
+    const outLedger = document.getElementById('orderAdvanceOutLedger').value;
+    const outAmount = parseFloat(document.getElementById('orderAdvanceOutAmount').value);
+    const outPartEl = document.getElementById('orderAdvanceOutParticular');
+
+    if (!orderNumber) { showToast('Enter an order number', 'error'); return; }
+    if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid advance amount', 'error'); return; }
+    if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
+    if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const inDescription = (inPartEl.value.trim()) || orderAdvanceParticularPlaceholder(orderNumber);
+    const outDescription = (outPartEl.value.trim()) || orderAdvanceParticularPlaceholder(orderNumber);
+
+    closeOrderAdvanceModal();
+    // Tag the incoming (advance) entry with the order number so it can be reconciled
+    // against the order's Shopify advance amount. Both legs go in one atomic
+    // bulk request instead of two racing POSTs.
+    const normalizedOrderNumber = orderNumber.replace(/^#/, '').trim();
+    await createCashbookEntriesBulk([
+        { entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: ORDERS_LEDGER_ID, order_number: normalizedOrderNumber },
+        { entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger }
+    ]);
+    // Refresh orders so the advance status indicator updates for this order.
+    if (typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
+}
+
+// --- Bulk Text Entry modal ---------------------------------------------------
+
+// Holds the most recent parse result so the submit handler can reuse it.
+let bulkEntryParsed = null;
+
+function openBulkEntryModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    if (ledgers.length === 0) {
+        showToast('No ledgers available. Create a ledger first.', 'error');
+        return;
+    }
+    const input = document.getElementById('bulkEntryInput');
+    if (input) { input.value = ''; input.disabled = false; }
+    const validation = document.getElementById('bulkEntryValidation');
+    if (validation) { validation.style.display = 'none'; validation.innerHTML = ''; }
+    const cancelBtn = document.getElementById('bulkEntryCancelBtn');
+    if (cancelBtn) cancelBtn.disabled = false;
+    setBulkEntryProgress('');
+    bulkEntryParsed = null;
+    setBulkEntrySubmitEnabled(false);
+    document.getElementById('bulkEntryModal').classList.add('active');
+    if (input) input.focus();
+}
+
+// True while bulk entries are being created; blocks closing the modal mid-run.
+let bulkEntryCreating = false;
+
+function closeBulkEntryModal() {
+    if (bulkEntryCreating) return;
+    document.getElementById('bulkEntryModal').classList.remove('active');
+}
+
+function setBulkEntrySubmitEnabled(enabled) {
+    const btn = document.getElementById('bulkEntrySubmitBtn');
+    if (btn) btn.disabled = !enabled;
+}
+
+// Find a ledger by name (case-insensitive, trimmed). Returns the ledger or null.
+function findLedgerByName(name) {
+    const target = String(name || '').trim().toLowerCase();
+    if (!target) return null;
+    return ledgers.find(l => String(l.name || '').trim().toLowerCase() === target) || null;
+}
+
+/**
+ * Extract an order number from particulars text. Looks for "order" and/or "#"
+ * followed by a number of 4 or more digits, allowing spaces between the tokens.
+ * Order numbers start at 1000 and can grow beyond 9999 (10000+).
+ * Examples matched: "Order #9865", "order# 9865", "Order  9865", "#9865", "#12345".
+ * Returns the digits as a string, or null if none found.
+ */
+function extractOrderNumberFromText(text) {
+    const s = String(text || '');
+    // "order" then optional "#", then 4+ digits (spaces allowed between tokens)
+    let m = s.match(/order\s*#?\s*(\d{4,})\b/i);
+    if (m) return m[1];
+    // bare "#" then 4+ digits
+    m = s.match(/#\s*(\d{4,})\b/);
+    if (m) return m[1];
+    return null;
+}
+
+/**
+ * Parse one line of bulk-entry text.
+ * Format: <KIND>: <AMOUNT> <PARTICULARS> "<LEDGER1>" ["<LEDGER2>"]
+ * Returns { ok, errors: [str], lineNo, raw, kind, amount, particulars, entries: [{entry_type, amount, description, folio}] }
+ */
+function parseBulkEntryLine(raw, lineNo) {
+    const result = { ok: false, errors: [], lineNo, raw };
+    const line = String(raw || '').trim();
+    if (!line) { result.blank = true; return result; }
+
+    // Find the KIND token (IN / OUT / XFER followed by ':') anywhere in the line and
+    // ignore anything before it. This lets pasted lines keep prefixes like a
+    // WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: IN: 16400 ...".
+    const kindMatch = line.match(/\b(IN|OUT|XFER)\s*:\s*(.*)$/i);
+    if (!kindMatch) {
+        result.errors.push('Missing "<KIND>:" prefix (use IN:, OUT:, or XFER:).');
+        return result;
+    }
+    const kind = kindMatch[1].toUpperCase();
+    const rest = kindMatch[2];
+    result.kind = kind;
+    // The cleaned line (from KIND: onward) without any pasted prefix such as a
+    // WhatsApp timestamp. Shown in the validation list instead of the raw line.
+    result.cleaned = `${kind}: ${rest.trim()}`;
+
+    // Extract quoted ledger names (in order).
+    const quoted = [];
+    const quoteRe = /"([^"]*)"/g;
+    let m;
+    while ((m = quoteRe.exec(rest)) !== null) quoted.push(m[1]);
+
+    // The portion before the first quote holds amount + particulars.
+    const firstQuoteIdx = rest.indexOf('"');
+    const head = (firstQuoteIdx === -1 ? rest : rest.slice(0, firstQuoteIdx)).trim();
+
+    // Amount is the first token of head.
+    const headMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s*(.*)$/);
+    if (!headMatch) {
+        result.errors.push('Missing or invalid amount (must come right after the colon).');
+    } else {
+        const amount = parseFloat(headMatch[1].replace(/,/g, ''));
+        if (Number.isNaN(amount) || amount <= 0) {
+            result.errors.push('Amount must be a number greater than 0.');
+        } else {
+            result.amount = amount;
+        }
+        result.particulars = (headMatch[2] || '').trim();
+    }
+
+    // Validate quoted-ledger count per kind.
+    const expected = kind === 'XFER' ? 2 : 1;
+    if (quoted.length < expected) {
+        result.errors.push(`${kind} requires ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
+    } else if (quoted.length > expected) {
+        result.errors.push(`${kind} expects ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
+    }
+
+    // Resolve ledger names against existing ledgers.
+    const resolved = quoted.map(name => ({ name, ledger: findLedgerByName(name) }));
+    resolved.forEach(r => {
+        if (!r.ledger) result.errors.push(`Ledger "${r.name}" not found.`);
+    });
+
+    if (result.errors.length > 0) return result;
+
+    // Build cashbook entries. Particulars default to a placeholder if empty.
+    const description = result.particulars || `${kind} entry`;
+
+    // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
+    // order number parsed from the particulars so advance reconciliation works.
+    const orderNumber = extractOrderNumberFromText(result.particulars);
+    const makeInflow = (ledger) => {
+        const entry = { entry_type: 'inflow', amount: result.amount, description, folio: ledger.id };
+        if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
+        return entry;
+    };
+
+    const entries = [];
+    if (kind === 'IN') {
+        entries.push(makeInflow(resolved[0].ledger));
+    } else if (kind === 'OUT') {
+        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[0].ledger.id });
+    } else { // XFER: LEDGER1 in, LEDGER2 out
+        entries.push(makeInflow(resolved[0].ledger));
+        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[1].ledger.id });
+    }
+    result.entries = entries;
+    result.orderNumber = orderNumber || null;
+    result.ok = true;
+    return result;
+}
+
+/** Parse the whole textarea. Returns { lines: [parsed], hasError, hasAny }. */
+function parseBulkEntryText(text) {
+    const rawLines = String(text || '').split(/\r?\n/);
+    const lines = [];
+    let hasError = false;
+    let hasAny = false;
+    rawLines.forEach((raw, i) => {
+        const parsed = parseBulkEntryLine(raw, i + 1);
+        if (parsed.blank) return; // ignore blank lines
+        lines.push(parsed);
+        hasAny = true;
+        if (!parsed.ok) hasError = true;
+    });
+    return { lines, hasError, hasAny };
+}
+
+/** Validate the textarea and render results. Returns the parse result. */
+function validateBulkEntry() {
+    const input = document.getElementById('bulkEntryInput');
+    const validation = document.getElementById('bulkEntryValidation');
+    const parsed = parseBulkEntryText(input ? input.value : '');
+    bulkEntryParsed = parsed;
+
+    if (!validation) return parsed;
+    if (!parsed.hasAny) {
+        validation.style.display = 'block';
+        validation.innerHTML = '<div class="bulk-entry-msg bulk-entry-msg-error">No entries to validate.</div>';
+        setBulkEntrySubmitEnabled(false);
+        return parsed;
+    }
+
+    const rows = parsed.lines.map(p => {
+        // Show the cleaned line (KIND: onward) so pasted prefixes like WhatsApp
+        // timestamps don't appear; fall back to raw when there's no KIND token.
+        const displayText = p.cleaned || p.raw;
+        if (p.ok) {
+            const summary = p.entries
+                .map(e => {
+                    const dir = e.entry_type === 'inflow' ? '▲ in' : '▼ out';
+                    const tag = e.order_number ? ` [Order #${escapeHtml(e.order_number)}]` : '';
+                    return `${dir} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}${tag}`;
+                })
+                .join(' , ');
+            return `<div class="bulk-entry-line bulk-entry-line-ok">`
+                + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
+                + `<span class="bulk-entry-line-text">${escapeHtml(displayText)}</span>`
+                + `<span class="bulk-entry-line-detail">${summary}</span>`
+                + `</div>`;
+        }
+        return `<div class="bulk-entry-line bulk-entry-line-error">`
+            + `<span class="bulk-entry-line-no">${p.lineNo}</span>`
+            + `<span class="bulk-entry-line-text">${escapeHtml(displayText)}</span>`
+            + `<span class="bulk-entry-line-detail">${p.errors.map(escapeHtml).join(' ')}</span>`
+            + `</div>`;
+    }).join('');
+
+    validation.style.display = 'block';
+    validation.innerHTML = rows;
+    setBulkEntrySubmitEnabled(!parsed.hasError);
+    return parsed;
+}
+
+function ledgerNameById(id) {
+    const l = ledgers.find(x => x.id === id);
+    return l ? l.name : '(unknown)';
+}
+
+function formatBulkAmount(val) {
+    const n = parseFloat(val) || 0;
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+async function submitBulkEntry() {
+    if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }
+    // Re-validate to be safe (the textarea may have changed since last validate).
+    const parsed = validateBulkEntry();
+    if (!parsed.hasAny) { showToast('No entries to create', 'error'); return; }
+    if (parsed.hasError) { showToast('Fix the highlighted entries first', 'error'); return; }
+
+    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const payloads = [];
+    parsed.lines.forEach(p => {
+        p.entries.forEach(e => payloads.push({ ...e, entry_date: entryDate }));
+    });
+
+    const total = payloads.length;
+    const cancelBtn = document.getElementById('bulkEntryCancelBtn');
+    const input = document.getElementById('bulkEntryInput');
+
+    // Lock the modal while creating so the user can't edit or close mid-run.
+    bulkEntryCreating = true;
+    setBulkEntrySubmitEnabled(false);
+    if (cancelBtn) cancelBtn.disabled = true;
+    if (input) input.disabled = true;
+
+    // One INSERT for the whole batch. All-or-nothing, but everything reaching
+    // this point already passed validateBulkEntry() — amount > 0 and each
+    // ledger name resolved against the live-loaded ledger list — so a DB-level
+    // rejection here should be rare (e.g. a ledger deleted moments ago).
+    setBulkEntryProgress(`Creating ${total} entr${total === 1 ? 'y' : 'ies'}…`);
+    const createdOrderAdvance = payloads.some(p => p.order_number);
+    try {
+        await postCashbookEntriesBulk(payloads);
+
+        setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
+        showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
+        await reloadCashbookForCurrentDate(true);
+        if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
+        bulkEntryCreating = false;
+        if (input) input.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        closeBulkEntryModal();
+    } catch (error) {
+        console.error('Error creating bulk entries:', error);
+        setBulkEntryProgress('Failed to create entries — nothing was saved. Review and retry.', 'error');
+        showToast('Failed to create entries', 'error');
+        bulkEntryCreating = false;
+        if (input) input.disabled = false;
+        if (cancelBtn) cancelBtn.disabled = false;
+        setBulkEntrySubmitEnabled(true);
+    }
+}
+
+// Show a progress/result message in the bulk-entry modal footer area.
+function setBulkEntryProgress(text, kind) {
+    const el = document.getElementById('bulkEntryProgress');
+    if (!el) return;
+    el.style.display = text ? 'block' : 'none';
+    el.textContent = text || '';
+    el.className = 'bulk-entry-progress'
+        + (kind === 'ok' ? ' bulk-entry-progress-ok' : '')
+        + (kind === 'error' ? ' bulk-entry-progress-error' : '');
+}
+
+// Per-submission key so a retried/duplicated create request is recognized
+// server-side and returns the original row instead of inserting a duplicate.
+function generateIdempotencyKey() {
+    return crypto.randomUUID();
+}
+
+async function createCashbookEntry(payload) {
+    // Optimistic update: add entry to local array immediately
+    const tempId = '__temp_' + Date.now();
+    const tempEntry = {
+        ...payload,
+        id: tempId,
+        entry_date: String(payload.entry_date || '').slice(0, 10),
+        created_at: getPKTISOString(),
+        updated_at: getPKTISOString()
+    };
+    cashbookEntries.push(tempEntry);
+    renderCashbook();
+
+    try {
+        const created = await apiJson('/cashbook/entries', {
+            method: 'POST',
+            body: { idempotency_key: generateIdempotencyKey(), ...payload },
+            fallback: 'Failed to add cashbook entry'
+        });
+        applyLedgerBalancePatches(created.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: waits to see if another write is on the way (e.g. the
+        // other side of a two-sided entry) before refetching real IDs/grid.
+        scheduleCashbookReload(false);
+        showToast('Entry added', 'success');
+    } catch (error) {
+        console.error('Error adding cashbook entry:', error);
+        // Remove the temp entry on failure
+        cashbookEntries = cashbookEntries.filter(e => e.id !== tempId);
+        renderCashbook();
+        showToast('Failed to add entry', 'error');
+    }
+}
+
+// POSTs a batch of cashbook entries as one atomic request (used for two-sided
+// entries so the paired inflow/outflow rows can't half-succeed), applies the
+// returned ledger balance patches, and updates Cash In Hand immediately.
+// Returns the created/replayed entries (each carries ledger_balances).
+async function postCashbookEntriesBulk(payloads) {
+    const withKeys = payloads.map(p => ({ idempotency_key: generateIdempotencyKey(), ...p }));
+    const created = await apiJson('/cashbook/entries/bulk', {
+        method: 'POST',
+        body: withKeys,
+        fallback: 'Failed to create cashbook entries'
+    });
+    applyLedgerBalancePatches(created[0]?.ledger_balances);
+    updateCashInHand();
+    return created;
+}
+
+// Optimistic-UI wrapper around postCashbookEntriesBulk for the two-sided
+// entry / order-advance modals: renders temp rows immediately, reverts them
+// on failure. The debounced day reload picks up the real IDs.
+async function createCashbookEntriesBulk(payloads) {
+    if (!payloads || payloads.length === 0) return;
+
+    const tempEntries = payloads.map((payload, i) => ({
+        ...payload,
+        id: `__temp_${Date.now()}_${i}`,
+        entry_date: String(payload.entry_date || '').slice(0, 10),
+        created_at: getPKTISOString(),
+        updated_at: getPKTISOString()
+    }));
+    cashbookEntries.push(...tempEntries);
+    renderCashbook();
+
+    try {
+        await postCashbookEntriesBulk(payloads);
+        scheduleCashbookReload(false);
+        showToast(payloads.length > 1 ? 'Entries added' : 'Entry added', 'success');
+    } catch (error) {
+        console.error('Error adding cashbook entries:', error);
+        const tempIds = new Set(tempEntries.map(e => e.id));
+        cashbookEntries = cashbookEntries.filter(e => !tempIds.has(e.id));
+        renderCashbook();
+        showToast('Failed to add entries', 'error');
+    }
+}
+
+function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
+    const entryDate = String(row.entry_date || '').trim();
+    const amount = parseCashbookAmount(row.amount);
+    if (amount === null || amount <= 0) return;
+    if (!entryDate) {
+        showToast('Select an entry date for this row.', 'error');
+        return;
+    }
+    const description = String(row.description || '').trim();
+    const folio = row.folio || null;
+    
+    // Folio is now required
+    if (!folio) {
+        showToast('Please select a ledger (folio) for this entry.', 'error');
+        return;
+    }
+
+    createCashbookEntry({
+        entry_date: entryDate,
+        entry_type: entryType,
+        amount,
+        description,
+        folio
+    });
+}
+
+async function updateCashbookEntry(entryId, updates) {
+    if (!entryId || !updates || Object.keys(updates).length === 0) return;
+    
+    // Optimistic update: apply changes immediately
+    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
+    const originalEntry = entryIndex >= 0 ? { ...cashbookEntries[entryIndex] } : null;
+    if (entryIndex >= 0) {
+        cashbookEntries[entryIndex] = { ...cashbookEntries[entryIndex], ...updates };
+        renderCashbook();
+    }
+
+    try {
+        const updated = await apiJson(`/cashbook/entries/${entryId}`, {
+            method: 'PUT',
+            body: updates,
+            fallback: 'Failed to update cashbook entry'
+        });
+        applyLedgerBalancePatches(updated.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: collapses a burst of edits into a single day refetch.
+        scheduleCashbookReload(false);
+        showToast('Entry updated', 'success');
+    } catch (error) {
+        console.error('Error updating cashbook entry:', error);
+        // Revert on failure
+        if (originalEntry && entryIndex >= 0) {
+            cashbookEntries[entryIndex] = originalEntry;
+            renderCashbook();
+        }
+        showToast('Failed to update entry', 'error');
+    }
+}
+
+async function deleteCashbookEntry(entryId) {
+    if (!entryId) return;
+    
+    // Optimistic update: remove immediately
+    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
+    const removedEntry = entryIndex >= 0 ? cashbookEntries[entryIndex] : null;
+    if (entryIndex >= 0) {
+        cashbookEntries.splice(entryIndex, 1);
+        renderCashbook();
+    }
+
+    try {
+        const deleted = await apiJson(`/cashbook/entries/${entryId}`, {
+            method: 'DELETE',
+            fallback: 'Failed to delete cashbook entry'
+        });
+        applyLedgerBalancePatches(deleted.ledger_balances);
+        updateCashInHand();
+
+        // Debounced: collapses a burst of deletes into a single day refetch.
+        scheduleCashbookReload(false);
+        showToast('Entry deleted', 'success');
+    } catch (error) {
+        console.error('Error deleting cashbook entry:', error);
+        // Restore on failure
+        if (removedEntry) {
+            cashbookEntries.push(removedEntry);
+            renderCashbook();
+        }
+        showToast('Failed to delete entry', 'error');
+    }
+}
+

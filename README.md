@@ -84,8 +84,18 @@ inventory-system/
 ├── frontend/                # Static web frontend (no build step)
 │   ├── index.html
 │   ├── config.js            # Sets window.API_BASE (swap per environment)
-│   ├── renderer.js          # App logic
-│   ├── utils.js
+│   ├── utils.js             # Shared helpers (apiJson/apiRequest, escapeHtml, ...)
+│   ├── js/                  # App logic, loaded in order as plain scripts
+│   │   ├── app-core.js      # Auth fetch wrapper, shared state, PIN gate
+│   │   ├── orders-grid.js   # Orders/products grid column defs & renderers
+│   │   ├── orders-actions.js
+│   │   ├── navigation.js
+│   │   ├── data-api.js
+│   │   ├── cashbook.js
+│   │   ├── ledgers.js
+│   │   ├── sync-summary.js
+│   │   ├── modals-forms.js
+│   │   └── delivery-status.js
 │   ├── styles.css
 │   └── assets/
 │

@@ -1018,7 +1018,21 @@
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="config.js"></script>
     <script src="utils.js"></script>
-    <script src="renderer.js"></script>
+    <!-- Plain scripts sharing one global scope, not ES modules: the app keeps ~38
+         top-level `let`s (orders, ordersGridApi, ...) that are reassigned across
+         files, which imported bindings do not allow. Load order matters -
+         app-core.js patches window.fetch and must come first. -->
+    <script src="js/app-core.js"></script>
+    <script src="js/orders-columns.js"></script>
+    <script src="js/orders-grid.js"></script>
+    <script src="js/orders-actions.js"></script>
+    <script src="js/navigation.js"></script>
+    <script src="js/data-api.js"></script>
+    <script src="js/cashbook.js"></script>
+    <script src="js/ledgers.js"></script>
+    <script src="js/sync-summary.js"></script>
+    <script src="js/modals-forms.js"></script>
+    <script src="js/delivery-status.js"></script>
 </body>
 
 </html>
