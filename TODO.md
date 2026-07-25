@@ -38,8 +38,13 @@ one line each.
 
 ## Frontend / UX
 
-- [ ] **Improved responsiveness & mobile view** — make the app usable on smaller
-      screens.
+- [ ] **Mobile view** — the app is usable down to ~768px after the 2026-07-25
+      responsive pass (see `styles.css` "Responsive" section: toolbar buttons drop
+      their shared fixed width then cap, two-column modal forms collapse, header
+      title/period label hide, stats grid goes single-column). Below ~768px the
+      orders header still scrolls horizontally and the AG Grid tables are
+      inherently wide — a real phone layout needs a different approach (card list
+      instead of grid, or a dedicated mobile view), not more breakpoints.
 - [ ] **Better column filtering** — replace the current column filter with a more
       usable mechanism.
 - [ ] **Per-user view persistence** — remember each user's column widths / layout
