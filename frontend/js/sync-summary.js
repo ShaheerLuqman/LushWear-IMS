@@ -174,9 +174,9 @@ async function openMonthDetail(month, year) {
     if (titleEl) titleEl.textContent = `${monthName} ${year} - ${periodLabel}`;
     if (container) {
         container.innerHTML = `
-            <div class="month-detail-loading">
-                <div class="month-detail-loading-spinner"></div>
-                <p class="month-detail-loading-text">Loading period data...</p>
+            <div class="content-loading">
+                <div class="content-loading-spinner"></div>
+                <p class="content-loading-text">Loading period data...</p>
             </div>
         `;
     }
@@ -714,7 +714,7 @@ function initForms() {
                 showToast('Select a type', 'error');
                 return;
             }
-            const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide, type === 'Bank');
+            const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide);
             createLedger(name, type, includeInCashInHand, openingBalance);
         });
     }

@@ -263,10 +263,12 @@ function switchView(viewName, { skipReload = false } = {}) {
     };
 
     show('syncShopifyBtn', isProducts);
+    if (isProducts) updateSyncShopifyLastSyncLabel();
     show('bulkUpdateCostPriceBtn', isProducts);
     show('recalculateOrderCostsBtn', isProducts);
 
     show('syncOrdersBtn', isOrders);
+    if (isOrders) updateSyncOrdersLastSyncLabel();
     show('ordersPeriodFilterWrap', isOrders, 'flex');
     show('ordersDateRangeBtn', isOrders);
     show('refreshDeliveryStatusSelectedBtn', isOrders);
@@ -315,7 +317,14 @@ function switchView(viewName, { skipReload = false } = {}) {
     } else if (viewName === 'dashboard') {
         // Dashboard-only data is bundled here so it's fetched only when the dashboard is
         // actually opened, not on every products/orders load elsewhere in the app.
-        loadProducts().then(() => updateDashboard());
+        const loadingEl = document.getElementById('dashboardLoading');
+        const contentEl = document.getElementById('dashboardContent');
+        if (loadingEl) loadingEl.style.display = 'flex';
+        if (contentEl) contentEl.style.display = 'none';
+        loadProducts().then(() => updateDashboard()).finally(() => {
+            if (loadingEl) loadingEl.style.display = 'none';
+            if (contentEl) contentEl.style.display = '';
+        });
     }
 }
 

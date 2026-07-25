@@ -7,6 +7,7 @@
     <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data: https:;">
     <title>Inventory Manager</title>
+    <link rel="icon" type="image/png" href="assets/Logo.png">
     <link
         href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
         rel="stylesheet">
@@ -172,10 +173,10 @@
                     </div>
                     <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Filter by date range">Date range</button>
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
-                        Sync from Shopify
+                        <span id="syncShopifyBtnLabel">Sync from Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
                     </button>
                     <button id="syncOrdersBtn" class="btn btn-primary header-toolbar-btn" style="display: none;" title="Sync the last 2 months of orders from Shopify">
-                        Sync from Shopify
+                        <span id="syncOrdersBtnLabel">Sync from Shopify</span><span id="syncOrdersLastSync" class="sync-btn-last-sync"></span>
                     </button>
                     <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
                         Bulk update cost price
@@ -230,41 +231,47 @@
             <div class="content-area">
                 <!-- Dashboard View -->
                 <div id="dashboardView" class="view">
-                    <div class="stats-grid">
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <span class="stat-label">Total Products</span>
-                                <span class="stat-value" id="totalProducts">0</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <span class="stat-label">Total variants</span>
-                                <span class="stat-value" id="totalProductsAndVariants">0</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <span class="stat-label">Items in Stock</span>
-                                <span class="stat-value" id="totalStock">0</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <span class="stat-label">Total Value</span>
-                                <span class="stat-value" id="totalValue">0</span>
-                            </div>
-                        </div>
-                        <div class="stat-card">
-                            <div class="stat-info">
-                                <span class="stat-label">Delivery charges (returned orders)</span>
-                                <span class="stat-value" id="returnedDeliveryChargesSum">—</span>
-                            </div>
-                        </div>
+                    <div id="dashboardLoading" class="content-loading" style="display: none;">
+                        <div class="content-loading-spinner"></div>
+                        <p class="content-loading-text">Loading dashboard...</p>
                     </div>
-                    <section class="dashboard-collections-section" aria-label="Inventory by collection">
-                        <div id="dashboardCollectionsGrid" class="dashboard-collections-grid"></div>
-                    </section>
+                    <div id="dashboardContent">
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-info">
+                                    <span class="stat-label">Total Products</span>
+                                    <span class="stat-value" id="totalProducts">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-info">
+                                    <span class="stat-label">Total variants</span>
+                                    <span class="stat-value" id="totalProductsAndVariants">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-info">
+                                    <span class="stat-label">Items in Stock</span>
+                                    <span class="stat-value" id="totalStock">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-info">
+                                    <span class="stat-label">Total Value</span>
+                                    <span class="stat-value" id="totalValue">0</span>
+                                </div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-info">
+                                    <span class="stat-label">Delivery charges (returned orders)</span>
+                                    <span class="stat-value" id="returnedDeliveryChargesSum">—</span>
+                                </div>
+                            </div>
+                        </div>
+                        <section class="dashboard-collections-section" aria-label="Inventory by collection">
+                            <div id="dashboardCollectionsGrid" class="dashboard-collections-grid"></div>
+                        </section>
+                    </div>
                 </div>
 
                 <!-- Orders View -->

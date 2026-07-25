@@ -39,9 +39,7 @@ function applyLedgerBalancePatches(patches) {
 function updateCashInHand() {
     const cashInHandLedgers = ledgers.filter(l => l.include_in_cash_in_hand);
 
-    // Reversed sum — add debit side, subtract credit side (per heading) = outgoing - incoming,
-    // i.e. the negative of the standard incoming-outgoing balance stored in ledger_balances.
-    bankLedgerBalances = cashInHandLedgers.map(l => ({ name: l.name, balance: -(parseFloat(l.balance) || 0) }));
+    bankLedgerBalances = cashInHandLedgers.map(l => ({ name: l.name, balance: parseFloat(l.balance) || 0 }));
     const totalBalance = bankLedgerBalances.reduce((sum, b) => sum + b.balance, 0);
 
     const amountEl = document.getElementById('cashInHandAmount');
@@ -162,16 +160,15 @@ function renderLedgerCards() {
 }
 
 // Opening balance is stored signed in the same incoming-outgoing convention as
-// ledger_balances (see renderLedgerDetailGrid's Bank-type Debit/Credit column
-// swap) — Debit/Credit means opposite things for Bank vs. non-Bank ledgers.
-function openingBalanceToSigned(amount, side, isBankType) {
+// ledger_balances: positive = incoming (Credit), negative = outgoing (Debit).
+function openingBalanceToSigned(amount, side) {
     const magnitude = Math.abs(parseFloat(amount)) || 0;
     if (!magnitude) return 0;
-    return (side === 'debit') === isBankType ? magnitude : -magnitude;
+    return side === 'debit' ? -magnitude : magnitude;
 }
 
-function signedToOpeningBalanceSide(signedValue, isBankType) {
-    return (signedValue > 0) === isBankType ? 'debit' : 'credit';
+function signedToOpeningBalanceSide(signedValue) {
+    return signedValue > 0 ? 'credit' : 'debit';
 }
 
 let createLedgerOnCreateCallback = null;
@@ -233,14 +230,13 @@ async function openEditLedgerModal(ledgerId) {
         }
         if (typeSelect) typeSelect.value = ledger.type || '';
         editLedgerOriginalOpeningBalance = parseFloat(ledger.opening_balance) || 0;
-        const isBankType = ledger.type === 'Bank';
         const openingBalanceAmountInput = document.getElementById('editLedgerOpeningBalanceAmount');
         const openingBalanceSideSelect = document.getElementById('editLedgerOpeningBalanceSide');
         if (openingBalanceAmountInput) {
             openingBalanceAmountInput.value = editLedgerOriginalOpeningBalance ? Math.abs(editLedgerOriginalOpeningBalance) : '';
         }
         if (openingBalanceSideSelect) {
-            openingBalanceSideSelect.value = signedToOpeningBalanceSide(editLedgerOriginalOpeningBalance, isBankType);
+            openingBalanceSideSelect.value = signedToOpeningBalanceSide(editLedgerOriginalOpeningBalance);
         }
         const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
         if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
@@ -275,7 +271,7 @@ async function saveEditLedger() {
     const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
     const openingBalanceAmount = document.getElementById('editLedgerOpeningBalanceAmount').value;
     const openingBalanceSide = document.getElementById('editLedgerOpeningBalanceSide').value;
-    const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide, type === 'Bank');
+    const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide);
     if (!name || !type) {
         showToast('Name and type are required', 'error');
         return;
@@ -371,23 +367,6 @@ async function loadLedgerEntries(ledgerId) {
 function renderLedgerDetailGrid() {
     if (!ledgerDetailGridApi) return;
 
-    // Check if this is a Bank-type ledger (invert debit/credit)
-    const isBankType = currentLedger?.type === 'Bank';
-
-    // Update column definitions to swap fields for Bank-type ledgers
-    const columnDefs = ledgerDetailGridApi.getGridOption('columnDefs');
-    if (columnDefs && columnDefs.length >= 4) {
-        // Swap Debit and Credit column fields for Bank-type ledgers
-        if (isBankType) {
-            columnDefs[2].field = 'incoming'; // Debit shows incoming
-            columnDefs[3].field = 'outgoing'; // Credit shows outgoing
-        } else {
-            columnDefs[2].field = 'outgoing'; // Debit shows outgoing
-            columnDefs[3].field = 'incoming'; // Credit shows incoming
-        }
-        ledgerDetailGridApi.setGridOption('columnDefs', columnDefs);
-    }
-
     // Compute running balance
     const sorted = [...ledgerEntries].sort((a, b) => {
         const dateA = a.entry_date || '';
@@ -396,11 +375,8 @@ function renderLedgerDetailGrid() {
         return String(a.created_at || '').localeCompare(String(b.created_at || ''));
     });
 
-    // Bank ledgers: reversed — add debit side (outgoing in data), subtract credit side (incoming in data) = outgoing - incoming. Non-Bank: incoming - outgoing.
-    const balanceDelta = isBankType ? (inc, out) => out - inc : (inc, out) => inc - out;
     // opening_balance is stored signed in the same incoming-outgoing convention as
-    // ledger_balances, so representing it as incoming/outgoing here reuses the same
-    // Debit/Credit column swap above instead of needing separate display logic.
+    // ledger_balances: positive = incoming (Credit), negative = outgoing (Debit).
     const openingBalance = parseFloat(currentLedger?.opening_balance) || 0;
     const openingRow = openingBalance ? [{
         id: 'opening-balance',
@@ -414,7 +390,7 @@ function renderLedgerDetailGrid() {
     const rowsWithBalance = [...openingRow, ...sorted].map(entry => {
         const incoming = parseFloat(entry.incoming) || 0;
         const outgoing = parseFloat(entry.outgoing) || 0;
-        running += balanceDelta(incoming, outgoing);
+        running += incoming - outgoing;
         return {
             ...entry,
             incoming: incoming,
@@ -501,12 +477,36 @@ function initLedgerDetailGrid() {
 // The CRUD operations for ledger entries have been removed.
 // To add/edit/delete ledger entries, use the Cashbook with the appropriate folio.
 
+const SHOPIFY_PRODUCT_SYNC_STORAGE_KEY = 'lushwear_last_shopify_product_sync';
+const SHOPIFY_ORDER_SYNC_STORAGE_KEY = 'lushwear_last_shopify_order_sync';
+
+function updateLastSyncLabel(labelId, storageKey) {
+    const label = document.getElementById(labelId);
+    if (!label) return;
+    const raw = localStorage.getItem(storageKey);
+    const timestamp = raw ? parseInt(raw, 10) : NaN;
+    label.textContent = isNaN(timestamp) ? '' : `Synced ${formatRelativeTime(timestamp)}`;
+}
+
+function updateSyncShopifyLastSyncLabel() {
+    updateLastSyncLabel('syncShopifyLastSync', SHOPIFY_PRODUCT_SYNC_STORAGE_KEY);
+}
+
+function updateSyncOrdersLastSyncLabel() {
+    updateLastSyncLabel('syncOrdersLastSync', SHOPIFY_ORDER_SYNC_STORAGE_KEY);
+}
+
+setInterval(() => {
+    updateSyncShopifyLastSyncLabel();
+    updateSyncOrdersLastSyncLabel();
+}, 30000);
+
 async function syncShopifyProducts() {
     const btn = document.getElementById('syncShopifyBtn');
-    const originalText = btn.innerHTML;
+    const labelEl = document.getElementById('syncShopifyBtnLabel');
 
     btn.disabled = true;
-    btn.innerHTML = 'Syncing...';
+    labelEl.textContent = 'Syncing...';
 
     try {
         const result = await apiJson('/products/sync-shopify', {
@@ -520,24 +520,25 @@ async function syncShopifyProducts() {
             'success'
         );
 
+        localStorage.setItem(SHOPIFY_PRODUCT_SYNC_STORAGE_KEY, Date.now().toString());
+        updateSyncShopifyLastSyncLabel();
         loadProducts();
     } catch (error) {
         console.error('Error syncing Shopify products:', error);
         showToast(error.message || 'Failed to sync products from Shopify', 'error');
     } finally {
         btn.disabled = false;
-        btn.innerHTML = originalText;
+        labelEl.textContent = 'Sync from Shopify';
     }
 }
 
 async function syncShopifyOrders() {
     const btn = document.getElementById('syncOrdersBtn');
     if (!btn) return;
-
-    const originalText = btn.innerHTML;
+    const labelEl = document.getElementById('syncOrdersBtnLabel');
 
     btn.disabled = true;
-    btn.innerHTML = 'Syncing...';
+    labelEl.textContent = 'Syncing...';
 
     try {
         const result = await apiJson('/orders/sync-shopify', {
@@ -548,13 +549,15 @@ async function syncShopifyOrders() {
             `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
             'success'
         );
+        localStorage.setItem(SHOPIFY_ORDER_SYNC_STORAGE_KEY, Date.now().toString());
+        updateSyncOrdersLastSyncLabel();
         await refreshOrdersView();
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');
     } finally {
         btn.disabled = false;
-        btn.innerHTML = originalText;
+        labelEl.textContent = 'Sync from Shopify';
     }
 }
 
