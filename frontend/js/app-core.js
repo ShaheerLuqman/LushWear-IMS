@@ -228,6 +228,24 @@ function initSettingsView() {
 const INSTALL_PROMPT_DISMISSED_KEY = 'lushwear_install_prompt_dismissed';
 let deferredInstallPrompt = null;
 
+// Safari (macOS) has no beforeinstallprompt/install API - "Add to Dock" is a manual
+// File-menu action only the user can trigger, so we just point them at it.
+function isMacSafari() {
+    const ua = navigator.userAgent;
+    return /Macintosh/.test(ua) && /^((?!chrome|android|crios|edg|opr).)*safari/i.test(ua);
+}
+
+function showInstallBanner() {
+    if (localStorage.getItem(INSTALL_PROMPT_DISMISSED_KEY)) return;
+    const banner = document.getElementById('installAppBanner');
+    if (banner) banner.style.display = 'flex';
+}
+
+function hideInstallBanner() {
+    const banner = document.getElementById('installAppBanner');
+    if (banner) banner.style.display = 'none';
+}
+
 function initInstallPrompt() {
     if ('serviceWorker' in navigator) {
         navigator.serviceWorker.register('service-worker.js').catch(() => { /* installability only - safe to ignore */ });
@@ -236,15 +254,12 @@ function initInstallPrompt() {
     window.addEventListener('beforeinstallprompt', (event) => {
         event.preventDefault();
         deferredInstallPrompt = event;
-        if (localStorage.getItem(INSTALL_PROMPT_DISMISSED_KEY)) return;
-        const banner = document.getElementById('installAppBanner');
-        if (banner) banner.style.display = 'flex';
+        showInstallBanner();
     });
 
     window.addEventListener('appinstalled', () => {
         deferredInstallPrompt = null;
-        const banner = document.getElementById('installAppBanner');
-        if (banner) banner.style.display = 'none';
+        hideInstallBanner();
     });
 
     const installBtn = document.getElementById('installAppBtn');
@@ -254,7 +269,7 @@ function initInstallPrompt() {
             deferredInstallPrompt.prompt();
             await deferredInstallPrompt.userChoice;
             deferredInstallPrompt = null;
-            document.getElementById('installAppBanner').style.display = 'none';
+            hideInstallBanner();
         });
     }
 
@@ -262,8 +277,17 @@ function initInstallPrompt() {
     if (dismissBtn) {
         dismissBtn.addEventListener('click', () => {
             localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, '1');
-            document.getElementById('installAppBanner').style.display = 'none';
+            hideInstallBanner();
         });
+    }
+
+    if (isMacSafari()) {
+        const titleEl = document.getElementById('installAppBannerTitle');
+        const subtitleEl = document.getElementById('installAppBannerSubtitle');
+        if (titleEl) titleEl.textContent = 'Install LushWear IMS';
+        if (subtitleEl) subtitleEl.textContent = 'In the Safari menu bar: File → Add to Dock';
+        if (installBtn) installBtn.style.display = 'none';
+        showInstallBanner();
     }
 }
 
