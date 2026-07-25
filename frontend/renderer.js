@@ -178,8 +178,6 @@ function applyEditLockState() {
         'bulkUpdateSetReturned',
         'bulkUpdateSetCancelled',
         'bulkUpdateSetPieceReceived',
-        'syncShopifyBtn',
-        'syncOrdersBtn',
         'bulkUpdateCostPriceSubmit',
         'recalculateOrderCostsSubmit',
         'bulkUpdateDeliveryChargesConfirm',
@@ -3352,19 +3350,18 @@ function switchView(viewName, { skipReload = false } = {}) {
 
     // Update header
     const titles = {
-        'dashboard': { title: 'Dashboard', subtitle: 'Overview of your inventory' },
-        'orders': { title: 'Orders', subtitle: 'View and manage orders' },
-        'cashbook': { title: 'Cashbook', subtitle: 'Track daily cash inflows and outflows' },
-        'ledgers': { title: 'Ledgers', subtitle: 'Manage individual account ledgers' },
-        'ledgerDetail': { title: 'Ledger', subtitle: 'View ledger entries' },
-        'monthSummary': { title: 'Month Summary', subtitle: 'View monthly order summaries' },
-        'monthDetail': { title: 'Month Details', subtitle: 'View detailed month statistics' },
-        'products': { title: 'Products', subtitle: 'Manage your product catalog' },
-        'loadSheetLogs': { title: 'Load Sheet Logs', subtitle: 'View and download past load sheets' }
+        'dashboard': 'Dashboard',
+        'orders': 'Orders',
+        'cashbook': 'Cashbook',
+        'ledgers': 'Ledgers',
+        'ledgerDetail': 'Ledger',
+        'monthSummary': 'Month Summary',
+        'monthDetail': 'Month Details',
+        'products': 'Products',
+        'loadSheetLogs': 'Load Sheet Logs'
     };
 
-    document.getElementById('viewTitle').textContent = titles[viewName].title;
-    document.getElementById('viewSubtitle').textContent = titles[viewName].subtitle;
+    document.getElementById('viewTitle').textContent = titles[viewName];
 
     // Show/hide buttons based on view
     const isOrders = viewName === 'orders';

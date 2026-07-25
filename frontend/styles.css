@@ -210,14 +210,34 @@ body {
 }
 
 /* Sidebar */
+/* Collapsed to an icon rail; expands on hover. The rail's 70px is held by
+   .sidebar-rail so the expanded panel overlays the content instead of reflowing
+   the grid on every hover. */
+.sidebar-rail {
+    width: 70px;
+    flex-shrink: 0;
+    position: relative;
+    z-index: 900;
+}
+
 .sidebar {
     width: 70px;
+    height: 100%;
     background: var(--bg-secondary);
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
     padding: 20px 0;
-    position: relative;
+    position: absolute;
+    top: 0;
+    left: 0;
+    overflow: hidden;
+    transition: width 0.18s ease;
+}
+
+.sidebar:hover {
+    width: 220px;
+    box-shadow: var(--shadow-lg);
 }
 
 .logo {
@@ -227,6 +247,7 @@ body {
     padding: 0 20px 24px;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 20px;
+    flex-shrink: 0;
 }
 
 .logo-img {
@@ -248,7 +269,7 @@ body {
     justify-content: center;
     position: relative;
     width: 100%;
-    padding: 14px;
+    padding: 14px 8px;
     background: transparent;
     border: none;
     border-radius: var(--radius-md);
@@ -257,6 +278,7 @@ body {
     font-size: 14px;
     font-weight: 400;
     cursor: pointer;
+    overflow: hidden;
     transition: var(--transition);
     margin-bottom: 4px;
 }
@@ -281,40 +303,31 @@ body {
     line-height: 1;
 }
 
-/* Tooltip on hover */
+/* Inline label, revealed when the sidebar expands (not a floating tooltip).
+   Collapsed it must take no width at all - an opacity-0 label still occupies
+   layout space and shoves the icon out of the 70px rail. */
 .nav-tooltip {
-    position: absolute;
-    left: 100%;
-    top: 50%;
-    transform: translateY(-50%);
-    margin-left: 12px;
-    padding: 8px 14px;
-    background: var(--text-primary);
-    color: var(--bg-primary);
-    font-size: 13px;
+    font-size: 14px;
     font-weight: 500;
     white-space: nowrap;
-    border-radius: var(--radius-sm);
+    overflow: hidden;
+    flex: 0 1 auto;
+    width: 0;
+    margin-left: 0;
     opacity: 0;
-    visibility: hidden;
-    transition: opacity 0.2s ease, visibility 0.2s ease;
-    z-index: 1000;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: opacity 0.12s ease;
 }
 
-.nav-tooltip::before {
-    content: '';
-    position: absolute;
-    right: 100%;
-    top: 50%;
-    transform: translateY(-50%);
-    border: 6px solid transparent;
-    border-right-color: var(--text-primary);
-}
-
-.nav-item:hover .nav-tooltip {
+.sidebar:hover .nav-tooltip {
+    width: auto;
+    margin-left: 12px;
     opacity: 1;
-    visibility: visible;
+}
+
+/* Icons hold the rail's centre when collapsed, then anchor left once expanded. */
+.sidebar:hover .nav-item {
+    justify-content: flex-start;
+    padding-left: 13px;
 }
 
 .sidebar-lock-wrap {
@@ -349,7 +362,7 @@ body {
 .header {
     display: flex;
     justify-content: space-between;
-    align-items: flex-start;
+    align-items: center;
     padding: 12px 20px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
@@ -364,15 +377,8 @@ body {
 .header-title h1 {
     font-size: 18px;
     font-weight: 600;
-    margin-bottom: 2px;
 }
 
-.header-subtitle {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-/* Two rows: items flow column-by-column so buttons split equally between rows, right-aligned */
 .header-actions {
     display: flex;
     flex-wrap: nowrap;
@@ -2086,6 +2092,26 @@ body:has(#ledgersView.active) .content-area {
     gap: 2px;
 }
 
+/* Keep the header label and its sort arrow on one baseline - without this the
+   indicator container aligns to the top of the cell instead of the text. */
+.ag-theme-alpine .ag-header-cell-label {
+    display: flex;
+    align-items: center;
+    height: 100%;
+}
+
+/* body's line-height: 1.6 makes a ~19px line box around 12px text, which throws
+   the text off-centre against the 12px sort icon. */
+.ag-theme-alpine .ag-header-cell-text {
+    line-height: 1.2;
+}
+
+.ag-theme-alpine .ag-sort-indicator-container {
+    display: flex;
+    align-items: center;
+    line-height: 1;
+}
+
 .ag-theme-alpine .ag-cell {
     display: flex;
     align-items: center;
@@ -2333,6 +2359,8 @@ body:has(#ledgersView.active) .content-area {
 }
 
 .ag-theme-alpine .ag-sort-indicator-icon {
+    display: flex;
+    align-items: center;
     margin-left: 3px;
 }
 
@@ -2753,7 +2781,7 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Order table full screen mode */
-body.orders-table-fullscreen .sidebar,
+body.orders-table-fullscreen .sidebar-rail,
 body.orders-table-fullscreen .header {
     display: none !important;
 }
