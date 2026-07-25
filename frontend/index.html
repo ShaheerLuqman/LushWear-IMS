@@ -8,6 +8,8 @@
         content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data: https:;">
     <title>Inventory Manager</title>
     <link rel="icon" type="image/png" href="assets/Logo.png">
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#8b5cf6">
     <link
         href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
         rel="stylesheet">
@@ -56,6 +58,17 @@
         </div>
     </div>
     
+    <!-- Install-as-desktop-app prompt -->
+    <div id="installAppBanner" class="install-app-banner" style="display: none;">
+        <img src="assets/Logo.png" alt="" class="install-app-banner-icon">
+        <div class="install-app-banner-text">
+            <p class="install-app-banner-title">Install LushWear IMS</p>
+            <p class="install-app-banner-subtitle">Add a desktop shortcut for quicker access</p>
+        </div>
+        <button type="button" id="installAppBtn" class="btn btn-primary">Install</button>
+        <button type="button" id="installAppDismissBtn" class="install-app-banner-dismiss" aria-label="Dismiss">&times;</button>
+    </div>
+
     <!-- Delivery Status Modal -->
     <div id="deliveryStatusModal" class="modal">
         <div class="modal-content">

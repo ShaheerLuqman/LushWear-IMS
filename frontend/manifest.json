@@ -1,0 +1,17 @@
+{
+    "name": "LushWear Inventory Manager",
+    "short_name": "LushWear IMS",
+    "start_url": "./index.html",
+    "scope": "./",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#8b5cf6",
+    "icons": [
+        {
+            "src": "assets/Logo.png",
+            "sizes": "258x258",
+            "type": "image/png",
+            "purpose": "any"
+        }
+    ]
+}

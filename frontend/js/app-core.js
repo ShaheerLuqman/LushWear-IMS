@@ -222,6 +222,51 @@ function initSettingsView() {
     });
 }
 
+// ============================================
+// Desktop install prompt (PWA) — lets the browser add a desktop shortcut
+// ============================================
+const INSTALL_PROMPT_DISMISSED_KEY = 'lushwear_install_prompt_dismissed';
+let deferredInstallPrompt = null;
+
+function initInstallPrompt() {
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('service-worker.js').catch(() => { /* installability only - safe to ignore */ });
+    }
+
+    window.addEventListener('beforeinstallprompt', (event) => {
+        event.preventDefault();
+        deferredInstallPrompt = event;
+        if (localStorage.getItem(INSTALL_PROMPT_DISMISSED_KEY)) return;
+        const banner = document.getElementById('installAppBanner');
+        if (banner) banner.style.display = 'flex';
+    });
+
+    window.addEventListener('appinstalled', () => {
+        deferredInstallPrompt = null;
+        const banner = document.getElementById('installAppBanner');
+        if (banner) banner.style.display = 'none';
+    });
+
+    const installBtn = document.getElementById('installAppBtn');
+    if (installBtn) {
+        installBtn.addEventListener('click', async () => {
+            if (!deferredInstallPrompt) return;
+            deferredInstallPrompt.prompt();
+            await deferredInstallPrompt.userChoice;
+            deferredInstallPrompt = null;
+            document.getElementById('installAppBanner').style.display = 'none';
+        });
+    }
+
+    const dismissBtn = document.getElementById('installAppDismissBtn');
+    if (dismissBtn) {
+        dismissBtn.addEventListener('click', () => {
+            localStorage.setItem(INSTALL_PROMPT_DISMISSED_KEY, '1');
+            document.getElementById('installAppBanner').style.display = 'none';
+        });
+    }
+}
+
 function initChangePinModal() {
     const modal = document.getElementById('changePinModal');
     const form = document.getElementById('changePinForm');
@@ -524,6 +569,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initGrids();
     initChangePinModal();
     initSettingsView();
+    initInstallPrompt();
     const lockAppBtn = document.getElementById('lockAppBtn');
     if (lockAppBtn) {
         lockAppBtn.addEventListener('click', () => lockApp());
