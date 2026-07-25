@@ -18,6 +18,10 @@
     <!-- Flatpickr (date picker for date range filter) -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" href="styles.css">
+    <script>
+        // Set before first paint so a dark-theme user never sees a light flash.
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('lushwear-theme') || 'light');
+    </script>
 </head>
 
 <body>
@@ -138,6 +142,10 @@
                         <span class="nav-icon" id="editLockIcon">🔒</span>
                         <span class="nav-tooltip" id="editLockTooltip">Unlock editing</span>
                     </button>
+                    <button class="nav-item" data-view="settings" title="Settings">
+                        <span class="nav-icon">⚙️</span>
+                        <span class="nav-tooltip">Settings</span>
+                    </button>
                 </div>
             </aside>
             </div>
@@ -181,8 +189,6 @@
                             <button type="button" id="ordersMoreActionGenerateLoadSheet" class="orders-more-actions__item" role="menuitem" title="Generate load sheet for selected orders">Generate Load Sheet</button>
                             <button type="button" id="ordersMoreActionGeneratePackagingList" class="orders-more-actions__item" role="menuitem" title="Generate combined packaging list for selected orders">Generate Packaging List</button>
                             <button type="button" id="ordersMoreActionGenerateInvoice" class="orders-more-actions__item" role="menuitem" title="Generate invoice PDF for selected orders">Generate Invoice</button>
-                            <div class="orders-more-actions__sep" role="separator"></div>
-                            <button type="button" id="changePinBtn" class="orders-more-actions__item" role="menuitem" title="Change app PIN">Change PIN</button>
                         </div>
                     </div>
                     <div id="headerOrdersAppActions" class="header-orders-app-actions" style="display: none;" role="group" aria-label="App security and view">
@@ -590,6 +596,36 @@
                             </table>
                             <p id="loadSheetLogsEmpty" class="load-sheet-logs-empty" style="display: none;">No load sheet logs yet.</p>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Settings View -->
+                <div id="settingsView" class="view">
+                    <div class="settings-container">
+                        <section class="settings-section">
+                            <h2 class="settings-section__title">Appearance</h2>
+                            <div class="settings-row">
+                                <div class="settings-row__text">
+                                    <span class="settings-row__label">Theme</span>
+                                    <span class="settings-row__hint">Choose a light or dark appearance.</span>
+                                </div>
+                                <div class="settings-theme-toggle" role="radiogroup" aria-label="Theme">
+                                    <button type="button" class="settings-theme-btn" data-theme-choice="light" role="radio" aria-checked="true">Light</button>
+                                    <button type="button" class="settings-theme-btn" data-theme-choice="dark" role="radio" aria-checked="false">Dark</button>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="settings-section">
+                            <h2 class="settings-section__title">Security</h2>
+                            <div class="settings-row">
+                                <div class="settings-row__text">
+                                    <span class="settings-row__label">App PIN</span>
+                                    <span class="settings-row__hint">Change the PIN used to unlock the app.</span>
+                                </div>
+                                <button type="button" id="settingsChangePinBtn" class="btn btn-secondary">Change PIN</button>
+                            </div>
+                        </section>
                     </div>
                 </div>
             </div>

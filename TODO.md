@@ -36,7 +36,6 @@ one line each.
       usable mechanism.
 - [ ] **Per-user view persistence** — remember each user's column widths / layout
       (cookies or user prefs; ties into Organizations & Users).
-- [ ] **Dark & light theme** — theme toggle with persisted preference.
 - [ ] **Keyboard shortcuts / keybinds** — add shortcuts for common actions.
 
 ### Full-stack (UI half; backend half in [`backend/BACKEND.md`](backend/BACKEND.md) §6)

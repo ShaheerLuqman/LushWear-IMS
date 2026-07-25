@@ -203,11 +203,43 @@ const navItems = document.querySelectorAll('.nav-item');
 const views = document.querySelectorAll('.view');
 const toast = document.getElementById('toast');
 
+const THEME_STORAGE_KEY = 'lushwear-theme';
+
+function applyTheme(theme) {
+    const dark = theme === 'dark';
+    document.documentElement.setAttribute('data-theme', theme);
+    // AG Grid ships its own dark theme; swapping the container class picks up all of
+    // its internals (menus, popups, chart panels) rather than only the vars we override.
+    document.querySelectorAll('.grid-container').forEach((el) => {
+        el.classList.toggle('ag-theme-alpine-dark', dark);
+        el.classList.toggle('ag-theme-alpine', !dark);
+    });
+    document.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+        const selected = btn.dataset.themeChoice === theme;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-checked', selected ? 'true' : 'false');
+    });
+}
+
+function initSettingsView() {
+    // The theme itself is set pre-paint by an inline script in index.html; this just
+    // syncs the toggle's selected state and handles changes.
+    applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || 'light');
+
+    document.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const theme = btn.dataset.themeChoice;
+            localStorage.setItem(THEME_STORAGE_KEY, theme);
+            applyTheme(theme);
+        });
+    });
+}
+
 function initChangePinModal() {
     const modal = document.getElementById('changePinModal');
     const form = document.getElementById('changePinForm');
     const errEl = document.getElementById('changePinError');
-    const openBtn = document.getElementById('changePinBtn');
+    const openBtn = document.getElementById('settingsChangePinBtn');
     const closeBtn = document.getElementById('changePinModalClose');
     const cancelBtn = document.getElementById('changePinCancelBtn');
     if (!modal || !form) {
@@ -504,6 +536,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initForms();
     initGrids();
     initChangePinModal();
+    initSettingsView();
     const lockAppBtn = document.getElementById('lockAppBtn');
     if (lockAppBtn) {
         lockAppBtn.addEventListener('click', () => lockApp());
@@ -3358,7 +3391,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
-        'loadSheetLogs': 'Load Sheet Logs'
+        'loadSheetLogs': 'Load Sheet Logs',
+        'settings': 'Settings'
     };
 
     document.getElementById('viewTitle').textContent = titles[viewName];

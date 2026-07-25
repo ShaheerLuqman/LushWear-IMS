@@ -28,6 +28,38 @@
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.1);
     --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.15);
     --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+    /* AG Grid surfaces, re-declared per theme below. */
+    --grid-bg: #ffffff;
+    --grid-header-bg: #f8f9fa;
+    --grid-border: #e5e7eb;
+    --grid-row-hover: #f3f0ff;
+    --grid-foreground: #1f2937;
+    --grid-header-foreground: #6b7280;
+}
+
+:root[data-theme="dark"] {
+    --bg-primary: #16161a;
+    --bg-secondary: #1d1d22;
+    --bg-tertiary: #2a2a31;
+    --bg-card: #1f1f25;
+    --border-color: #34343d;
+    --text-primary: #f2f2f5;
+    --text-secondary: #b9b9c4;
+    --text-muted: #85858f;
+    --danger: #e07575;
+    --warning: #d9b871;
+    --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
+    --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.6);
+
+    /* Matched to ag-theme-alpine-dark's own palette so the surfaces we style
+       ourselves (paging panel, popups, menus) blend with the grid. */
+    --grid-bg: #181d1f;
+    --grid-header-bg: #222628;
+    --grid-border: #68686e;
+    --grid-row-hover: #2c2740;
+    --grid-foreground: #ffffff;
+    --grid-header-foreground: #a0a0ac;
 }
 
 body {
@@ -330,6 +362,7 @@ body {
     padding-left: 13px;
 }
 
+/* Bottom-pinned group: edit lock + settings. */
 .sidebar-lock-wrap {
     margin-top: auto;
     padding: 12px 12px 0;
@@ -2053,16 +2086,11 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* AG Grid Light Theme Customization */
-.ag-theme-alpine {
-    --ag-background-color: #ffffff;
-    --ag-header-background-color: #f8f9fa;
-    --ag-odd-row-background-color: #ffffff;
-    --ag-row-hover-color: #f3f0ff;
+/* Shared sizing/typography for both AG Grid themes. Colours are left to each
+   theme's own stylesheet, plus the light-only overrides below. */
+.ag-theme-alpine,
+.ag-theme-alpine-dark {
     --ag-selected-row-background-color: rgba(139, 92, 246, 0.12);
-    --ag-border-color: #e5e7eb;
-    --ag-header-foreground-color: #6b7280;
-    --ag-foreground-color: #1f2937;
-    --ag-secondary-foreground-color: #4b5563;
     --ag-input-focus-border-color: #8b5cf6;
     --ag-range-selection-border-color: #8b5cf6;
     --ag-checkbox-checked-color: #8b5cf6;
@@ -2071,30 +2099,41 @@ body:has(#ledgersView.active) .content-area {
     --ag-cell-horizontal-padding: 16px;
     --ag-row-height: 48px;
     --ag-header-height: 48px;
-    --ag-filter-tool-panel-background-color: #f8f9fa;
-    --ag-control-panel-background-color: #f8f9fa;
     --ag-alpine-active-color: #8b5cf6;
 }
 
-.ag-theme-alpine .ag-header {
+.ag-theme-alpine {
+    --ag-background-color: var(--grid-bg);
+    --ag-header-background-color: var(--grid-header-bg);
+    --ag-odd-row-background-color: var(--grid-bg);
+    --ag-row-hover-color: var(--grid-row-hover);
+    --ag-border-color: var(--grid-border);
+    --ag-header-foreground-color: var(--grid-header-foreground);
+    --ag-foreground-color: var(--grid-foreground);
+    --ag-secondary-foreground-color: var(--text-secondary);
+    --ag-filter-tool-panel-background-color: var(--grid-header-bg);
+    --ag-control-panel-background-color: var(--grid-header-bg);
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header {
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
-.ag-theme-alpine .ag-header-cell {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell {
     padding-left: 12px;
     padding-right: 8px;
 }
 
-.ag-theme-alpine .ag-header-cell-comp-wrapper {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-comp-wrapper {
     gap: 2px;
 }
 
 /* Keep the header label and its sort arrow on one baseline - without this the
    indicator container aligns to the top of the cell instead of the text. */
-.ag-theme-alpine .ag-header-cell-label {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-label {
     display: flex;
     align-items: center;
     height: 100%;
@@ -2102,72 +2141,72 @@ body:has(#ledgersView.active) .content-area {
 
 /* body's line-height: 1.6 makes a ~19px line box around 12px text, which throws
    the text off-centre against the 12px sort icon. */
-.ag-theme-alpine .ag-header-cell-text {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-text {
     line-height: 1.2;
 }
 
-.ag-theme-alpine .ag-sort-indicator-container {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-sort-indicator-container {
     display: flex;
     align-items: center;
     line-height: 1;
 }
 
-.ag-theme-alpine .ag-cell {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-cell {
     display: flex;
     align-items: center;
 }
 
-.ag-theme-alpine .ag-paging-panel {
-    background: #f8f9fa;
-    border-top: 1px solid #e5e7eb;
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-panel {
+    background: var(--grid-header-bg);
+    border-top: 1px solid var(--grid-border);
     padding: 12px 16px;
 }
 
-.ag-theme-alpine .ag-paging-button {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-button {
     cursor: pointer;
     padding: 6px 12px;
     border-radius: var(--radius-sm);
     transition: var(--transition);
 }
 
-.ag-theme-alpine .ag-paging-button:hover {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-button:hover {
     background: rgba(139, 92, 246, 0.1);
 }
 
-.ag-theme-alpine input[class^="ag-"]:focus {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) input[class^="ag-"]:focus {
     border-color: #8b5cf6;
     box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
 }
 
-.ag-theme-alpine .ag-filter-toolpanel-header,
-.ag-theme-alpine .ag-filter-toolpanel-search,
-.ag-theme-alpine .ag-filter-body-wrapper {
-    background: #f8f9fa;
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-toolpanel-header,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-toolpanel-search,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-body-wrapper {
+    background: var(--grid-header-bg);
 }
 
-.ag-theme-alpine .ag-popup {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-popup {
+    background: var(--grid-header-bg);
+    border: 1px solid var(--grid-border);
     border-radius: 8px;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
 }
 
-.ag-theme-alpine .ag-menu {
-    background: #ffffff;
-    border: 1px solid #e5e7eb;
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-menu {
+    background: var(--grid-header-bg);
+    border: 1px solid var(--grid-border);
     border-radius: 8px;
 }
 
-.ag-theme-alpine .ag-menu-option-active {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-menu-option-active {
     background: rgba(139, 92, 246, 0.1);
 }
 
-.ag-theme-alpine .ag-floating-filter-input {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-input {
     border-radius: 4px;
 }
 
 /* Vertically center content in floating filter row */
-.ag-theme-alpine .ag-floating-filter-body {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-body {
     display: flex;
     align-items: center;
 }
@@ -2333,195 +2372,195 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Editable cells highlight */
-.ag-theme-alpine .ag-cell-inline-editing {
-    background: #f8f9fa;
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-cell-inline-editing {
+    background: var(--grid-header-bg);
     border-color: #8b5cf6;
     box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
 }
 
 /* Filtering is already visible in the floating filter row, so the header funnel is
    redundant - the only header indicator is the sort arrow below. */
-.ag-theme-alpine .ag-icon-filter,
-.ag-theme-alpine .ag-filter-icon {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-filter,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-icon {
     display: none !important;
 }
 
 /* Sort icons - flex-centred rather than line-height aligned, so the glyph sits on
    the header text's optical centre instead of its baseline. */
-.ag-theme-alpine .ag-icon-asc,
-.ag-theme-alpine .ag-icon-desc {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc {
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
     width: 12px !important;
     height: 12px !important;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-sort-indicator-icon {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-sort-indicator-icon {
     display: flex;
     align-items: center;
     margin-left: 3px;
 }
 
-.ag-theme-alpine .ag-icon-asc::before,
-.ag-theme-alpine .ag-icon-desc::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc::before,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc::before {
     font-family: inherit;
     font-size: 9px;
     line-height: 1;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-asc::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc::before {
     content: "▲";
 }
 
-.ag-theme-alpine .ag-icon-desc::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc::before {
     content: "▼";
 }
 
-.ag-theme-alpine .ag-icon-menu::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-menu::before {
     content: "▼";
     font-family: inherit;
     font-size: 6px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-menu {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-menu {
     width: 10px !important;
     height: 10px !important;
     line-height: 10px;
 }
 
 /* Hide dropdown/menu beside column name */
-.ag-theme-alpine .ag-header-cell-menu-button {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-menu-button {
     display: none !important;
 }
 
 /* Hide dropdown/button beside search bar in floating filter */
-.ag-theme-alpine .ag-floating-filter-button {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-button {
     display: none !important;
 }
 
-.ag-theme-alpine .ag-header-cell-filter-button {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-filter-button {
     display: none !important;
 }
 
-.ag-theme-alpine .ag-picker-field-icon {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-picker-field-icon {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
 }
 
-.ag-theme-alpine .ag-icon-columns::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-columns::before {
     content: "⊞";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-pin::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-pin::before {
     content: "📌";
     font-family: inherit;
     font-size: 12px;
 }
 
-.ag-theme-alpine .ag-icon-first::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-first::before {
     content: "⏮";
     font-family: inherit;
     font-size: 14px;
 }
 
-.ag-theme-alpine .ag-icon-previous::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-previous::before {
     content: "◀";
     font-family: inherit;
     font-size: 14px;
 }
 
-.ag-theme-alpine .ag-icon-next::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-next::before {
     content: "▶";
     font-family: inherit;
     font-size: 14px;
 }
 
-.ag-theme-alpine .ag-icon-last::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-last::before {
     content: "⏭";
     font-family: inherit;
     font-size: 14px;
 }
 
-.ag-theme-alpine .ag-icon-checkbox-checked::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-checked::before {
     content: "☑";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-checkbox-unchecked::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-unchecked::before {
     content: "☐";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-checkbox-indeterminate::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-indeterminate::before {
     content: "▣";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-none::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-none::before {
     content: "";
 }
 
-.ag-theme-alpine .ag-icon-loading::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-loading::before {
     content: "⟳";
     font-family: inherit;
     animation: spin 1s linear infinite;
 }
 
 /* Dropdown arrow (page size, filters, menus) – single rule to avoid double triangle */
-.ag-theme-alpine .ag-icon-small-down::before,
-.ag-theme-alpine .ag-icon-tree-closed::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-down::before,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tree-closed::before {
     content: "▼";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
     line-height: 1;
 }
 
-.ag-theme-alpine .ag-icon-small-up::before,
-.ag-theme-alpine .ag-icon-tree-open::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-up::before,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tree-open::before {
     content: "▲";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-small-left::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-left::before {
     content: "◀";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-small-right::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-right::before {
     content: "▶";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-cross::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-cross::before {
     content: "✕";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-cancel::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-cancel::before {
     content: "✕";
     font-family: inherit;
 }
 
-.ag-theme-alpine .ag-icon-tick::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tick::before {
     content: "✓";
     font-family: inherit;
 }
 
 /* Hide original icon font glyph (we use ::before for our icons) */
-.ag-theme-alpine .ag-icon {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon {
     font-family: inherit !important;
     font-size: 0;
     line-height: 1;
@@ -2530,18 +2569,18 @@ body:has(#ledgersView.active) .content-area {
     justify-content: center !important;
 }
 
-.ag-theme-alpine .ag-icon-expanded::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-expanded::before {
     content: "▼";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
-.ag-theme-alpine .ag-icon-contracted::before {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-contracted::before {
     content: "▶";
     font-family: inherit;
     font-size: 8px;
-    color: #000000;
+    color: var(--text-primary);
 }
 
 /* Grid cell renderers */
@@ -2561,7 +2600,7 @@ body:has(#ledgersView.active) .content-area {
 .grid-image-placeholder {
     width: 40px;
     height: 40px;
-    background: #f3f0ff;
+    background: var(--grid-row-hover);
     border-radius: 4px;
     display: flex;
     align-items: center;
@@ -2822,13 +2861,13 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 /* AG Grid Footer Row Styles */
-.ag-theme-alpine .ag-pinned-bottom-row {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-pinned-bottom-row {
     background-color: var(--bg-secondary) !important;
     border-top: 2px solid var(--accent-primary) !important;
     font-weight: bold;
 }
 
-.ag-theme-alpine .ag-pinned-bottom-row .ag-cell {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-pinned-bottom-row .ag-cell {
     background-color: var(--bg-secondary) !important;
     border-top: none !important;
 }
@@ -3227,7 +3266,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 /* Cashbook required field highlighting */
-.ag-theme-alpine .cashbook-required-field {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .cashbook-required-field {
     background-color: rgba(245, 158, 11, 0.15) !important;
     border: 1px solid rgba(245, 158, 11, 0.5) !important;
 }
@@ -3979,4 +4018,117 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .bulk-entry-progress-error {
     background: rgba(239, 68, 68, 0.12);
     color: #dc2626;
+}
+
+/* Settings */
+.settings-container {
+    max-width: 720px;
+    padding: 8px 4px;
+}
+
+.settings-section {
+    margin-bottom: 28px;
+}
+
+.settings-section__title {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+
+.settings-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.settings-row + .settings-row {
+    margin-top: 8px;
+}
+
+.settings-row__text {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.settings-row__label {
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.settings-row__hint {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.settings-theme-toggle {
+    display: inline-flex;
+    padding: 3px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-sm);
+    flex-shrink: 0;
+}
+
+.settings-theme-btn {
+    padding: 6px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.settings-theme-btn.active {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+/* Flatpickr ships a light-only stylesheet; recolour its surfaces for dark mode. */
+:root[data-theme="dark"] .flatpickr-calendar {
+    background: var(--bg-card);
+    color: var(--text-primary);
+    box-shadow: var(--shadow-lg);
+}
+
+:root[data-theme="dark"] .flatpickr-months .flatpickr-month,
+:root[data-theme="dark"] .flatpickr-weekdays,
+:root[data-theme="dark"] span.flatpickr-weekday {
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    fill: var(--text-secondary);
+}
+
+:root[data-theme="dark"] .flatpickr-day {
+    color: var(--text-primary);
+}
+
+:root[data-theme="dark"] .flatpickr-day:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--bg-tertiary);
+}
+
+:root[data-theme="dark"] .flatpickr-day.prevMonthDay,
+:root[data-theme="dark"] .flatpickr-day.nextMonthDay,
+:root[data-theme="dark"] .flatpickr-day.flatpickr-disabled {
+    color: var(--text-muted);
+}
+
+:root[data-theme="dark"] .flatpickr-months .flatpickr-prev-month svg,
+:root[data-theme="dark"] .flatpickr-months .flatpickr-next-month svg {
+    fill: var(--text-secondary);
 }
