@@ -27,6 +27,46 @@ CHECK constraints, data cleanup) is recorded in
       sequence of independent `addEventListener` blocks that would split cleanly
       per feature area. Left over from the `renderer.js` split.
 
+### Discussion: is AG Grid still the right table library?
+
+Not a decision to make now — capture the trade-offs before anyone reaches for a
+rewrite, and revisit if one of the pain points below actually bites.
+
+**What we use today:** AG Grid Community 31.0.2, loaded from jsDelivr (no build
+step, no npm dependency). 5 grids: orders, products, cashbook in/out, ledger
+detail. We lean on a fair amount of its surface — 12 `cellRenderer`s, 10
+`valueGetter`s, 27 `valueFormatter`s, 8 `cellEditor`s, `pinnedBottomRowData` for
+the selected-rows footer, `getRowId` for row-level updates after a sync,
+`onCellValueChanged` for inline saves, and ~20 `filterParams` blocks including
+the custom date-range filter. Orders loads up to 1000 rows at a time
+(`RECENT_ORDERS_LIMIT`), so virtualised rendering is doing real work.
+
+**Why it might be worth reconsidering:**
+- ~65 rules in `styles.css` exist purely to restyle AG Grid internals (icons,
+  header layout, popups, paging), and they fight the vendor stylesheet — the
+  filter/sort icon work and the `:is(.ag-theme-alpine, .ag-theme-alpine-dark)`
+  rewrite for dark mode are both symptoms of that.
+- Community edition omits things we may eventually want (row grouping,
+  server-side row model, Excel export with styling — we hand-roll xlsx today).
+- Enterprise is per-developer paid, so those features aren't a cheap upgrade.
+
+**Why replacing it is probably not worth it:**
+- Inline editing + custom cell editors + pinned footer + per-column filters +
+  virtualisation is a lot to reimplement or re-wire, and it touches the single
+  most-used screen in the app.
+- The alternatives trade one set of constraints for another: TanStack Table is
+  headless (we'd own all rendering and styling, which is most of what we already
+  dislike doing), a component-kit table like Ant Design's `<a-table>` (what
+  `kcp-frontend` uses) assumes you've adopted that whole UI kit and Vue, and
+  Handsontable/vxe-table are licensed or Vue-first.
+- We have no build step. Most modern options assume npm + bundler, which is a
+  bigger change than the grid swap itself.
+
+**If it comes up, the questions to answer first:** what specifically is hurting
+(styling friction? a missing feature? bundle size?), and would a targeted fix —
+e.g. dropping our CSS overrides in favour of AG Grid's theming API — solve it
+without a migration.
+
 ---
 
 # Feature backlog (frontend / UX)
@@ -38,13 +78,16 @@ one line each.
 
 ## Frontend / UX
 
-- [ ] **Mobile view** — the app is usable down to ~768px after the 2026-07-25
-      responsive pass (see `styles.css` "Responsive" section: toolbar buttons drop
-      their shared fixed width then cap, two-column modal forms collapse, header
-      title/period label hide, stats grid goes single-column). Below ~768px the
-      orders header still scrolls horizontally and the AG Grid tables are
-      inherently wide — a real phone layout needs a different approach (card list
-      instead of grid, or a dedicated mobile view), not more breakpoints.
+- [x] **Mobile view** — **Done, 2026-07-25.** Deliberately *not* a separate phone
+      layout: the grids keep full-size columns and scroll horizontally, since the
+      product is for big screens and shrinking cells to fit would make the data
+      unreadable. What changed instead (`styles.css` "Responsive / mobile"):
+      `sizeColumnsToFit()` is skipped below 820px via `sizeGridColumns()` (it was
+      squeezing ~2100px of orders columns into the viewport); nav becomes an
+      off-canvas drawer with a hamburger + scrim, since hover-to-expand does
+      nothing on touch; the toolbar wraps to its own scrollable row; modals go
+      full-bleed bottom-sheet; inputs go to 16px to stop iOS focus-zoom;
+      `100dvh` + `env(safe-area-inset-*)` for address bars and notches.
 - [ ] **Better column filtering** — replace the current column filter with a more
       usable mechanism.
 - [ ] **Per-user view persistence** — remember each user's column widths / layout

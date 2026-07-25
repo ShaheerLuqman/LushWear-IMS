@@ -789,7 +789,7 @@ function toggleOrdersFullScreen() {
             document.documentElement.requestFullscreen().catch(() => {});
         }
         setTimeout(() => {
-            if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+            sizeGridColumns(ordersGridApi);
         }, 100);
     }
 }
@@ -798,7 +798,7 @@ function toggleOrdersFullScreen() {
 function syncOrdersFullScreenExit() {
     document.body.classList.remove('orders-table-fullscreen');
     setTimeout(() => {
-        if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+        sizeGridColumns(ordersGridApi);
     }, 100);
 }
 
@@ -809,7 +809,7 @@ function exitOrdersFullScreen() {
         document.exitFullscreen().catch(() => {});
     }
     setTimeout(() => {
-        if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+        sizeGridColumns(ordersGridApi);
     }, 100);
 }
 

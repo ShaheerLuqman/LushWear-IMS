@@ -3,7 +3,7 @@
 
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data: https:;">
     <title>Inventory Manager</title>
@@ -101,6 +101,9 @@
     </div>
 
     <div class="app-container">
+        <!-- Dims the page behind the mobile nav drawer; tap to dismiss. -->
+        <div id="sidebarScrim" class="sidebar-scrim" hidden></div>
+
         <!-- Sidebar -->
         <div class="sidebar-rail">
             <aside class="sidebar" id="sidebar">
@@ -154,6 +157,9 @@
         <main class="main-content">
             <!-- Header -->
             <header class="header">
+                <button type="button" id="mobileNavToggle" class="mobile-nav-toggle" aria-label="Open navigation" aria-expanded="false" aria-controls="sidebar">
+                    <span class="mobile-nav-toggle__bars" aria-hidden="true"></span>
+                </button>
                 <div class="header-title">
                     <h1 id="viewTitle">Orders</h1>
                 </div>

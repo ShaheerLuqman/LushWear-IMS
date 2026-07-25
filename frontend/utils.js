@@ -2,6 +2,26 @@
 // Utilities
 // ============================================
 
+/** Viewport below which the app switches to its mobile layout. Keep in sync with
+ *  the `max-width: 820px` breakpoint in styles.css. */
+const MOBILE_BREAKPOINT = 820;
+
+function isMobileViewport() {
+    return window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).matches;
+}
+
+/**
+ * Fit columns to the viewport on desktop only.
+ *
+ * The orders grid alone is ~2100px of columns; squeezing that into a phone
+ * viewport makes every cell unreadable. On mobile we keep the columns at their
+ * natural widths and let AG Grid scroll horizontally instead.
+ */
+function sizeGridColumns(api) {
+    if (!api || isMobileViewport()) return;
+    api.sizeColumnsToFit();
+}
+
 /**
  * Fetch `path` (relative to API_BASE) and throw a normalised Error on failure.
  *

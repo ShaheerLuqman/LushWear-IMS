@@ -4,12 +4,41 @@
 // Navigation
 // ============================================
 
+/** Open/close the off-canvas nav drawer (mobile only; a no-op layout on desktop). */
+function setMobileNavOpen(open) {
+    const toggle = document.getElementById('mobileNavToggle');
+    const scrim = document.getElementById('sidebarScrim');
+    document.body.classList.toggle('mobile-nav-open', open);
+    if (toggle) toggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (scrim) scrim.hidden = !open;
+}
+
+function initMobileNav() {
+    const toggle = document.getElementById('mobileNavToggle');
+    const scrim = document.getElementById('sidebarScrim');
+    if (!toggle) return;
+
+    toggle.addEventListener('click', () => {
+        setMobileNavOpen(!document.body.classList.contains('mobile-nav-open'));
+    });
+    scrim?.addEventListener('click', () => setMobileNavOpen(false));
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') setMobileNavOpen(false);
+    });
+    // Leaving mobile widths with the drawer open would strand the scrim over the app.
+    window.matchMedia(`(max-width: ${MOBILE_BREAKPOINT}px)`).addEventListener('change', (e) => {
+        if (!e.matches) setMobileNavOpen(false);
+    });
+}
+
 function initNavigation() {
+    initMobileNav();
     navItems.forEach(item => {
         if (!item.dataset.view) return; // e.g. edit lock button has no data-view
         item.addEventListener('click', () => {
             const view = item.dataset.view;
             switchView(view);
+            setMobileNavOpen(false);
         });
     });
     const editLockBtn = document.getElementById('editLockBtn');
@@ -257,18 +286,18 @@ function switchView(viewName, { skipReload = false } = {}) {
     if (viewName === 'products') {
         loadProducts();
         setTimeout(() => {
-            if (productsGridApi) productsGridApi.sizeColumnsToFit();
+            sizeGridColumns(productsGridApi);
         }, 100);
     } else if (viewName === 'orders') {
         if (!skipReload) loadOrders();
         setTimeout(() => {
-            if (ordersGridApi) ordersGridApi.sizeColumnsToFit();
+            sizeGridColumns(ordersGridApi);
         }, 100);
     } else if (viewName === 'cashbook') {
         loadCashbook();
         setTimeout(() => {
-            if (cashbookIncomingGridApi) cashbookIncomingGridApi.sizeColumnsToFit();
-            if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.sizeColumnsToFit();
+            sizeGridColumns(cashbookIncomingGridApi);
+            sizeGridColumns(cashbookOutgoingGridApi);
         }, 100);
     } else if (viewName === 'loadSheetLogs') {
         loadLoadSheetLogs();
@@ -277,7 +306,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail
         setTimeout(() => {
-            if (ledgerDetailGridApi) ledgerDetailGridApi.sizeColumnsToFit();
+            sizeGridColumns(ledgerDetailGridApi);
         }, 100);
     } else if (viewName === 'monthSummary') {
         loadMonthSummaryList();
