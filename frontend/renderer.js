@@ -60,22 +60,6 @@ function onAuthExpired() {
     };
 })();
 
-function formatApiErrorDetail(payload) {
-    if (!payload || typeof payload !== 'object') {
-        return 'Request failed';
-    }
-    const d = payload.detail;
-    if (typeof d === 'string') {
-        return d;
-    }
-    if (Array.isArray(d)) {
-        return d
-            .map((x) => (x && typeof x === 'object' && x.msg ? x.msg : String(x)))
-            .join(' ');
-    }
-    return 'Request failed';
-}
-
 /** PIN gate form submit handler (removed after success so lock-app can re-open the gate). */
 let pinGateSubmitHandler = null;
 
@@ -302,7 +286,7 @@ function initChangePinModal() {
             });
             const data = await r.json().catch(() => ({}));
             if (!r.ok) {
-                throw new Error(formatApiErrorDetail(data));
+                throw new Error(apiErrorMessage(data, 'Request failed'));
             }
             showToast('PIN updated', 'success');
             closeModal();
@@ -376,7 +360,7 @@ function runPinGate() {
                         if (form) form.style.display = '';
                         if (titleEl) titleEl.style.display = '';
                         if (errEl) {
-                            errEl.textContent = formatApiErrorDetail(data);
+                            errEl.textContent = apiErrorMessage(data, 'Request failed');
                         }
                         submitBtn.disabled = true;
                         detachPinGateSubmit();
@@ -384,7 +368,7 @@ function runPinGate() {
                         return;
                     }
                     if (!r.ok) {
-                        throw new Error(formatApiErrorDetail(data));
+                        throw new Error(apiErrorMessage(data, 'Request failed'));
                     }
 
                     // Backend is ready. (Data is loaded after PIN verify, once we hold a
@@ -448,7 +432,7 @@ function runPinGate() {
                     });
                     const data = await r.json().catch(() => ({}));
                     if (!r.ok) {
-                        throw new Error(formatApiErrorDetail(data));
+                        throw new Error(apiErrorMessage(data, 'Request failed'));
                     }
                     setAuthToken(data.token);
                     root.hidden = true;
@@ -467,7 +451,7 @@ function runPinGate() {
                 if (!r.ok) {
                     if (errEl) {
                         errEl.textContent =
-                            r.status === 401 ? 'Incorrect PIN' : formatApiErrorDetail(data);
+                            r.status === 401 ? 'Incorrect PIN' : apiErrorMessage(data, 'Request failed');
                     }
                     pinInput.value = '';
                     pinInput.focus();
@@ -1339,10 +1323,8 @@ function initOrdersGrid() {
                     courierNormalized === 'POSTEX' ||
                     courierNormalized === 'COURIERS NEXT'
                 );
-                const courierEsc = (courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-                const trackEsc = (order.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
                 const refreshBtn = supportsDeliveryRefresh
-                    ? `<button type="button" class="grid-delivery-refresh-btn" onclick="event.stopPropagation(); fetchDeliveryStatus('${order.id}', '${courierEsc}', '${trackEsc}')" title="Refresh status"><span>🔄</span></button>`
+                    ? `<button type="button" class="grid-delivery-refresh-btn" data-refresh-order-id="${escapeHtml(order.id)}" title="Refresh status"><span>🔄</span></button>`
                     : '';
                 return `<div class="delivery-cell-with-status" title="${escapeHtml(displayStatus)}">
                     ${refreshBtn}
@@ -2100,6 +2082,19 @@ function initOrdersGrid() {
     };
 
     agGrid.createGrid(gridDiv, gridOptions);
+
+    // Delegated so the per-row refresh button carries only an id - courier and tracking
+    // are read from row data instead of being interpolated into an inline onclick.
+    gridDiv.addEventListener('click', (e) => {
+        const btn = e.target.closest('.grid-delivery-refresh-btn');
+        if (!btn) return;
+        e.stopPropagation();
+        const id = btn.dataset.refreshOrderId;
+        const node = id && ordersGridApi && ordersGridApi.getRowNode(id);
+        if (node && node.data) {
+            fetchDeliveryStatus(node.data.id, node.data.courier, node.data.tracking_number);
+        }
+    });
 }
 
 function isCashbookSystemOrFooterRow(data) {
@@ -2564,16 +2559,11 @@ function initCashbookOutgoingGrid() {
 
 async function saveCostPrice(productId, costPrice) {
     try {
-        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
+        await apiJson('/products/batch-update-cost-prices', {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ updates: [{ id: productId, cost_price: costPrice }] })
+            body: { updates: [{ id: productId, cost_price: costPrice }] },
+            fallback: 'Failed to update cost price'
         });
-
-        if (!response.ok) {
-            throw new Error('Failed to update cost price');
-        }
-
         showToast('Cost price updated', 'success');
     } catch (error) {
         console.error('Error saving cost price:', error);
@@ -2583,16 +2573,11 @@ async function saveCostPrice(productId, costPrice) {
 
 async function saveProductCollection(productId, collection) {
     try {
-        const response = await fetch(`${API_BASE}/products/${productId}`, {
+        await apiJson(`/products/${productId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ collection: collection })
+            body: { collection: collection },
+            fallback: 'Failed to update collection'
         });
-
-        if (!response.ok) {
-            throw new Error('Failed to update collection');
-        }
-
         showToast('Collection updated', 'success');
     } catch (error) {
         console.error('Error saving collection:', error);
@@ -2602,21 +2587,16 @@ async function saveProductCollection(productId, collection) {
 
 async function saveOrderField(orderId, field, value) {
     try {
-        const response = await fetch(`${API_BASE}/orders/${orderId}`, {
+        const updated = await apiJson(`/orders/${orderId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ [field]: value })
+            body: { [field]: value },
+            fallback: `Failed to update ${field}`
         });
-
-        if (!response.ok) {
-            throw new Error(`Failed to update ${field}`);
-        }
 
         // When the advance amount changes, the backend recomputes advance_status.
         // Reflect the recomputed status on the grid row so the indicator updates.
         if (field === 'advance_amount') {
             try {
-                const updated = await response.json();
                 if (updated && ordersGridApi) {
                     const rowNode = ordersGridApi.getRowNode(orderId);
                     if (rowNode && updated.advance_status !== undefined) {
@@ -2681,16 +2661,10 @@ async function confirmDeleteReplacementOrder() {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/orders/${orderId}`, {
+        await apiRequest(`/orders/${orderId}`, {
             method: 'DELETE',
-            headers: { 'Content-Type': 'application/json' }
+            fallback: 'Failed to delete order'
         });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to delete order');
-        }
-
         showToast(`Replacement order ${orderNumber} deleted`, 'success');
         loadOrders();
     } catch (error) {
@@ -2825,14 +2799,11 @@ async function handlePackagingListPdfUpload(event) {
             try {
                 const formData = new FormData();
                 formData.append('file', file);
-                const res = await fetch(`${API_BASE}/orders/extract-order-numbers-from-pdf`, {
+                const res = await apiRequest('/orders/extract-order-numbers-from-pdf', {
                     method: 'POST',
-                    body: formData
+                    body: formData,
+                    fallback: 'Failed to read PDF'
                 });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Failed to read PDF');
-                }
                 const data = await res.json();
                 addNumbers(data.order_numbers || []);
             } catch (e) {
@@ -2871,15 +2842,12 @@ async function generatePackagingListFromNumbers() {
     const prevText = generateBtn ? generateBtn.textContent : '';
     if (generateBtn) { generateBtn.disabled = true; generateBtn.textContent = 'Generating…'; }
     try {
-        const res = await fetch(`${API_BASE}/orders/generate-packaging-list-by-numbers`, {
+        const res = await apiRequest('/orders/generate-packaging-list-by-numbers', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_numbers: orderNumbers })
+            body: JSON.stringify({ order_numbers: orderNumbers }),
+            fallback: 'Failed to generate packaging list'
         });
-        if (!res.ok) {
-            const err = await res.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to generate packaging list');
-        }
         const matchedCount = parseInt(res.headers.get('X-Matched-Count') || '0', 10);
         const notFoundHeader = res.headers.get('X-Not-Found') || '';
         const blob = await res.blob();
@@ -2988,25 +2956,19 @@ async function confirmGenerateLoadSheet() {
         confirmBtn.textContent = 'Saving & generating...';
     }
     try {
-        const createRes = await fetch(`${API_BASE}/orders/load-sheet-logs`, {
+        const logData = await apiJson('/orders/load-sheet-logs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
+            body: {
                 assignment_number: assignmentNumber,
                 rider_name: riderName,
                 order_numbers: orderNumbers,
                 delivery_charge: deliveryCharge
-            })
+            },
+            fallback: 'Failed to save load sheet log'
         });
-        if (!createRes.ok) {
-            const err = await createRes.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to save load sheet log');
-        }
-        const logData = await createRes.json();
         const logId = logData.id;
         closeGenerateLoadSheetModal();
-        const pdfRes = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
-        if (!pdfRes.ok) throw new Error('Failed to generate PDF');
+        const pdfRes = await apiRequest(`/orders/load-sheet-logs/${logId}/pdf`, { fallback: 'Failed to generate PDF' });
         const blob = await pdfRes.blob();
         const filename = loadSheetFilenameFromDateAndRider(new Date(), riderName);
         const url = window.URL.createObjectURL(blob);
@@ -3082,12 +3044,7 @@ async function loadLoadSheetLogs() {
     tbody.innerHTML = '';
     if (emptyEl) emptyEl.style.display = 'none';
     try {
-        const response = await fetch(`${API_BASE}/orders/load-sheet-logs`);
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || `Failed to load (${response.status})`);
-        }
-        const logs = await response.json();
+        const logs = await apiJson('/orders/load-sheet-logs', { fallback: 'Failed to load' });
         updateNextLoadSheetAssignmentNumber(logs);
         fetchLoadSheetRiderNames();
         if (logs.length === 0) {
@@ -3138,11 +3095,7 @@ async function deleteLoadSheetLog(logId) {
     });
     if (!confirmed) return;
     try {
-        const response = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}`, { method: 'DELETE' });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to delete');
-        }
+        await apiRequest(`/orders/load-sheet-logs/${logId}`, { method: 'DELETE', fallback: 'Failed to delete' });
         showToast('Load sheet log deleted', 'success');
         loadLoadSheetLogs();
         loadOrders();
@@ -3154,8 +3107,7 @@ async function deleteLoadSheetLog(logId) {
 async function downloadLoadSheetLogPdf(logId, riderName, createdAt) {
     if (!logId) return;
     try {
-        const response = await fetch(`${API_BASE}/orders/load-sheet-logs/${logId}/pdf`);
-        if (!response.ok) throw new Error('Failed to generate PDF');
+        const response = await apiRequest(`/orders/load-sheet-logs/${logId}/pdf`, { fallback: 'Failed to generate PDF' });
         const blob = await response.blob();
         const filename = loadSheetFilenameFromDateAndRider(createdAt || new Date(), riderName);
         const url = window.URL.createObjectURL(blob);
@@ -3468,10 +3420,7 @@ function switchView(viewName, { skipReload = false } = {}) {
 
 async function loadProducts() {
     try {
-        const response = await fetch(`${API_BASE}/products/`);
-        if (!response.ok) throw new Error('Failed to fetch products');
-
-        products = await response.json();
+        products = await apiJson('/products/', { fallback: 'Failed to fetch products' });
         products.sort((a, b) => {
             const nameA = (a.name || '').toLowerCase();
             const nameB = (b.name || '').toLowerCase();
@@ -3583,10 +3532,7 @@ function populateOrdersPeriodFilterDropdown() {
 async function loadOrders() {
     if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
-        const response = await fetch(`${API_BASE}/orders/`);
-        if (!response.ok) throw new Error('Failed to fetch orders');
-
-        orders = await response.json();
+        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
 
         populateOrdersPeriodFilterDropdown();
         const selectEl = document.getElementById('ordersPeriodFilter');
@@ -3634,10 +3580,7 @@ async function refreshOrdersView() {
 async function loadOrdersForPeriod(month, year) {
     if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
-        const response = await fetch(`${API_BASE}/orders/?month=${month}&year=${year}`);
-        if (!response.ok) throw new Error('Failed to fetch orders for period');
-
-        orders = await response.json();
+        orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders for period' });
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
@@ -3826,9 +3769,7 @@ async function loadCashbookDay(targetDate, showLoading = true) {
         if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
     }
     try {
-        const response = await fetch(`${API_BASE}/cashbook/day/${targetDate}`);
-        if (!response.ok) throw new Error('Failed to load cashbook day');
-        const data = await response.json();
+        const data = await apiJson(`/cashbook/day/${targetDate}`, { fallback: 'Failed to load cashbook day' });
         cashbookDailyBalance = data.daily_balance;
         cashbookEntries = normalizeCashbookEntries(data.entries);
     } catch (error) {
@@ -4510,13 +4451,11 @@ async function createCashbookEntry(payload) {
     renderCashbook();
 
     try {
-        const response = await fetch(`${API_BASE}/cashbook/entries`, {
+        const created = await apiJson('/cashbook/entries', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ idempotency_key: generateIdempotencyKey(), ...payload })
+            body: { idempotency_key: generateIdempotencyKey(), ...payload },
+            fallback: 'Failed to add cashbook entry'
         });
-        if (!response.ok) throw new Error('Failed to add cashbook entry');
-        const created = await response.json();
         applyLedgerBalancePatches(created.ledger_balances);
         updateCashInHand();
 
@@ -4539,13 +4478,11 @@ async function createCashbookEntry(payload) {
 // Returns the created/replayed entries (each carries ledger_balances).
 async function postCashbookEntriesBulk(payloads) {
     const withKeys = payloads.map(p => ({ idempotency_key: generateIdempotencyKey(), ...p }));
-    const response = await fetch(`${API_BASE}/cashbook/entries/bulk`, {
+    const created = await apiJson('/cashbook/entries/bulk', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(withKeys)
+        body: withKeys,
+        fallback: 'Failed to create cashbook entries'
     });
-    if (!response.ok) throw new Error('Failed to create cashbook entries');
-    const created = await response.json();
     applyLedgerBalancePatches(created[0]?.ledger_balances);
     updateCashInHand();
     return created;
@@ -4618,13 +4555,11 @@ async function updateCashbookEntry(entryId, updates) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
+        const updated = await apiJson(`/cashbook/entries/${entryId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(updates)
+            body: updates,
+            fallback: 'Failed to update cashbook entry'
         });
-        if (!response.ok) throw new Error('Failed to update cashbook entry');
-        const updated = await response.json();
         applyLedgerBalancePatches(updated.ledger_balances);
         updateCashInHand();
 
@@ -4654,11 +4589,10 @@ async function deleteCashbookEntry(entryId) {
     }
 
     try {
-        const response = await fetch(`${API_BASE}/cashbook/entries/${entryId}`, {
-            method: 'DELETE'
+        const deleted = await apiJson(`/cashbook/entries/${entryId}`, {
+            method: 'DELETE',
+            fallback: 'Failed to delete cashbook entry'
         });
-        if (!response.ok) throw new Error('Failed to delete cashbook entry');
-        const deleted = await response.json();
         applyLedgerBalancePatches(deleted.ledger_balances);
         updateCashInHand();
 
@@ -4682,9 +4616,7 @@ async function deleteCashbookEntry(entryId) {
 
 async function loadLedgersList() {
     try {
-        const response = await fetch(`${API_BASE}/ledgers/`);
-        if (!response.ok) throw new Error('Failed to load ledgers');
-        ledgers = await response.json();
+        ledgers = await apiJson('/ledgers/', { fallback: 'Failed to load ledgers' });
     } catch (error) {
         console.error('Error loading ledgers:', error);
         ledgers = [];
@@ -4860,16 +4792,11 @@ async function createLedger(name, type, includeInCashInHand, openingBalance) {
         return;
     }
     try {
-        const response = await fetch(`${API_BASE}/ledgers/`, {
+        const created = await apiJson('/ledgers/', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, type, include_in_cash_in_hand: !!includeInCashInHand, opening_balance: openingBalance || 0 })
+            body: { name, type, include_in_cash_in_hand: !!includeInCashInHand, opening_balance: openingBalance || 0 },
+            fallback: 'Failed to create ledger'
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to create ledger');
-        }
-        const created = await response.json();
         const onCreated = createLedgerOnCreateCallback;
         showToast('Ledger created', 'success');
         closeCreateLedgerModal();
@@ -4904,9 +4831,7 @@ async function openEditLedgerModal(ledgerId) {
     if (!ledgerId) return;
     editLedgerId = ledgerId;
     try {
-        const ledgerRes = await fetch(`${API_BASE}/ledgers/${ledgerId}`);
-        if (!ledgerRes.ok) throw new Error('Failed to load ledger');
-        const ledger = await ledgerRes.json();
+        const ledger = await apiJson(`/ledgers/${ledgerId}`, { fallback: 'Failed to load ledger' });
         editLedgerHasEntries = !!ledger.has_entries;
 
         const nameInput = document.getElementById('editLedgerName');
@@ -4975,15 +4900,11 @@ async function saveEditLedger() {
     const body = { name, type, include_in_cash_in_hand: includeInCashInHand };
     if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
     try {
-        const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
+        await apiJson(`/ledgers/${editLedgerId}`, {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body)
+            body,
+            fallback: 'Failed to update ledger'
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to update ledger');
-        }
         showToast('Ledger updated', 'success');
         closeEditLedgerModal();
         await loadLedgers();
@@ -4999,10 +4920,7 @@ async function deleteLedgerFromEditModal() {
     const confirmed = await showAppConfirm({ title: 'Delete Ledger', message: 'Are you sure you want to delete this ledger? This cannot be undone.', confirmText: 'Delete', danger: true });
     if (!confirmed) return;
     try {
-        const response = await fetch(`${API_BASE}/ledgers/${editLedgerId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete ledger');
+        await apiRequest(`/ledgers/${editLedgerId}`, { method: 'DELETE', fallback: 'Failed to delete ledger' });
         showToast('Ledger deleted', 'success');
         closeEditLedgerModal();
         await loadLedgers();
@@ -5016,10 +4934,7 @@ async function deleteLedger(ledgerId) {
     if (!ledgerId) return;
     if (!confirm('Are you sure you want to delete this ledger? This cannot be undone.')) return;
     try {
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}`, {
-            method: 'DELETE'
-        });
-        if (!response.ok) throw new Error('Failed to delete ledger');
+        await apiRequest(`/ledgers/${ledgerId}`, { method: 'DELETE', fallback: 'Failed to delete ledger' });
         showToast('Ledger deleted', 'success');
         await loadLedgers();
     } catch (error) {
@@ -5030,9 +4945,7 @@ async function deleteLedger(ledgerId) {
 
 async function openLedgerDetail(ledgerId) {
     try {
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}`);
-        if (!response.ok) throw new Error('Failed to load ledger');
-        currentLedger = await response.json();
+        currentLedger = await apiJson(`/ledgers/${ledgerId}`, { fallback: 'Failed to load ledger' });
     } catch (error) {
         console.error('Error loading ledger:', error);
         showToast('Failed to load ledger', 'error');
@@ -5050,9 +4963,7 @@ async function loadLedgerEntries(ledgerId) {
 
     if (ledgerDetailGridApi) ledgerDetailGridApi.showLoadingOverlay();
     try {
-        const response = await fetch(`${API_BASE}/ledgers/${ledgerId}/entries`);
-        if (!response.ok) throw new Error('Failed to load ledger entries');
-        ledgerEntries = (await response.json()).map(e => ({
+        ledgerEntries = (await apiJson(`/ledgers/${ledgerId}/entries`, { fallback: 'Failed to load ledger entries' })).map(e => ({
             ...e,
             entry_date: e.entry_date ? String(e.entry_date).slice(0, 10) : ''
         }));
@@ -5208,17 +5119,10 @@ async function syncShopifyProducts() {
     btn.innerHTML = 'Syncing...';
 
     try {
-        const response = await fetch(`${API_BASE}/products/sync-shopify`, {
+        const result = await apiJson('/products/sync-shopify', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            fallback: 'Failed to sync products from Shopify'
         });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to sync products from Shopify');
-        }
-
-        const result = await response.json();
         const productsInfo = result.products || {};
         const variantsInfo = result.variants || {};
         showToast(
@@ -5246,17 +5150,10 @@ async function syncShopifyOrders() {
     btn.innerHTML = 'Syncing...';
 
     try {
-        const response = await fetch(`${API_BASE}/orders/sync-shopify`, {
+        const result = await apiJson('/orders/sync-shopify', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' }
+            fallback: 'Failed to sync orders from Shopify'
         });
-
-        if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.detail || 'Failed to sync orders from Shopify');
-        }
-
-        const result = await response.json();
         showToast(
             `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
             'success'
@@ -5467,10 +5364,7 @@ let currentMonthDetail = null;
 
 async function loadMonthSummaryList() {
     try {
-        const response = await fetch(`${API_BASE}/orders/month-summary/list`);
-        if (!response.ok) throw new Error('Failed to fetch month summary list');
-        
-        const months = await response.json();
+        const months = await apiJson('/orders/month-summary/list', { fallback: 'Failed to fetch month summary list' });
         displayMonthSummaryCards(months);
     } catch (error) {
         console.error('Error loading month summary list:', error);
@@ -5555,9 +5449,7 @@ async function openMonthDetail(month, year) {
     switchView('monthDetail');
 
     try {
-        const response = await fetch(`${API_BASE}/orders/month-summary/${month}/${year}`);
-        if (!response.ok) throw new Error('Failed to fetch month detail');
-        const data = await response.json();
+        const data = await apiJson(`/orders/month-summary/${month}/${year}`, { fallback: 'Failed to fetch month detail' });
         displayMonthDetail(data);
     } catch (error) {
         console.error('Error loading month detail:', error);
@@ -5739,15 +5631,12 @@ function initForms() {
                 return;
             }
             try {
-                const res = await fetch(`${API_BASE}/orders/generate-invoice`, {
+                const res = await apiRequest('/orders/generate-invoice', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(orderIds)
+                    body: JSON.stringify(orderIds),
+                    fallback: 'Failed to generate invoice'
                 });
-                if (!res.ok) {
-                    const err = await res.json().catch(() => ({}));
-                    throw new Error(err.detail || 'Failed to generate invoice');
-                }
                 const blob = await res.blob();
                 const filename = invoicePdfFilename();
                 const url = window.URL.createObjectURL(blob);
@@ -5822,23 +5711,18 @@ function initForms() {
             submitBtn.disabled = true;
             submitBtn.textContent = 'Creating...';
             try {
-                const response = await fetch(`${API_BASE}/orders/create-replacement`, {
+                const result = await apiJson('/orders/create-replacement', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
+                    body: {
                         original_order_number: originalNum,
                         total_amount: total,
                         advance_amount: advance,
                         cost_price: costPrice,
                         courier: courier,
                         tracking_number: tracking || null,
-                    }),
+                    },
+                    fallback: 'Failed to create replacement order'
                 });
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || 'Failed to create replacement order');
-                }
-                const result = await response.json();
                 showToast(`Replacement order ${result.order_number} created`, 'success');
                 closeReplacementModal();
                 loadOrders();
@@ -6358,16 +6242,11 @@ async function submitBulkUpdateDeliveryCharges() {
         confirmBtn.textContent = 'Updating...';
     }
     try {
-        const response = await fetch(`${API_BASE}/orders/bulk-update-delivery-charges`, {
+        const result = await apiJson('/orders/bulk-update-delivery-charges', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_numbers: orderNumbers, delivery_charge: deliveryCharge }),
+            body: { order_numbers: orderNumbers, delivery_charge: deliveryCharge },
+            fallback: 'Failed to update delivery charges'
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to update delivery charges');
-        }
-        const result = await response.json();
         closeBulkUpdateDeliveryChargesModal();
         showBulkUpdateResults(result);
         loadOrders();
@@ -6429,18 +6308,11 @@ async function submitBulkUpdateCostPrice() {
         submitBtn.textContent = 'Updating...';
     }
     try {
-        const response = await fetch(`${API_BASE}/products/batch-update-cost-prices`, {
+        const result = await apiJson('/products/batch-update-cost-prices', {
             method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                updates: selected.map((r) => ({ id: r.id, cost_price: costPrice }))
-            })
+            body: { updates: selected.map((r) => ({ id: r.id, cost_price: costPrice })) },
+            fallback: 'Failed to update cost prices'
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            throw new Error(err.detail || 'Failed to update cost prices');
-        }
-        const result = await response.json();
         showToast(result.message || `Updated cost price for ${selected.length} product(s)`, 'success');
         closeBulkUpdateCostPriceModal();
         await loadProducts();
@@ -6511,21 +6383,11 @@ async function submitRecalculateOrderCosts() {
         submitBtn.textContent = 'Updating...';
     }
     try {
-        const response = await fetch(`${API_BASE}/products/recalculate-order-costs`, {
+        const result = await apiJson('/products/recalculate-order-costs', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                product_id: productId,
-                created_after: d.toISOString()
-            })
+            body: { product_id: productId, created_after: d.toISOString() },
+            fallback: 'Failed to recalculate'
         });
-        if (!response.ok) {
-            const err = await response.json().catch(() => ({}));
-            const detail = err.detail;
-            const msg = typeof detail === 'string' ? detail : (Array.isArray(detail) ? JSON.stringify(detail) : 'Failed to recalculate');
-            throw new Error(msg);
-        }
-        const result = await response.json();
         closeRecalculateOrderCostsModal();
         const nums = result.updated_order_numbers;
         if (Array.isArray(nums) && nums.length) {
@@ -6676,16 +6538,11 @@ async function bulkUpdateOrderStatus(orderStatus) {
     });
     
     try {
-        const response = await fetch(`${API_BASE}/orders/bulk-update-status`, {
+        const result = await apiJson('/orders/bulk-update-status', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_numbers: orderNumbers, order_status: orderStatus }),
+            body: { order_numbers: orderNumbers, order_status: orderStatus },
+            fallback: 'Bulk update failed'
         });
-        if (!response.ok) {
-            const err = await response.json();
-            throw new Error(err.detail || 'Bulk update failed');
-        }
-        const result = await response.json();
         showBulkUpdateResults(result);
         loadOrders();
     } catch (error) {
@@ -6735,16 +6592,11 @@ async function bulkUpdatePieceReceived() {
     
     try {
         // First, update piece_received to "Received"
-        const pieceReceivedResponse = await fetch(`${API_BASE}/orders/bulk-update-piece-received`, {
+        const pieceReceivedResult = await apiJson('/orders/bulk-update-piece-received', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ order_numbers: orderNumbers }),
+            body: { order_numbers: orderNumbers },
+            fallback: 'Failed to update piece received'
         });
-        if (!pieceReceivedResponse.ok) {
-            const err = await pieceReceivedResponse.json();
-            throw new Error(err.detail || 'Failed to update piece received');
-        }
-        const pieceReceivedResult = await pieceReceivedResponse.json();
         
         // Then, automatically set order status to "returned"
         let statusUpdateResult = null;
@@ -6954,17 +6806,11 @@ function exportCurrentGridToExcel() {
 /** Fetch delivery status for many orders in one request (PostEx orders are batched
  * server-side via track-bulk-order). Returns [{order_id, delivery_status} | {order_id, error}]. */
 async function fetchDeliveryStatusBulk(orderIds) {
-    const response = await fetch(`${API_BASE}/orders/delivery-status/bulk?save=true`, {
+    return apiJson('/orders/delivery-status/bulk?save=true', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(orderIds)
+        body: orderIds,
+        fallback: 'Failed to fetch delivery status'
     });
-    if (!response.ok) {
-        const error = await response.json().catch(() => ({}));
-        const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
-        throw new Error(detail);
-    }
-    return response.json();
 }
 
 const FETCH_DELIVERY_BTN_DEFAULT_TEXT = 'Fetch Delivery Status';
@@ -7049,8 +6895,6 @@ async function refreshDeliveryStatusSelected() {
 }
 
 async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
-    console.log('fetchDeliveryStatus called with:', { orderId, courier, trackingNumber });
-    
     if (!orderId) {
         showToast('Order ID not available', 'error');
         return;
@@ -7080,19 +6924,16 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         return;
     }
     
-    modal.style.display = 'flex';
+    modal.classList.add('active');
     content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
     
     try {
         const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
-        console.log('Making request to:', url);
         const response = await fetch(url, {
             method: 'GET',
             headers: { 'Content-Type': 'application/json' }
         });
-        
-        console.log('Response status:', response.status);
-        
+
         if (!response.ok) {
             const error = await response.json().catch(() => ({}));
             const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
@@ -7100,7 +6941,6 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
         }
         
         const data = await response.json();
-        console.log('Received data:', data);
         displayDeliveryStatus(data, orderId);
         // Update order in grid: Delivery, Piece With, order_status (backend already saved when save=true)
         if (ordersGridApi) {
@@ -7127,9 +6967,7 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
 
 function displayDeliveryStatus(data, orderId) {
     const content = document.getElementById('deliveryStatusContent');
-    const courierSafe = (data.courier || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    const trackingSafe = (data.tracking_number || '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
-    
+
     let html = `
         <div class="delivery-status-info">
             <div class="info-row">
@@ -7174,14 +7012,17 @@ function displayDeliveryStatus(data, orderId) {
     }
     
     html += '</div>';
-    html += `<div class="delivery-status-modal-actions"><button type="button" class="btn btn-primary delivery-status-btn" onclick="fetchDeliveryStatus('${orderId}', '${courierSafe}', '${trackingSafe}')">Refresh status</button></div>`;
+    html += '<div class="delivery-status-modal-actions"><button type="button" class="btn btn-primary delivery-status-btn">Refresh status</button></div>';
     content.innerHTML = html;
+    content.querySelector('.delivery-status-btn')?.addEventListener('click', () => {
+        fetchDeliveryStatus(orderId, data.courier, data.tracking_number);
+    });
 }
 
 function closeDeliveryStatusModal() {
     const modal = document.getElementById('deliveryStatusModal');
     if (modal) {
-        modal.style.display = 'none';
+        modal.classList.remove('active');
     }
 }
 
@@ -7269,12 +7110,12 @@ function showDeliveryStatusReportModal(report, succeeded, total, settledCount = 
 
     const firstNonEmpty = visible.find(c => (report[c.key] || []).length > 0);
     renderDeliveryStatusReportDetail((firstNonEmpty || visible[0]).key);
-    modal.style.display = 'flex';
+    modal.classList.add('active');
 }
 
 function closeDeliveryStatusReportModal() {
     const modal = document.getElementById('deliveryStatusReportModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) modal.classList.remove('active');
 }
 
 function showPostExAmountMismatchesModal(mismatches) {
@@ -7285,12 +7126,12 @@ function showPostExAmountMismatchesModal(mismatches) {
         const diff = (m.receivable - m.csv_net_amount).toFixed(2);
         return `<tr><td>${m.order_number}</td><td>${m.receivable.toFixed(2)}</td><td>${m.csv_net_amount.toFixed(2)}</td><td>${diff}</td></tr>`;
     }).join('');
-    modal.style.display = 'flex';
+    modal.classList.add('active');
 }
 
 function closePostExAmountMismatchesModal() {
     const modal = document.getElementById('postExAmountMismatchesModal');
-    if (modal) modal.style.display = 'none';
+    if (modal) modal.classList.remove('active');
 }
 
 // Close modal when clicking outside or on close button
@@ -7336,8 +7177,5 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('closeDeliveryStatusReportBtn')?.addEventListener('click', closeDeliveryStatusReportModal);
 });
 
-// Make functions globally accessible
+// Referenced by inline onclick handlers in index.html.
 window.closeModal = closeModal;
-window.syncShopifyProducts = syncShopifyProducts;
-window.fetchDeliveryStatus = fetchDeliveryStatus;
-window.closeDeliveryStatusModal = closeDeliveryStatusModal;

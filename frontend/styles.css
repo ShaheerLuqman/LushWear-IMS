@@ -1133,15 +1133,6 @@ body:has(#ledgersView.active) .content-area {
     min-width: 32px;
 }
 
-.btn-danger {
-    background: var(--danger);
-    color: white;
-}
-
-.btn-danger:hover {
-    background: #d46c6c;
-}
-
 .btn-success {
     background: linear-gradient(135deg, #4ade80, #22c55e);
     color: white;
@@ -1232,6 +1223,7 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Modal */
+/* Every modal opens by toggling `.active` - never by setting style.display. */
 .modal {
     display: none;
     position: fixed;
@@ -1239,32 +1231,34 @@ body:has(#ledgersView.active) .content-area {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.5);
     backdrop-filter: blur(4px);
-    z-index: 1000;
+    z-index: 10000;
     align-items: center;
     justify-content: center;
 }
 
 .modal.active {
     display: flex;
-    z-index: 10001;
 }
 
 #createLedgerModal.active {
     z-index: 10011;
 }
 
+/* Column layout so .modal-header stays put and only .modal-body scrolls. */
 .modal-content {
     position: relative;
     z-index: 1;
+    display: flex;
+    flex-direction: column;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
     width: 90%;
     max-width: 600px;
-    max-height: 90vh;
-    overflow-y: auto;
+    max-height: 80vh;
+    overflow: hidden;
     box-shadow: var(--shadow-lg);
     animation: modalIn 0.3s ease;
 }
@@ -1283,20 +1277,29 @@ body:has(#ledgersView.active) .content-area {
 }
 
 .modal-header h2 {
-    font-size: 18px;
+    margin: 0;
+    font-size: 20px;
     font-weight: 600;
 }
 
 .modal-close {
     background: none;
     border: none;
-    font-size: 24px;
+    font-size: 28px;
     color: var(--text-muted);
     cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-sm);
     transition: var(--transition);
 }
 
 .modal-close:hover {
+    background: var(--bg-tertiary);
     color: var(--text-primary);
 }
 
@@ -1306,7 +1309,9 @@ body:has(#ledgersView.active) .content-area {
 }
 
 .modal-body {
-    padding: 20px 24px 24px;
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
 }
 
 .modal-description {
@@ -1489,8 +1494,8 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: var(--shadow-lg);
     color: var(--text-primary);
     font-size: 14px;
-    /* Above every modal/dropdown/tooltip layer (highest in use: #createLedgerModal.active
-       at 10011) so a toast fired while a popup is open is never hidden behind it. */
+    /* Above every modal/dropdown/tooltip layer (highest in use: #deliveryStatusModal.active
+       at 10020) so a toast fired while a popup is open is never hidden behind it. */
     z-index: 20000;
     transform: translateY(100px);
     opacity: 0;
@@ -1606,73 +1611,6 @@ body:has(#ledgersView.active) .content-area {
     }
 }
 
-/* Modal Styles */
-.modal {
-    display: none;
-    position: fixed;
-    z-index: 10000;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.5);
-    align-items: center;
-    justify-content: center;
-}
-
-.modal-content {
-    background: var(--bg-card);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow-lg);
-    max-width: 600px;
-    width: 90%;
-    max-height: 80vh;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.modal-header h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 600;
-}
-
-.modal-close {
-    background: none;
-    border: none;
-    font-size: 28px;
-    cursor: pointer;
-    color: var(--text-muted);
-    padding: 0;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    transition: var(--transition);
-}
-
-.modal-close:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.modal-body {
-    padding: 24px;
-    overflow-y: auto;
-    flex: 1;
-}
-
 .postex-mismatches-table-wrap {
     overflow-x: auto;
     margin: 1rem 0;
@@ -1746,9 +1684,10 @@ body:has(#ledgersView.active) .content-area {
     background: var(--accent-glow);
 }
 
-/* Detail modal is earlier in the DOM, so it needs a higher stacking order to
-   open on top of the report rather than behind it. */
-#deliveryStatusModal {
+/* Opened from within the report modal while that stays open. Both get the same
+   z-index from .modal.active, and this one is earlier in the DOM, so it needs an
+   explicit bump to land on top instead of behind. */
+#deliveryStatusModal.active {
     z-index: 10020;
 }
 

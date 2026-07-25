@@ -2,11 +2,53 @@
 // Utilities
 // ============================================
 
+/**
+ * Fetch `path` (relative to API_BASE) and throw a normalised Error on failure.
+ *
+ * FastAPI returns errors as `{detail: ...}` where detail is a string, or an array
+ * of validation objects for a 422. `fallback` is used when the body has no usable
+ * detail (empty body, HTML error page, network-level failure).
+ *
+ * Returns the raw Response - callers read .json()/.blob()/.headers themselves.
+ */
+async function apiRequest(path, { fallback = 'Request failed', ...options } = {}) {
+    const response = await fetch(`${API_BASE}${path}`, options);
+    if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(apiErrorMessage(body, `${fallback} (${response.status})`));
+    }
+    return response;
+}
+
+/** JSON-in/JSON-out wrapper around apiRequest. Pass `body` to send it as JSON. */
+async function apiJson(path, { body, ...options } = {}) {
+    const opts = { ...options };
+    if (body !== undefined) {
+        opts.headers = { 'Content-Type': 'application/json', ...(options.headers || {}) };
+        opts.body = JSON.stringify(body);
+    }
+    const response = await apiRequest(path, opts);
+    if (response.status === 204) return null;
+    return response.json();
+}
+
+/** Pull a displayable message out of a FastAPI error body. */
+function apiErrorMessage(body, fallback) {
+    const detail = body && body.detail;
+    if (typeof detail === 'string' && detail) return detail;
+    if (Array.isArray(detail) && detail.length) {
+        return detail.map((d) => (typeof d === 'string' ? d : d.msg || JSON.stringify(d))).join(' ');
+    }
+    return fallback;
+}
+
+/** Escape for both text and double-quoted attribute contexts. textContent/innerHTML
+ *  escapes & < > but leaves `"` raw, which breaks out of an attribute value. */
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
     div.textContent = text;
-    return div.innerHTML;
+    return div.innerHTML.replace(/"/g, '&quot;');
 }
 
 /** Show Fedex as TCS in the app. */
