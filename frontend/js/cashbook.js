@@ -601,7 +601,9 @@ function extractOrderNumberFromText(text) {
 
 /**
  * Parse one line of bulk-entry text.
- * Format: <KIND>: <AMOUNT> <PARTICULARS> "<LEDGER1>" ["<LEDGER2>"]
+ * Format: <KIND>: <AMOUNT> <LEDGER> [(<PARTICULARS>)]
+ * KIND is IN (inflow to LEDGER) or OUT (outflow from LEDGER). Particulars are
+ * optional; when omitted, the same default text as the manual entry form is used.
  * Returns { ok, errors: [str], lineNo, raw, kind, amount, particulars, entries: [{entry_type, amount, description, folio}] }
  */
 function parseBulkEntryLine(raw, lineNo) {
@@ -609,83 +611,60 @@ function parseBulkEntryLine(raw, lineNo) {
     const line = String(raw || '').trim();
     if (!line) { result.blank = true; return result; }
 
-    // Find the KIND token (IN / OUT / XFER followed by ':') anywhere in the line and
+    // Find the KIND token (IN / OUT followed by ':') anywhere in the line and
     // ignore anything before it. This lets pasted lines keep prefixes like a
     // WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: IN: 16400 ...".
-    const kindMatch = line.match(/\b(IN|OUT|XFER)\s*:\s*(.*)$/i);
+    const kindMatch = line.match(/\b(IN|OUT)\s*:\s*(.*)$/i);
     if (!kindMatch) {
-        result.errors.push('Missing "<KIND>:" prefix (use IN:, OUT:, or XFER:).');
+        result.errors.push('Missing "<KIND>:" prefix (use IN: or OUT:).');
         return result;
     }
     const kind = kindMatch[1].toUpperCase();
-    const rest = kindMatch[2];
+    const rest = kindMatch[2].trim();
     result.kind = kind;
     // The cleaned line (from KIND: onward) without any pasted prefix such as a
     // WhatsApp timestamp. Shown in the validation list instead of the raw line.
-    result.cleaned = `${kind}: ${rest.trim()}`;
+    result.cleaned = `${kind}: ${rest}`;
 
-    // Extract quoted ledger names (in order).
-    const quoted = [];
-    const quoteRe = /"([^"]*)"/g;
-    let m;
-    while ((m = quoteRe.exec(rest)) !== null) quoted.push(m[1]);
+    // Optional trailing "(particulars)" - everything before it is "<AMOUNT> <LEDGER>".
+    let particulars = null;
+    let head = rest;
+    const parenMatch = rest.match(/\(([^)]*)\)\s*$/);
+    if (parenMatch) {
+        particulars = parenMatch[1].trim();
+        head = rest.slice(0, parenMatch.index).trim();
+    }
 
-    // The portion before the first quote holds amount + particulars.
-    const firstQuoteIdx = rest.indexOf('"');
-    const head = (firstQuoteIdx === -1 ? rest : rest.slice(0, firstQuoteIdx)).trim();
-
-    // Amount is the first token of head.
-    const headMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s*(.*)$/);
+    const headMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s+(.+)$/);
     if (!headMatch) {
-        result.errors.push('Missing or invalid amount (must come right after the colon).');
+        result.errors.push('Missing amount or ledger name (format: "<AMOUNT> <LEDGER>").');
+        return result;
+    }
+
+    const amount = parseFloat(headMatch[1].replace(/,/g, ''));
+    if (Number.isNaN(amount) || amount <= 0) {
+        result.errors.push('Amount must be a number greater than 0.');
     } else {
-        const amount = parseFloat(headMatch[1].replace(/,/g, ''));
-        if (Number.isNaN(amount) || amount <= 0) {
-            result.errors.push('Amount must be a number greater than 0.');
-        } else {
-            result.amount = amount;
-        }
-        result.particulars = (headMatch[2] || '').trim();
+        result.amount = amount;
     }
 
-    // Validate quoted-ledger count per kind.
-    const expected = kind === 'XFER' ? 2 : 1;
-    if (quoted.length < expected) {
-        result.errors.push(`${kind} requires ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
-    } else if (quoted.length > expected) {
-        result.errors.push(`${kind} expects ${expected} quoted ledger name${expected > 1 ? 's' : ''}; found ${quoted.length}.`);
-    }
-
-    // Resolve ledger names against existing ledgers.
-    const resolved = quoted.map(name => ({ name, ledger: findLedgerByName(name) }));
-    resolved.forEach(r => {
-        if (!r.ledger) result.errors.push(`Ledger "${r.name}" not found.`);
-    });
+    const ledgerName = headMatch[2].trim();
+    const ledger = findLedgerByName(ledgerName);
+    if (!ledger) result.errors.push(`Ledger "${ledgerName}" not found.`);
 
     if (result.errors.length > 0) return result;
 
-    // Build cashbook entries. Particulars default to a placeholder if empty.
-    const description = result.particulars || `${kind} entry`;
+    const entryType = kind === 'IN' ? 'inflow' : 'outflow';
+    const description = particulars || cashbookEntryParticularPlaceholder(entryType, ledger.id);
+    result.particulars = particulars || '';
 
     // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
     // order number parsed from the particulars so advance reconciliation works.
-    const orderNumber = extractOrderNumberFromText(result.particulars);
-    const makeInflow = (ledger) => {
-        const entry = { entry_type: 'inflow', amount: result.amount, description, folio: ledger.id };
-        if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
-        return entry;
-    };
+    const orderNumber = kind === 'IN' ? extractOrderNumberFromText(particulars) : null;
+    const entry = { entry_type: entryType, amount: result.amount, description, folio: ledger.id };
+    if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
 
-    const entries = [];
-    if (kind === 'IN') {
-        entries.push(makeInflow(resolved[0].ledger));
-    } else if (kind === 'OUT') {
-        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[0].ledger.id });
-    } else { // XFER: LEDGER1 in, LEDGER2 out
-        entries.push(makeInflow(resolved[0].ledger));
-        entries.push({ entry_type: 'outflow', amount: result.amount, description, folio: resolved[1].ledger.id });
-    }
-    result.entries = entries;
+    result.entries = [entry];
     result.orderNumber = orderNumber || null;
     result.ok = true;
     return result;

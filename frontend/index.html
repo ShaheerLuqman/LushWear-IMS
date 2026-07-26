@@ -489,16 +489,16 @@
                         <div class="modal-body">
                             <div class="bulk-entry-help">
                                 <p>One entry per line. Format:</p>
-                                <code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;PARTICULARS&gt; "&lt;LEDGER1&gt;" ["&lt;LEDGER2&gt;"]</code>
+                                <code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code>
                                 <ul>
-                                    <li><strong>IN</strong> — incoming to LEDGER1. e.g. <code>IN: 5147 Received For Order# 9269 "Meezan Bank"</code></li>
-                                    <li><strong>OUT</strong> — outgoing from LEDGER1. e.g. <code>OUT: 9910 Cash Paid For Expense "Ad Expense"</code></li>
-                                    <li><strong>XFER</strong> — into LEDGER1, out of LEDGER2. e.g. <code>XFER: 20000 Transferred To Nayapay From Meezan "Meezan Bank" "Nayapay"</code></li>
+                                    <li><strong>IN</strong> — incoming to LEDGER. e.g. <code>IN: 2064 TCS (Received order payment)</code></li>
+                                    <li><strong>OUT</strong> — outgoing from LEDGER. e.g. <code>OUT: 2064 Meezan Bank (Received order payment)</code></li>
                                 </ul>
+                                <p>Particulars are optional — omit them and a default description is generated.</p>
                             </div>
                             <div class="form-group">
                                 <label for="bulkEntryInput">Entries</label>
-                                <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="10" spellcheck="false" placeholder='IN: 5147 Received For Order# 9269 "Meezan Bank"'></textarea>
+                                <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="10" spellcheck="false" placeholder='IN: 2064 TCS (Received order payment)'></textarea>
                             </div>
                             <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
                             <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
