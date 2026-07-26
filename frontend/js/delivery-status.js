@@ -354,7 +354,8 @@ function displayDeliveryStatus(data, orderId) {
     html += `</div><h3 style="margin-top: 20px; margin-bottom: 10px;">Status History</h3><div class="status-timeline">`;
     
     if (data.status_history && data.status_history.length > 0) {
-        data.status_history.forEach((status, index) => {
+        // API returns oldest first; show most recent first.
+        [...data.status_history].reverse().forEach((status, index) => {
             const isActive = status.is_active || index === 0;
             const dateDisplay = status.datetime ? formatDateTimeDDMMYYYY(status.datetime) : '';
             html += `
