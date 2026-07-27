@@ -296,7 +296,7 @@ function switchView(viewName, { skipReload = false } = {}) {
             sizeGridColumns(ordersGridApi);
         }, 100);
     } else if (viewName === 'cashbook') {
-        loadCashbook();
+        if (!skipReload) loadCashbook();
         setTimeout(() => {
             sizeGridColumns(cashbookIncomingGridApi);
             sizeGridColumns(cashbookOutgoingGridApi);

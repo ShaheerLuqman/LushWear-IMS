@@ -646,6 +646,37 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncShopifyOrders();
         scheduleOrdersAutoSync();
         fetchLoadSheetRiderNames();
+
+        await applyStartupDeepLink();
     }
 });
+
+/**
+ * Handle ?action= deep links (e.g. a phone shortcut to record an entry).
+ * Runs after the PIN gate so the target view has data and a valid token.
+ */
+async function applyStartupDeepLink() {
+    // Also accept the hash form (#action=...): static hosts that redirect
+    // /index.html to / drop the query string, but never the hash.
+    const action = new URLSearchParams(window.location.search).get('action')
+        || new URLSearchParams(window.location.hash.replace(/^#/, '')).get('action');
+    if (action !== 'create-entry' && action !== 'bulk-entry') {
+        return;
+    }
+    // Editing defaults to locked on open, which would make openCashbookEntryModal
+    // bail with a toast. The link exists to record an entry, so unlock for it.
+    editLocked = false;
+    applyEditLockState();
+    // The entry modal needs the ledger list, so load before opening rather than
+    // letting switchView kick off an un-awaited fetch.
+    switchView('cashbook', { skipReload: true });
+    await loadCashbook();
+    openCashbookEntryModal();
+    if (action === 'bulk-entry') {
+        setCashbookEntryMode('bulk');
+    }
+    // Drop the query/hash so a refresh or back-navigation doesn't re-open the modal.
+    history.replaceState(null, '', window.location.pathname);
+
+}
 

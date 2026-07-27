@@ -13,5 +13,31 @@
             "type": "image/png",
             "purpose": "any"
         }
+    ],
+    "shortcuts": [
+        {
+            "name": "Create Cashbook Entry",
+            "short_name": "New Entry",
+            "url": "./?action=create-entry",
+            "icons": [
+                {
+                    "src": "assets/Logo.png",
+                    "sizes": "258x258",
+                    "type": "image/png"
+                }
+            ]
+        },
+        {
+            "name": "Bulk Text Entry",
+            "short_name": "Bulk Entry",
+            "url": "./?action=bulk-entry",
+            "icons": [
+                {
+                    "src": "assets/Logo.png",
+                    "sizes": "258x258",
+                    "type": "image/png"
+                }
+            ]
+        }
     ]
 }
