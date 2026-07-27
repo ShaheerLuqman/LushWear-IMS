@@ -600,8 +600,8 @@ function findLedgerByName(name) {
  */
 function extractOrderNumberFromText(text) {
     const s = String(text || '');
-    // "order" then optional "#", then 4+ digits (spaces allowed between tokens)
-    let m = s.match(/order\s*#?\s*(\d{4,})\b/i);
+    // "order"/"orders" then optional "#", then 4+ digits (spaces allowed between tokens)
+    let m = s.match(/orders?\s*#?\s*(\d{4,})\b/i);
     if (m) return m[1];
     // bare "#" then 4+ digits
     m = s.match(/#\s*(\d{4,})\b/);
@@ -658,19 +658,28 @@ function parseBulkEntryLine(raw, lineNo) {
         result.amount = amount;
     }
 
+    // Shorthand for an order advance: "Order# 11473" (or "Orders# 11473") in
+    // place of a ledger name resolves straight to the Orders ledger, tagged
+    // with that order number.
     const ledgerName = headMatch[2].trim();
-    const ledger = findLedgerByName(ledgerName);
-    if (!ledger) result.errors.push(`Ledger "${ledgerName}" not found.`);
+    const orderShorthand = ledgerName.match(/^orders?\s*#?\s*(\d{4,})$/i);
+    const ledger = orderShorthand
+        ? ledgers.find(l => l.id === ORDERS_LEDGER_ID) || null
+        : findLedgerByName(ledgerName);
+    if (!ledger) result.errors.push(orderShorthand ? 'Orders ledger not found.' : `Ledger "${ledgerName}" not found.`);
 
     if (result.errors.length > 0) return result;
 
     const entryType = kind === 'IN' ? 'inflow' : 'outflow';
-    const description = particulars || cashbookEntryParticularPlaceholder(entryType, ledger.id);
+    // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
+    // order number parsed from the particulars (or the "Order# ..." shorthand)
+    // so advance reconciliation works.
+    const orderNumber = orderShorthand ? orderShorthand[1] : (kind === 'IN' ? extractOrderNumberFromText(particulars) : null);
+    const description = particulars || (orderNumber && ledger.id === ORDERS_LEDGER_ID
+        ? orderAdvanceParticularPlaceholder(orderNumber)
+        : cashbookEntryParticularPlaceholder(entryType, ledger.id));
     result.particulars = particulars || '';
 
-    // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
-    // order number parsed from the particulars so advance reconciliation works.
-    const orderNumber = kind === 'IN' ? extractOrderNumberFromText(particulars) : null;
     const entry = { entry_type: entryType, amount: result.amount, description, folio: ledger.id };
     if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
 
