@@ -417,7 +417,7 @@ function runPinGate() {
             if (form) form.style.display = 'none';
             if (titleEl) titleEl.style.display = 'none';
             if (waitingEl) {
-                waitingEl.style.display = 'block';
+                waitingEl.style.display = '';
                 waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Connecting to server…';
             }
 
@@ -470,7 +470,7 @@ function runPinGate() {
                     break;
                 } catch {
                     if (waitingEl) {
-                        waitingEl.style.display = 'block';
+                        waitingEl.style.display = '';
                         waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Waiting for server…';
                     }
                     await new Promise((t) => setTimeout(t, 800));

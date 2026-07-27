@@ -582,53 +582,20 @@ function initForms() {
         createLedgerBtn.addEventListener('click', () => openCreateLedgerModal());
     }
     // Cashbook/order advance ledger selects: picking "+ Create new ledger..." opens the create ledger modal
-    ['cashbookEntryInLedger', 'cashbookEntryOutLedger', 'orderAdvanceOutLedger'].forEach((id) => {
+    ['cashbookEntryInLedger', 'cashbookEntryOutLedger'].forEach((id) => {
         document.getElementById(id)?.addEventListener('change', handleLedgerSelectChange);
     });
 
     // Cashbook: create entry button opens modal
     document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
-    // Cashbook: order advance amount button opens its modal
-    document.getElementById('cashbookOrderAdvanceBtn')?.addEventListener('click', openOrderAdvanceModal);
-    document.getElementById('closeOrderAdvanceModal')?.addEventListener('click', closeOrderAdvanceModal);
-    document.getElementById('orderAdvanceCancelBtn')?.addEventListener('click', closeOrderAdvanceModal);
-    document.getElementById('orderAdvanceModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'orderAdvanceModal') closeOrderAdvanceModal();
+    // Cashbook: order advance mode within the create entry modal
+    document.getElementById('cashbookEntryOrderAdvance')?.addEventListener('change', (e) => {
+        setCashbookEntryOrderAdvance(e.target.checked);
     });
-    document.getElementById('orderAdvanceForm')?.addEventListener('submit', (e) => {
-        e.preventDefault();
-        submitOrderAdvanceModal();
-    });
-    document.getElementById('orderAdvanceOrderNumber')?.addEventListener('input', () => {
-        refreshOrderAdvanceParticularPlaceholder();
-        refreshOrderAdvanceOutParticularPlaceholder();
-    });
-    // Mirror the advance amount into the outgoing amount until the user edits it.
-    document.getElementById('orderAdvanceAmount')?.addEventListener('input', (e) => {
-        const outAmount = document.getElementById('orderAdvanceOutAmount');
-        if (e.target.value === '' && outAmount && outAmount.value === '') {
-            orderAdvanceOutAmountTouched = false;
-        }
-        if (!orderAdvanceOutAmountTouched && outAmount) {
-            outAmount.value = e.target.value;
-        }
-    });
-    document.getElementById('orderAdvanceOutAmount')?.addEventListener('input', (e) => {
-        const inAmount = document.getElementById('orderAdvanceAmount');
-        if (e.target.value === '' && inAmount && inAmount.value === '') {
-            orderAdvanceOutAmountTouched = false;
-        } else {
-            orderAdvanceOutAmountTouched = true;
-        }
-    });
-    // Cashbook: bulk text entry modal
-    document.getElementById('cashbookBulkEntryBtn')?.addEventListener('click', openBulkEntryModal);
-    document.getElementById('closeBulkEntryModal')?.addEventListener('click', closeBulkEntryModal);
-    document.getElementById('bulkEntryCancelBtn')?.addEventListener('click', closeBulkEntryModal);
-    document.getElementById('bulkEntryModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'bulkEntryModal') closeBulkEntryModal();
-    });
-    document.getElementById('bulkEntryValidateBtn')?.addEventListener('click', validateBulkEntry);
+    document.getElementById('cashbookEntryOrderNumber')?.addEventListener('input', refreshCashbookEntryParticularPlaceholders);
+    // Cashbook: bulk text entry mode within the create entry modal
+    document.getElementById('cashbookEntryModeSingle')?.addEventListener('click', () => setCashbookEntryMode('single'));
+    document.getElementById('cashbookEntryModeBulk')?.addEventListener('click', () => setCashbookEntryMode('bulk'));
     document.getElementById('bulkEntrySubmitBtn')?.addEventListener('click', submitBulkEntry);
     // Re-validate as the user types (debounced lightly) and reset submit state.
     document.getElementById('bulkEntryInput')?.addEventListener('input', () => {

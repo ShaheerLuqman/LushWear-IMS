@@ -1227,8 +1227,21 @@ body:has(#ledgersView.active) .content-area {
     box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
+/* The native arrow is drawn by the OS and ignores the field's dark background,
+   so swap it for a themed chevron that reads correctly in both themes. */
 .form-group select {
     cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 16px center;
+    background-size: 12px 8px;
+    padding-right: 40px;
+}
+
+:root[data-theme="dark"] .form-group select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
 }
 
 .form-group textarea {
@@ -1343,8 +1356,55 @@ body:has(#ledgersView.active) .content-area {
 }
 
 /* Create Cashbook Entry modal */
+/* Fixed box so switching between single and bulk mode doesn't resize the modal. */
 .modal-content.cashbook-entry-modal-content {
-    max-width: 900px;
+    width: 900px;
+    max-width: 90vw;
+    height: 600px;
+    max-height: 90vh;
+}
+
+/* Pinned outside the scrolling body so the buttons hold position across modes. */
+.cashbook-entry-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-color);
+}
+
+.cashbook-entry-mode {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    margin-bottom: 16px;
+    background: var(--bg-tertiary);
+    border-radius: var(--radius-md);
+}
+
+.cashbook-entry-mode-btn {
+    flex: 1;
+    padding: 8px 12px;
+    border: none;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.cashbook-entry-mode-btn:hover {
+    color: var(--text-primary);
+}
+
+.cashbook-entry-mode-btn.active {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
 .cashbook-entry-split {
@@ -1382,6 +1442,12 @@ body:has(#ledgersView.active) .content-area {
 
 .cashbook-entry-skip-toggle input {
     cursor: pointer;
+}
+
+/* Stand-in for the opposite side's extra toggle: same markup so it reserves an
+   identical row height, but invisible and out of the accessibility tree. */
+.cashbook-entry-toggle-spacer {
+    visibility: hidden;
 }
 
 #createLedgerModal .form-group,
@@ -3916,12 +3982,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     cursor: help;
 }
 
-/* Bulk Text Entry modal */
-.bulk-entry-modal-content {
-    max-width: 720px;
-    width: 92%;
-}
-
+/* Bulk Text Entry */
 .bulk-entry-help {
     background: var(--bg-secondary, #f7f8fa);
     border: 1px solid var(--border-color, #e5e7eb);
@@ -4257,7 +4318,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     }
 
     .modal-content.cashbook-entry-modal-content {
-        max-width: 600px;
+        width: 600px;
     }
 }
 
@@ -4375,7 +4436,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
     /* Near-full-bleed modals - a centred 90% box wastes edge space on a phone. */
     .modal-content,
-    #deliveryStatusReportModal .modal-content {
+    #deliveryStatusReportModal .modal-content,
+    .modal-content.cashbook-entry-modal-content {
         width: 100%;
         max-width: none;
         height: auto;

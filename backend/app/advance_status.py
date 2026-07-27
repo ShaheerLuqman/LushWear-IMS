@@ -32,7 +32,7 @@ _CONCURRENCY = 20
 
 # The "Orders" ledger that order advances are always posted to (mirrors the
 # ORDERS_LEDGER_ID constant in the frontend).
-ORDERS_LEDGER_ID = "020dbc00-d5da-4110-89e9-fa22edf002f6"
+ORDERS_LEDGER_ID = "4bc067af-cf91-4700-8b52-b70ad4a991df"
 
 # Status codes
 ADV_NONE = 1

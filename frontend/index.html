@@ -32,9 +32,9 @@
     <div id="pinGateRoot" class="pin-gate-root">
         <div class="pin-gate-card">
             <img src="assets/Logo_Large.png" alt="" class="pin-gate-logo">
-            <h2 id="pinGateTitle" class="pin-gate-title">Enter PIN</h2>
-            <p id="pinGateWaiting" class="pin-gate-waiting" style="display: none;">Connecting to server…</p>
-            <form id="pinGateForm" class="pin-gate-form" autocomplete="off">
+            <h2 id="pinGateTitle" class="pin-gate-title" style="display: none;">Enter PIN</h2>
+            <p id="pinGateWaiting" class="pin-gate-waiting"><span class="pin-gate-spinner"></span>Connecting to server…</p>
+            <form id="pinGateForm" class="pin-gate-form" autocomplete="off" style="display: none;">
                 <label class="pin-gate-label" for="pinGatePin">PIN</label>
                 <input type="password" id="pinGatePin" class="pin-gate-input" inputmode="numeric"
                     minlength="4" maxlength="64" required autocomplete="new-password" placeholder="••••">
@@ -233,8 +233,6 @@
                         <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
                         <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
-                        <button id="cashbookOrderAdvanceBtn" class="btn btn-primary btn-sm" title="Record an order advance amount">Order Advance Amount</button>
-                        <button id="cashbookBulkEntryBtn" class="btn btn-primary btn-sm" title="Create multiple entries from text">Bulk Text Entry</button>
                         <button id="cashbookCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new cashbook entry">Create Entry</button>
                     </div>
                 </div>
@@ -373,6 +371,10 @@
                             <button type="button" class="modal-close" id="closeCashbookEntryModal" aria-label="Close">&times;</button>
                         </div>
                         <div class="modal-body">
+                            <div class="cashbook-entry-mode" role="tablist" aria-label="Entry mode">
+                                <button type="button" id="cashbookEntryModeSingle" class="cashbook-entry-mode-btn active" role="tab" aria-selected="true">Single Entry</button>
+                                <button type="button" id="cashbookEntryModeBulk" class="cashbook-entry-mode-btn" role="tab" aria-selected="false">Bulk Text Entry</button>
+                            </div>
                             <form id="cashbookEntryForm" class="ledger-form">
                                 <div class="cashbook-entry-split">
                                     <fieldset class="cashbook-entry-side">
@@ -381,7 +383,15 @@
                                             <input type="checkbox" id="cashbookEntryOutSkip">
                                             <span>Received as Cash</span>
                                         </label>
-                                        <div class="form-group">
+                                        <label class="cashbook-entry-skip-toggle">
+                                            <input type="checkbox" id="cashbookEntryOrderAdvance">
+                                            <span>Order Advance Amount</span>
+                                        </label>
+                                        <div class="form-group" id="cashbookEntryOrderNumberGroup" style="display: none;">
+                                            <label for="cashbookEntryOrderNumber">Order number *</label>
+                                            <input type="text" id="cashbookEntryOrderNumber" class="form-input" placeholder="e.g. 1234" autocomplete="off">
+                                        </div>
+                                        <div class="form-group" id="cashbookEntryInLedgerGroup">
                                             <label for="cashbookEntryInLedger">Ledger *</label>
                                             <select id="cashbookEntryInLedger" class="form-input" required>
                                                 <option value="">Select ledger...</option>
@@ -402,6 +412,11 @@
                                             <input type="checkbox" id="cashbookEntryInSkip">
                                             <span>Paid with Cash</span>
                                         </label>
+                                        <!-- Matches the Order Advance toggle opposite so both sides' fields line up. -->
+                                        <div class="cashbook-entry-skip-toggle cashbook-entry-toggle-spacer" aria-hidden="true">
+                                            <input type="checkbox" tabindex="-1" disabled>
+                                            <span>&nbsp;</span>
+                                        </div>
                                         <div class="form-group">
                                             <label for="cashbookEntryOutLedger">Ledger *</label>
                                             <select id="cashbookEntryOutLedger" class="form-input" required>
@@ -418,95 +433,29 @@
                                         </div>
                                     </fieldset>
                                 </div>
-                                <div class="modal-actions form-actions">
-                                    <button type="button" id="cashbookEntryCancelBtn" class="btn btn-secondary">Cancel</button>
-                                    <button type="submit" class="btn btn-primary">Create</button>
-                                </div>
                             </form>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Order Advance Amount Modal -->
-                <div id="orderAdvanceModal" class="modal">
-                    <div class="modal-content cashbook-entry-modal-content">
-                        <div class="modal-header">
-                            <h2>Order Advance Amount</h2>
-                            <button type="button" class="modal-close" id="closeOrderAdvanceModal" aria-label="Close">&times;</button>
-                        </div>
-                        <div class="modal-body">
-                            <form id="orderAdvanceForm" class="ledger-form">
-                                <div class="cashbook-entry-split">
-                                    <fieldset class="cashbook-entry-side">
-                                        <legend>Incoming</legend>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceOrderNumber">Order number *</label>
-                                            <input type="text" id="orderAdvanceOrderNumber" class="form-input" placeholder="e.g. 1234" autocomplete="off" required>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceAmount">Advance amount *</label>
-                                            <input type="number" id="orderAdvanceAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceInParticular">Particulars</label>
-                                            <input type="text" id="orderAdvanceInParticular" class="form-input" autocomplete="off">
-                                        </div>
-                                    </fieldset>
-                                    <fieldset class="cashbook-entry-side">
-                                        <legend>Outgoing</legend>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceOutLedger">Ledger *</label>
-                                            <select id="orderAdvanceOutLedger" class="form-input" required>
-                                                <option value="">Select ledger...</option>
-                                            </select>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceOutAmount">Amount *</label>
-                                            <input type="number" id="orderAdvanceOutAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
-                                        </div>
-                                        <div class="form-group">
-                                            <label for="orderAdvanceOutParticular">Particulars</label>
-                                            <input type="text" id="orderAdvanceOutParticular" class="form-input" autocomplete="off">
-                                        </div>
-                                    </fieldset>
+                            <div id="cashbookEntryBulkPanel" style="display: none;">
+                                <div class="bulk-entry-help">
+                                    <p>One entry per line. Format:
+                                    <b><code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
+                                    <ul>
+                                        <li><strong>IN</strong> — incoming to LEDGER. e.g. <b><code>IN: 2064 TCS (Received order payment)</code></b></li>
+                                        <li><strong>OUT</strong> — outgoing from LEDGER. e.g. <b><code>OUT: 2064 Meezan Bank (Received order payment)</code></b></li>
+                                    </ul>
+                                    <p>Particulars are optional — omit them and a default description is generated.</p>
                                 </div>
-                                <div class="modal-actions form-actions">
-                                    <button type="button" id="orderAdvanceCancelBtn" class="btn btn-secondary">Cancel</button>
-                                    <button type="submit" class="btn btn-primary">Create</button>
+                                <div class="form-group">
+                                    <label for="bulkEntryInput">Entries</label>
+                                    <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="6" spellcheck="false" placeholder='IN: 2064 TCS (Received order payment)'></textarea>
                                 </div>
-                            </form>
+                                <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
+                                <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
+                            </div>
                         </div>
-                    </div>
-                </div>
-
-                <!-- Bulk Text Entry Modal -->
-                <div id="bulkEntryModal" class="modal">
-                    <div class="modal-content bulk-entry-modal-content">
-                        <div class="modal-header">
-                            <h2>Bulk Text Entry</h2>
-                            <button type="button" class="modal-close" id="closeBulkEntryModal" aria-label="Close">&times;</button>
-                        </div>
-                        <div class="modal-body">
-                            <div class="bulk-entry-help">
-                                <p>One entry per line. Format:</p>
-                                <code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code>
-                                <ul>
-                                    <li><strong>IN</strong> — incoming to LEDGER. e.g. <code>IN: 2064 TCS (Received order payment)</code></li>
-                                    <li><strong>OUT</strong> — outgoing from LEDGER. e.g. <code>OUT: 2064 Meezan Bank (Received order payment)</code></li>
-                                </ul>
-                                <p>Particulars are optional — omit them and a default description is generated.</p>
-                            </div>
-                            <div class="form-group">
-                                <label for="bulkEntryInput">Entries</label>
-                                <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="10" spellcheck="false" placeholder='IN: 2064 TCS (Received order payment)'></textarea>
-                            </div>
-                            <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
-                            <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
-                            <div class="modal-actions form-actions">
-                                <button type="button" id="bulkEntryCancelBtn" class="btn btn-secondary">Cancel</button>
-                                <button type="button" id="bulkEntryValidateBtn" class="btn btn-secondary">Validate</button>
-                                <button type="button" id="bulkEntrySubmitBtn" class="btn btn-primary" disabled>Create entries</button>
-                            </div>
+                        <div class="cashbook-entry-footer">
+                            <button type="button" id="cashbookEntryCancelBtn" class="btn btn-secondary">Cancel</button>
+                            <button type="submit" form="cashbookEntryForm" id="cashbookEntrySubmitBtn" class="btn btn-primary">Create</button>
+                            <button type="button" id="bulkEntrySubmitBtn" class="btn btn-primary" style="display: none;" disabled>Create entries</button>
                         </div>
                     </div>
                 </div>
