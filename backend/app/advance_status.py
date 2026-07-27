@@ -10,8 +10,8 @@ advance_status (stored on orders.advance_status) reconciles the two:
   1 = no advance amount for the order (both zero)
   2 = Shopify advance present, but no cashbook entry
   3 = cashbook entry present, but no Shopify advance
-  4 = advance present in both and they match
-  5 = advance present in both but they do not match
+  4 = advance present in both and they match (within Rs. 5 tolerance)
+  5 = advance present in both but they do not match (differ by Rs. 5 or more)
 """
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict
@@ -41,6 +41,10 @@ ADV_CASHBOOK_ONLY = 3
 ADV_MATCH = 4
 ADV_MISMATCH = 5
 
+# Amounts within this tolerance count as a match - small discrepancies (rounding,
+# manual entry) shouldn't flag every near-equal advance as a mismatch.
+MATCH_TOLERANCE = 5
+
 def compute_advance_status(shopify_advance: float, cashbook_advance: float) -> int:
     """Return the advance_status code for one order given the two advance amounts."""
     # Rounding to cents first makes these exact comparisons; sub-cent float noise
@@ -54,7 +58,7 @@ def compute_advance_status(shopify_advance: float, cashbook_advance: float) -> i
         return ADV_SHOPIFY_ONLY
     if not shopify and cashbook:
         return ADV_CASHBOOK_ONLY
-    return ADV_MATCH if shopify == cashbook else ADV_MISMATCH
+    return ADV_MATCH if abs(shopify - cashbook) < MATCH_TOLERANCE else ADV_MISMATCH
 
 
 def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:

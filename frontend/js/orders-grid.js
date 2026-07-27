@@ -569,8 +569,8 @@ function advanceStatusMeta(status) {
     switch (Number(status)) {
         case 2: return { color: '#f59e0b', title: 'Shopify advance, no cashbook entry' };      // amber
         case 3: return { color: '#3b82f6', title: 'Cashbook entry, no Shopify advance' };        // blue
-        case 4: return { color: '#22c55e', title: 'Advance matches (Shopify & cashbook)' };      // green
-        case 5: return { color: '#ef4444', title: 'Advance mismatch (Shopify ≠ cashbook)' };     // red
+        case 4: return { color: '#22c55e', title: 'Advance matches (Shopify & cashbook, within Rs. 5)' };  // green
+        case 5: return { color: '#ef4444', title: 'Advance mismatch (Shopify vs cashbook differ by Rs. 5+)' }; // red
         case 1:
         default: return { color: '#d1d5db', title: 'No advance amount' };                        // grey
     }

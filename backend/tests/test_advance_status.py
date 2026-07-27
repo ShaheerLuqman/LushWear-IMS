@@ -27,8 +27,16 @@ def test_sub_cent_float_noise_still_matches():
     assert compute_advance_status(1522.20, 1522.1999999999998) == ADV_MATCH
 
 
-def test_one_cent_difference_is_a_mismatch():
-    assert compute_advance_status(500.00, 500.01) == ADV_MISMATCH
+def test_one_cent_difference_is_within_tolerance():
+    assert compute_advance_status(500.00, 500.01) == ADV_MATCH
+
+
+def test_difference_at_tolerance_boundary_is_a_mismatch():
+    assert compute_advance_status(500.00, 505.00) == ADV_MISMATCH
+
+
+def test_difference_just_under_tolerance_matches():
+    assert compute_advance_status(500.00, 504.99) == ADV_MATCH
 
 
 def test_amounts_are_rounded_before_comparing():
