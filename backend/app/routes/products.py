@@ -55,33 +55,20 @@ def _is_replacement_order(row: dict) -> bool:
 async def get_all_products():
     """Get all products with their variants"""
     try:
-        products, variants = await _fetch_products_and_variants()
+        supabase = get_supabase()
+        # variants(*) is a PostgREST embed over the variants -> products FK - one
+        # query does the join server-side instead of fetching both full tables
+        # and grouping them into a dict here.
+        products = fetch_all(lambda: supabase.table("products").select("*, variants(*)"))
 
-        if not products:
-            return []
-
-        # Group variants by product_id
-        variants_by_product = {}
-        for variant in variants:
-            product_id = variant.get("product_id")
-            if product_id not in variants_by_product:
-                variants_by_product[product_id] = []
-            variants_by_product[product_id].append(variant)
-        
-        # Attach variants to products and calculate total quantity
-        result = []
         for product in products:
-            product_variants = variants_by_product.get(product["id"], [])
-            # Sort variants by title
+            product_variants = product.get("variants") or []
             product_variants.sort(key=lambda v: v.get("title", ""))
-            product["variants"] = product_variants
-            # Calculate total quantity across all variants
             product["total_quantity"] = sum(v.get("quantity", 0) for v in product_variants)
-            result.append(product)
-        
+
         # Sort case-insensitively
-        result.sort(key=lambda x: (x.get("name") or "").lower())
-        return result
+        products.sort(key=lambda x: (x.get("name") or "").lower())
+        return products
     except HTTPException:
         raise
     except Exception:
@@ -334,17 +321,16 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
     try:
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
+
+        payload = [
+            {"id": update.id, "cost_price": update.cost_price, "updated_at": current_time}
+            for update in batch_update.updates
+        ]
         updated_count = 0
-        
-        for update in batch_update.updates:
-            update_data = {
-                "cost_price": update.cost_price,
-                "updated_at": current_time
-            }
-            response = supabase.table("products").update(update_data).eq("id", update.id).execute()
-            if response.data:
-                updated_count += 1
-        
+        if payload:
+            response = supabase.table("products").upsert(payload, on_conflict="id").execute()
+            updated_count = len(response.data or [])
+
         return {
             "message": f"Successfully updated {updated_count} product(s)",
             "updated_count": updated_count
@@ -588,34 +574,23 @@ async def search_products(query: str):
     """Search products by name"""
     try:
         supabase = get_supabase()
-        
-        # Search products
-        response = supabase.table("products").select("*").ilike("name", f"%{query}%").execute()
+
+        # Same embed as get_all_products - the join happens in Postgres, not here.
+        response = (
+            supabase.table("products")
+            .select("*, variants(*)")
+            .ilike("name", f"%{query}%")
+            .execute()
+        )
         products = response.data
-        
+
         if not products:
             return []
-        
-        # Get product IDs
-        product_ids = [p["id"] for p in products]
-        
-        # Get variants for these products
-        variants_response = supabase.table("variants").select("*").in_("product_id", product_ids).execute()
-        variants = variants_response.data
-        
-        # Group variants by product_id
-        variants_by_product = {}
-        for variant in variants:
-            product_id = variant.get("product_id")
-            if product_id not in variants_by_product:
-                variants_by_product[product_id] = []
-            variants_by_product[product_id].append(variant)
-        
-        # Attach variants to products
+
         for product in products:
-            product["variants"] = variants_by_product.get(product["id"], [])
+            product["variants"] = product.get("variants") or []
             product["total_quantity"] = sum(v.get("quantity", 0) for v in product["variants"])
-        
+
         return products
     except HTTPException:
         raise

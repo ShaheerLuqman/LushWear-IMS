@@ -72,6 +72,49 @@ class TestLedgers:
         assert "cashbook entries" in r.json()["detail"]
 
 
+class TestProducts:
+    def test_list_groups_variants_via_the_embed_not_in_python(self, make_client):
+        # Shaped like a real PostgREST `select=*, variants(*)` response: variants
+        # already nested under their product, not two flat tables to zip together.
+        def variant(vid, product_id, title, quantity):
+            return {"id": vid, "product_id": product_id, "title": title, "quantity": quantity}
+
+        products = [
+            {"id": "p2", "name": "banana", "variants": [variant("v3", "p2", "M", 3)]},
+            {"id": "p1", "name": "Apple", "variants": [
+                variant("v1", "p1", "L", 2), variant("v2", "p1", "M", 5),
+            ]},
+        ]
+        r = make_client({"products": products}).get("/api/products/")
+        assert r.status_code == 200
+        body = r.json()
+        assert [p["name"] for p in body] == ["Apple", "banana"]
+        assert [v["title"] for v in body[0]["variants"]] == ["L", "M"]
+        assert body[0]["total_quantity"] == 7
+        assert body[1]["total_quantity"] == 3
+
+    def test_batch_update_cost_prices_is_a_single_batched_upsert(self, make_client):
+        client = make_client({"products": [
+            {"id": "p1", "cost_price": 100.0},
+            {"id": "p2", "cost_price": 200.0},
+        ]})
+        r = client.put("/api/products/batch-update-cost-prices", json={
+            "updates": [
+                {"id": "p1", "cost_price": 150.0},
+                {"id": "p2", "cost_price": 250.0},
+            ]
+        })
+        assert r.status_code == 200
+        assert r.json()["updated_count"] == 2
+
+    def test_batch_update_with_no_updates_is_a_no_op(self, make_client):
+        r = make_client({"products": []}).put(
+            "/api/products/batch-update-cost-prices", json={"updates": []}
+        )
+        assert r.status_code == 200
+        assert r.json()["updated_count"] == 0
+
+
 class TestCashbook:
     def test_create_rejects_non_positive_amount(self, make_client):
         client = make_client({"cashbook_entries": []})

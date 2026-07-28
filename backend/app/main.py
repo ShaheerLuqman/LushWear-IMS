@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import products, orders, cashbook, ledger, app_pin
 from app.auth import require_auth
+from app.config import settings
 from app.logging_config import configure_logging
 
 configure_logging()
@@ -26,6 +27,10 @@ if IS_PROD:
     if _wildcard:
         # allow_origins=["*"] + allow_credentials=True is rejected by browsers.
         raise RuntimeError("ALLOWED_ORIGINS must list explicit origin(s) when APP_ENV=production.")
+    if not settings.shopify_store_url:
+        # No dangerous default to fall back to (unlike the old staging-store default) -
+        # an unset store URL must stop the boot, not surface as a 400 on the first sync.
+        raise RuntimeError("SHOPIFY_STORE_URL (or SHOPIFY_API_KEY) must be set when APP_ENV=production.")
 
 app = FastAPI(
     title="Inventory Management System",

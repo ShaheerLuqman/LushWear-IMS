@@ -83,7 +83,7 @@ backend/
     │       └── packaging_list.py   # aggregation + render      (230)
     └── routes/
         ├── app_pin.py      # PIN status/verify/setup/change (+ lockout)
-        ├── products.py     # products + variants + Shopify product sync   (700)
+        ├── products.py     # products + variants + Shopify product sync   (671)
         ├── orders.py       # orders, Shopify sync, summaries             (2451)
         ├── cashbook.py     # cashbook entries + daily balances            (298)
         └── ledger.py       # ledgers (entries derived from cashbook)      (129)
@@ -169,17 +169,15 @@ Ordered roughly by impact-to-effort.
 
 ### 4.3 Performance
 
-- **Push filtering/sorting/aggregation into Postgres.** Several endpoints fetch
-  *all* rows in 1000-row pages and then sort/sum in Python (e.g. `get_all_orders`
-  numeric re-sort, `products` variant grouping, month summaries). As data grows
-  this is O(N) memory and latency per request. Move to:
-  - a computed/generated column or an indexed expression for numeric order sort,
-  - SQL `GROUP BY` / views for month summaries and daily balances,
-  - `select` only the columns you need (some queries already do; make it the rule).
-- **Batch the per-row updates.** `batch_update_cost_prices`, the CSV upload, and
-  parts of sync issue one `UPDATE` per row in a Python loop. Use `upsert` with a
-  single batched payload (the sync's insert path already does this — apply it
-  everywhere).
+- **Push filtering/sorting/aggregation into Postgres.** `products` variant
+  grouping is done (`select("*, variants(*)")` embed, no more fetching both
+  full tables and grouping in Python). Still open: `get_all_orders`'s numeric
+  re-sort (attempted via a generated column, reverted — `order_number` also
+  needs to shed the unused `create_replacement_order` "-R" path first; see
+  §7) and month summaries, which still fetch pages and sort/sum in Python.
+- **Batch the per-row updates.** The CSV upload and parts of sync still issue
+  one `UPDATE` per row in a Python loop (`batch_update_cost_prices` now does a
+  single batched `upsert`, apply the same elsewhere).
 - **Offload PDF generation.** ReportLab in the request path blocks a worker and
   can be slow for large batches. Consider a background task/queue and stream the
   result, or at least cap batch sizes.
@@ -208,20 +206,6 @@ Ordered roughly by impact-to-effort.
 ### 4.6 Config & deploy hygiene
 
 - **Enable Dependabot** (or equivalent) for dependency updates.
-- The `SHOPIFY_STORE_URL` **default is a real staging store** in `config.py`.
-  Defaults for external integrations should be empty and fail loudly, not point
-  somewhere real.
-- **Dockerfile**: run as a non-root user and add a `HEALTHCHECK`. A multi-worker
-  Uvicorn/Gunicorn setup would break the in-memory PIN lockout (see 4.4) until that
-  state is externalised. The build already runs the test suite as a deploy gate.
-
-### 4.7 API design
-
-- **Version the API** (`/api/v1/...`) before external consumers depend on it.
-- **Pagination on list endpoints.** Partly done: `GET /orders/` now requires a
-  `month`/`year` period (naturally bounded to that period's rows, rather than
-  scanning the full table) instead of an unbounded `limit`-based "most recent N."
-  Cashbook and products still return the full set.
 
 ---
 
@@ -290,72 +274,11 @@ expand into a spec when picked up.
 - [ ] **Activity logging / audit trail** — store and track user activity via logs
       (pairs with the structured-logging work in §4.5).
 
-### Completed tasks
-- [x] **Sync-from-Shopify last-updated time + a lock against overlapping syncs** —
-      a `sync_status` table (single row, id `shopify_orders`; see
-      `supabase/migrations/20260728000000_create_sync_status.sql`) persists when
-      `sync_shopify_orders` last completed. `GET /orders/sync-status` exposes it
-      without running a sync, and `POST /orders/sync-shopify` returns it too.
-      The frontend (`ledgers.js`) still owns *when* to auto-sync — on load and
-      every 5 minutes, relative to that server-tracked time rather than a fixed
-      per-tab timer, so multiple open tabs/devices don't each force a sync on
-      load. What changed is that `POST /orders/sync-shopify` is now safe to call
-      concurrently: `in_progress`/`lock_acquired_at` on the same row are a lock,
-      claimed via a conditional `UPDATE ... WHERE in_progress = false` (Postgres
-      serializes concurrent UPDATEs on one row, so at most one caller ever flips
-      it — race-free without an advisory lock, which isn't usable through
-      PostgREST anyway); a separate `UPDATE ... WHERE in_progress = true AND
-      lock_acquired_at < stale_cutoff` clears a lock left behind by a crashed
-      sync after 5 minutes. (An earlier version combined both into one `OR`'d
-      UPDATE via `.or_()` - that didn't reliably reclaim stale locks in practice
-      and had no precedent elsewhere in this file, unlike the plain `.eq()`/
-      `.lt()` filters used here, which are the same pattern already proven by
-      the `order_receiving_date` range filters elsewhere in `orders.py`.) A
-      manual sync while another is in flight gets `{"already_syncing": true}`
-      back instead of racing it (named distinctly from the pre-existing
-      `skipped` reconciliation count in the same response - the two sharing a
-      name was the actual bug: any real sync with `skipped > 0`, i.e. nearly
-      every sync, was truthy and got misread by the frontend as "already
-      syncing," silently skipping the grid refresh). This closes the
-      concurrency gap noted below for the
-      orders sync specifically (cashbook/CSV-upload multi-writes are still open).
-- [x] **Per-order last-fetched time** — `delivery_status.fetched_at` is stamped on
-      every courier fetch (PostEx and Couriers Next) and persisted as part of the
-      stored `delivery_status` JSON.
-- [x] **Optimize the delivery-status fetch** — PostEx orders are batched via
-      `track-bulk-order` and Couriers Next orders are fetched concurrently
-      (`_BULK_CONCURRENCY`); a 1-hour freshness cache (`_delivery_status_is_fresh`,
-      keyed on `fetched_at`) now skips the courier call — and the DB write —
-      entirely for any order checked within the last hour.
-- [x] **Order recalculation: account for discount codes** — `recalculate_order_totals`
-      (`POST /recalculate-totals`) checks `PRICE_REDUCTION_DISCOUNT_CODES` against
-      the order's Shopify `discount_codes` and subtracts `total_discounts` from the
-      recalculated total when a configured code is present.
-- [x] **Test suite** — 121 tests in `backend/tests/` cover the pure functions
-      (`money.py`, `ordering.py`, `advance_status.py`, `services/postex.py`,
-      `services/pdf/*`) plus route wiring, and `.github/workflows/backend-tests.yml`
-      runs the suite on every push/PR touching `backend/**`. Note: the Dockerfile's
-      test stage is skipped by default (`SKIP_TESTS=1`) — it only gates the image
-      build when the deploy config explicitly overrides that build arg.
-- [x] **D1 — extract `services/shopify_sync.py`** — the ~800-line Shopify orders
-      sync function (fetch → normalize → reconcile → persist, including the
-      freeze-after-fulfilled rules, voided-order handling and `NNNN-R`
-      replacements) moved verbatim out of `orders.py` into its own service
-      module (1004 lines). `POST /sync-shopify` is now parse → call service →
-      return (the old D3). Shared helpers it needs (`_resolve_line_item_cost`,
-      `_cost_from_line_items`, `_line_items_signature`,
-      `_order_total_from_fulfillments`, `PRICE_REDUCTION_DISCOUNT_CODES`) moved
-      alongside it, with `orders.py` importing them back so the
-      routes-import-from-services direction stays one-way (no circular import).
-      `orders.py` dropped from 3037 to 2451 lines. Verified with a live sync
-      diff — `created`/`updated`/`skipped` and the affected rows matched a
-      known-good run — in addition to the existing 123 tests passing unchanged.
-
 ---
 
 ## 7. Improvement plan — remaining work
 
-Current sizes: `orders.py` 2451 (was 4280), `products.py` 700, `cashbook.py` 298,
+Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298,
 `ledger.py` 129, plus `services/` at ~2,100 lines across six modules.
 
 > **Sync performance** ([`../TODO.md`](../TODO.md) §3) is probably worth doing next:
@@ -363,14 +286,31 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 700, `cashbook.py` 298
 > re-processing unchanged orders. Making the sync incremental would both speed it
 > up and shrink the surface of future changes to `services/shopify_sync.py`.
 
-### E3 — integration test for the sync
+### Next up: §4.1
 
-- [ ] Drive the reconciliation against the recorded fixtures
-      (`app/routes/sample_orders.json` / `sample_products.json`) with a faked
-      Supabase, asserting the created/updated/skipped decisions. This is the
-      coverage gap that makes changes to `services/shopify_sync.py` riskier than
-      they need to be — still worth doing given D1 is now extracted and easier
-      to test in isolation.
+- [ ] **Wrap multi-write operations in transactions** — sync, CSV upload, and
+      replacement creation issue many independent PostgREST calls; a failure
+      halfway through leaves the DB partially updated with no rollback. PostgREST
+      can't do interactive transactions, so move multi-step mutations into
+      **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection**
+      for the write-heavy paths. At minimum, keep the sync idempotent and
+      restartable. Bundled in: **`month-summary`'s Postgres pushdown** (§4.3) —
+      it needs the same RPC plumbing (`get_month_summary_list` fetches every
+      order's date columns to bucket them in Python; no schema change needed,
+      the bucketing logic just moves into the function).
+
+### Deferred separately
+
+**`get_all_orders`'s numeric re-sort** (§4.3) — attempted via a generated
+`order_number_numeric` column, reverted. `order_number` is `VARCHAR(20) UNIQUE`
+and the unused `create_replacement_order` endpoint still writes `"NNNN-R"`
+into it, which blocks converting the column to `INTEGER`; confirmed live that
+no current rows have `-R` in `order_number` (replacements are tracked via
+`replacement_of_order_no` instead), so the endpoint looks safe to remove, but
+that's a product call, not made yet. Revisit once that's decided — either
+drop the dead endpoint and convert the column, or do the sort via an RPC
+function instead (no schema change, same plumbing as the month-summary item
+above).
 
 ### Remaining §4 items not yet addressed
 
@@ -384,18 +324,6 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 700, `cashbook.py` 298
 - [ ] **Externalise the PIN lockout state** — it is in-memory, so it resets on
       redeploy and does not work across replicas (§4.4).
 - [ ] **Trusted-proxy `X-Forwarded-For` handling** for the lockout's client IP (§4.4).
-- [ ] **Push filtering/sorting/aggregation into Postgres** — `month-summary`,
-      order numeric sort, and product variant grouping still fetch pages and
-      process them in Python (§4.3).
-- [ ] **Batch the per-row updates** — `batch_update_cost_prices` (`products.py`)
-      still issues one `UPDATE` per row in a loop instead of a single batched
-      `upsert` (§4.3).
-- [ ] **Offload PDF generation** — ReportLab still runs synchronously in the
-      request path; no background task/queue for invoice/packaging-list/load-sheet
-      batches (§4.3).
-- [ ] **`SHOPIFY_STORE_URL` default is a real staging store** (`staginglushwear.myshopify.com`
-      in `config.py`) — should default to empty and fail loudly instead (§4.6).
-- [ ] **Dockerfile**: run as a non-root user and add a `HEALTHCHECK` (§4.6).
 - [ ] **API versioning** (`/api/v1/...`) before external consumers depend on it (§4.7).
 - [ ] **Client-facing pagination** on list endpoints (§4.7). Partly addressed:
       `GET /orders/` now requires a `month`/`year` period instead of returning
@@ -410,8 +338,9 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 700, `cashbook.py` 298
 **Concurrency guard** (old D4) was investigated and moved to
 [`../TODO.md`](../TODO.md) §4 with its full design and findings — notably that
 `pg_advisory_lock` is unusable through PostgREST. The orders sync itself is now
-covered (see the completed-tasks entry above) via a conditional-`UPDATE` lock on
-`sync_status` instead; `../TODO.md` §4 is about the remaining CSV-upload /
+covered via a conditional-`UPDATE` lock on `sync_status`'s `in_progress` column
+(claimed via `UPDATE ... WHERE in_progress = false`, race-free since Postgres
+serializes concurrent UPDATEs on one row); `../TODO.md` §4 is about the remaining CSV-upload /
 replacement-creation write sequences. **Transactional multi-writes** (old D5)
 remains deferred there too — the sync's batched upserts are already atomic so the
 real transactional gap is in the cashbook, not the sync.
