@@ -15,7 +15,7 @@ from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.config import settings
 from app.database import get_supabase
-from app.db_utils import PAGE_SIZE, fetch_all
+from app.db_utils import fetch_all
 from app.models import Order, OrderCreate, OrderUpdate
 from app.money import money
 from app.order_pdf import extract_order_numbers
@@ -238,8 +238,6 @@ def _period_start_end_dates(month: int, year: int):
     return start_date, end_date
 
 
-RECENT_ORDERS_LIMIT = 1000
-
 # The orders list is the one place `delivery_status` gets fetched at scale (hundreds-1000+
 # rows), and the frontend list view only ever renders `latest_status` from it - the full
 # `status_history` array (the bulk of that column's size) is only needed by the per-order
@@ -265,66 +263,31 @@ def _reshape_delivery_status_latest(rows: List[dict]) -> List[dict]:
 
 @router.get("/", response_model=List[Order])
 async def get_all_orders(
-    month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
-    year: int = Query(None, ge=2000, le=2100, description="Filter by period year."),
-    limit: int = Query(RECENT_ORDERS_LIMIT, ge=1, le=10000, description="Max orders when no period is given."),
+    month: int = Query(..., ge=1, le=12, description="Period month (1-12). Period is 22nd to next 21st."),
+    year: int = Query(..., ge=2000, le=2100, description="Period year."),
 ):
-    """Orders for a month period, or the most recent `limit` orders when no period is given."""
+    """Orders for a single month period (22nd to next 21st)."""
     try:
         t_start = time.perf_counter()
         supabase = get_supabase()
 
-        if month is not None and year is not None:
-            start_iso, end_iso = _period_start_end(month, year)
-            period_orders = fetch_all(
-                lambda: supabase.table("orders")
-                .select(ORDERS_LIST_SELECT)
-                .gte("order_receiving_date", start_iso)
-                .lt("order_receiving_date", end_iso)
-                .order("order_receiving_date", desc=True)
-            )
-            period_orders = _reshape_delivery_status_latest(period_orders)
-            t_query = time.perf_counter()
-            period_orders.sort(key=_order_recency_key, reverse=True)
-            t_sort = time.perf_counter()
-            logger.info(
-                "[get_all_orders] period=%s-%s query=%.2fs sort=%.3fs total=%.2fs (rows=%d)",
-                month, year, t_query - t_start, t_sort - t_query, t_sort - t_start, len(period_orders),
-            )
-            return period_orders
-
-        # Most recent N orders. Ordering must be by date, not order_number: that column
-        # is VARCHAR, so a DB sort is lexicographic and would rank "9999" above "11308"
-        # — a limit on that ordering would return the wrong rows entirely.
-        # PostgREST caps one request at 1000 rows, so page when more is asked for.
-        recent = []
-        offset = 0
-        page_count = 0
-        while len(recent) < limit:
-            page = (
-                supabase.table("orders")
-                .select(ORDERS_LIST_SELECT)
-                .order("order_receiving_date", desc=True)
-                .range(offset, min(offset + PAGE_SIZE, limit) - 1)
-                .execute()
-                .data
-                or []
-            )
-            page_count += 1
-            recent.extend(page)
-            if len(page) < PAGE_SIZE:
-                break
-            offset += PAGE_SIZE
-        recent = _reshape_delivery_status_latest(recent)
+        start_iso, end_iso = _period_start_end(month, year)
+        period_orders = fetch_all(
+            lambda: supabase.table("orders")
+            .select(ORDERS_LIST_SELECT)
+            .gte("order_receiving_date", start_iso)
+            .lt("order_receiving_date", end_iso)
+            .order("order_receiving_date", desc=True)
+        )
+        period_orders = _reshape_delivery_status_latest(period_orders)
         t_query = time.perf_counter()
-
-        recent.sort(key=_order_recency_key, reverse=True)
+        period_orders.sort(key=_order_recency_key, reverse=True)
         t_sort = time.perf_counter()
         logger.info(
-            "[get_all_orders] recent limit=%d query=%.2fs (%d page(s)) sort=%.3fs total=%.2fs (rows=%d)",
-            limit, t_query - t_start, page_count, t_sort - t_query, t_sort - t_start, len(recent),
+            "[get_all_orders] period=%s-%s query=%.2fs sort=%.3fs total=%.2fs (rows=%d)",
+            month, year, t_query - t_start, t_sort - t_query, t_sort - t_start, len(period_orders),
         )
-        return recent
+        return period_orders
     except HTTPException:
         raise
     except Exception:

@@ -86,9 +86,9 @@ function isPeriodPassed(month, year) {
 const ORDERS_PERIOD_OLDEST_MONTH = 10;
 const ORDERS_PERIOD_OLDEST_YEAR = 2024;
 
-/** Build dropdown options: "All orders" + periods from current down to Oct 22 – Nov 21, 2024 */
+/** Build dropdown options: periods from current down to Oct 22 – Nov 21, 2024 */
 function buildStaticPeriodOptions() {
-    const options = [{ value: '__all__', label: 'All orders (recent)' }];
+    const options = [];
     let { month, year } = getCurrentOrdersPeriod();
     while (year > ORDERS_PERIOD_OLDEST_YEAR || (year === ORDERS_PERIOD_OLDEST_YEAR && month >= ORDERS_PERIOD_OLDEST_MONTH)) {
         options.push({ value: `${month}-${year}`, label: formatOrdersPeriodLabel(month, year) });
@@ -102,6 +102,12 @@ function buildStaticPeriodOptions() {
     return options;
 }
 
+/** value ("month-year") of the current period - the default the dropdown resets to. */
+function getCurrentOrdersPeriodValue() {
+    const { month, year } = getCurrentOrdersPeriod();
+    return `${month}-${year}`;
+}
+
 function populateOrdersPeriodFilterDropdown() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (!selectEl) return;
@@ -111,17 +117,20 @@ function populateOrdersPeriodFilterDropdown() {
     if (currentVal && options.some((o) => o.value === currentVal)) {
         selectEl.value = currentVal;
     } else {
-        selectEl.value = '__all__';
+        selectEl.value = getCurrentOrdersPeriodValue();
     }
 }
 
+/** Loads the current period's orders - the default/reset view (e.g. after any mutation
+ * elsewhere resets the grid back to this instead of preserving a past period). */
 async function loadOrders() {
+    const { month, year } = getCurrentOrdersPeriod();
     try {
-        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
+        orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders' });
 
         populateOrdersPeriodFilterDropdown();
         const selectEl = document.getElementById('ordersPeriodFilter');
-        if (selectEl) selectEl.value = '__all__';
+        if (selectEl) selectEl.value = getCurrentOrdersPeriodValue();
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
@@ -137,7 +146,7 @@ async function loadOrders() {
             orders = getSampleOrders();
             populateOrdersPeriodFilterDropdown();
             const sel = document.getElementById('ordersPeriodFilter');
-            if (sel) sel.value = '__all__';
+            if (sel) sel.value = getCurrentOrdersPeriodValue();
             if (ordersGridApi) {
                 ordersGridApi.setGridOption('rowData', orders);
                 setTimeout(() => updateFooterRow(), 0);
@@ -147,11 +156,11 @@ async function loadOrders() {
 }
 
 /** Reload orders while preserving whichever period view is currently selected - loadOrders()
- * always resets the period dropdown to "All orders", which would silently drop a selected
- * period out from under the user (e.g. after a background sync). */
+ * always resets the period dropdown to the current period, which would silently drop a
+ * selected past period out from under the user (e.g. after a background sync). */
 async function refreshOrdersView() {
     const periodVal = document.getElementById('ordersPeriodFilter')?.value;
-    if (periodVal && periodVal !== '__all__') {
+    if (periodVal) {
         const [month, year] = periodVal.split('-');
         await loadOrdersForPeriod(Number(month), Number(year));
     } else {
@@ -159,7 +168,7 @@ async function refreshOrdersView() {
     }
 }
 
-/** Load orders for a specific period from API (for older months beyond the initial 1000) */
+/** Load orders for a specific period from the API. */
 async function loadOrdersForPeriod(month, year) {
     try {
         orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders for period' });

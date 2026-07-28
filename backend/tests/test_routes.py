@@ -16,30 +16,31 @@ class TestHealthAndAuth:
 
         client = make_client()
         main.app.dependency_overrides.pop(require_auth, None)  # restore the real gate
-        assert client.get("/api/orders/").status_code == 401
+        assert client.get("/api/orders/?month=6&year=2026").status_code == 401
 
 
 class TestOrders:
     def test_list_returns_rows(self, make_client, order_row):
-        r = make_client({"orders": [order_row]}).get("/api/orders/")
+        r = make_client({"orders": [order_row]}).get("/api/orders/?month=6&year=2026")
         assert r.status_code == 200
         assert [o["order_number"] for o in r.json()] == ["11308"]
 
     def test_empty_table_returns_empty_list(self, make_client):
-        r = make_client({"orders": []}).get("/api/orders/")
+        r = make_client({"orders": []}).get("/api/orders/?month=6&year=2026")
         assert r.status_code == 200
         assert r.json() == []
 
     def test_response_is_shaped_by_the_order_model(self, make_client, order_row):
         noisy = {**order_row, "internal_debug_column": "should not be exposed"}
-        body = make_client({"orders": [noisy]}).get("/api/orders/").json()[0]
+        body = make_client({"orders": [noisy]}).get("/api/orders/?month=6&year=2026").json()[0]
         assert "internal_debug_column" not in body
         assert body["total_amount"] == 2598.0
 
-    def test_limit_is_validated(self, make_client, order_row):
+    def test_period_is_required(self, make_client, order_row):
         client = make_client({"orders": [order_row]})
-        assert client.get("/api/orders/?limit=0").status_code == 422
-        assert client.get("/api/orders/?limit=50").status_code == 200
+        assert client.get("/api/orders/").status_code == 422
+        assert client.get("/api/orders/?month=6").status_code == 422
+        assert client.get("/api/orders/?year=2026").status_code == 422
 
     def test_month_query_is_validated(self, make_client, order_row):
         client = make_client({"orders": [order_row]})

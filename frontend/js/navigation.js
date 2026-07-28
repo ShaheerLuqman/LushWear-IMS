@@ -54,13 +54,16 @@ function initNavigation() {
 function initOrdersPeriodFilter() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (selectEl) {
-        selectEl.addEventListener('change', () => {
-            const val = selectEl.value;
-            if (val === '__all__') {
-                loadOrders();
-            } else {
-                const [month, year] = val.split('-').map(Number);
-                loadOrdersForPeriod(month, year);
+        selectEl.addEventListener('change', async () => {
+            const [month, year] = selectEl.value.split('-').map(Number);
+            // Only an explicit period change shows the grid's loading overlay - other
+            // reloads (sync, mutations elsewhere) keep the existing rows visible until the
+            // new data lands instead of flashing to a blank/spinner state.
+            if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+            try {
+                await loadOrdersForPeriod(month, year);
+            } finally {
+                if (ordersGridApi) ordersGridApi.hideOverlay();
             }
         });
     }

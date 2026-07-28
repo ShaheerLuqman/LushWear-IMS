@@ -263,9 +263,10 @@ Was 4232 lines; now **3037** after the PDF and PostEx extractions.
 - ✅ **DONE (mostly) — response models.** Entity endpoints return real Pydantic
   models; the 12 remaining `dict` responses are operation results (sync stats,
   delete confirmations, load-sheet logs), left untyped deliberately.
-- **Pagination on list endpoints.** Partly done: `GET /orders/` now returns the
-  1,000 most recent by default (`limit` overridable) rather than all 10k. Cashbook
-  and products still return the full set.
+- **Pagination on list endpoints.** Partly done: `GET /orders/` now requires a
+  `month`/`year` period (naturally bounded to that period's rows, rather than
+  scanning the full table) instead of an unbounded `limit`-based "most recent N."
+  Cashbook and products still return the full set.
 
 ---
 
@@ -459,8 +460,8 @@ then the pattern is `Decimal` internally, `float` at the API boundary.
 - [ ] **Dockerfile**: run as a non-root user and add a `HEALTHCHECK` (§4.6).
 - [ ] **API versioning** (`/api/v1/...`) before external consumers depend on it (§4.7).
 - [ ] **Client-facing pagination** on list endpoints (§4.7). Partly addressed:
-      `GET /orders/` now defaults to the 1,000 most recent instead of all 10k;
-      cashbook and products still return the full set.
+      `GET /orders/` now requires a `month`/`year` period instead of returning
+      up to 10k rows; cashbook and products still return the full set.
 - [ ] **Remaining untyped `response_model=dict`** (9 left) are operation results —
       sync stats, `{"status": "deleted"}`, load-sheet logs — not entities. Typing
       them would mean inventing models for ad-hoc payloads; left as `dict`
