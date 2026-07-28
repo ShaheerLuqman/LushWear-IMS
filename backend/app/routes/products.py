@@ -373,7 +373,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         after = body.created_after.isoformat()
         now_iso = datetime.now(timezone.utc).isoformat()
         page = 500
-        select_cols = "id, order_number, replacement_of_order_no, line_items, cost_price"
+        select_cols = "id, order_number, order_status, replacement_of_order_no, line_items, cost_price"
 
         # Collect orders whose effective date is on/after the cutoff. The effective date
         # is order_receiving_date (the date shown in the orders grid), falling back to
@@ -399,6 +399,8 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         updated_order_numbers: List[int] = []
         for row in order_rows:
             scanned += 1
+            if (row.get("order_status") or "").strip().lower() == "cancelled":
+                continue
             line_items = row.get("line_items") if isinstance(row.get("line_items"), list) else []
 
             # Does this order include the target product?

@@ -219,6 +219,7 @@ async def upload_postex_csv(
         matched_order_numbers = []
         updated_count = 0
         unmatched_order_numbers = []
+        cancelled_order_numbers = []
         updated_order_ids = []
         amount_mismatches = []  # { order_number, receivable, csv_net_amount, total_amount, advance_amount, delivery_charge, tax_amount }
 
@@ -227,6 +228,9 @@ async def upload_postex_csv(
             order = order_number_to_order.get(order_num)
             if not order:
                 unmatched_order_numbers.append(order_num)
+                continue
+            if (order.get("order_status") or "").strip().lower() == "cancelled":
+                cancelled_order_numbers.append(order_num)
                 continue
             matched_order_numbers.append(order_num)
             update_data = {
@@ -274,17 +278,21 @@ async def upload_postex_csv(
             message += f" {len(unmatched_order_numbers)} order number(s) from CSV did not match any orders."
             if len(unmatched_order_numbers) <= 10:
                 message += f" Unmatched: {', '.join(map(str, unmatched_order_numbers[:10]))}"
+        if cancelled_order_numbers:
+            message += f" {len(cancelled_order_numbers)} order(s) skipped because they are cancelled."
 
         return {
             "updated": updated_count,
             "message": message,
             "updated_order_ids": updated_order_ids,
             "matched_order_numbers": matched_order_numbers,
+            "cancelled_order_numbers": cancelled_order_numbers,
             "csv_rows_processed": len(rows),
             "csv_order_numbers_count": len(csv_order_numbers),
             "db_order_numbers_count": len(set(db_order_numbers)),
             "matched_count": len(matched_order_numbers),
             "unmatched_count": len(unmatched_order_numbers),
+            "cancelled_count": len(cancelled_order_numbers),
             "amount_mismatches": amount_mismatches,
         }
     except HTTPException:
@@ -353,6 +361,10 @@ async def fix_voided_order_totals(
             order_number = str(db_order.get("order_number") or "").strip()
             if not order_number:
                 logger.info(f"[fix-voided-totals] skip row id={db_order.get('id')} reason=missing_order_number")
+                continue
+
+            if (db_order.get("order_status") or "").strip().lower() == "cancelled":
+                logger.info(f"[fix-voided-totals] skip order={order_number} reason=cancelled")
                 continue
 
             if only_returned_status:
@@ -1006,10 +1018,28 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
         if dc is not None and dc < 0:
             raise HTTPException(status_code=400, detail="delivery_charge must be 0 or greater")
         supabase = get_supabase()
+
+        # A cancelled order isn't being shipped, so it can't go on a rider's load sheet.
+        status_rows = (
+            supabase.table("orders")
+            .select("order_number, order_status")
+            .in_("order_number", body.order_numbers)
+            .execute()
+            .data
+            or []
+        )
+        cancelled_order_numbers = [
+            str(r.get("order_number")) for r in status_rows
+            if (r.get("order_status") or "").strip().lower() == "cancelled"
+        ]
+        order_numbers = [n for n in body.order_numbers if n not in cancelled_order_numbers]
+        if not order_numbers:
+            raise HTTPException(status_code=400, detail="All selected orders are cancelled")
+
         row = {
             "assignment_number": body.assignment_number.strip(),
             "rider_name": body.rider_name.strip(),
-            "order_numbers": body.order_numbers,
+            "order_numbers": order_numbers,
         }
         if dc is not None:
             row["delivery_charge"] = float(dc)
@@ -1017,15 +1047,17 @@ async def create_load_sheet_log(body: LoadSheetLogCreate):
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create load sheet log")
         # Update all orders in this load sheet: set folio to assignment number, and optionally delivery_charge
-        if body.order_numbers:
-            update_data = {
-                "folio": body.assignment_number.strip(),
-                "updated_at": datetime.now(timezone.utc).isoformat(),
-            }
-            if dc is not None:
-                update_data["delivery_charge"] = float(dc)
-            supabase.table("orders").update(update_data).in_("order_number", body.order_numbers).execute()
-        return response.data[0]
+        update_data = {
+            "folio": body.assignment_number.strip(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if dc is not None:
+            update_data["delivery_charge"] = float(dc)
+        supabase.table("orders").update(update_data).in_("order_number", order_numbers).execute()
+        result = dict(response.data[0])
+        if cancelled_order_numbers:
+            result["cancelled_order_numbers"] = cancelled_order_numbers
+        return result
     except HTTPException:
         raise
     except Exception:
@@ -1995,16 +2027,23 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
         supabase = get_supabase()
-        orders_response = supabase.table("orders").select("id, order_number, line_items").in_("id", order_ids).execute()
+        orders_response = supabase.table("orders").select("id, order_number, order_status, line_items").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
+        cancelled_count = sum(1 for o in orders if (o.get("order_status") or "").strip().lower() == "cancelled")
+        orders = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
+        if not orders:
+            raise HTTPException(status_code=400, detail="All selected orders are cancelled")
         aggregated, sizes = _aggregate_packaging_items(orders)
         pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
-            headers={"Content-Disposition": "attachment; filename=packaging_list.pdf"},
+            headers={
+                "Content-Disposition": "attachment; filename=packaging_list.pdf",
+                "X-Cancelled-Excluded": str(cancelled_count),
+            },
         )
     except HTTPException:
         raise
@@ -2046,17 +2085,24 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
         supabase = get_supabase()
         orders_response = (
             supabase.table("orders")
-            .select("id, order_number, line_items")
+            .select("id, order_number, order_status, line_items")
             .in_("order_number", order_numbers)
             .execute()
         )
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found for the given order numbers")
-        aggregated, sizes = _aggregate_packaging_items(orders)
-        pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
         found = {o.get("order_number") for o in orders}
         not_found = sorted(set(order_numbers) - found, key=_order_number_sort_key)
+        cancelled = sorted(
+            (o.get("order_number") for o in orders if (o.get("order_status") or "").strip().lower() == "cancelled"),
+            key=_order_number_sort_key,
+        )
+        orders = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
+        if not orders:
+            raise HTTPException(status_code=400, detail="All matched orders are cancelled")
+        aggregated, sizes = _aggregate_packaging_items(orders)
+        pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
@@ -2064,6 +2110,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
                 "Content-Disposition": "attachment; filename=packaging_list.pdf",
                 "X-Matched-Count": str(len(orders)),
                 "X-Not-Found": ",".join(str(n) for n in not_found),
+                "X-Cancelled": ",".join(str(n) for n in cancelled),
             },
         )
     except HTTPException:

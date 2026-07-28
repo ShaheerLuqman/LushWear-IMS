@@ -226,6 +226,7 @@ async function generatePackagingListFromNumbers() {
         });
         const matchedCount = parseInt(res.headers.get('X-Matched-Count') || '0', 10);
         const notFoundHeader = res.headers.get('X-Not-Found') || '';
+        const cancelledHeader = res.headers.get('X-Cancelled') || '';
         const blob = await res.blob();
         const filename = packagingListPdfFilename();
         const url = window.URL.createObjectURL(blob);
@@ -238,8 +239,12 @@ async function generatePackagingListFromNumbers() {
         setTimeout(() => window.URL.revokeObjectURL(url), 60000);
         closePackagingListModal();
         const notFound = notFoundHeader ? notFoundHeader.split(',').filter(Boolean) : [];
-        if (notFound.length > 0) {
-            showToast(`Packaging list saved (${matchedCount} order(s)). Not found: ${notFound.join(', ')}`, 'info');
+        const cancelled = cancelledHeader ? cancelledHeader.split(',').filter(Boolean) : [];
+        const notes = [];
+        if (notFound.length > 0) notes.push(`Not found: ${notFound.join(', ')}`);
+        if (cancelled.length > 0) notes.push(`Cancelled (excluded): ${cancelled.join(', ')}`);
+        if (notes.length > 0) {
+            showToast(`Packaging list saved (${matchedCount} order(s)). ${notes.join('. ')}`, 'info');
         } else {
             showToast(`Packaging list saved (${matchedCount} order(s))`, 'success');
         }
@@ -350,7 +355,12 @@ async function confirmGenerateLoadSheet() {
         a.click();
         document.body.removeChild(a);
         window.URL.revokeObjectURL(url);
-        showToast(`Load sheet saved and PDF downloaded (${orderNumbers.length} order(s))`, 'success');
+        const savedCount = Array.isArray(logData.order_numbers) ? logData.order_numbers.length : orderNumbers.length;
+        const cancelledSkipped = logData.cancelled_order_numbers || [];
+        const skippedNote = cancelledSkipped.length
+            ? ` (${cancelledSkipped.length} cancelled order(s) skipped: ${cancelledSkipped.join(', ')})`
+            : '';
+        showToast(`Load sheet saved and PDF downloaded (${savedCount} order(s))${skippedNote}`, 'success');
         if (currentView === 'loadSheetLogs') {
             loadLoadSheetLogs();
         } else {
