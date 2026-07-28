@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS orders (
     -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
     -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
     -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.
-    line_items               JSONB,
+    line_items               JSONB NOT NULL DEFAULT '[]',
     piece_received           TEXT NOT NULL DEFAULT 'Pending'
                                  CHECK (piece_received IN ('Pending', 'Done', 'Received')),
     replacement_of_order_no  INTEGER,

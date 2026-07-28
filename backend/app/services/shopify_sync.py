@@ -535,16 +535,19 @@ async def _sync_shopify_orders() -> dict:
                             return None
             return None
 
-        def extract_line_items(order):
+        def extract_line_items(order, order_status=None):
             """Build structured line_items (one object per line, real qty) from Shopify line_items.
             Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price
             so old orders survive product renames/deletes/cost changes. Excludes removed lines
-            (current_quantity 0)."""
+            (current_quantity 0) - except for "returned" orders, where current_quantity is 0 on
+            every line by definition (the whole order was refunded back), so falling back to it
+            would erase the historical record of what was actually shipped/invoiced; use the
+            original quantity there instead."""
             if "line_items" not in order or not order["line_items"]:
                 return []
             rows = []
             for item in order["line_items"]:
-                qty = item.get("current_quantity")
+                qty = item.get("quantity") if order_status == "returned" else item.get("current_quantity")
                 if qty is None:
                     qty = item.get("quantity") or 0
                 try:
@@ -725,7 +728,7 @@ async def _sync_shopify_orders() -> dict:
             # Set fixed delivery charge for SCS courier
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
-            structured_line_items = extract_line_items(sp_order)
+            structured_line_items = extract_line_items(sp_order, order_status)
             calculated_cost_from_items = _cost_from_line_items(structured_line_items) if structured_line_items else 0.0
 
             # If cost_price is 0, calculate it from items using products table

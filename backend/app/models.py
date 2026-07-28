@@ -120,7 +120,10 @@ class OrderBase(BaseModel):
     advance_status: int = 1
 
 class OrderCreate(OrderBase):
-    pass
+    # Narrower than OrderBase: new orders should never be inserted with a null
+    # line_items (see 20260728030000_line_items_default_empty_array.sql) - only
+    # existing legacy rows may still be null until backfilled.
+    line_items: List[OrderLineItem] = Field(default_factory=list)
 
 class OrderUpdate(BaseModel):
     order_number: Optional[int] = None

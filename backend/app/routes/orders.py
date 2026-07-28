@@ -662,12 +662,16 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                         return None
             return None
 
-        def extract_line_items(order):
+        def extract_line_items(order, order_status=None):
             """Structured line_items (one object per line, real qty) from Shopify line_items.
-            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price."""
+            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price.
+            Excludes removed lines (current_quantity 0) - except for "returned" orders, where
+            current_quantity is 0 on every line by definition (the whole order was refunded back),
+            so falling back to it would erase the historical record of what was actually
+            shipped/invoiced; use the original quantity there instead."""
             rows: List[Dict[str, Any]] = []
             for item in order.get("line_items") or []:
-                qty = item.get("current_quantity")
+                qty = item.get("quantity") if order_status == "returned" else item.get("current_quantity")
                 if qty is None:
                     qty = item.get("quantity") or 0
                 try:
@@ -695,10 +699,21 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 })
             return rows
 
-        fetch_tasks = [_fetch_shopify_order_by_order_number(n) for n in order_numbers_input]
+        # Bounded concurrency (shares _BULK_CONCURRENCY with the delivery-status bulk fetches
+        # below): an unbounded gather here once opened one httpx.AsyncClient per order number
+        # simultaneously, which on Windows (uvicorn forces the selector event loop there,
+        # capped at ~512 fds by select()) crashed the whole server for large batches.
+        fetch_sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+        async def _fetch_bounded(n: int):
+            async with fetch_sem:
+                return await _fetch_shopify_order_by_order_number(n)
+
+        fetch_tasks = [_fetch_bounded(n) for n in order_numbers_input]
         fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
-        upserts: List[Dict[str, Any]] = []
+        to_insert: List[Dict[str, Any]] = []
+        to_update: List[Dict[str, Any]] = []
         created_order_numbers: List[int] = []
         updated_order_numbers: List[int] = []
         shopify_fetch_failed: List[int] = []
@@ -755,7 +770,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             else:
                 advance_amount = total_amount if financial_status == "paid" else total_discounts
 
-            structured_line_items = extract_line_items(sp_order)
+            structured_line_items = extract_line_items(sp_order, order_status)
             cost_price = extract_cost_price(sp_order)
             if cost_price is None or cost_price == 0.0:
                 cost_price = _cost_from_line_items(structured_line_items)
@@ -812,21 +827,29 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             if existing_order:
                 payload["id"] = existing_order["id"]
                 updated_order_numbers.append(target_order_number)
+                to_update.append(payload)
             else:
                 payload["created_at"] = current_time
                 created_order_numbers.append(target_order_number)
+                to_insert.append(payload)
 
-            upserts.append(payload)
-
-        if upserts:
-            batch_size = 500
-            for i in range(0, len(upserts), batch_size):
-                batch = upserts[i:i + batch_size]
-                supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
+        # Insert/update batches are sent separately, never mixed in the same call: PostgREST's
+        # bulk upsert derives its column list from the JSON keys present and fills anything
+        # missing with SQL NULL rather than the column's DEFAULT - a payload without "id"
+        # (new orders, meant to get the DB-generated UUID) sharing a batch with payloads that
+        # do have "id" (existing orders) makes it null out id for the new rows instead of
+        # leaving it unset, which trips the NOT NULL constraint.
+        batch_size = 500
+        for i in range(0, len(to_insert), batch_size):
+            batch = to_insert[i:i + batch_size]
+            supabase.table("orders").insert(batch).execute()
+        for i in range(0, len(to_update), batch_size):
+            batch = to_update[i:i + batch_size]
+            supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
 
         return {
             "requested_count": len(order_numbers_input),
-            "processed_count": len(upserts),
+            "processed_count": len(to_insert) + len(to_update),
             "created_count": len(created_order_numbers),
             "updated_count": len(updated_order_numbers),
             "created_order_numbers": created_order_numbers,
