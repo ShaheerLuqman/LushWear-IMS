@@ -2202,6 +2202,26 @@ def _delivery_status_is_final(delivery_status_data: dict) -> bool:
     return False
 
 
+DELIVERY_STATUS_CACHE_TTL = timedelta(hours=1)
+
+
+def _delivery_status_is_fresh(delivery_status_data: Optional[dict]) -> bool:
+    """True if delivery_status_data was fetched less than an hour ago, so a courier
+    API call can be skipped in favor of the cached value."""
+    if not delivery_status_data:
+        return False
+    fetched_at = delivery_status_data.get("fetched_at")
+    if not fetched_at:
+        return False
+    try:
+        fetched_dt = datetime.fromisoformat(fetched_at)
+    except (ValueError, TypeError):
+        return False
+    if fetched_dt.tzinfo is None:
+        fetched_dt = fetched_dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) - fetched_dt < DELIVERY_STATUS_CACHE_TTL
+
+
 def _delivery_status_indicates_returned(delivery_status_data: dict) -> bool:
     """True if delivery status contains 'Return to KARACHI' (e.g. in latest_status or status_history)."""
     if not delivery_status_data:
@@ -2769,6 +2789,9 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         delivery_status_data = None
         existing_delivery = order.get("delivery_status")
 
+        if _delivery_status_is_fresh(existing_delivery):
+            return existing_delivery
+
         if courier_normalized in ("postex",):
             if not settings.POSTEX_MERCHANT_TOKEN:
                 raise HTTPException(status_code=400, detail="PostEx credentials not configured. Please set POSTEX_MERCHANT_TOKEN environment variable.")
@@ -2849,11 +2872,17 @@ async def get_delivery_status_bulk(
         postex_orders: List[Tuple[str, str]] = []
         couriersnext_orders: List[Tuple[str, str]] = []
         results: Dict[str, dict] = {}
+        fresh_ids: set = set()
 
         for order_id in order_ids:
             order = orders_by_id.get(order_id)
             if not order:
                 results[order_id] = {"error": "Order not found"}
+                continue
+            existing_delivery = order.get("delivery_status")
+            if _delivery_status_is_fresh(existing_delivery):
+                results[order_id] = existing_delivery
+                fresh_ids.add(order_id)
                 continue
             courier_normalized = _normalize_courier_name(order.get("courier", "").strip())
             tracking_number = (order.get("tracking_number") or "").strip()
@@ -2879,7 +2908,8 @@ async def get_delivery_status_bulk(
                 results[order_id] = couriersnext_by_tracking[tracking_number]
 
         if save:
-            await _save_delivery_status_updates(results, orders_by_id)
+            to_save = {oid: data for oid, data in results.items() if oid not in fresh_ids}
+            await _save_delivery_status_updates(to_save, orders_by_id)
 
         response_list = []
         for order_id in order_ids:

@@ -646,6 +646,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         syncShopifyOrders();
         scheduleOrdersAutoSync();
         fetchLoadSheetRiderNames();
+        autoFetchRecentDeliveryStatus();
 
         await applyStartupDeepLink();
     }

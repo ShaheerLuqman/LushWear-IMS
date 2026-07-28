@@ -207,7 +207,7 @@ async function refreshDeliveryStatusSelected() {
         btn.textContent = toFetch.length ? `Fetching ${toFetch.length}` : 'Building report';
     }
     const total = toFetch.length;
-    const report = { delivered: [], returned: [], transit: [], CNA: [], ICA: [], RFD: [], failed: [] };
+    const report = { delivered: [], returned: [], transit: [], issues: [], failed: [] };
     for (const row of settled) {
         const bucket = (row.order_status || '').toLowerCase() === 'delivered' ? 'delivered' : 'returned';
         report[bucket].push({ order: row, note: (row.delivery_status && row.delivery_status.latest_status) || '' });
@@ -237,8 +237,14 @@ async function refreshDeliveryStatusSelected() {
                 }
                 node.setData(updated);
                 // No derived status means nothing terminal happened yet - still on its way.
-                const bucket = derivedStatus || 'transit';
-                (report[bucket] || report.transit).push({ order: updated, note: (data && data.latest_status) || '' });
+                // CNA/ICA/RFD are all delivery-attempt issues, so they share one "Issues" tab.
+                const isIssue = ['CNA', 'ICA', 'RFD'].includes(derivedStatus);
+                const bucket = isIssue ? 'issues' : (derivedStatus || 'transit');
+                (report[bucket] || report.transit).push({
+                    order: updated,
+                    note: (data && data.latest_status) || '',
+                    issueType: isIssue ? derivedStatus : null
+                });
             });
         }
         showDeliveryStatusReportModal(report, succeeded, total, settled.length);
@@ -251,6 +257,50 @@ async function refreshDeliveryStatusSelected() {
             b.disabled = false;
             b.textContent = FETCH_DELIVERY_BTN_DEFAULT_TEXT;
         }
+    }
+}
+
+/** Silently refresh delivery status for non-terminal orders from the last 2 months.
+ * Fired once at startup, right after orders finish loading. */
+async function autoFetchRecentDeliveryStatus() {
+    if (!Array.isArray(orders) || orders.length === 0) return;
+
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 2);
+
+    const toFetch = orders.filter((order) => {
+        const status = (order.order_status || '').toLowerCase();
+        if (status === 'delivered' || status === 'returned') return false;
+        const courierNormalized = (order.courier || '').trim().toUpperCase();
+        if (courierNormalized !== 'POSTEX' && courierNormalized !== 'COURIERS NEXT') return false;
+        const track = (order.tracking_number || '').trim();
+        if (!track || track === '-') return false;
+        const date = getOrderDateForPeriod(order);
+        return !!date && date >= cutoff;
+    });
+    if (toFetch.length === 0) return;
+
+    try {
+        const results = await fetchDeliveryStatusBulk(toFetch.map(o => o.id));
+        const resultsById = new Map(results.map(r => [r.order_id, r]));
+        if (ordersGridApi) {
+            ordersGridApi.forEachNode(node => {
+                const result = node.data && resultsById.get(node.data.id);
+                if (!result || result.error) return;
+                const data = result.delivery_status;
+                const updated = { ...node.data, delivery_status: data };
+                const derivedStatus = deriveOrderStatusFromLatest(data);
+                if (derivedStatus) {
+                    updated.order_status = derivedStatus;
+                    if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                        updated.piece_received = 'Done';
+                    }
+                }
+                node.setData(updated);
+            });
+        }
+    } catch (err) {
+        console.error('Auto delivery status fetch failed:', err);
     }
 }
 
@@ -388,12 +438,10 @@ function closeDeliveryStatusModal() {
 }
 
 const DELIVERY_REPORT_CATEGORIES = [
-    { key: 'transit', label: 'In transit' },
     { key: 'delivered', label: 'Delivered' },
     { key: 'returned', label: 'Returned' },
-    { key: 'CNA', label: 'Issue: CNA' },
-    { key: 'ICA', label: 'Issue: ICA' },
-    { key: 'RFD', label: 'Issue: RFD' },
+    { key: 'transit', label: 'In transit' },
+    { key: 'issues', label: 'Issues' },
     { key: 'failed', label: 'Fetch failed' },
 ];
 
@@ -412,7 +460,8 @@ function renderDeliveryStatusReportDetail(key) {
         detail.innerHTML = `<div class="no-status">No orders in ${escapeHtml(label)}.</div>`;
         return;
     }
-    const rows = entries.map(({ order, note }, i) => {
+    const showIssueColumn = key === 'issues';
+    const rows = entries.map(({ order, note, issueType }, i) => {
         const courierNormalized = (order.courier || '').trim().toUpperCase();
         const track = (order.tracking_number || '').trim();
         // Full details come from the courier API, so only offer it where that call can work.
@@ -425,6 +474,7 @@ function renderDeliveryStatusReportDetail(key) {
             <td>${escapeHtml(order.order_number || '')}</td>
             <td>${escapeHtml(formatCourierForDisplay(order.courier) || '')}</td>
             <td>${escapeHtml(order.tracking_number || '')}</td>
+            ${showIssueColumn ? `<td>${issueType ? `<span class="grid-status-badge grid-status-rfd">${escapeHtml(issueType)}</span>` : ''}</td>` : ''}
             <td>${escapeHtml(note || '')}</td>
             <td>${canViewDetails ? `<button type="button" class="status-report-view-btn" data-index="${i}">View</button>` : ''}</td>
         </tr>`;
@@ -433,7 +483,7 @@ function renderDeliveryStatusReportDetail(key) {
         <h3 class="status-report-detail__title">${escapeHtml(label)} (${entries.length})</h3>
         <div class="postex-mismatches-table-wrap">
             <table class="postex-mismatches-table">
-                <thead><tr><th>Order #</th><th>Courier</th><th>Tracking</th><th>Latest status</th><th></th></tr></thead>
+                <thead><tr><th>Order #</th><th>Courier</th><th>Tracking</th>${showIssueColumn ? '<th>Issue</th>' : ''}<th>Latest status</th><th></th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>`;
@@ -460,11 +510,16 @@ function showDeliveryStatusReportModal(report, succeeded, total, settledCount = 
     }
 
     const visible = DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'failed' || (report.failed || []).length > 0);
-    cards.innerHTML = visible.map(({ key, label }) => `
+    const grandTotal = visible.reduce((sum, c) => sum + (report[c.key] || []).length, 0);
+    cards.innerHTML = visible.map(({ key, label }) => {
+        const count = (report[key] || []).length;
+        const pct = grandTotal ? Math.round((count / grandTotal) * 100) : 0;
+        return `
         <button type="button" class="status-report-card status-report-card--${key}" data-category="${key}">
-            <span class="status-report-card__count">${(report[key] || []).length}</span>
+            <span class="status-report-card__count">${count}<span class="status-report-card__pct">${pct}%</span></span>
             <span class="status-report-card__label">${escapeHtml(label)}</span>
-        </button>`).join('');
+        </button>`;
+    }).join('');
     cards.querySelectorAll('.status-report-card').forEach(card => {
         card.addEventListener('click', () => renderDeliveryStatusReportDetail(card.dataset.category));
     });

@@ -1817,9 +1817,18 @@ body:has(#ledgersView.active) .content-area {
 }
 
 .status-report-card__count {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
     font-size: 22px;
     font-weight: 600;
     color: var(--text-primary);
+}
+
+.status-report-card__pct {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-secondary);
 }
 
 .status-report-card__label {
@@ -1831,9 +1840,7 @@ body:has(#ledgersView.active) .content-area {
 .status-report-card--delivered .status-report-card__count { color: var(--success); }
 .status-report-card--returned .status-report-card__count,
 .status-report-card--failed .status-report-card__count { color: var(--danger); }
-.status-report-card--CNA .status-report-card__count,
-.status-report-card--ICA .status-report-card__count,
-.status-report-card--RFD .status-report-card__count { color: var(--warning); }
+.status-report-card--issues .status-report-card__count { color: var(--warning); }
 
 .status-report-detail__title {
     margin-top: 8px;
