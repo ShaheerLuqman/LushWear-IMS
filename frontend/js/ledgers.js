@@ -511,7 +511,7 @@ function updateSyncShopifyLastSyncLabel() {
 function updateSyncOrdersLastSyncLabel() {
     const label = document.getElementById('syncOrdersLastSync');
     if (!label) return;
-    label.textContent = lastOrdersSyncAt ? `Synced ${formatRelativeTime(lastOrdersSyncAt)}` : '';
+    label.textContent = lastOrdersSyncAt ? `Synced with Shopify ${formatRelativeTime(lastOrdersSyncAt)}` : '';
 }
 
 setInterval(() => {
@@ -556,7 +556,7 @@ async function syncShopifyProducts() {
 // syncing, this gets result.already_syncing back instead of racing it.
 async function syncShopifyOrders() {
     const labelEl = document.getElementById('syncOrdersLastSync');
-    if (labelEl) labelEl.textContent = 'Syncing...';
+    if (labelEl) labelEl.textContent = 'Syncing with Shopify...';
 
     try {
         const result = await apiJson('/orders/sync-shopify', {
