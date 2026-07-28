@@ -98,6 +98,19 @@ def _line_items_signature(line_items) -> List[str]:
     )
 
 
+def _line_items_incomplete(line_items) -> bool:
+    """True if any line item is missing cost_price/unit_price - the shape the one-time
+    legacy `items`-column backfill produced (no per-item price/cost existed to carry over).
+    A snapshot like this must be treated as stale even when name/variant/qty already match
+    Shopify, or a force-sync/periodic-sync would see "nothing changed" and skip filling it in."""
+    if not isinstance(line_items, list):
+        return False
+    return any(
+        isinstance(li, dict) and (li.get("cost_price") is None or li.get("unit_price") is None)
+        for li in line_items
+    )
+
+
 def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
     """
     Compute order total from fulfillments: fulfilled merchandise (price * quantity per
@@ -821,7 +834,11 @@ async def _sync_shopify_orders() -> dict:
                 # still change post-fulfillment); it only freezes once the order reaches delivered/returned
                 # (handled above via early continue) or another terminal-ish status.
                 freeze_advance = existing_status not in ("unfulfilled", "fulfilled")
-                items_changed = _line_items_signature(structured_line_items) != _line_items_signature(existing_order.get("line_items"))
+                existing_line_items = existing_order.get("line_items")
+                items_changed = (
+                    _line_items_signature(structured_line_items) != _line_items_signature(existing_line_items)
+                    or _line_items_incomplete(existing_line_items)
+                )
 
                 # Compare and update courier and tracking_number from Shopify if they differ
                 shopify_courier = (courier or "").strip()

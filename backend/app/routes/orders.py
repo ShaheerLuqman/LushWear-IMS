@@ -33,6 +33,7 @@ from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     _cost_from_line_items,
     _get_sync_status_row,
+    _line_items_incomplete,
     _line_items_signature,
     _order_total_from_fulfillments,
     _resolve_line_item_cost,
@@ -788,10 +789,18 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                     break
 
             # Only refresh line_items/cost_price (which snapshot each line's cost_price) when
-            # the order's own items actually changed - not on every force-sync, so a product's
-            # cost_price changing later doesn't silently overwrite an old order's cost snapshot.
-            if existing_order and _line_items_signature(structured_line_items) == _line_items_signature(existing_order.get("line_items")):
-                final_line_items = existing_order.get("line_items")
+            # the order's own items actually changed, or the existing snapshot is missing
+            # cost_price/unit_price (e.g. orders backfilled from the old legacy items[]
+            # column, which never carried per-item price/cost) - not on every force-sync, so
+            # a product's cost_price changing later doesn't silently overwrite a real old
+            # order's cost snapshot.
+            existing_line_items = existing_order.get("line_items") if existing_order else None
+            if (
+                existing_order
+                and not _line_items_incomplete(existing_line_items)
+                and _line_items_signature(structured_line_items) == _line_items_signature(existing_line_items)
+            ):
+                final_line_items = existing_line_items
                 final_cost_price = 0.0 if is_replacement_order else float(existing_order.get("cost_price") or 0.0)
             else:
                 final_line_items = structured_line_items
