@@ -300,20 +300,27 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
       order's date columns to bucket them in Python; no schema change needed,
       the bucketing logic just moves into the function).
 
-### Deferred separately
+### Resolved
 
-**`get_all_orders`'s numeric re-sort** (§4.3) — attempted via a generated
-`order_number_numeric` column, reverted at the time because the manual
-`create_replacement_order` endpoint wrote `"NNNN-R"` into `order_number`
-(`VARCHAR(20) UNIQUE`), which blocked converting the column to `INTEGER`.
-That endpoint (and its "Create Replacement" / "Delete Replacement Order" UI)
-has been removed — replacement orders are tracked exclusively via Shopify's
-`NNNN-R` tag convention (`services/shopify_sync.py`), which only ever sets the
-numeric `replacement_of_order_no` column, never `order_number` itself. The
-`-R` suffix shown next to a replacement order in the grid (`orders-columns.js`)
-is display-only, derived from `replacement_of_order_no`. This unblocks
-converting `order_number` to `INTEGER` via a migration, which would also let
-the numeric re-sort happen in Postgres instead of Python.
+**`order_number` is now `INTEGER`**, not `VARCHAR(20)`
+(`supabase/migrations/20260728010000_order_number_to_integer.sql`). It was kept
+as `VARCHAR` only because the manual `create_replacement_order` endpoint wrote
+`"NNNN-R"` into it; that endpoint (and its "Create Replacement" / "Delete
+Replacement Order" UI) has been removed. Replacement orders are now tracked
+exclusively via Shopify's `NNNN-R` tag convention (`services/shopify_sync.py`),
+which only ever sets the numeric `replacement_of_order_no` column, never
+`order_number` itself. The `-R` suffix shown next to a replacement order in the
+grid (`orders-columns.js`) is display-only, derived from
+`replacement_of_order_no`. `OrderBase.order_number`/`OrderUpdate.order_number`
+in `models.py` were updated from `str` to `int` to match (FastAPI's
+`response_model=List[Order]` on `get_all_orders` validates every response, and
+Pydantic v2 does not coerce `int` → `str`, so the model had to change in the
+same commit as the migration, not after).
+
+**Still open**: `get_all_orders`'s numeric re-sort (§4.3) currently sorts in
+Python (`_order_recency_key`/`_order_number_sort_key` in `ordering.py`) — now
+that the column is a real `INTEGER`, this can move into the Postgres query
+(`.order("order_number")`) instead, removing the Python sort pass.
 
 ### Remaining §4 items not yet addressed
 

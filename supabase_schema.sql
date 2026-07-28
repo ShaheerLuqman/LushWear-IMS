@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS variants (
 
 CREATE TABLE IF NOT EXISTS orders (
     id                       UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    order_number             VARCHAR(20) NOT NULL UNIQUE,
+    order_number             INTEGER NOT NULL UNIQUE,
     courier                  VARCHAR(100) NOT NULL,
     tracking_number          VARCHAR(255),
     folio                    VARCHAR(255),
@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS orders (
     line_items               JSONB,
     piece_received           TEXT NOT NULL DEFAULT 'Pending'
                                  CHECK (piece_received IN ('Pending', 'Done', 'Received')),
-    replacement_of_order_no  VARCHAR(20),
+    replacement_of_order_no  INTEGER,
     created_at               TIMESTAMPTZ DEFAULT NOW(),
     updated_at               TIMESTAMPTZ DEFAULT NOW()
 );

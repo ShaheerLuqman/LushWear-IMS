@@ -99,7 +99,7 @@ class OrderLineItem(BaseModel):
     cost_price: Optional[float] = None
 
 class OrderBase(BaseModel):
-    order_number: NonBlankStr
+    order_number: int
     courier: NonBlankStr
     tracking_number: Optional[str] = None
     folio: Optional[str] = None
@@ -123,7 +123,7 @@ class OrderCreate(OrderBase):
     pass
 
 class OrderUpdate(BaseModel):
-    order_number: Optional[str] = None
+    order_number: Optional[int] = None
     courier: Optional[str] = None
     tracking_number: Optional[str] = None
     folio: Optional[str] = None
@@ -140,7 +140,7 @@ class OrderUpdate(BaseModel):
 
 class Order(OrderBase):
     id: str
-    replacement_of_order_no: Optional[str] = None
+    replacement_of_order_no: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 

@@ -67,7 +67,7 @@ def make_client():
 def order_row():
     return {
         "id": "11111111-1111-1111-1111-111111111111",
-        "order_number": "11308",
+        "order_number": 11308,
         "courier": "PostEx",
         "tracking_number": "12345678901234",
         "folio": None,

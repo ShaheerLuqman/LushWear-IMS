@@ -18,13 +18,13 @@ CHECK constraints, data cleanup) is recorded in
 > (live courier codes CNA/ICA/RFD); orders ↔ cashbook and JSONB line-item ids stay
 > soft links, not FKs; money stays `float` at the API boundary, not `Decimal`.
 >
-> `order_number` staying `VARCHAR` is **no longer settled**: it was kept as
-> `VARCHAR` only because `create_replacement_order` wrote `"NNNN-R"` into it.
-> That endpoint (and its UI) has been removed — replacements are now tracked
-> solely via Shopify's `NNNN-R` tag → numeric `replacement_of_order_no`, never
-> via `order_number` itself (see [`backend/BACKEND.md`](backend/BACKEND.md) §7).
-> Converting `order_number` to `INTEGER` via a migration is now viable if
-> wanted, e.g. to push `get_all_orders`'s numeric re-sort into Postgres.
+> `order_number` is now `INTEGER`, not `VARCHAR`
+> ([`20260728010000_order_number_to_integer.sql`](supabase/migrations/20260728010000_order_number_to_integer.sql)).
+> It was kept as `VARCHAR` only because `create_replacement_order` wrote
+> `"NNNN-R"` into it; that endpoint (and its UI) has been removed — replacements
+> are tracked solely via Shopify's `NNNN-R` tag → numeric `replacement_of_order_no`,
+> never via `order_number` itself (see [`backend/BACKEND.md`](backend/BACKEND.md) §7).
+> `get_all_orders`'s numeric re-sort (§4.3 there) can now move into Postgres.
 
 ---
 

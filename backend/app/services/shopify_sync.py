@@ -748,7 +748,7 @@ async def _sync_shopify_orders() -> dict:
             replacement_of_from_tag = False
             is_replacement_order = False
             if re.match(r"^\d+-R$", str(order_number or ""), re.IGNORECASE):
-                replacement_of = re.match(r"^(\d+)-R$", str(order_number), re.IGNORECASE).group(1)
+                replacement_of = int(re.match(r"^(\d+)-R$", str(order_number), re.IGNORECASE).group(1))
                 is_replacement_order = True
             else:
                 tags_raw = sp_order.get("tags")
@@ -756,7 +756,7 @@ async def _sync_shopify_orders() -> dict:
                 for tag in tags_str.split(","):
                     tag = tag.strip()
                     if re.match(r"^\d+-R$", tag, re.IGNORECASE):
-                        replacement_of = re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1)
+                        replacement_of = int(re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1))
                         replacement_of_from_tag = True
                         is_replacement_order = True
                         break

@@ -23,7 +23,7 @@ class TestOrders:
     def test_list_returns_rows(self, make_client, order_row):
         r = make_client({"orders": [order_row]}).get("/api/orders/?month=6&year=2026")
         assert r.status_code == 200
-        assert [o["order_number"] for o in r.json()] == ["11308"]
+        assert [o["order_number"] for o in r.json()] == [11308]
 
     def test_empty_table_returns_empty_list(self, make_client):
         r = make_client({"orders": []}).get("/api/orders/?month=6&year=2026")
