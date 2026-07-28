@@ -383,6 +383,7 @@ function closeDeliveryStatusModal() {
 }
 
 const DELIVERY_REPORT_CATEGORIES = [
+    { key: 'all', label: 'All orders' },
     { key: 'delivered', label: 'Delivered' },
     { key: 'returned', label: 'Returned' },
     { key: 'transit', label: 'In transit' },
@@ -399,13 +400,20 @@ function renderDeliveryStatusReportDetail(key) {
     cards?.querySelectorAll('.status-report-card').forEach(card => {
         card.classList.toggle('active', card.dataset.category === key);
     });
-    const entries = deliveryStatusReport[key] || [];
+    const entries = key === 'all'
+        ? DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'all').flatMap(c => deliveryStatusReport[c.key] || []).sort((a, b) => {
+            const numA = parseInt(a.order.order_number, 10);
+            const numB = parseInt(b.order.order_number, 10);
+            if (!isNaN(numA) && !isNaN(numB)) return numB - numA;
+            return String(b.order.order_number || '').localeCompare(String(a.order.order_number || ''));
+        })
+        : (deliveryStatusReport[key] || []);
     const label = (DELIVERY_REPORT_CATEGORIES.find(c => c.key === key) || {}).label || key;
     if (entries.length === 0) {
         detail.innerHTML = `<div class="no-status">No orders in ${escapeHtml(label)}.</div>`;
         return;
     }
-    const showIssueColumn = key === 'issues';
+    const showIssueColumn = key === 'issues' || key === 'all';
     const rows = entries.map(({ order, note, issueType }, i) => {
         const courierNormalized = (order.courier || '').trim().toUpperCase();
         const track = (order.tracking_number || '').trim();
@@ -452,9 +460,9 @@ function showDeliveryStatusReportModal(report, total) {
     }
 
     const visible = DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'failed' || (report.failed || []).length > 0);
-    const grandTotal = visible.reduce((sum, c) => sum + (report[c.key] || []).length, 0);
+    const grandTotal = visible.reduce((sum, c) => sum + (c.key === 'all' ? 0 : (report[c.key] || []).length), 0);
     cards.innerHTML = visible.map(({ key, label }) => {
-        const count = (report[key] || []).length;
+        const count = key === 'all' ? grandTotal : (report[key] || []).length;
         const pct = grandTotal ? Math.round((count / grandTotal) * 100) : 0;
         return `
         <button type="button" class="status-report-card status-report-card--${key}" data-category="${key}">
@@ -466,8 +474,7 @@ function showDeliveryStatusReportModal(report, total) {
         card.addEventListener('click', () => renderDeliveryStatusReportDetail(card.dataset.category));
     });
 
-    const firstNonEmpty = visible.find(c => (report[c.key] || []).length > 0);
-    renderDeliveryStatusReportDetail((firstNonEmpty || visible[0]).key);
+    renderDeliveryStatusReportDetail(grandTotal > 0 ? 'all' : visible[0].key);
     modal.classList.add('active');
 }
 

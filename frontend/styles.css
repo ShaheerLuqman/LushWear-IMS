@@ -20,6 +20,7 @@
     --danger: #c45c5c;
     --warning: #c4a35c;
     --success: #8b5cf6;
+    --status-delivered: #5cc45c;
     --font-primary: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
     --font-mono: 'Roboto Mono', monospace;
     --radius-sm: 6px;
@@ -49,6 +50,7 @@
     --text-muted: #85858f;
     --danger: #e07575;
     --warning: #d9b871;
+    --status-delivered: #71d971;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.6);
 
@@ -1838,7 +1840,8 @@ body:has(#ledgersView.active) .content-area {
     text-align: center;
 }
 
-.status-report-card--delivered .status-report-card__count { color: var(--success); }
+.status-report-card--all .status-report-card__count { color: var(--accent-primary); }
+.status-report-card--delivered .status-report-card__count { color: var(--status-delivered); }
 .status-report-card--returned .status-report-card__count,
 .status-report-card--failed .status-report-card__count { color: var(--danger); }
 .status-report-card--issues .status-report-card__count { color: var(--warning); }
