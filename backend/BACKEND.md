@@ -76,6 +76,7 @@ backend/
     ├── services/
     │   ├── postex.py           # PostEx CSV parsing            (158)
     │   ├── shopify_orders.py   # single-order Shopify fetch     (95)
+    │   ├── shopify_sync.py     # full orders sync (fetch/reconcile/persist) (1004)
     │   └── pdf/
     │       ├── invoice.py          # invoice shaping + render  (424)
     │       ├── load_sheet.py       # rider manifest            (229)
@@ -83,7 +84,7 @@ backend/
     └── routes/
         ├── app_pin.py      # PIN status/verify/setup/change (+ lockout)
         ├── products.py     # products + variants + Shopify product sync   (700)
-        ├── orders.py       # orders, Shopify sync, summaries             (3037)
+        ├── orders.py       # orders, Shopify sync, summaries             (2451)
         ├── cashbook.py     # cashbook entries + daily balances            (298)
         └── ledger.py       # ledgers (entries derived from cashbook)      (129)
 ```
@@ -159,39 +160,12 @@ Ordered roughly by impact-to-effort.
 
 ### 4.1 Correctness & data integrity (highest priority)
 
-- ✅ **DONE — Enforce invariants in the database.** FKs
-  (`variants → products`, `cashbook_entries.folio → ledgers`), `CHECK`s
-  (`amount > 0`, `entry_type`, `piece_received`, `order_status` non-blank,
-  `advance_status BETWEEN 1 AND 5`), and an `updated_at` trigger are in place and
-  verified live. See [`DATABASE.md`](DATABASE.md). (The soft links
-  `orders ↔ cashbook_entries` and JSONB line-item ids are intentionally *not* FKs
-  — documented there.)
-- ✅ **DONE — Supabase Row Level Security** is enabled on all tables; the backend
-  uses the Secret key (bypasses RLS), the public/publishable path is closed.
 - **Wrap multi-write operations in transactions.** *(Still open.)* Sync, CSV
   upload, and replacement creation issue many independent PostgREST calls. A
   failure halfway through leaves the DB partially updated with no rollback.
   PostgREST can't do interactive transactions, so move multi-step mutations into
   **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for
   the write-heavy paths. At minimum, keep the sync idempotent and restartable.
-- ✅ **DONE — Concurrency on sync.** Two overlapping `/sync-shopify` calls no
-  longer race: a `sync_status.in_progress` flag, claimed via a conditional
-  `UPDATE`, makes the endpoint a no-op (`{"already_syncing": true}`) if a sync is
-  already running. See the completed-tasks entry in §6 and §7's "Deferred elsewhere" note.
-
-### 4.2 Break up `orders.py`
-
-Was 4232 lines; now **3037** after the PDF and PostEx extractions.
-
-- ✅ **DONE — `services/pdf/`** (invoice, packaging list, load sheet),
-  `services/postex.py` (CSV), `services/shopify_orders.py` (single-order fetch),
-  plus shared `ordering.py` / `paths.py` / `timezones.py` / `money.py`.
-- ✅ **DONE — the duplicated Shopify cursor-pagination loop** is one helper
-  (`app/shopify.py`), as is the Supabase offset loop (`app/db_utils.py`).
-- ✅ **DONE — tests.** 123 of them, hermetic (Supabase faked), gating CI and the
-  Docker build. Covers the pure functions listed here plus route wiring.
-- **Still open:** `services/shopify_sync.py` — the ~800-line sync function, and the
-  last large block in the file. See §7 (D1).
 
 ### 4.3 Performance
 
@@ -206,9 +180,6 @@ Was 4232 lines; now **3037** after the PDF and PostEx extractions.
   parts of sync issue one `UPDATE` per row in a Python loop. Use `upsert` with a
   single batched payload (the sync's insert path already does this — apply it
   everywhere).
-- ✅ **DONE — indexes** on the hot filter/sort columns (`orders(order_receiving_date)`,
-  `orders(replacement_of_order_no)`, `cashbook_entries(folio, order_number)`, plus
-  the pre-existing ones) are applied. See [`DATABASE.md`](DATABASE.md).
 - **Offload PDF generation.** ReportLab in the request path blocks a worker and
   can be slow for large batches. Consider a background task/queue and stream the
   result, or at least cap batch sizes.
@@ -228,12 +199,6 @@ Was 4232 lines; now **3037** after the PDF and PostEx extractions.
 
 ### 4.5 Observability & operations
 
-- ✅ **DONE — structured logging.** All 37 `print()` calls are `logger` calls;
-  `logging_config.py` sets the format and silences httpx's per-request URL noise
-  (which leaked query params and flooded the log during syncs).
-- ✅ **DONE — no internal leaks in error responses.** A global exception handler
-  logs the traceback and returns a generic 500. All 46 `detail=str(e)` leaks are
-  gone; the only remaining `str(e)` are intentional 400-level validation messages.
 - **Add request-id middleware, timing metrics, and Sentry** (or equivalent) for
   error tracking. A `/health` exists — add a `/ready` that actually checks
   Supabase connectivity.
@@ -242,14 +207,7 @@ Was 4232 lines; now **3037** after the PDF and PostEx extractions.
 
 ### 4.6 Config & deploy hygiene
 
-- ✅ **DONE — `/debug/routes` and the interactive docs** are registered only
-  outside production (`APP_ENV`).
-- ✅ **DONE — dependencies pinned** to exact versions, with `requirements-dev.txt`
-  adding only the test tooling so pytest never ships in the runtime image.
-  (Dependabot still open.)
-- ✅ **DONE — CORS.** Production refuses to boot on a wildcard origin; development
-  keeps `*` but with credentials off, which is the only valid wildcard form.
-  `AUTH_SECRET` is likewise required in production.
+- **Enable Dependabot** (or equivalent) for dependency updates.
 - The `SHOPIFY_STORE_URL` **default is a real staging store** in `config.py`.
   Defaults for external integrations should be empty and fail loudly, not point
   somewhere real.
@@ -260,9 +218,6 @@ Was 4232 lines; now **3037** after the PDF and PostEx extractions.
 ### 4.7 API design
 
 - **Version the API** (`/api/v1/...`) before external consumers depend on it.
-- ✅ **DONE (mostly) — response models.** Entity endpoints return real Pydantic
-  models; the 12 remaining `dict` responses are operation results (sync stats,
-  delete confirmations, load-sheet logs), left untyped deliberately.
 - **Pagination on list endpoints.** Partly done: `GET /orders/` now requires a
   `month`/`year` period (naturally bounded to that period's rows, rather than
   scanning the full table) instead of an unbounded `limit`-based "most recent N."
@@ -382,57 +337,40 @@ expand into a spec when picked up.
       runs the suite on every push/PR touching `backend/**`. Note: the Dockerfile's
       test stage is skipped by default (`SKIP_TESTS=1`) — it only gates the image
       build when the deploy config explicitly overrides that build arg.
+- [x] **D1 — extract `services/shopify_sync.py`** — the ~800-line Shopify orders
+      sync function (fetch → normalize → reconcile → persist, including the
+      freeze-after-fulfilled rules, voided-order handling and `NNNN-R`
+      replacements) moved verbatim out of `orders.py` into its own service
+      module (1004 lines). `POST /sync-shopify` is now parse → call service →
+      return (the old D3). Shared helpers it needs (`_resolve_line_item_cost`,
+      `_cost_from_line_items`, `_line_items_signature`,
+      `_order_total_from_fulfillments`, `PRICE_REDUCTION_DISCOUNT_CODES`) moved
+      alongside it, with `orders.py` importing them back so the
+      routes-import-from-services direction stays one-way (no circular import).
+      `orders.py` dropped from 3037 to 2451 lines. Verified with a live sync
+      diff — `created`/`updated`/`skipped` and the affected rows matched a
+      known-good run — in addition to the existing 123 tests passing unchanged.
 
 ---
 
 ## 7. Improvement plan — remaining work
 
-✅ **Done:** Stage A (bare excepts, `utcnow()`, dead imports, pinned deps),
-Stage B (Shopify + Supabase pagination deduplicated, Shopify client centralised),
-Stage C (typed response models, `models.py` constraints/`Literal`s/`ConfigDict`),
-Stage D2 (PDF + PostEx extractions), and Stage E1/E2 (123 tests, hermetic, gated
-in CI and the Docker build).
+Current sizes: `orders.py` 2451 (was 4280), `products.py` 700, `cashbook.py` 298,
+`ledger.py` 129, plus `services/` at ~2,100 lines across six modules.
 
-Current sizes: `orders.py` 3037 (was 4280), `products.py` 700, `cashbook.py` 298,
-`ledger.py` 129, plus `services/` at ~1,100 lines across five modules.
-
-### D1 — extract `services/shopify_sync.py`
-
-The ~800-line sync function is the largest remaining block and the most
-business-critical code in the repo (fetch → normalize → reconcile → persist,
-including the freeze-after-fulfilled rules, voided-order handling and `NNNN-R`
-replacements).
-
-- [ ] Extract it, then thin the route handler to: parse request → call service →
-      return (the old **D3**).
-- [ ] Verify by running a real sync and diffing `created/updated/skipped` plus the
-      affected rows against a known-good run. **The test suite does not cover the
-      reconciliation rules**, so a live diff is the safety net here, not pytest.
-
-> Related, and probably worth doing first: **sync performance**
-> ([`../TODO.md`](../TODO.md) §3). A recent run reported `created=1, skipped=1279`
-> — almost all the work was re-processing unchanged orders. Making the sync
-> incremental would both speed it up and shrink the surface D1 has to preserve.
-
-### C3 — `Decimal` for money (investigated — deliberately not done)
-
-Measured against live data: the worst float error across all 10,307 orders is
-`1e-12`, **zero rows** would round to a different cent, and the total drift over
-₨33.8M is `1.3e-7`. Meanwhile `Decimal` serialises to a JSON *string* by default,
-which would break every `parseFloat` in the frontend.
-
-Rounding at the boundary (`app/money.py`) removed the display artifacts without
-that risk. Revisit only if money maths gains multiplication/division (tax rates,
-percentage discounts, currency conversion), where errors actually compound —
-then the pattern is `Decimal` internally, `float` at the API boundary.
+> **Sync performance** ([`../TODO.md`](../TODO.md) §3) is probably worth doing next:
+> a recent run reported `created=1, skipped=1279` — almost all the work was
+> re-processing unchanged orders. Making the sync incremental would both speed it
+> up and shrink the surface of future changes to `services/shopify_sync.py`.
 
 ### E3 — integration test for the sync
 
 - [ ] Drive the reconciliation against the recorded fixtures
       (`app/routes/sample_orders.json` / `sample_products.json`) with a faked
       Supabase, asserting the created/updated/skipped decisions. This is the
-      coverage gap that currently makes D1 riskier than it needs to be — worth
-      doing **before** D1, not after.
+      coverage gap that makes changes to `services/shopify_sync.py` riskier than
+      they need to be — still worth doing given D1 is now extracted and easier
+      to test in isolation.
 
 ### Remaining §4 items not yet addressed
 

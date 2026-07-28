@@ -46,8 +46,9 @@ def make_client():
         import app.routes.products as products
         import app.routes.cashbook as cashbook
         import app.routes.ledger as ledger
+        import app.services.shopify_sync as shopify_sync
 
-        patched = [orders, products, cashbook, ledger]
+        patched = [orders, products, cashbook, ledger, shopify_sync]
         originals = [m.get_supabase for m in patched]
         for m in patched:
             m.get_supabase = lambda _f=fake: _f
