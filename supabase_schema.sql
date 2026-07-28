@@ -106,6 +106,19 @@ CREATE TABLE IF NOT EXISTS app_pin (
 
 
 -- ============================================================================
+-- Sync status (single row per sync type; currently just the Shopify orders
+-- sync). Lets the API expose "last synced" and gate auto-sync on staleness
+-- without running a sync. See supabase/migrations/20260728000000_create_sync_status.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS sync_status (
+    id             TEXT PRIMARY KEY,
+    last_synced_at TIMESTAMPTZ NOT NULL,
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
 -- Cashbook & ledgers
 -- ----------------------------------------------------------------------------
 -- Records daily inflow/outflow entries with carried-forward balances.

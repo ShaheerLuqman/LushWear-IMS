@@ -373,6 +373,38 @@ async def _fetch_shopify_orders_in_range(
 
 SHOPIFY_SYNC_WINDOW_DAYS = 60
 
+# Row id in `sync_status` for the full Shopify orders sync (see sync_shopify_orders).
+_SYNC_STATUS_ORDERS_ID = "shopify_orders"
+
+
+def _get_last_synced_at(supabase) -> Optional[str]:
+    resp = (
+        supabase.table("sync_status")
+        .select("last_synced_at")
+        .eq("id", _SYNC_STATUS_ORDERS_ID)
+        .execute()
+    )
+    rows = resp.data or []
+    return rows[0]["last_synced_at"] if rows else None
+
+
+def _set_last_synced_at(supabase, when_iso: str) -> None:
+    supabase.table("sync_status").upsert({
+        "id": _SYNC_STATUS_ORDERS_ID,
+        "last_synced_at": when_iso,
+        "updated_at": when_iso,
+    }).execute()
+
+
+@router.get("/sync-status")
+async def get_sync_status():
+    try:
+        supabase = get_supabase()
+        return {"last_synced_at": _get_last_synced_at(supabase)}
+    except Exception:
+        logger.exception("Failed to fetch sync status")
+        raise HTTPException(status_code=500, detail="Error fetching sync status")
+
 
 @router.post("/sync-shopify")
 async def sync_shopify_orders():
@@ -1046,8 +1078,15 @@ async def sync_shopify_orders():
             len(all_orders), created_count, updated_count, skipped_count,
         )
 
+        last_synced_at = datetime.now(timezone.utc).isoformat()
+        try:
+            _set_last_synced_at(supabase, last_synced_at)
+        except Exception as e:
+            logger.warning("[sync-shopify] failed to persist last_synced_at: %s", e)
+
         return {
             "message": "Orders synced successfully",
+            "last_synced_at": last_synced_at,
             "synced": synced_count,
             "created": created_count,
             "updated": updated_count,

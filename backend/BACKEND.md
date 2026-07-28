@@ -275,8 +275,8 @@ prod-gated config in `main.py`, structured logging with generic error responses,
 Stages A–C, the PDF/CSV extractions, and a 123-test suite that gates both CI and
 the Docker build.
 
-**§7 is the live plan** — it lists only what is left. Longer-horizon items
-(SQL-side aggregation, background-queued PDFs, users/orgs/RBAC) live in §6.
+**§7 is the live plan** — it lists only what is left. The users/orgs/RBAC
+migration lives in §6.
 
 ---
 
@@ -313,18 +313,17 @@ expand into a spec when picked up.
 ### Performance
 - [ ] **Caching** — cache hot reads (e.g. products, ledgers) to cut Supabase
       round-trips.
-- [ ] **Optimize the delivery-status fetch** — reduce latency / batch the
-      per-order courier lookups.
 
 ### Data & reporting
 - [ ] **Carrier health in Monthly Summary** — per-carrier delivered/total parcel
       percentage; extend the `month-summary` endpoints in `orders.py`.
-- [ ] **Sync-from-Shopify last-updated time** — persist and expose when the last
-      sync ran.
-- [ ] **Per-order last-fetched time** — persist and expose when each order's
-      delivery status was last refreshed.
-- [ ] **Server status / health** — a health signal the frontend can poll to show
-      online/offline (relates to the `/ready` idea in §4.5).
+- [ ] **Shopify webhooks for real-time order ingestion** — replace/augment the
+      manual sync button with `orders/create` / `orders/updated` / `orders/fulfilled`
+      webhooks (HMAC-verified) that trigger reconciliation for the affected order
+      via `services/shopify_orders.py`'s single-order fetch, instead of waiting for
+      a full poll. Webhook delivery isn't guaranteed, so keep the manual button
+      and/or a periodic fallback sync alongside it — this is a trigger for
+      `sync_shopify_orders`'s reconciliation logic, not a replacement for it.
 - [ ] **Notifications** — endpoints + storage for notifications (UI in TODO.md).
 
 ### New capabilities
@@ -334,15 +333,32 @@ expand into a spec when picked up.
 - [ ] **Activity logging / audit trail** — store and track user activity via logs
       (pairs with the structured-logging work in §4.5).
 
-### Fixes
-- [ ] **Order recalculation: account for discount codes** — factor discount codes
-      into recalculation (see `PRICE_REDUCTION_DISCOUNT_CODES` and commit
-      `65ed0ce`; clarify intended cost/total behavior).
-
-### Engineering / quality
-- [ ] **Test suite** — stand up automated tests (start with the pure functions in
-      §4.2) and make it policy to add tests covering each new issue/fix so
-      regressions don't recur.
+### Completed tasks
+- [x] **Sync-from-Shopify last-updated time** — a `sync_status` table (single row,
+      id `shopify_orders`; see `supabase/migrations/20260728000000_create_sync_status.sql`)
+      persists when `sync_shopify_orders` last completed. `GET /orders/sync-status`
+      exposes it without running a sync, and `POST /orders/sync-shopify` returns it
+      too. The frontend now schedules auto-sync 5 minutes after that server-tracked
+      time (`initOrdersAutoSync`/`scheduleOrdersAutoSync` in `ledgers.js`) instead of
+      a fixed 15-minute per-tab timer that force-synced on every page load.
+- [x] **Per-order last-fetched time** — `delivery_status.fetched_at` is stamped on
+      every courier fetch (PostEx and Couriers Next) and persisted as part of the
+      stored `delivery_status` JSON.
+- [x] **Optimize the delivery-status fetch** — PostEx orders are batched via
+      `track-bulk-order` and Couriers Next orders are fetched concurrently
+      (`_BULK_CONCURRENCY`); a 1-hour freshness cache (`_delivery_status_is_fresh`,
+      keyed on `fetched_at`) now skips the courier call — and the DB write —
+      entirely for any order checked within the last hour.
+- [x] **Order recalculation: account for discount codes** — `recalculate_order_totals`
+      (`POST /recalculate-totals`) checks `PRICE_REDUCTION_DISCOUNT_CODES` against
+      the order's Shopify `discount_codes` and subtracts `total_discounts` from the
+      recalculated total when a configured code is present.
+- [x] **Test suite** — 121 tests in `backend/tests/` cover the pure functions
+      (`money.py`, `ordering.py`, `advance_status.py`, `services/postex.py`,
+      `services/pdf/*`) plus route wiring, and `.github/workflows/backend-tests.yml`
+      runs the suite on every push/PR touching `backend/**`. Note: the Dockerfile's
+      test stage is skipped by default (`SKIP_TESTS=1`) — it only gates the image
+      build when the deploy config explicitly overrides that build arg.
 
 ---
 
@@ -399,15 +415,31 @@ then the pattern is `Decimal` internally, `float` at the API boundary.
 
 - [ ] **Sentry** (or equivalent) for error tracking — structured logging and generic
       error responses are in place, but nothing aggregates exceptions (§4.5).
-- [ ] **`/ready`** endpoint that actually checks Supabase connectivity (§4.5).
+- [ ] **`/ready`** endpoint that actually checks Supabase connectivity — also
+      serves as the online/offline health signal the frontend can poll (§4.5).
+- [ ] **Request-id middleware and timing metrics** — only `CORSMiddleware` is
+      registered today; no per-request id or latency instrumentation (§4.5).
 - [ ] **Rate-limit the API** beyond PIN verify, especially sync/PDF endpoints (§4.5).
 - [ ] **Externalise the PIN lockout state** — it is in-memory, so it resets on
       redeploy and does not work across replicas (§4.4).
 - [ ] **Trusted-proxy `X-Forwarded-For` handling** for the lockout's client IP (§4.4).
+- [ ] **Push filtering/sorting/aggregation into Postgres** — `month-summary`,
+      order numeric sort, and product variant grouping still fetch pages and
+      process them in Python (§4.3).
+- [ ] **Batch the per-row updates** — `batch_update_cost_prices` (`products.py`)
+      still issues one `UPDATE` per row in a loop instead of a single batched
+      `upsert` (§4.3).
+- [ ] **Offload PDF generation** — ReportLab still runs synchronously in the
+      request path; no background task/queue for invoice/packaging-list/load-sheet
+      batches (§4.3).
+- [ ] **`SHOPIFY_STORE_URL` default is a real staging store** (`staginglushwear.myshopify.com`
+      in `config.py`) — should default to empty and fail loudly instead (§4.6).
+- [ ] **Dockerfile**: run as a non-root user and add a `HEALTHCHECK` (§4.6).
 - [ ] **API versioning** (`/api/v1/...`) before external consumers depend on it (§4.7).
 - [ ] **Client-facing pagination** on list endpoints (§4.7). Partly addressed:
-      `GET /orders/` now defaults to the 1,000 most recent instead of all 10k.
-- [ ] **Remaining untyped `response_model=dict`** (12 left) are operation results —
+      `GET /orders/` now defaults to the 1,000 most recent instead of all 10k;
+      cashbook and products still return the full set.
+- [ ] **Remaining untyped `response_model=dict`** (9 left) are operation results —
       sync stats, `{"status": "deleted"}`, load-sheet logs — not entities. Typing
       them would mean inventing models for ad-hoc payloads; left as `dict`
       deliberately.

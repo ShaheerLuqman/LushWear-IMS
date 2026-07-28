@@ -493,7 +493,6 @@ function initLedgerDetailGrid() {
 // To add/edit/delete ledger entries, use the Cashbook with the appropriate folio.
 
 const SHOPIFY_PRODUCT_SYNC_STORAGE_KEY = 'lushwear_last_shopify_product_sync';
-const SHOPIFY_ORDER_SYNC_STORAGE_KEY = 'lushwear_last_shopify_order_sync';
 
 function updateLastSyncLabel(labelId, storageKey) {
     const label = document.getElementById(labelId);
@@ -507,8 +506,12 @@ function updateSyncShopifyLastSyncLabel() {
     updateLastSyncLabel('syncShopifyLastSync', SHOPIFY_PRODUCT_SYNC_STORAGE_KEY);
 }
 
+// Orders' last-sync time comes from the server (sync_status table), not localStorage - keeps
+// it consistent across tabs/devices instead of resetting whenever a browser's storage is cleared.
 function updateSyncOrdersLastSyncLabel() {
-    updateLastSyncLabel('syncOrdersLastSync', SHOPIFY_ORDER_SYNC_STORAGE_KEY);
+    const label = document.getElementById('syncOrdersLastSync');
+    if (!label) return;
+    label.textContent = lastOrdersSyncAt ? `Synced ${formatRelativeTime(lastOrdersSyncAt)}` : '';
 }
 
 setInterval(() => {
@@ -564,7 +567,7 @@ async function syncShopifyOrders() {
             `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
             'success'
         );
-        localStorage.setItem(SHOPIFY_ORDER_SYNC_STORAGE_KEY, Date.now().toString());
+        lastOrdersSyncAt = new Date(result.last_synced_at).getTime();
         updateSyncOrdersLastSyncLabel();
         await refreshOrdersView();
     } catch (error) {
@@ -573,10 +576,34 @@ async function syncShopifyOrders() {
     } finally {
         btn.disabled = false;
         labelEl.textContent = 'Sync from Shopify';
+        // Reschedule regardless of outcome so a failed sync still retries later.
+        scheduleOrdersAutoSync();
     }
 }
 
-function scheduleOrdersAutoSync() {
+/** Fetches the server's last-sync time on startup and schedules the first auto-sync relative
+ *  to it (rather than always syncing immediately), so multiple tabs/devices don't each force
+ *  a fresh sync on load when another one already ran recently. */
+async function initOrdersAutoSync() {
+    try {
+        const status = await apiJson('/orders/sync-status', { fallback: 'Failed to fetch sync status' });
+        if (status.last_synced_at) {
+            lastOrdersSyncAt = new Date(status.last_synced_at).getTime();
+            updateSyncOrdersLastSyncLabel();
+        }
+    } catch (error) {
+        console.error('Error fetching orders sync status:', error);
+    }
+
+    const elapsed = lastOrdersSyncAt ? Date.now() - lastOrdersSyncAt : Infinity;
+    if (elapsed >= ORDERS_AUTO_SYNC_INTERVAL_MS) {
+        await syncShopifyOrders();
+    } else {
+        scheduleOrdersAutoSync(ORDERS_AUTO_SYNC_INTERVAL_MS - elapsed);
+    }
+}
+
+function scheduleOrdersAutoSync(delayMs = ORDERS_AUTO_SYNC_INTERVAL_MS) {
     if (ordersAutoSyncTimerId != null) {
         clearTimeout(ordersAutoSyncTimerId);
         ordersAutoSyncTimerId = null;
@@ -584,8 +611,7 @@ function scheduleOrdersAutoSync() {
     ordersAutoSyncTimerId = setTimeout(async () => {
         ordersAutoSyncTimerId = null;
         await syncShopifyOrders();
-        scheduleOrdersAutoSync();
-    }, ORDERS_AUTO_SYNC_INTERVAL_MS);
+    }, delayMs);
 }
 
 async function uploadPostExCsv(file, assignmentNumber) {

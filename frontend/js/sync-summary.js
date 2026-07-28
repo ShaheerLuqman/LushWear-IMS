@@ -276,12 +276,11 @@ function initForms() {
         });
     }
 
-    // Sync Shopify Orders Button (manual sync resets the 15-min auto-sync timer)
+    // Sync Shopify Orders Button (syncShopifyOrders() resets the auto-sync timer itself)
     const syncOrdersBtn = document.getElementById('syncOrdersBtn');
     if (syncOrdersBtn) {
         syncOrdersBtn.addEventListener('click', async () => {
             await syncShopifyOrders();
-            scheduleOrdersAutoSync();
         });
     }
 

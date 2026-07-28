@@ -91,9 +91,11 @@ let updateFooterRow = null; // Will be set in initOrdersGrid
 let loadSheetRiderNames = [];
 /** Next assignment number for load sheet (format LW-N). Updated when load sheet logs are fetched. */
 let nextLoadSheetAssignmentNumber = 1;
-// Auto-sync orders every 15 minutes; timer is reset when user clicks sync
-const ORDERS_AUTO_SYNC_INTERVAL_MS = 15 * 60 * 1000;
+// Auto-sync orders 5 minutes after the last sync (server-tracked, not per-tab); timer is
+// reset whenever a sync (manual or auto) completes.
+const ORDERS_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
+let lastOrdersSyncAt = null; // ms epoch; from the server, not localStorage
 /** Orders grid date column id (for header date range filter). */
 const ORDERS_DATE_COLUMN_ID = 'order_receiving_date';
 /** Guard: when Order# filter is a full order number (4+ digits) and 0 results, we fetch from DB; avoid duplicate requests */
@@ -643,8 +645,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         syncShopifyProducts();
-        syncShopifyOrders();
-        scheduleOrdersAutoSync();
+        initOrdersAutoSync();
         fetchLoadSheetRiderNames();
         autoFetchRecentDeliveryStatus();
 
