@@ -375,32 +375,78 @@ SHOPIFY_SYNC_WINDOW_DAYS = 60
 
 # Row id in `sync_status` for the full Shopify orders sync (see sync_shopify_orders).
 _SYNC_STATUS_ORDERS_ID = "shopify_orders"
+# A held lock older than this is assumed to belong to a crashed/killed sync, not a live one.
+_SYNC_LOCK_STALE_AFTER = timedelta(minutes=5)
 
 
-def _get_last_synced_at(supabase) -> Optional[str]:
+def _get_sync_status_row(supabase) -> Dict[str, Any]:
     resp = (
         supabase.table("sync_status")
-        .select("last_synced_at")
+        .select("last_synced_at, in_progress")
         .eq("id", _SYNC_STATUS_ORDERS_ID)
         .execute()
     )
     rows = resp.data or []
-    return rows[0]["last_synced_at"] if rows else None
+    return rows[0] if rows else {"last_synced_at": None, "in_progress": False}
+
+
+def _get_last_synced_at(supabase) -> Optional[str]:
+    return _get_sync_status_row(supabase).get("last_synced_at")
 
 
 def _set_last_synced_at(supabase, when_iso: str) -> None:
-    supabase.table("sync_status").upsert({
-        "id": _SYNC_STATUS_ORDERS_ID,
+    supabase.table("sync_status").update({
         "last_synced_at": when_iso,
         "updated_at": when_iso,
-    }).execute()
+    }).eq("id", _SYNC_STATUS_ORDERS_ID).execute()
+
+
+def _release_stale_sync_lock(supabase) -> None:
+    """Clears a lock left behind by a crashed/killed sync. Plain AND'd filters
+    (eq + eq + lt) - PostgREST/Postgres handle this combination everywhere else
+    in this file (see the order_receiving_date range filters below), unlike the
+    OR'd single-UPDATE version this replaced, which had no precedent in this
+    codebase and turned out not to reclaim stale locks correctly."""
+    stale_cutoff = (datetime.now(timezone.utc) - _SYNC_LOCK_STALE_AFTER).isoformat()
+    supabase.table("sync_status").update({"in_progress": False}).eq(
+        "id", _SYNC_STATUS_ORDERS_ID
+    ).eq("in_progress", True).lt("lock_acquired_at", stale_cutoff).execute()
+
+
+def _try_acquire_sync_lock(supabase) -> bool:
+    """Claim the sync lock with a conditional UPDATE (in_progress: false -> true).
+    Postgres serializes concurrent UPDATEs on the same row, so at most one caller
+    can ever flip it - race-free without an advisory lock (unusable through
+    PostgREST anyway)."""
+    supabase.table("sync_status").upsert(
+        {"id": _SYNC_STATUS_ORDERS_ID, "in_progress": False},
+        on_conflict="id",
+        ignore_duplicates=True,
+    ).execute()
+    _release_stale_sync_lock(supabase)
+    now_iso = datetime.now(timezone.utc).isoformat()
+    resp = (
+        supabase.table("sync_status")
+        .update({"in_progress": True, "lock_acquired_at": now_iso})
+        .eq("id", _SYNC_STATUS_ORDERS_ID)
+        .eq("in_progress", False)
+        .execute()
+    )
+    return bool(resp.data)
+
+
+def _release_sync_lock(supabase) -> None:
+    supabase.table("sync_status").update({"in_progress": False}).eq(
+        "id", _SYNC_STATUS_ORDERS_ID
+    ).execute()
 
 
 @router.get("/sync-status")
 async def get_sync_status():
     try:
         supabase = get_supabase()
-        return {"last_synced_at": _get_last_synced_at(supabase)}
+        row = _get_sync_status_row(supabase)
+        return {"last_synced_at": row.get("last_synced_at"), "in_progress": bool(row.get("in_progress"))}
     except Exception:
         logger.exception("Failed to fetch sync status")
         raise HTTPException(status_code=500, detail="Error fetching sync status")
@@ -408,6 +454,14 @@ async def get_sync_status():
 
 @router.post("/sync-shopify")
 async def sync_shopify_orders():
+    """The frontend decides when to auto-sync (see ledgers.js); this just guarantees
+    at most one sync runs at a time, whether triggered by one tab, several tabs, or
+    the manual button while an auto-sync is in flight."""
+    supabase = get_supabase()
+
+    if not _try_acquire_sync_lock(supabase):
+        return {"message": "Sync already in progress", "skipped": True}
+
     try:
         t_start = time.perf_counter()
         now = datetime.now(timezone.utc)
@@ -424,8 +478,6 @@ async def sync_shopify_orders():
             raw_number = sp_order.get("order_number")
             if raw_number:
                 shopify_order_numbers.add(str(int(raw_number)))
-
-        supabase = get_supabase()
 
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
@@ -1114,6 +1166,8 @@ async def sync_shopify_orders():
     except Exception:
         logger.exception("Shopify order sync failed")
         raise HTTPException(status_code=500, detail="Error syncing orders")
+    finally:
+        _release_sync_lock(supabase)
 
 
 @router.post("/upload-postex-csv")

@@ -550,6 +550,9 @@ async function syncShopifyProducts() {
     }
 }
 
+// The backend locks around the actual sync (sync_status.in_progress), so if another tab/
+// device (or the auto-sync timer) is already syncing, this gets result.skipped back instead
+// of racing it.
 async function syncShopifyOrders() {
     const btn = document.getElementById('syncOrdersBtn');
     if (!btn) return;
@@ -563,20 +566,26 @@ async function syncShopifyOrders() {
             method: 'POST',
             fallback: 'Failed to sync orders from Shopify'
         });
-        showToast(
-            `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
-            'success'
-        );
-        lastOrdersSyncAt = new Date(result.last_synced_at).getTime();
-        updateSyncOrdersLastSyncLabel();
-        await refreshOrdersView();
+        if (result.skipped) {
+            showToast(result.message || 'Sync already in progress', 'info');
+        } else {
+            showToast(
+                `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
+                'success'
+            );
+            await refreshOrdersView();
+        }
+        if (result.last_synced_at) {
+            lastOrdersSyncAt = new Date(result.last_synced_at).getTime();
+            updateSyncOrdersLastSyncLabel();
+        }
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');
     } finally {
         btn.disabled = false;
         labelEl.textContent = 'Sync from Shopify';
-        // Reschedule regardless of outcome so a failed sync still retries later.
+        // Reschedule regardless of outcome (synced, skipped, or failed) so the loop continues.
         scheduleOrdersAutoSync();
     }
 }

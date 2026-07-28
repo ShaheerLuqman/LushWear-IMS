@@ -174,9 +174,10 @@ Ordered roughly by impact-to-effort.
   PostgREST can't do interactive transactions, so move multi-step mutations into
   **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for
   the write-heavy paths. At minimum, keep the sync idempotent and restartable.
-- **Concurrency on sync.** *(Still open.)* Two overlapping `/sync-shopify` calls
-  will race on the same rows. Add an advisory lock (Postgres `pg_advisory_lock`)
-  or a "sync in progress" flag so the endpoint can't run concurrently.
+- ✅ **DONE — Concurrency on sync.** Two overlapping `/sync-shopify` calls no
+  longer race: a `sync_status.in_progress` flag, claimed via a conditional
+  `UPDATE`, makes the endpoint a no-op (`{"skipped": true}`) if a sync is already
+  running. See the completed-tasks entry in §6 and §7's "Deferred elsewhere" note.
 
 ### 4.2 Break up `orders.py`
 
@@ -334,13 +335,29 @@ expand into a spec when picked up.
       (pairs with the structured-logging work in §4.5).
 
 ### Completed tasks
-- [x] **Sync-from-Shopify last-updated time** — a `sync_status` table (single row,
-      id `shopify_orders`; see `supabase/migrations/20260728000000_create_sync_status.sql`)
-      persists when `sync_shopify_orders` last completed. `GET /orders/sync-status`
-      exposes it without running a sync, and `POST /orders/sync-shopify` returns it
-      too. The frontend now schedules auto-sync 5 minutes after that server-tracked
-      time (`initOrdersAutoSync`/`scheduleOrdersAutoSync` in `ledgers.js`) instead of
-      a fixed 15-minute per-tab timer that force-synced on every page load.
+- [x] **Sync-from-Shopify last-updated time + a lock against overlapping syncs** —
+      a `sync_status` table (single row, id `shopify_orders`; see
+      `supabase/migrations/20260728000000_create_sync_status.sql`) persists when
+      `sync_shopify_orders` last completed. `GET /orders/sync-status` exposes it
+      without running a sync, and `POST /orders/sync-shopify` returns it too.
+      The frontend (`ledgers.js`) still owns *when* to auto-sync — on load and
+      every 10 minutes, relative to that server-tracked time rather than a fixed
+      per-tab timer, so multiple open tabs/devices don't each force a sync on
+      load. What changed is that `POST /orders/sync-shopify` is now safe to call
+      concurrently: `in_progress`/`lock_acquired_at` on the same row are a lock,
+      claimed via a conditional `UPDATE ... WHERE in_progress = false` (Postgres
+      serializes concurrent UPDATEs on one row, so at most one caller ever flips
+      it — race-free without an advisory lock, which isn't usable through
+      PostgREST anyway); a separate `UPDATE ... WHERE in_progress = true AND
+      lock_acquired_at < stale_cutoff` clears a lock left behind by a crashed
+      sync after 5 minutes. (An earlier version combined both into one `OR`'d
+      UPDATE via `.or_()` - that didn't reliably reclaim stale locks in practice
+      and had no precedent elsewhere in this file, unlike the plain `.eq()`/
+      `.lt()` filters used here, which are the same pattern already proven by
+      the `order_receiving_date` range filters elsewhere in `orders.py`.) A
+      manual sync while another is in flight gets `{"skipped": true}` back
+      instead of racing it. This closes the concurrency gap noted below for the
+      orders sync specifically (cashbook/CSV-upload multi-writes are still open).
 - [x] **Per-order last-fetched time** — `delivery_status.fetched_at` is stamped on
       every courier fetch (PostEx and Couriers Next) and persisted as part of the
       stored `delivery_status` JSON.
@@ -446,11 +463,14 @@ then the pattern is `Decimal` internally, `float` at the API boundary.
 
 ### Deferred elsewhere
 
-**Concurrency guard** (old D4) and **transactional multi-writes** (old D5) were
-investigated and moved to [`../TODO.md`](../TODO.md) §4–5 with their full designs
-and findings — notably that `pg_advisory_lock` is unusable through PostgREST, and
-that the sync's batched upserts are already atomic so the real transactional gap is
-in the cashbook, not the sync.
+**Concurrency guard** (old D4) was investigated and moved to
+[`../TODO.md`](../TODO.md) §4 with its full design and findings — notably that
+`pg_advisory_lock` is unusable through PostgREST. The orders sync itself is now
+covered (see the completed-tasks entry above) via a conditional-`UPDATE` lock on
+`sync_status` instead; `../TODO.md` §4 is about the remaining CSV-upload /
+replacement-creation write sequences. **Transactional multi-writes** (old D5)
+remains deferred there too — the sync's batched upserts are already atomic so the
+real transactional gap is in the cashbook, not the sync.
 
 ---
 

@@ -107,14 +107,19 @@ CREATE TABLE IF NOT EXISTS app_pin (
 
 -- ============================================================================
 -- Sync status (single row per sync type; currently just the Shopify orders
--- sync). Lets the API expose "last synced" and gate auto-sync on staleness
--- without running a sync. See supabase/migrations/20260728000000_create_sync_status.sql.
+-- sync). Lets the API expose "last synced" and gate the periodic backend sync
+-- on staleness. in_progress/lock_acquired_at are a lock so the periodic sync,
+-- a manual sync, and multiple instances can't run concurrently - acquired via
+-- a conditional UPDATE, not an advisory lock (unusable through PostgREST).
+-- See supabase/migrations/20260728000000_create_sync_status.sql.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS sync_status (
-    id             TEXT PRIMARY KEY,
-    last_synced_at TIMESTAMPTZ NOT NULL,
-    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id               TEXT PRIMARY KEY,
+    last_synced_at   TIMESTAMPTZ,
+    in_progress      BOOLEAN NOT NULL DEFAULT FALSE,
+    lock_acquired_at TIMESTAMPTZ,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 
