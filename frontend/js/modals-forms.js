@@ -35,14 +35,7 @@ function openBulkUpdateOrderModal() {
                     .filter(Boolean);
                 
                 // Remove duplicates and sort
-                const uniqueOrderNumbers = [...new Set(orderNumbers)].sort((a, b) => {
-                    const numA = parseInt(a, 10);
-                    const numB = parseInt(b, 10);
-                    if (!isNaN(numA) && !isNaN(numB)) {
-                        return numA - numB;
-                    }
-                    return String(a).localeCompare(String(b));
-                });
+                const uniqueOrderNumbers = [...new Set(orderNumbers)].sort((a, b) => a - b);
                 
                 orderNumbersText = uniqueOrderNumbers.join('\n');
             }
@@ -351,7 +344,7 @@ function parseOrderNumbersFromTextarea() {
     const results = [];
     for (const line of lines) {
         const n = parseInt(line, 10);
-        if (!Number.isNaN(n) && n > 0) results.push(String(n));
+        if (!Number.isNaN(n) && n > 0) results.push(n);
     }
     return [...new Set(results)];
 }

@@ -484,11 +484,11 @@ async def fix_voided_order_totals(
 
 
 class RecalculateTotalsBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
 
 
 class ForceSyncOrdersBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
 
 
 @router.post("/sync-shopify-force", response_model=dict)
@@ -503,9 +503,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
     try:
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
-        order_numbers_input = [str(n).strip() for n in body.order_numbers if str(n).strip()]
-        if not order_numbers_input:
-            raise HTTPException(status_code=400, detail="No valid order numbers provided")
+        order_numbers_input = list(dict.fromkeys(body.order_numbers))
 
         # products cost map for item-based cost calculation fallback
         products_cost_map: Dict[str, float] = {}
@@ -533,7 +531,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
 
         # existing orders map by order_number
-        existing_orders_map: Dict[str, Dict[str, Any]] = {}
+        existing_orders_map: Dict[int, Dict[str, Any]] = {}
         existing_rows = (
             supabase.table("orders")
             .select(
@@ -547,8 +545,8 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             or []
         )
         for row in existing_rows:
-            key = str(row.get("order_number") or "").strip()
-            if key:
+            key = row.get("order_number")
+            if key is not None:
                 existing_orders_map[key] = row
 
         def _parse_iso_local(s):
@@ -689,9 +687,9 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
         fetch_results = await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
         upserts: List[Dict[str, Any]] = []
-        created_order_numbers: List[str] = []
-        updated_order_numbers: List[str] = []
-        shopify_fetch_failed: List[str] = []
+        created_order_numbers: List[int] = []
+        updated_order_numbers: List[int] = []
+        shopify_fetch_failed: List[int] = []
 
         for requested_number, sp_order_result in zip(order_numbers_input, fetch_results):
             if isinstance(sp_order_result, Exception) or not sp_order_result:
@@ -703,7 +701,7 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
             if shopify_order_number_raw is None:
                 shopify_fetch_failed.append(requested_number)
                 continue
-            shopify_order_number = str(int(shopify_order_number_raw))
+            shopify_order_number = int(shopify_order_number_raw)
             target_order_number = requested_number if requested_number in existing_orders_map else shopify_order_number
             existing_order = existing_orders_map.get(target_order_number)
 
@@ -752,20 +750,15 @@ async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
 
             replacement_of = None
             is_replacement_order = False
-            if re.match(r"^\d+-R$", target_order_number, re.IGNORECASE):
-                m = re.match(r"^(\d+)-R$", target_order_number, re.IGNORECASE)
-                replacement_of = m.group(1) if m else None
-                is_replacement_order = True
-            else:
-                tags_raw = sp_order.get("tags")
-                tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip()
-                for tag in tags_str.split(","):
-                    tag = tag.strip()
-                    m = re.match(r"^(\d+)-R$", tag, re.IGNORECASE)
-                    if m:
-                        replacement_of = m.group(1)
-                        is_replacement_order = True
-                        break
+            tags_raw = sp_order.get("tags")
+            tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip()
+            for tag in tags_str.split(","):
+                tag = tag.strip()
+                m = re.match(r"^(\d+)-R$", tag, re.IGNORECASE)
+                if m:
+                    replacement_of = int(m.group(1))
+                    is_replacement_order = True
+                    break
 
             # Only refresh line_items/cost_price (which snapshot each line's cost_price) when
             # the order's own items actually changed - not on every force-sync, so a product's
@@ -848,15 +841,12 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
     
     try:
         supabase = get_supabase()
-        order_numbers_input = [str(n).strip() for n in body.order_numbers if str(n).strip()]
-        
-        if not order_numbers_input:
-            raise HTTPException(status_code=400, detail="No valid order numbers provided")
-        
+        order_numbers_input = list(dict.fromkeys(body.order_numbers))
+
         logger.info(f"[recalculate-totals] started | order_numbers={order_numbers_input}")
-        
+
         # Fetch the orders from DB
-        db_orders_map: Dict[str, Dict[str, Any]] = {}
+        db_orders_map: Dict[int, Dict[str, Any]] = {}
         for order_num in order_numbers_input:
             resp = (
                 supabase.table("orders")
@@ -875,7 +865,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
         updated_count = 0
         checked_count = 0
         shopify_fetch_failed_count = 0
-        updated_order_numbers: List[str] = []
+        updated_order_numbers: List[int] = []
         fetch_batch_size = 50
         
         # Process orders in batches
@@ -959,7 +949,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
                     }
                 ).eq("id", db_order["id"]).execute()
                 updated_count += 1
-                updated_order_numbers.append(str(order_number))
+                updated_order_numbers.append(order_number)
                 logger.info(f"[recalculate-totals] updated order={order_number} existing_total={existing_total:.2f} new_total={new_total:.2f}")
         
         logger.info(f"[recalculate-totals] completed | checked={checked_count} updated={updated_count} fetch_failed={shopify_fetch_failed_count}")
@@ -979,15 +969,11 @@ async def recalculate_order_totals(body: RecalculateTotalsBody):
 
 
 @router.get("/by-number/{order_number}")
-async def get_order_by_number(order_number: str):
+async def get_order_by_number(order_number: int):
     """Get a single order by order_number. Used when order is not in current grid (e.g. different period)."""
     try:
-        num = order_number.strip()
-        if not num:
-            raise HTTPException(status_code=400, detail="order_number required")
         supabase = get_supabase()
-        # Match as string; DB may store as string or int
-        response = supabase.table("orders").select("*").eq("order_number", num).limit(1).execute()
+        response = supabase.table("orders").select("*").eq("order_number", order_number).limit(1).execute()
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=404, detail="Order not found")
         return response.data[0]
@@ -1446,7 +1432,7 @@ def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], orde
 
 
 class BulkUpdateStatusBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
     order_status: str  # "delivered", "returned", or "cancelled"
 
 
@@ -1489,7 +1475,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
             supabase.table("orders").update(update_payload).eq("id", order_id).execute()
             onum = order.get("order_number")
             if onum is not None:
-                updated_order_numbers.append(str(onum))
+                updated_order_numbers.append(onum)
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -1508,11 +1494,11 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody):
 
 
 class BulkUpdatePieceReceivedBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
 
 
 class BulkUpdateDeliveryChargeBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
     delivery_charge: float
 
 
@@ -1536,7 +1522,7 @@ async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody):
             .execute()
         )
         updated_rows = response.data or []
-        updated_order_numbers = [str(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
+        updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -1572,7 +1558,7 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody):
             .execute()
         )
         updated_rows = response.data or []
-        updated_order_numbers = [str(o["order_number"]) for o in updated_rows if o.get("order_number") is not None]
+        updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -2038,7 +2024,7 @@ async def extract_order_numbers_from_pdf(file: UploadFile = File(...)):
 
 
 class PackagingListByNumbersBody(BaseModel):
-    order_numbers: List[str]
+    order_numbers: List[int]
 
 
 @router.post("/generate-packaging-list-by-numbers")
@@ -2048,7 +2034,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
     (rather than by id). Mirrors /generate-packaging-list.
     """
     try:
-        order_numbers = [str(n).strip() for n in (body.order_numbers or []) if str(n).strip()]
+        order_numbers = list(dict.fromkeys(body.order_numbers))
         if not order_numbers:
             raise HTTPException(status_code=400, detail="No order numbers provided")
         supabase = get_supabase()
@@ -2063,7 +2049,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
             raise HTTPException(status_code=404, detail="No orders found for the given order numbers")
         aggregated, sizes = _aggregate_packaging_items(orders)
         pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
-        found = {str(o.get("order_number")) for o in orders}
+        found = {o.get("order_number") for o in orders}
         not_found = sorted(set(order_numbers) - found, key=_order_number_sort_key)
         return Response(
             content=pdf_buffer.getvalue(),
@@ -2071,7 +2057,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
             headers={
                 "Content-Disposition": "attachment; filename=packaging_list.pdf",
                 "X-Matched-Count": str(len(orders)),
-                "X-Not-Found": ",".join(not_found),
+                "X-Not-Found": ",".join(str(n) for n in not_found),
             },
         )
     except HTTPException:

@@ -15,7 +15,7 @@ from app.config import settings
 
 
 def _shopify_order_matches_db_order(db_order_number: str, o: dict) -> bool:
-    """True if Shopify order row corresponds to our DB order_number (e.g. 6563 or 5404-R)."""
+    """True if Shopify order row corresponds to our DB order_number (e.g. 6563)."""
     want = str(db_order_number).strip().lstrip("#")
     if not want:
         return False
@@ -29,15 +29,11 @@ def _shopify_order_matches_db_order(db_order_number: str, o: dict) -> bool:
         onum_str = str(int(onum))
     except (TypeError, ValueError):
         return False
-    if onum_str == want:
-        return True
-    if want.upper().endswith("-R") and onum_str == want.split("-")[0].strip():
-        return True
-    return False
+    return onum_str == want
 
 
 async def _fetch_shopify_order_by_order_number(order_number: str) -> Optional[dict]:
-    """Fetch a single order from Shopify Admin REST API by order number (e.g. 6563 or 5404-R)."""
+    """Fetch a single order from Shopify Admin REST API by order number (e.g. 6563)."""
     store_url = settings.shopify_store_url
     token = settings.shopify_access_token
     if not store_url or not token:

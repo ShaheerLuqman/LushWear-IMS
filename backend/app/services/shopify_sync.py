@@ -311,7 +311,7 @@ async def _sync_shopify_orders() -> dict:
         for sp_order in all_orders:
             raw_number = sp_order.get("order_number")
             if raw_number:
-                shopify_order_numbers.add(str(int(raw_number)))
+                shopify_order_numbers.add(int(raw_number))
 
         existing_orders_select = (
             "id, order_number, order_status, delivery_charge, tax_amount, "
@@ -330,7 +330,7 @@ async def _sync_shopify_orders() -> dict:
         # client's connection across concurrent threads isn't safe) instead of one at a time.
         sem = asyncio.Semaphore(_BULK_CONCURRENCY)
 
-        async def select_concurrently(table: str, select_cols: str, in_col: str = None, in_vals: List[str] = None):
+        async def select_concurrently(table: str, select_cols: str, in_col: str = None, in_vals: Optional[List[int]] = None):
             def run():
                 client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
                 q = client.table(table).select(select_cols)
@@ -375,7 +375,7 @@ async def _sync_shopify_orders() -> dict:
         for o in existing_orders_all:
             order_num = o.get("order_number")
             if order_num is not None:
-                existing_orders_map[str(order_num)] = o
+                existing_orders_map[order_num] = o
 
         def extract_courier(order):
             """Extract courier from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
@@ -644,7 +644,7 @@ async def _sync_shopify_orders() -> dict:
             if not order_number:
                 continue
 
-            order_number = str(int(order_number))
+            order_number = int(order_number)
 
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
@@ -745,21 +745,15 @@ async def _sync_shopify_orders() -> dict:
                 order_received_date = current_time
 
             replacement_of = None
-            replacement_of_from_tag = False
             is_replacement_order = False
-            if re.match(r"^\d+-R$", str(order_number or ""), re.IGNORECASE):
-                replacement_of = int(re.match(r"^(\d+)-R$", str(order_number), re.IGNORECASE).group(1))
-                is_replacement_order = True
-            else:
-                tags_raw = sp_order.get("tags")
-                tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
-                for tag in tags_str.split(","):
-                    tag = tag.strip()
-                    if re.match(r"^\d+-R$", tag, re.IGNORECASE):
-                        replacement_of = int(re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1))
-                        replacement_of_from_tag = True
-                        is_replacement_order = True
-                        break
+            tags_raw = sp_order.get("tags")
+            tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
+            for tag in tags_str.split(","):
+                tag = tag.strip()
+                if re.match(r"^\d+-R$", tag, re.IGNORECASE):
+                    replacement_of = int(re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1))
+                    is_replacement_order = True
+                    break
 
             # Replacement orders (XXXX-R) always have 0 cost price
             order_cost_price = 0.0 if is_replacement_order else cost_price
@@ -780,7 +774,7 @@ async def _sync_shopify_orders() -> dict:
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time
             }
-            if replacement_of_from_tag and replacement_of:
+            if replacement_of:
                 original_orders_to_reset_piece_received.add(replacement_of)
 
             if order_number in existing_orders_map:

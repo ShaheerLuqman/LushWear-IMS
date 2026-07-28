@@ -732,7 +732,7 @@ function initOrdersGrid() {
         }
         
         if (col.field === 'order_number') {
-            // Order number is not numeric - show nothing in footer
+            // Summing order numbers would be meaningless - show nothing in footer
             col.pinnedRowCellRenderer = () => '<span></span>';
         } else if (['total_amount', 'advance_amount', 'cod', 'delivery_charge', 'tax_amount', 'receivable', 'cost_price', 'net_profit'].includes(col.field)) {
             col.pinnedRowCellRenderer = (params) => {

@@ -401,12 +401,7 @@ function renderDeliveryStatusReportDetail(key) {
         card.classList.toggle('active', card.dataset.category === key);
     });
     const entries = key === 'all'
-        ? DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'all').flatMap(c => deliveryStatusReport[c.key] || []).sort((a, b) => {
-            const numA = parseInt(a.order.order_number, 10);
-            const numB = parseInt(b.order.order_number, 10);
-            if (!isNaN(numA) && !isNaN(numB)) return numB - numA;
-            return String(b.order.order_number || '').localeCompare(String(a.order.order_number || ''));
-        })
+        ? DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'all').flatMap(c => deliveryStatusReport[c.key] || []).sort((a, b) => (b.order.order_number || 0) - (a.order.order_number || 0))
         : (deliveryStatusReport[key] || []);
     const label = (DELIVERY_REPORT_CATEGORIES.find(c => c.key === key) || {}).label || key;
     if (entries.length === 0) {

@@ -99,7 +99,7 @@ function parsePackagingListOrderNumbers() {
     const results = [];
     for (const line of lines) {
         const n = parseInt(line, 10);
-        if (!Number.isNaN(n) && n > 0) results.push(String(n));
+        if (!Number.isNaN(n) && n > 0) results.push(n);
     }
     return [...new Set(results)];
 }
@@ -280,12 +280,7 @@ function openGenerateLoadSheetModal() {
     if (ordersGridApi) {
         const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
         const orderNumbers = selectedRows.map(row => row.order_number).filter(Boolean);
-        const unique = [...new Set(orderNumbers)].sort((a, b) => {
-            const na = parseInt(a, 10);
-            const nb = parseInt(b, 10);
-            if (!isNaN(na) && !isNaN(nb)) return na - nb;
-            return String(a).localeCompare(String(b));
-        });
+        const unique = [...new Set(orderNumbers)].sort((a, b) => a - b);
         if (textarea) textarea.value = unique.join('\n');
     } else {
         if (textarea) textarea.value = '';

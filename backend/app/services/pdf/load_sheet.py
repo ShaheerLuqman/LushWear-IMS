@@ -133,7 +133,6 @@ def _generate_pdf_load_sheet(
         elements.append(Paragraph(f"<b>Rider:</b> {rider_name}", normal_style))
     elements.append(Spacer(1, 5*mm))
     
-    # Sort orders by order_number (numerically; order_number is a VARCHAR column)
     orders.sort(key=lambda x: _order_number_sort_key(x.get("order_number")))
     
     # Prepare table data

@@ -196,7 +196,7 @@ class TestFirstSyncFromEmptyDB:
 
     def test_every_order_number_is_persisted(self, synced_once):
         fake_db, _result, orders_fixture = synced_once
-        expected_numbers = {str(int(o["order_number"])) for o in orders_fixture}
+        expected_numbers = {int(o["order_number"]) for o in orders_fixture}
         assert set(fake_db.orders.rows_by_number.keys()) == expected_numbers
 
     def test_order_status_distribution_matches_fixture(self, synced_once):
@@ -235,13 +235,13 @@ def test_second_sync_on_unchanged_data_is_a_no_op(synced_once):
     assert second_result["synced"] == 0
 
 
-def _find_order_number(orders_fixture, *, fulfilled: bool) -> str:
+def _find_order_number(orders_fixture, *, fulfilled: bool) -> int:
     for o in orders_fixture:
         if o.get("cancelled_at"):
             continue
         is_fulfilled = o.get("fulfillment_status") == "fulfilled"
         if is_fulfilled == fulfilled:
-            return str(int(o["order_number"]))
+            return int(o["order_number"])
     raise AssertionError("fixture has no matching order")
 
 

@@ -15,7 +15,6 @@ from supabase import create_client
 import asyncio
 import logging
 import httpx
-import re
 
 logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
@@ -44,11 +43,8 @@ SHOPIFY_SYNC_PRODUCTS_IGNORE: List[str] = [
 
 
 def _is_replacement_order(row: dict) -> bool:
-    """Same notion as Shopify sync: replacement SKUs (NNNN-R) or explicit link to original order."""
-    if row.get("replacement_of_order_no"):
-        return True
-    on = str(row.get("order_number") or "").strip()
-    return bool(re.match(r"^\d+-R$", on, re.IGNORECASE))
+    """Same notion as Shopify sync: an order tagged as a replacement for another."""
+    return bool(row.get("replacement_of_order_no"))
 
 
 @router.get("/", response_model=List[ProductWithVariants])
@@ -400,7 +396,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         _collect(lambda: supabase.table("orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
 
         scanned = updated = 0
-        updated_order_numbers: List[str] = []
+        updated_order_numbers: List[int] = []
         for row in order_rows:
             scanned += 1
             line_items = row.get("line_items") if isinstance(row.get("line_items"), list) else []
@@ -448,7 +444,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             updated += 1
             num = row.get("order_number")
             if num is not None:
-                updated_order_numbers.append(str(num))
+                updated_order_numbers.append(num)
 
         logger.info("[recalculate-order-costs] updated %d order(s): %s", updated, updated_order_numbers)
 
