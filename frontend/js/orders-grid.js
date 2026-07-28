@@ -894,32 +894,6 @@ function initOrdersGrid() {
         onCellValueChanged: () => {
             // Update footer when cell values change (e.g., after editing)
             setTimeout(() => updateFooterRow(), 0);
-        },
-        onCellClicked: (params) => {
-            // Handle delete button clicks for replacement orders
-            if (!params.event || !params.event.target) return;
-            
-            // Only process clicks in the delete column
-            if (params.colDef?.colId !== 'delete') return;
-            
-            // Find the delete button (could be clicked directly or on SVG inside)
-            const target = params.event.target;
-            let deleteBtn = null;
-            
-            if (target.classList && target.classList.contains('grid-delete-btn')) {
-                deleteBtn = target;
-            } else if (target.closest) {
-                deleteBtn = target.closest('.grid-delete-btn');
-            }
-            
-            if (deleteBtn) {
-                params.event.preventDefault();
-                params.event.stopPropagation();
-                const orderId = deleteBtn.getAttribute('data-order-id');
-                if (orderId && params.data) {
-                    deleteReplacementOrder(orderId, params.data);
-                }
-            }
         }
     };
 

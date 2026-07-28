@@ -160,9 +160,9 @@ Ordered roughly by impact-to-effort.
 
 ### 4.1 Correctness & data integrity (highest priority)
 
-- **Wrap multi-write operations in transactions.** *(Still open.)* Sync, CSV
-  upload, and replacement creation issue many independent PostgREST calls. A
-  failure halfway through leaves the DB partially updated with no rollback.
+- **Wrap multi-write operations in transactions.** *(Still open.)* Sync and CSV
+  upload issue many independent PostgREST calls. A failure halfway through
+  leaves the DB partially updated with no rollback.
   PostgREST can't do interactive transactions, so move multi-step mutations into
   **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for
   the write-heavy paths. At minimum, keep the sync idempotent and restartable.
@@ -172,9 +172,10 @@ Ordered roughly by impact-to-effort.
 - **Push filtering/sorting/aggregation into Postgres.** `products` variant
   grouping is done (`select("*, variants(*)")` embed, no more fetching both
   full tables and grouping in Python). Still open: `get_all_orders`'s numeric
-  re-sort (attempted via a generated column, reverted — `order_number` also
-  needs to shed the unused `create_replacement_order` "-R" path first; see
-  §7) and month summaries, which still fetch pages and sort/sum in Python.
+  re-sort (attempted via a generated column, reverted at the time — the
+  `create_replacement_order` "-R" path has since been removed, see §7, so this
+  is worth retrying) and month summaries, which still fetch pages and sort/sum
+  in Python.
 - **Batch the per-row updates.** The CSV upload and parts of sync still issue
   one `UPDATE` per row in a Python loop (`batch_update_cost_prices` now does a
   single batched `upsert`, apply the same elsewhere).
@@ -288,9 +289,9 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
 
 ### Next up: §4.1
 
-- [ ] **Wrap multi-write operations in transactions** — sync, CSV upload, and
-      replacement creation issue many independent PostgREST calls; a failure
-      halfway through leaves the DB partially updated with no rollback. PostgREST
+- [ ] **Wrap multi-write operations in transactions** — sync and CSV upload
+      issue many independent PostgREST calls; a failure halfway through leaves
+      the DB partially updated with no rollback. PostgREST
       can't do interactive transactions, so move multi-step mutations into
       **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection**
       for the write-heavy paths. At minimum, keep the sync idempotent and
@@ -302,15 +303,17 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
 ### Deferred separately
 
 **`get_all_orders`'s numeric re-sort** (§4.3) — attempted via a generated
-`order_number_numeric` column, reverted. `order_number` is `VARCHAR(20) UNIQUE`
-and the unused `create_replacement_order` endpoint still writes `"NNNN-R"`
-into it, which blocks converting the column to `INTEGER`; confirmed live that
-no current rows have `-R` in `order_number` (replacements are tracked via
-`replacement_of_order_no` instead), so the endpoint looks safe to remove, but
-that's a product call, not made yet. Revisit once that's decided — either
-drop the dead endpoint and convert the column, or do the sort via an RPC
-function instead (no schema change, same plumbing as the month-summary item
-above).
+`order_number_numeric` column, reverted at the time because the manual
+`create_replacement_order` endpoint wrote `"NNNN-R"` into `order_number`
+(`VARCHAR(20) UNIQUE`), which blocked converting the column to `INTEGER`.
+That endpoint (and its "Create Replacement" / "Delete Replacement Order" UI)
+has been removed — replacement orders are tracked exclusively via Shopify's
+`NNNN-R` tag convention (`services/shopify_sync.py`), which only ever sets the
+numeric `replacement_of_order_no` column, never `order_number` itself. The
+`-R` suffix shown next to a replacement order in the grid (`orders-columns.js`)
+is display-only, derived from `replacement_of_order_no`. This unblocks
+converting `order_number` to `INTEGER` via a migration, which would also let
+the numeric re-sort happen in Postgres instead of Python.
 
 ### Remaining §4 items not yet addressed
 
@@ -340,8 +343,8 @@ above).
 `pg_advisory_lock` is unusable through PostgREST. The orders sync itself is now
 covered via a conditional-`UPDATE` lock on `sync_status`'s `in_progress` column
 (claimed via `UPDATE ... WHERE in_progress = false`, race-free since Postgres
-serializes concurrent UPDATEs on one row); `../TODO.md` §4 is about the remaining CSV-upload /
-replacement-creation write sequences. **Transactional multi-writes** (old D5)
+serializes concurrent UPDATEs on one row); `../TODO.md` §4 is about the remaining
+CSV-upload write sequences. **Transactional multi-writes** (old D5)
 remains deferred there too — the sync's batched upserts are already atomic so the
 real transactional gap is in the cashbook, not the sync.
 

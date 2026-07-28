@@ -15,22 +15,6 @@ document.getElementById('editModal')?.addEventListener('click', (e) => {
     }
 });
 
-// Replacement Order modal
-function openReplacementOrderModal() {
-    const form = document.getElementById('replacementOrderForm');
-    if (form) form.reset();
-    // Pre-fill order number from selected row if exactly one is selected
-    if (ordersGridApi) {
-        const selected = ordersGridApi.getSelectedRows().filter(r => r && r.id !== '__footer__');
-        if (selected.length === 1) {
-            const orderNum = String(selected[0].order_number || '').replace(/-R$/i, '');
-            document.getElementById('replOrderNumber').value = orderNum;
-        }
-    }
-    document.getElementById('replacementOrderModal')?.classList.add('active');
-    document.getElementById('replOrderNumber')?.focus();
-}
-
 // Bulk Update Order modal
 function openBulkUpdateOrderModal() {
     const formEl = document.getElementById('bulkUpdateOrderForm');
@@ -366,12 +350,6 @@ function parseOrderNumbersFromTextarea() {
     const lines = textarea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     const results = [];
     for (const line of lines) {
-        // Support both numeric order numbers and replacement orders like "4807-R"
-        const replMatch = line.match(/^(\d+)-R$/i);
-        if (replMatch) {
-            results.push(`${replMatch[1]}-R`);
-            continue;
-        }
         const n = parseInt(line, 10);
         if (!Number.isNaN(n) && n > 0) results.push(String(n));
     }

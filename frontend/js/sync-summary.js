@@ -300,7 +300,7 @@ function initForms() {
     document.getElementById('bulkUpdateSelectInGrid')?.addEventListener('click', bulkUpdateSelectInGrid);
     document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
 
-    // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet, Create Replacement
+    // Orders toolbar actions: Upload PostEx CSV, Generate Load Sheet
     const ordersMoreActionUploadPostEx = document.getElementById('ordersMoreActionUploadPostEx');
     if (ordersMoreActionUploadPostEx) {
         ordersMoreActionUploadPostEx.addEventListener('click', openUploadPostExModal);
@@ -397,81 +397,6 @@ function initForms() {
     });
     document.getElementById('packagingListPdfInput')?.addEventListener('change', handlePackagingListPdfUpload);
     document.getElementById('packagingListGenerateBtn')?.addEventListener('click', generatePackagingListFromNumbers);
-
-    // Create Replacement Order
-    const ordersMoreActionCreateReplacement = document.getElementById('ordersMoreActionCreateReplacement');
-    if (ordersMoreActionCreateReplacement) {
-        ordersMoreActionCreateReplacement.addEventListener('click', () => openReplacementOrderModal());
-    }
-
-    // Replacement Order modal
-    const replacementOrderModal = document.getElementById('replacementOrderModal');
-    const closeReplacementOrderModalBtn = document.getElementById('closeReplacementOrderModal');
-    const cancelReplacementOrderBtn = document.getElementById('cancelReplacementOrder');
-    const replacementOrderForm = document.getElementById('replacementOrderForm');
-
-    const closeReplacementModal = () => replacementOrderModal?.classList.remove('active');
-    closeReplacementOrderModalBtn?.addEventListener('click', closeReplacementModal);
-    cancelReplacementOrderBtn?.addEventListener('click', closeReplacementModal);
-    replacementOrderModal?.addEventListener('click', (e) => {
-        if (e.target === replacementOrderModal) closeReplacementModal();
-    });
-
-    if (replacementOrderForm) {
-        replacementOrderForm.addEventListener('submit', async (e) => {
-            e.preventDefault();
-            const submitBtn = document.getElementById('submitReplacementOrder');
-            const originalNum = document.getElementById('replOrderNumber').value.trim();
-            const courier = document.getElementById('replCourier').value;
-            const total = parseFloat(document.getElementById('replTotal').value) || 0;
-            const advance = parseFloat(document.getElementById('replAdvance').value) || 0;
-            const costPrice = parseFloat(document.getElementById('replCostPrice').value) || 0;
-            const tracking = document.getElementById('replTracking').value.trim();
-
-            if (!originalNum) {
-                showToast('Please enter the original order number', 'error');
-                return;
-            }
-
-            submitBtn.disabled = true;
-            submitBtn.textContent = 'Creating...';
-            try {
-                const result = await apiJson('/orders/create-replacement', {
-                    method: 'POST',
-                    body: {
-                        original_order_number: originalNum,
-                        total_amount: total,
-                        advance_amount: advance,
-                        cost_price: costPrice,
-                        courier: courier,
-                        tracking_number: tracking || null,
-                    },
-                    fallback: 'Failed to create replacement order'
-                });
-                showToast(`Replacement order ${result.order_number} created`, 'success');
-                closeReplacementModal();
-                loadOrders();
-            } catch (error) {
-                showToast(error.message || 'Failed to create replacement order', 'error');
-            } finally {
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Create';
-            }
-        });
-    }
-
-    // Delete Confirmation Modal
-    const deleteConfirmModal = document.getElementById('deleteConfirmModal');
-    const closeDeleteConfirmModalBtn = document.getElementById('closeDeleteConfirmModal');
-    const cancelDeleteBtn = document.getElementById('cancelDeleteBtn');
-    const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
-
-    closeDeleteConfirmModalBtn?.addEventListener('click', closeDeleteConfirmModal);
-    cancelDeleteBtn?.addEventListener('click', closeDeleteConfirmModal);
-    confirmDeleteBtn?.addEventListener('click', confirmDeleteReplacementOrder);
-    deleteConfirmModal?.addEventListener('click', (e) => {
-        if (e.target === deleteConfirmModal) closeDeleteConfirmModal();
-    });
 
     // Generate Load Sheet modal
     document.getElementById('generateLoadSheetModal')?.addEventListener('click', (e) => {

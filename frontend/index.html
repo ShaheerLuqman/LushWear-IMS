@@ -200,7 +200,6 @@
                         <div id="ordersMoreActionsMenu" class="orders-more-actions__menu" role="menu">
                             <button type="button" id="refreshDeliveryStatusSelectedBtn" class="orders-more-actions__item" role="menuitem" title="Show a delivery status breakdown for selected orders, from data already on file">Delivery Status Report</button>
                             <button type="button" id="bulkUpdateOrderBtn" class="orders-more-actions__item" role="menuitem" title="Bulk update order">Bulk update order</button>
-                            <button type="button" id="ordersMoreActionCreateReplacement" class="orders-more-actions__item" role="menuitem" title="Create replacement order">Create Replacement</button>
                             <button type="button" id="ordersMoreActionUploadPostEx" class="orders-more-actions__item" role="menuitem" title="Upload PostEx CSV">Upload PostEx CSV</button>
                             <button type="button" id="ordersMoreActionGenerateLoadSheet" class="orders-more-actions__item" role="menuitem" title="Generate load sheet for selected orders">Generate Load Sheet</button>
                             <button type="button" id="ordersMoreActionGeneratePackagingList" class="orders-more-actions__item" role="menuitem" title="Generate combined packaging list for selected orders">Generate Packaging List</button>
@@ -815,56 +814,6 @@
         </div>
     </div>
 
-    <!-- Replacement Order Modal -->
-    <div id="replacementOrderModal" class="modal">
-        <div class="modal-content replacement-modal-content">
-            <div class="modal-header">
-                <h2>Create Replacement Order</h2>
-                <button type="button" class="modal-close" id="closeReplacementOrderModal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <form id="replacementOrderForm" class="replacement-order-form">
-                    <div class="repl-form-grid">
-                        <div class="form-group">
-                            <label for="replOrderNumber">Original Order #</label>
-                            <input type="text" id="replOrderNumber" required placeholder="e.g. 4807">
-                        </div>
-                        <div class="form-group">
-                            <label for="replCourier">Courier</label>
-                            <select id="replCourier">
-                                <option value="Unassigned">Unassigned</option>
-                                <option value="PostEx">PostEx</option>
-                                <option value="SCS">SCS</option>
-                                <option value="RIDER">RIDER</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                        <div class="form-group">
-                            <label for="replTotal">Total Amount</label>
-                            <input type="number" id="replTotal" min="0" step="0.01" required placeholder="0.00">
-                        </div>
-                        <div class="form-group">
-                            <label for="replAdvance">Advance Amount</label>
-                            <input type="number" id="replAdvance" min="0" step="0.01" value="0" placeholder="0.00">
-                        </div>
-                        <div class="form-group">
-                            <label for="replCostPrice">Cost Price</label>
-                            <input type="number" id="replCostPrice" min="0" step="0.01" value="0" placeholder="0.00">
-                        </div>
-                        <div class="form-group">
-                            <label for="replTracking">Tracking Number</label>
-                            <input type="text" id="replTracking" placeholder="Optional">
-                        </div>
-                    </div>
-                    <div class="form-actions">
-                        <button type="button" class="btn btn-secondary" id="cancelReplacementOrder">Cancel</button>
-                        <button type="submit" class="btn btn-primary" id="submitReplacementOrder">Create</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
     <!-- Generate Load Sheet Modal -->
     <div id="generateLoadSheetModal" class="modal">
         <div class="modal-content">
@@ -892,38 +841,6 @@
                 <div class="bulk-update-actions" style="margin-top: 16px;">
                     <button type="button" id="loadSheetModalCancel" class="btn btn-secondary">Cancel</button>
                     <button type="button" id="loadSheetModalConfirm" class="btn btn-primary">Generate &amp; Download PDF</button>
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Delete Confirmation Modal -->
-    <div id="deleteConfirmModal" class="modal">
-        <div class="modal-content delete-confirm-modal-content">
-            <div class="modal-header">
-                <h2>Delete Replacement Order</h2>
-                <button type="button" class="modal-close" id="closeDeleteConfirmModal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="delete-confirm-content">
-                    <div class="delete-confirm-icon">
-                        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                            <line x1="10" y1="11" x2="10" y2="17"></line>
-                            <line x1="14" y1="11" x2="14" y2="17"></line>
-                        </svg>
-                    </div>
-                    <p class="delete-confirm-message">
-                        Are you sure you want to delete replacement order <strong id="deleteConfirmOrderNumber"></strong>?
-                    </p>
-                    <p class="delete-confirm-warning">
-                        This action cannot be undone.
-                    </p>
-                </div>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="cancelDeleteBtn">Cancel</button>
-                    <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
                 </div>
             </div>
         </div>

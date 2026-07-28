@@ -14,10 +14,17 @@ CHECK constraints, data cleanup) is recorded in
 
 > **Settled — do not "fix" these.** Recurring schema questions that were
 > investigated and deliberately closed (rationale in
-> [`backend/DATABASE.md`](backend/DATABASE.md) §2): `order_number` stays `VARCHAR`
-> (the `NNNN-R` replacement convention needs it); `order_status` stays open text
+> [`backend/DATABASE.md`](backend/DATABASE.md) §2): `order_status` stays open text
 > (live courier codes CNA/ICA/RFD); orders ↔ cashbook and JSONB line-item ids stay
 > soft links, not FKs; money stays `float` at the API boundary, not `Decimal`.
+>
+> `order_number` staying `VARCHAR` is **no longer settled**: it was kept as
+> `VARCHAR` only because `create_replacement_order` wrote `"NNNN-R"` into it.
+> That endpoint (and its UI) has been removed — replacements are now tracked
+> solely via Shopify's `NNNN-R` tag → numeric `replacement_of_order_no`, never
+> via `order_number` itself (see [`backend/BACKEND.md`](backend/BACKEND.md) §7).
+> Converting `order_number` to `INTEGER` via a migration is now viable if
+> wanted, e.g. to push `get_all_orders`'s numeric re-sort into Postgres.
 
 ---
 

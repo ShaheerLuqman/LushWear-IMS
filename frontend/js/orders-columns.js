@@ -39,12 +39,7 @@ function buildOrdersGridColumns() {
                 if (on == null || on === '') return '';
                 const s = String(on);
                 const replacementOf = params.data?.replacement_of_order_no;
-                if (replacementOf) return `${s} (${replacementOf}-R)`;
-                if (/^\d+-R$/i.test(s)) {
-                    const base = s.replace(/-R$/i, '');
-                    return `${base} (${s})`;
-                }
-                return s;
+                return replacementOf ? `${s} (${replacementOf}-R)` : s;
             },
             cellStyle: { fontWeight: 'bold' },
             valueFormatter: (params) => {
@@ -53,25 +48,9 @@ function buildOrdersGridColumns() {
                 if (on == null || on === '') return '';
                 const s = String(on);
                 const replacementOf = params.data?.replacement_of_order_no;
-                if (replacementOf) return `${s} (${replacementOf}-R)`;
-                if (/^\d+-R$/i.test(s)) {
-                    const base = s.replace(/-R$/i, '');
-                    return `${base} (${s})`;
-                }
-                return s;
+                return replacementOf ? `${s} (${replacementOf}-R)` : s;
             },
-            comparator: (a, b) => {
-                // Sort numerically, with -R orders right after their parent
-                const parseON = (v) => {
-                    const s = String(v || '');
-                    const m = s.match(/^(\d+)(-R)?$/i);
-                    return m ? [parseInt(m[1], 10), m[2] ? 1 : 0] : [0, 0];
-                };
-                const [numA, suffA] = parseON(a);
-                const [numB, suffB] = parseON(b);
-                if (numA !== numB) return numA - numB;
-                return suffA - suffB;
-            }
+            comparator: (a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0)
         },
         {
             headerName: 'Courier',
@@ -559,35 +538,6 @@ function buildOrdersGridColumns() {
                 }
             }
         },
-        {
-            headerName: '',
-            colId: 'delete',
-            width: 60,
-            minWidth: 60,
-            maxWidth: 60,
-            sortable: false,
-            filter: false,
-            suppressSizeToFit: true,
-            suppressMovable: true,
-            cellRenderer: (params) => {
-                const orderNumber = String(params.data?.order_number || '');
-                const isReplacement = /-R$/i.test(orderNumber);
-                if (!isReplacement) {
-                    return '';
-                }
-                const orderId = params.data?.id;
-                if (!orderId) return '';
-                return `<button class="grid-delete-btn" data-order-id="${escapeHtml(orderId)}" title="Delete replacement order" aria-label="Delete">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        <line x1="10" y1="11" x2="10" y2="17"></line>
-                        <line x1="14" y1="11" x2="14" y2="17"></line>
-                    </svg>
-                </button>`;
-            },
-            pinnedRowCellRenderer: () => ''
-        }
     ];
 
     return columnDefs;

@@ -63,72 +63,6 @@ async function saveOrderField(orderId, field, value) {
     }
 }
 
-let pendingDeleteOrderId = null;
-let pendingDeleteOrderData = null;
-
-function openDeleteConfirmModal(orderId, orderData) {
-    const orderNumber = String(orderData?.order_number || '');
-    if (!/-R$/i.test(orderNumber)) {
-        showToast('Only replacement orders can be deleted', 'error');
-        return;
-    }
-
-    pendingDeleteOrderId = orderId;
-    pendingDeleteOrderData = orderData;
-    
-    const orderNumberEl = document.getElementById('deleteConfirmOrderNumber');
-    if (orderNumberEl) {
-        orderNumberEl.textContent = orderNumber;
-    }
-    
-    document.getElementById('deleteConfirmModal')?.classList.add('active');
-}
-
-function closeDeleteConfirmModal() {
-    document.getElementById('deleteConfirmModal')?.classList.remove('active');
-    pendingDeleteOrderId = null;
-    pendingDeleteOrderData = null;
-}
-
-async function confirmDeleteReplacementOrder() {
-    if (!pendingDeleteOrderId || !pendingDeleteOrderData) {
-        return;
-    }
-
-    const orderId = pendingDeleteOrderId;
-    const orderData = pendingDeleteOrderData;
-    const orderNumber = String(orderData.order_number || '');
-
-    closeDeleteConfirmModal();
-
-    const confirmBtn = document.getElementById('confirmDeleteBtn');
-    if (confirmBtn) {
-        confirmBtn.disabled = true;
-        confirmBtn.textContent = 'Deleting...';
-    }
-
-    try {
-        await apiRequest(`/orders/${orderId}`, {
-            method: 'DELETE',
-            fallback: 'Failed to delete order'
-        });
-        showToast(`Replacement order ${orderNumber} deleted`, 'success');
-        loadOrders();
-    } catch (error) {
-        console.error('Error deleting replacement order:', error);
-        showToast(error.message || 'Failed to delete replacement order', 'error');
-    } finally {
-        if (confirmBtn) {
-            confirmBtn.disabled = false;
-            confirmBtn.textContent = 'Delete';
-        }
-    }
-}
-
-function deleteReplacementOrder(orderId, orderData) {
-    openDeleteConfirmModal(orderId, orderData);
-}
-
 // ============================================
 // Generate Load Sheet modal & Load Sheet Logs
 // ============================================
@@ -164,11 +98,6 @@ function parsePackagingListOrderNumbers() {
     const lines = textarea.value.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
     const results = [];
     for (const line of lines) {
-        const replMatch = line.match(/^(\d+)-R$/i);
-        if (replMatch) {
-            results.push(`${replMatch[1]}-R`);
-            continue;
-        }
         const n = parseInt(line, 10);
         if (!Number.isNaN(n) && n > 0) results.push(String(n));
     }
