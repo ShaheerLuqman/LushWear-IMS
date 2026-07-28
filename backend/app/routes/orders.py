@@ -1782,13 +1782,16 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             raise HTTPException(status_code=404, detail="Order not found")
         
         order = order_response.data[0]
+        if (order.get("order_status") or "").strip().lower() == "cancelled":
+            raise HTTPException(status_code=400, detail="Order is cancelled")
+
         courier = order.get("courier", "").strip()
         courier_normalized = _normalize_courier_name(courier)
         tracking_number = order.get("tracking_number", "").strip()
-        
+
         if not tracking_number:
             raise HTTPException(status_code=400, detail="Tracking number not available")
-        
+
         if courier_normalized == "unassigned":
             raise HTTPException(status_code=400, detail="Courier not assigned")
         
@@ -1884,6 +1887,9 @@ async def get_delivery_status_bulk(
             order = orders_by_id.get(order_id)
             if not order:
                 results[order_id] = {"error": "Order not found"}
+                continue
+            if (order.get("order_status") or "").strip().lower() == "cancelled":
+                results[order_id] = {"error": "Order is cancelled"}
                 continue
             existing_delivery = order.get("delivery_status")
             if _delivery_status_is_fresh(existing_delivery):

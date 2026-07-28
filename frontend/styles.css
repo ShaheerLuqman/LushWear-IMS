@@ -1845,6 +1845,7 @@ body:has(#ledgersView.active) .content-area {
 .status-report-card--returned .status-report-card__count,
 .status-report-card--failed .status-report-card__count { color: var(--danger); }
 .status-report-card--issues .status-report-card__count { color: var(--warning); }
+.status-report-card--unfulfilled .status-report-card__count { color: var(--text-muted); }
 
 .status-report-detail__title {
     margin-top: 8px;

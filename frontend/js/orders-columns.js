@@ -129,7 +129,8 @@ function buildOrdersGridColumns() {
                     ? formatDateTimeDDMMYYYY(lastStatus.fetched_at)
                     : '';
                 const courierNormalized = (courier || '').trim().toUpperCase();
-                const supportsDeliveryRefresh = (
+                const isCancelled = (order.order_status || '').trim().toLowerCase() === 'cancelled';
+                const supportsDeliveryRefresh = !isCancelled && (
                     courierNormalized === 'POSTEX' ||
                     courierNormalized === 'COURIERS NEXT'
                 );

@@ -178,15 +178,15 @@ async function fetchDeliveryStatusBulk(orderIds) {
  * are for; this report is just a snapshot of current data.) */
 function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
-    const selected = ordersGridApi.getSelectedRows();
+    const selected = ordersGridApi.getSelectedRows().filter(row => (row.order_status || '').toLowerCase() !== 'cancelled');
     if (selected.length === 0) {
         showToast('Select orders to include in the report', 'warning');
         return;
     }
-    const report = { delivered: [], returned: [], transit: [], issues: [], failed: [] };
+    const report = { delivered: [], returned: [], unfulfilled: [], transit: [], issues: [], failed: [] };
     for (const row of selected) {
         const status = (row.order_status || '').toLowerCase();
-        if (status === 'delivered' || status === 'returned') {
+        if (status === 'delivered' || status === 'returned' || status === 'unfulfilled') {
             report[status].push({ order: row, note: (row.delivery_status && row.delivery_status.latest_status) || '' });
             continue;
         }
@@ -215,7 +215,7 @@ async function autoFetchRecentDeliveryStatus() {
 
     const toFetch = orders.filter((order) => {
         const status = (order.order_status || '').toLowerCase();
-        if (status === 'delivered' || status === 'returned') return false;
+        if (status === 'delivered' || status === 'returned' || status === 'cancelled') return false;
         const courierNormalized = (order.courier || '').trim().toUpperCase();
         if (courierNormalized !== 'POSTEX' && courierNormalized !== 'COURIERS NEXT') return false;
         const track = (order.tracking_number || '').trim();
@@ -388,6 +388,7 @@ const DELIVERY_REPORT_CATEGORIES = [
     { key: 'returned', label: 'Returned' },
     { key: 'transit', label: 'In transit' },
     { key: 'issues', label: 'Issues' },
+    { key: 'unfulfilled', label: 'Unfulfilled' },
     { key: 'failed', label: 'Fetch failed' },
 ];
 
