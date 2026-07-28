@@ -267,11 +267,10 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('bulkUpdateCostPriceBtn', isProducts);
     show('recalculateOrderCostsBtn', isProducts);
 
-    show('syncOrdersBtn', isOrders);
+    show('syncOrdersLastSync', isOrders, 'inline-block');
     if (isOrders) updateSyncOrdersLastSyncLabel();
     show('ordersPeriodFilterWrap', isOrders, 'flex');
     show('ordersDateRangeBtn', isOrders);
-    show('refreshDeliveryStatusSelectedBtn', isOrders);
     show('ordersMoreActionsWrap', isOrders);
     show('headerOrdersAppActions', isOrders);
     show('deliveryRefreshProgress', false);

@@ -116,7 +116,6 @@ function populateOrdersPeriodFilterDropdown() {
 }
 
 async function loadOrders() {
-    if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
         orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
 
@@ -144,8 +143,6 @@ async function loadOrders() {
                 setTimeout(() => updateFooterRow(), 0);
             }
         }
-    } finally {
-        if (ordersGridApi) ordersGridApi.hideOverlay();
     }
 }
 
@@ -164,7 +161,6 @@ async function refreshOrdersView() {
 
 /** Load orders for a specific period from API (for older months beyond the initial 1000) */
 async function loadOrdersForPeriod(month, year) {
-    if (ordersGridApi) ordersGridApi.showLoadingOverlay();
     try {
         orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders for period' });
 
@@ -177,8 +173,6 @@ async function loadOrdersForPeriod(month, year) {
         console.error('Error loading orders for period:', error);
         showToast('Failed to load orders for period', 'error');
         if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
-    } finally {
-        if (ordersGridApi) ordersGridApi.hideOverlay();
     }
 }
 

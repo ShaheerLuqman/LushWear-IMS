@@ -176,8 +176,8 @@ Ordered roughly by impact-to-effort.
   the write-heavy paths. At minimum, keep the sync idempotent and restartable.
 - ✅ **DONE — Concurrency on sync.** Two overlapping `/sync-shopify` calls no
   longer race: a `sync_status.in_progress` flag, claimed via a conditional
-  `UPDATE`, makes the endpoint a no-op (`{"skipped": true}`) if a sync is already
-  running. See the completed-tasks entry in §6 and §7's "Deferred elsewhere" note.
+  `UPDATE`, makes the endpoint a no-op (`{"already_syncing": true}`) if a sync is
+  already running. See the completed-tasks entry in §6 and §7's "Deferred elsewhere" note.
 
 ### 4.2 Break up `orders.py`
 
@@ -341,7 +341,7 @@ expand into a spec when picked up.
       `sync_shopify_orders` last completed. `GET /orders/sync-status` exposes it
       without running a sync, and `POST /orders/sync-shopify` returns it too.
       The frontend (`ledgers.js`) still owns *when* to auto-sync — on load and
-      every 10 minutes, relative to that server-tracked time rather than a fixed
+      every 5 minutes, relative to that server-tracked time rather than a fixed
       per-tab timer, so multiple open tabs/devices don't each force a sync on
       load. What changed is that `POST /orders/sync-shopify` is now safe to call
       concurrently: `in_progress`/`lock_acquired_at` on the same row are a lock,
@@ -355,8 +355,13 @@ expand into a spec when picked up.
       and had no precedent elsewhere in this file, unlike the plain `.eq()`/
       `.lt()` filters used here, which are the same pattern already proven by
       the `order_receiving_date` range filters elsewhere in `orders.py`.) A
-      manual sync while another is in flight gets `{"skipped": true}` back
-      instead of racing it. This closes the concurrency gap noted below for the
+      manual sync while another is in flight gets `{"already_syncing": true}`
+      back instead of racing it (named distinctly from the pre-existing
+      `skipped` reconciliation count in the same response - the two sharing a
+      name was the actual bug: any real sync with `skipped > 0`, i.e. nearly
+      every sync, was truthy and got misread by the frontend as "already
+      syncing," silently skipping the grid refresh). This closes the
+      concurrency gap noted below for the
       orders sync specifically (cashbook/CSV-upload multi-writes are still open).
 - [x] **Per-order last-fetched time** — `delivery_status.fetched_at` is stamped on
       every courier fetch (PostEx and Couriers Next) and persisted as part of the

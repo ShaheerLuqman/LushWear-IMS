@@ -157,11 +157,7 @@ function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
 
 // Bundles daily-balance + that date's entries — always needed together — into
 // the single GET /cashbook/day/{date} request instead of two parallel fetches.
-async function loadCashbookDay(targetDate, showLoading = true) {
-    if (showLoading) {
-        if (cashbookIncomingGridApi) cashbookIncomingGridApi.showLoadingOverlay();
-        if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.showLoadingOverlay();
-    }
+async function loadCashbookDay(targetDate) {
     try {
         const data = await apiJson(`/cashbook/day/${targetDate}`, { fallback: 'Failed to load cashbook day' });
         cashbookDailyBalance = data.daily_balance;
@@ -177,11 +173,6 @@ async function loadCashbookDay(targetDate, showLoading = true) {
             closing_balance: 0
         };
         cashbookEntries = [];
-    } finally {
-        if (showLoading) {
-            if (cashbookIncomingGridApi) cashbookIncomingGridApi.hideOverlay();
-            if (cashbookOutgoingGridApi) cashbookOutgoingGridApi.hideOverlay();
-        }
     }
 }
 
@@ -222,9 +213,9 @@ async function loadCashbook() {
     updateCashInHand();
 }
 
-async function reloadCashbookForCurrentDate(showLoading = true) {
+async function reloadCashbookForCurrentDate() {
     const selectedDate = cashbookSelectedDate || getTodayDateString();
-    await loadCashbookDay(selectedDate, showLoading);
+    await loadCashbookDay(selectedDate);
     renderCashbook();
     updateCashInHand();
 }
@@ -235,11 +226,11 @@ let cashbookReloadTimer = null;
 // call resets a 500ms timer, so a burst of entry writes (e.g. the two-sided
 // entry / order-advance modals, each firing two creates) collapses into one
 // refetch after the last one settles, instead of one per write.
-function scheduleCashbookReload(showLoading = false) {
+function scheduleCashbookReload() {
     if (cashbookReloadTimer) clearTimeout(cashbookReloadTimer);
     cashbookReloadTimer = setTimeout(() => {
         cashbookReloadTimer = null;
-        reloadCashbookForCurrentDate(showLoading);
+        reloadCashbookForCurrentDate();
     }, 500);
 }
 
@@ -795,7 +786,7 @@ async function submitBulkEntry() {
 
         setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
         showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
-        await reloadCashbookForCurrentDate(true);
+        await reloadCashbookForCurrentDate();
         if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
         bulkEntryCreating = false;
         if (input) input.disabled = false;
@@ -853,7 +844,7 @@ async function createCashbookEntry(payload) {
 
         // Debounced: waits to see if another write is on the way (e.g. the
         // other side of a two-sided entry) before refetching real IDs/grid.
-        scheduleCashbookReload(false);
+        scheduleCashbookReload();
         showToast('Entry added', 'success');
     } catch (error) {
         console.error('Error adding cashbook entry:', error);
@@ -898,7 +889,7 @@ async function createCashbookEntriesBulk(payloads) {
 
     try {
         await postCashbookEntriesBulk(payloads);
-        scheduleCashbookReload(false);
+        scheduleCashbookReload();
         showToast(payloads.length > 1 ? 'Entries added' : 'Entry added', 'success');
     } catch (error) {
         console.error('Error adding cashbook entries:', error);
@@ -956,7 +947,7 @@ async function updateCashbookEntry(entryId, updates) {
         updateCashInHand();
 
         // Debounced: collapses a burst of edits into a single day refetch.
-        scheduleCashbookReload(false);
+        scheduleCashbookReload();
         showToast('Entry updated', 'success');
     } catch (error) {
         console.error('Error updating cashbook entry:', error);
@@ -989,7 +980,7 @@ async function deleteCashbookEntry(entryId) {
         updateCashInHand();
 
         // Debounced: collapses a burst of deletes into a single day refetch.
-        scheduleCashbookReload(false);
+        scheduleCashbookReload();
         showToast('Entry deleted', 'success');
     } catch (error) {
         console.error('Error deleting cashbook entry:', error);

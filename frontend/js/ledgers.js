@@ -550,23 +550,20 @@ async function syncShopifyProducts() {
     }
 }
 
-// The backend locks around the actual sync (sync_status.in_progress), so if another tab/
-// device (or the auto-sync timer) is already syncing, this gets result.skipped back instead
-// of racing it.
+// Orders sync automatically (see initOrdersAutoSync/scheduleOrdersAutoSync below) - there's
+// no manual button, just the "Synced X ago" status text. The backend locks around the actual
+// sync (sync_status.in_progress), so if another tab/device (or the auto-sync timer) is already
+// syncing, this gets result.already_syncing back instead of racing it.
 async function syncShopifyOrders() {
-    const btn = document.getElementById('syncOrdersBtn');
-    if (!btn) return;
-    const labelEl = document.getElementById('syncOrdersBtnLabel');
-
-    btn.disabled = true;
-    labelEl.textContent = 'Syncing...';
+    const labelEl = document.getElementById('syncOrdersLastSync');
+    if (labelEl) labelEl.textContent = 'Syncing...';
 
     try {
         const result = await apiJson('/orders/sync-shopify', {
             method: 'POST',
             fallback: 'Failed to sync orders from Shopify'
         });
-        if (result.skipped) {
+        if (result.already_syncing) {
             showToast(result.message || 'Sync already in progress', 'info');
         } else {
             showToast(
@@ -577,15 +574,14 @@ async function syncShopifyOrders() {
         }
         if (result.last_synced_at) {
             lastOrdersSyncAt = new Date(result.last_synced_at).getTime();
-            updateSyncOrdersLastSyncLabel();
         }
     } catch (error) {
         console.error('Error syncing Shopify orders:', error);
         showToast(error.message || 'Failed to sync orders from Shopify', 'error');
     } finally {
-        btn.disabled = false;
-        labelEl.textContent = 'Sync from Shopify';
-        // Reschedule regardless of outcome (synced, skipped, or failed) so the loop continues.
+        // Always restore the status text (covers the already-syncing/failed cases too, where
+        // there's no fresh last_synced_at to report) and reschedule so the loop continues.
+        updateSyncOrdersLastSyncLabel();
         scheduleOrdersAutoSync();
     }
 }

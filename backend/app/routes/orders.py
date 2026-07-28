@@ -376,7 +376,7 @@ SHOPIFY_SYNC_WINDOW_DAYS = 60
 # Row id in `sync_status` for the full Shopify orders sync (see sync_shopify_orders).
 _SYNC_STATUS_ORDERS_ID = "shopify_orders"
 # A held lock older than this is assumed to belong to a crashed/killed sync, not a live one.
-_SYNC_LOCK_STALE_AFTER = timedelta(minutes=5)
+_SYNC_LOCK_STALE_AFTER = timedelta(minutes=4)
 
 
 def _get_sync_status_row(supabase) -> Dict[str, Any]:
@@ -460,7 +460,10 @@ async def sync_shopify_orders():
     supabase = get_supabase()
 
     if not _try_acquire_sync_lock(supabase):
-        return {"message": "Sync already in progress", "skipped": True}
+        # Named distinctly from the reconciliation "skipped" count below (orders that
+        # didn't need changes) - both being called "skipped" made every real sync with
+        # skipped_count > 0 (i.e. nearly every sync) look like a no-op to callers.
+        return {"message": "Sync already in progress", "already_syncing": True}
 
     try:
         t_start = time.perf_counter()

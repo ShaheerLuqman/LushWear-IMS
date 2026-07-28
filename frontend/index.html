@@ -178,6 +178,7 @@
                     <h1 id="viewTitle">Orders</h1>
                 </div>
                 <div class="header-actions">
+                    <span id="syncOrdersLastSync" class="orders-sync-status" style="display: none;" title="Orders sync automatically from Shopify every 5 minutes"></span>
                     <div id="ordersPeriodFilterWrap" class="orders-period-filter-wrap header-inline" style="display: none;">
                         <label for="ordersPeriodFilter" class="orders-period-filter-label">Period:</label>
                         <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by period (month 22 – next 21)">
@@ -188,21 +189,18 @@
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         <span id="syncShopifyBtnLabel">Sync from Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
                     </button>
-                    <button id="syncOrdersBtn" class="btn btn-primary header-toolbar-btn" style="display: none;" title="Sync the last 2 months of orders from Shopify">
-                        <span id="syncOrdersBtnLabel">Sync from Shopify</span><span id="syncOrdersLastSync" class="sync-btn-last-sync"></span>
-                    </button>
                     <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
                         Bulk update cost price
                     </button>
                     <button id="recalculateOrderCostsBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Recalculate order cost totals for orders containing the selected product">
                         Recalculate order costs
                     </button>
-                    <button type="button" id="refreshDeliveryStatusSelectedBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Refresh delivery status for selected orders (with courier and tracking number)">Fetch Delivery Status</button>
                     <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
                         <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded="false" title="More order actions">
                             <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
                         </button>
                         <div id="ordersMoreActionsMenu" class="orders-more-actions__menu" role="menu">
+                            <button type="button" id="refreshDeliveryStatusSelectedBtn" class="orders-more-actions__item" role="menuitem" title="Show a delivery status breakdown for selected orders, from data already on file">Delivery Status Report</button>
                             <button type="button" id="bulkUpdateOrderBtn" class="orders-more-actions__item" role="menuitem" title="Bulk update order">Bulk update order</button>
                             <button type="button" id="ordersMoreActionCreateReplacement" class="orders-more-actions__item" role="menuitem" title="Create replacement order">Create Replacement</button>
                             <button type="button" id="ordersMoreActionUploadPostEx" class="orders-more-actions__item" role="menuitem" title="Upload PostEx CSV">Upload PostEx CSV</button>

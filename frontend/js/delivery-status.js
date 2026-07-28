@@ -173,91 +173,36 @@ async function fetchDeliveryStatusBulk(orderIds) {
     });
 }
 
-const FETCH_DELIVERY_BTN_DEFAULT_TEXT = 'Fetch Delivery Status';
-
-/** Refresh delivery status for all selected orders in one bulk request, then update rows. */
-async function refreshDeliveryStatusSelected() {
+/** Build the delivery status report for selected orders from data already on each row -
+ * no courier API call. (Live refreshing is what the auto-fetch-on-load and per-row actions
+ * are for; this report is just a snapshot of current data.) */
+function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows();
-    // Delivered/returned are terminal - their status can't change, so they're reported
-    // from data already on the row instead of costing a courier API call.
-    const settled = [];
-    const toFetch = [];
+    if (selected.length === 0) {
+        showToast('Select orders to include in the report', 'warning');
+        return;
+    }
+    const report = { delivered: [], returned: [], transit: [], issues: [], failed: [] };
     for (const row of selected) {
         const status = (row.order_status || '').toLowerCase();
         if (status === 'delivered' || status === 'returned') {
-            settled.push(row);
+            report[status].push({ order: row, note: (row.delivery_status && row.delivery_status.latest_status) || '' });
             continue;
         }
-        const track = (row.tracking_number || '').trim();
-        const courierNormalized = (row.courier || '').trim().toUpperCase();
-        const supportsDeliveryRefresh = (
-            courierNormalized === 'POSTEX' ||
-            courierNormalized === 'COURIERS NEXT'
-        );
-        if (supportsDeliveryRefresh && track && track !== '-') toFetch.push(row);
+        // Not yet terminal per order_status - fall back to whatever the last stored
+        // delivery_status says (CNA/ICA/RFD are delivery-attempt issues, grouped together;
+        // no relevant status yet means still in transit, or never fetched at all).
+        const derivedStatus = deriveOrderStatusFromLatest(row.delivery_status);
+        const isIssue = ['CNA', 'ICA', 'RFD'].includes(derivedStatus);
+        const bucket = isIssue ? 'issues' : (derivedStatus || 'transit');
+        (report[bucket] || report.transit).push({
+            order: row,
+            note: (row.delivery_status && row.delivery_status.latest_status) || '',
+            issueType: isIssue ? derivedStatus : null
+        });
     }
-    if (toFetch.length === 0 && settled.length === 0) {
-        showToast('Select PostEx/Couriers Next orders with tracking number', 'warning');
-        return;
-    }
-    const btn = document.getElementById('refreshDeliveryStatusSelectedBtn');
-    if (btn) {
-        btn.disabled = true;
-        btn.textContent = toFetch.length ? `Fetching ${toFetch.length}` : 'Building report';
-    }
-    const total = toFetch.length;
-    const report = { delivered: [], returned: [], transit: [], issues: [], failed: [] };
-    for (const row of settled) {
-        const bucket = (row.order_status || '').toLowerCase() === 'delivered' ? 'delivered' : 'returned';
-        report[bucket].push({ order: row, note: (row.delivery_status && row.delivery_status.latest_status) || '' });
-    }
-    try {
-        const results = toFetch.length ? await fetchDeliveryStatusBulk(toFetch.map(o => o.id)) : [];
-        const resultsById = new Map(results.map(r => [r.order_id, r]));
-        let succeeded = 0;
-        if (ordersGridApi) {
-            ordersGridApi.forEachNode(node => {
-                const result = node.data && resultsById.get(node.data.id);
-                if (!result) return;
-                if (result.error) {
-                    console.warn('Delivery status fetch failed for order', node.data.id, result.error);
-                    report.failed.push({ order: node.data, note: result.error });
-                    return;
-                }
-                succeeded += 1;
-                const data = result.delivery_status;
-                const updated = { ...node.data, delivery_status: data };
-                const derivedStatus = deriveOrderStatusFromLatest(data);
-                if (derivedStatus) {
-                    updated.order_status = derivedStatus;
-                    if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
-                        updated.piece_received = 'Done';
-                    }
-                }
-                node.setData(updated);
-                // No derived status means nothing terminal happened yet - still on its way.
-                // CNA/ICA/RFD are all delivery-attempt issues, so they share one "Issues" tab.
-                const isIssue = ['CNA', 'ICA', 'RFD'].includes(derivedStatus);
-                const bucket = isIssue ? 'issues' : (derivedStatus || 'transit');
-                (report[bucket] || report.transit).push({
-                    order: updated,
-                    note: (data && data.latest_status) || '',
-                    issueType: isIssue ? derivedStatus : null
-                });
-            });
-        }
-        showDeliveryStatusReportModal(report, succeeded, total, settled.length);
-    } catch (err) {
-        console.error('Bulk delivery status fetch failed:', err);
-        showToast(err.message || 'Failed to fetch delivery status', 'error');
-    } finally {
-        const b = document.getElementById('refreshDeliveryStatusSelectedBtn');
-        if (b) {
-            b.disabled = false;
-            b.textContent = FETCH_DELIVERY_BTN_DEFAULT_TEXT;
-        }
-    }
+    showDeliveryStatusReportModal(report, selected.length);
 }
 
 /** Silently refresh delivery status for non-terminal orders from the last 2 months.
@@ -495,7 +440,7 @@ function renderDeliveryStatusReportDetail(key) {
     });
 }
 
-function showDeliveryStatusReportModal(report, succeeded, total, settledCount = 0) {
+function showDeliveryStatusReportModal(report, total) {
     deliveryStatusReport = report;
     const modal = document.getElementById('deliveryStatusReportModal');
     const summary = document.getElementById('deliveryStatusReportSummary');
@@ -503,10 +448,7 @@ function showDeliveryStatusReportModal(report, succeeded, total, settledCount = 
     if (!modal || !cards) return;
 
     if (summary) {
-        const parts = [];
-        if (total) parts.push(`Updated delivery status for ${succeeded} of ${total} order${total === 1 ? '' : 's'}.`);
-        if (settledCount) parts.push(`${settledCount} already delivered/returned — included below without refetching.`);
-        summary.textContent = parts.join(' ');
+        summary.textContent = `Delivery status for ${total} selected order${total === 1 ? '' : 's'}.`;
     }
 
     const visible = DELIVERY_REPORT_CATEGORIES.filter(c => c.key !== 'failed' || (report.failed || []).length > 0);

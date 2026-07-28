@@ -276,14 +276,6 @@ function initForms() {
         });
     }
 
-    // Sync Shopify Orders Button (syncShopifyOrders() resets the auto-sync timer itself)
-    const syncOrdersBtn = document.getElementById('syncOrdersBtn');
-    if (syncOrdersBtn) {
-        syncOrdersBtn.addEventListener('click', async () => {
-            await syncShopifyOrders();
-        });
-    }
-
     // Bulk update order button
     const bulkUpdateOrderBtn = document.getElementById('bulkUpdateOrderBtn');
     if (bulkUpdateOrderBtn) {

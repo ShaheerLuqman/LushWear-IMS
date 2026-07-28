@@ -528,10 +528,12 @@ body:has(#ordersView.active) .header-actions {
     margin-right: 6px;
 }
 
-.header-actions #syncOrdersBtn {
+.orders-sync-status {
     flex: 0 0 auto;
-    overflow: visible;
-    text-overflow: unset;
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+    white-space: nowrap;
 }
 
 .sync-btn-last-sync {
@@ -547,12 +549,11 @@ body:has(#ordersView.active) .header-actions {
     opacity: 0.7;
 }
 
-/* Date range / Fetch Delivery Status / More actions share one width so the orders
-   toolbar reads as an even group instead of label-sized buttons. Fixed width also
-   stops the row shifting when labels swap mid-action ("Fetching 12", "Range set").
-   Sync from Shopify is excluded so it can grow to fit its "last synced" suffix. */
+/* Date range / More actions share one width so the orders toolbar reads as an even
+   group instead of label-sized buttons. Fixed width also stops the row shifting
+   when labels swap mid-action ("Range set"). Sync from Shopify is excluded so it
+   can grow to fit its "last synced" suffix. */
 .header-actions #ordersDateRangeBtn,
-.header-actions #refreshDeliveryStatusSelectedBtn,
 .header-actions #ordersMoreActionsBtn {
     flex: 0 0 auto;
     width: 11.5em;
@@ -4279,12 +4280,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 @media (max-width: 1280px) {
-    /* Toolbar buttons drop their shared fixed width and shrink to their labels.
-       JS still swaps the full text ("Syncing...", "Fetching 12"), so these can
-       never become span-based label swaps. */
+    /* Toolbar buttons drop their shared fixed width and shrink to their labels. */
     .header-actions #ordersDateRangeBtn,
-    .header-actions #syncOrdersBtn,
-    .header-actions #refreshDeliveryStatusSelectedBtn,
     .header-actions #ordersMoreActionsBtn {
         width: auto;
     }
@@ -4305,14 +4302,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     }
 
     .header-actions #ordersDateRangeBtn,
-    .header-actions #refreshDeliveryStatusSelectedBtn,
     .header-actions #ordersMoreActionsBtn {
         max-width: 8.5em;
-        padding-left: 10px;
-        padding-right: 10px;
-    }
-
-    .header-actions #syncOrdersBtn {
         padding-left: 10px;
         padding-right: 10px;
     }
@@ -4406,8 +4397,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     }
 
     .header-actions #ordersDateRangeBtn,
-    .header-actions #syncOrdersBtn,
-    .header-actions #refreshDeliveryStatusSelectedBtn,
     .header-actions #ordersMoreActionsBtn {
         max-width: none;
     }
