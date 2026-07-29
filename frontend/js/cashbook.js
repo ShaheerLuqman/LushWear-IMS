@@ -23,80 +23,6 @@ function getEmptyCashbookRow(entryDate = '', side = '') {
     };
 }
 
-function buildCashbookRows(entries, openingBalance) {
-    const sorted = [...entries].sort((a, b) => {
-        const dateA = a.entry_date || '';
-        const dateB = b.entry_date || '';
-        if (dateA !== dateB) return dateA.localeCompare(dateB);
-        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
-    });
-
-    let running = parseFloat(openingBalance) || 0;
-    let totalInflow = 0;
-    let totalOutflow = 0;
-    const dailySummary = [];
-    let currentDate = null;
-    let dayOpening = running;
-    let dayInflow = 0;
-    let dayOutflow = 0;
-
-    const rows = sorted.map((entry) => {
-        const entryDate = entry.entry_date || '';
-        if (currentDate !== null && entryDate !== currentDate) {
-            dailySummary.push({
-                date: currentDate,
-                opening: dayOpening,
-                inflow: dayInflow,
-                outflow: dayOutflow,
-                closing: running
-            });
-            dayOpening = running;
-            dayInflow = 0;
-            dayOutflow = 0;
-        }
-
-        if (currentDate !== entryDate) {
-            currentDate = entryDate;
-        }
-
-        const amount = parseFloat(entry.amount) || 0;
-        const inflow = entry.entry_type === 'inflow' ? amount : 0;
-        const outflow = entry.entry_type === 'outflow' ? amount : 0;
-        totalInflow += inflow;
-        totalOutflow += outflow;
-        running += inflow - outflow;
-        dayInflow += inflow;
-        dayOutflow += outflow;
-
-        return {
-            ...entry,
-            inflow,
-            outflow,
-            running_balance: running
-        };
-    });
-
-    if (currentDate !== null) {
-        dailySummary.push({
-            date: currentDate,
-            opening: dayOpening,
-            inflow: dayInflow,
-            outflow: dayOutflow,
-            closing: running
-        });
-    }
-
-    return {
-        rows,
-        dailySummary,
-        totals: {
-            totalInflow,
-            totalOutflow,
-            closingBalance: running
-        }
-    };
-}
-
 function buildCashbookSideRows(entries, side) {
     const filtered = (entries || []).filter((entry) => entry.entry_type === side);
     const sorted = [...filtered].sort((a, b) => {
@@ -113,33 +39,33 @@ function buildCashbookSideRows(entries, side) {
 
 function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
     const opening = parseFloat(carryForward) || 0;
-    const rows = buildCashbookSideRows(entries, 'inflow');
-    const totalInflow = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    const rows = buildCashbookSideRows(entries, 'credit');
+    const totalCredit = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
     const openingRow = {
         id: '__opening__',
         description: "Opening Balance",
         amount: opening,
         _isSystemRow: true
     };
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'inflow');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'credit');
     const totalRow = {
         id: '__total_in__',
         description: 'Total',
-        amount: opening + totalInflow,
+        amount: opening + totalCredit,
         _isFooter: true
     };
-    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalInflow };
+    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalCredit };
 }
 
 function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
-    const inflowEntries = (entries || []).filter((e) => e.entry_type === 'inflow');
-    const outflowEntries = (entries || []).filter((e) => e.entry_type === 'outflow');
-    const totalInflow = inflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-    const totalOutflow = outflowEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const creditEntries = (entries || []).filter((e) => e.entry_type === 'credit');
+    const debitEntries = (entries || []).filter((e) => e.entry_type === 'debit');
+    const totalCredit = creditEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
+    const totalDebit = debitEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
     const opening = parseFloat(carryForward) || 0;
-    const closingBalance = opening + totalInflow - totalOutflow;
-    const rows = buildCashbookSideRows(entries, 'outflow');
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'outflow');
+    const closingBalance = opening + totalCredit - totalDebit;
+    const rows = buildCashbookSideRows(entries, 'debit');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'debit');
     const closingRow = {
         id: '__closing__',
         description: 'Closing Balance',
@@ -149,10 +75,10 @@ function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
     const totalRow = {
         id: '__total_out__',
         description: 'Total',
-        amount: totalOutflow + closingBalance,
+        amount: totalDebit + closingBalance,
         _isFooter: true
     };
-    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalOutflow };
+    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalDebit };
 }
 
 // Bundles daily-balance + that date's entries — always needed together — into
@@ -168,8 +94,8 @@ async function loadCashbookDay(targetDate) {
         cashbookDailyBalance = {
             balance_date: targetDate,
             opening_balance: 0,
-            total_inflow: 0,
-            total_outflow: 0,
+            total_credit: 0,
+            total_debit: 0,
             closing_balance: 0
         };
         cashbookEntries = [];
@@ -234,41 +160,6 @@ function scheduleCashbookReload() {
     }, 500);
 }
 
-async function addCashbookEntry() {
-    const dateInput = document.getElementById('cashbookEntryDate');
-    const typeInput = document.getElementById('cashbookEntryType');
-    const amountInput = document.getElementById('cashbookEntryAmount');
-    const descInput = document.getElementById('cashbookEntryDescription');
-    if (!dateInput || !typeInput || !amountInput) return;
-
-    const entryDate = String(dateInput.value || '').trim();
-    const entryType = String(typeInput.value || '').trim();
-    const amount = parseFloat(amountInput.value);
-    const description = descInput ? String(descInput.value || '').trim() : '';
-
-    if (!entryDate) {
-        showToast('Select an entry date', 'error');
-        return;
-    }
-    if (!entryType || (entryType !== 'inflow' && entryType !== 'outflow')) {
-        showToast('Select a valid entry type', 'error');
-        return;
-    }
-    if (Number.isNaN(amount) || amount <= 0) {
-        showToast('Enter a valid amount', 'error');
-        return;
-    }
-
-    await createCashbookEntry({
-        entry_date: entryDate,
-        entry_type: entryType,
-        amount,
-        description
-    });
-    if (amountInput) amountInput.value = '';
-    if (descInput) descInput.value = '';
-}
-
 // --- Create Cashbook Entry modal ---------------------------------------------
 
 // Tracks whether the user has manually edited the outgoing amount. Until they do,
@@ -291,8 +182,8 @@ function cashbookEntryLedgerName(ledgerId) {
 
 function cashbookEntryParticularPlaceholder(side, ledgerId) {
     const name = cashbookEntryLedgerName(ledgerId);
-    if (!name) return side === 'inflow' ? 'Amount received from...' : 'Amount transferred to...';
-    return side === 'inflow' ? `Amount received from ${name}` : `Amount transferred to ${name}`;
+    if (!name) return side === 'credit' ? 'Amount received from...' : 'Amount transferred to...';
+    return side === 'credit' ? `Amount received from ${name}` : `Amount transferred to ${name}`;
 }
 
 function refreshCashbookEntryParticularPlaceholders() {
@@ -308,8 +199,8 @@ function refreshCashbookEntryParticularPlaceholders() {
         if (outPart) outPart.placeholder = text;
         return;
     }
-    if (inPart) inPart.placeholder = cashbookEntryParticularPlaceholder('inflow', inLedger ? inLedger.value : '');
-    if (outPart) outPart.placeholder = cashbookEntryParticularPlaceholder('outflow', outLedger ? outLedger.value : '');
+    if (inPart) inPart.placeholder = cashbookEntryParticularPlaceholder('credit', inLedger ? inLedger.value : '');
+    if (outPart) outPart.placeholder = cashbookEntryParticularPlaceholder('debit', outLedger ? outLedger.value : '');
 }
 
 function isCashbookEntryOrderAdvance() {
@@ -325,21 +216,21 @@ function setCashbookEntryOrderAdvance(enabled) {
     const group = document.getElementById('cashbookEntryOrderNumberGroup');
     const orderNumber = document.getElementById('cashbookEntryOrderNumber');
     const inLedger = document.getElementById('cashbookEntryInLedger');
-    // "Paid with Cash" (on the Outgoing side) skips the inflow leg, which an
+    // "Paid with Cash" (on the Outgoing side) skips the credit leg, which an
     // order advance always needs.
-    const inflowSkip = document.getElementById('cashbookEntryInSkip');
+    const creditSkip = document.getElementById('cashbookEntryInSkip');
 
     if (group) group.style.display = enabled ? '' : 'none';
     if (orderNumber) {
         if (enabled) orderNumber.setAttribute('required', '');
         else { orderNumber.removeAttribute('required'); orderNumber.value = ''; }
     }
-    // Must run before the ledger is locked below — it re-enables the inflow fields.
-    if (enabled && inflowSkip && inflowSkip.checked) {
-        inflowSkip.checked = false;
-        setCashbookEntrySideSkipped('inflow', false);
+    // Must run before the ledger is locked below — it re-enables the credit fields.
+    if (enabled && creditSkip && creditSkip.checked) {
+        creditSkip.checked = false;
+        setCashbookEntrySideSkipped('credit', false);
     }
-    if (inflowSkip) inflowSkip.disabled = enabled;
+    if (creditSkip) creditSkip.disabled = enabled;
     // The incoming ledger is always Orders for an advance, so hide the field
     // rather than showing a locked select.
     const inLedgerGroup = document.getElementById('cashbookEntryInLedgerGroup');
@@ -356,7 +247,7 @@ function setCashbookEntryOrderAdvance(enabled) {
 // Enables/disables one side of the entry modal. A disabled (skipped) side will not
 // create an entry; its `required` attributes are removed so the form can still submit.
 function setCashbookEntrySideSkipped(side, skipped) {
-    const prefix = side === 'inflow' ? 'cashbookEntryIn' : 'cashbookEntryOut';
+    const prefix = side === 'credit' ? 'cashbookEntryIn' : 'cashbookEntryOut';
     const ledger = document.getElementById(prefix + 'Ledger');
     const amount = document.getElementById(prefix + 'Amount');
     const part = document.getElementById(prefix + 'Particular');
@@ -428,8 +319,8 @@ function openCashbookEntryModal() {
     const outSkip = document.getElementById('cashbookEntryOutSkip');
     if (inSkip) inSkip.checked = false;
     if (outSkip) outSkip.checked = false;
-    setCashbookEntrySideSkipped('inflow', false);
-    setCashbookEntrySideSkipped('outflow', false);
+    setCashbookEntrySideSkipped('credit', false);
+    setCashbookEntrySideSkipped('debit', false);
 
     const orderAdvance = document.getElementById('cashbookEntryOrderAdvance');
     if (orderAdvance) orderAdvance.checked = false;
@@ -532,15 +423,15 @@ async function submitCashbookEntryModal() {
 
     if (!skipIn) {
         // If the particulars field is left empty, fall back to the default placeholder text.
-        const inDescription = (inPartEl.value.trim()) || defaultDescription('inflow', inLedger);
-        const inPayload = { entry_date: entryDate, entry_type: 'inflow', amount: inAmount, description: inDescription, folio: inLedger };
+        const inDescription = (inPartEl.value.trim()) || defaultDescription('credit', inLedger);
+        const inPayload = { entry_date: entryDate, entry_type: 'credit', amount: inAmount, description: inDescription, folio: inLedger };
         // Tag the advance so it can be reconciled against the order's Shopify advance amount.
         if (isAdvance) inPayload.order_number = orderNumber;
         payloads.push(inPayload);
     }
     if (!skipOut) {
-        const outDescription = (outPartEl.value.trim()) || defaultDescription('outflow', outLedger);
-        payloads.push({ entry_date: entryDate, entry_type: 'outflow', amount: outAmount, description: outDescription, folio: outLedger });
+        const outDescription = (outPartEl.value.trim()) || defaultDescription('debit', outLedger);
+        payloads.push({ entry_date: entryDate, entry_type: 'debit', amount: outAmount, description: outDescription, folio: outLedger });
     }
 
     closeCashbookEntryModal();
@@ -550,14 +441,48 @@ async function submitCashbookEntryModal() {
     if (isAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
 }
 
+function closeBulkEntryInfoCard() {
+    document.getElementById('bulkEntryInfoCard')?.classList.remove('open');
+    document.getElementById('bulkEntryInfoBtn')?.setAttribute('aria-expanded', 'false');
+}
+
+function initBulkEntryInfoCard() {
+    const btn = document.getElementById('bulkEntryInfoBtn');
+    const wrap = btn ? btn.closest('.bulk-entry-info-wrap') : null;
+    const card = document.getElementById('bulkEntryInfoCard');
+    if (!btn || !wrap || !card) return;
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const open = card.classList.toggle('open');
+        btn.setAttribute('aria-expanded', String(open));
+    });
+    document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) closeBulkEntryInfoCard();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeBulkEntryInfoCard();
+    });
+}
+
 // --- Bulk Text Entry modal ---------------------------------------------------
 
 // Holds the most recent parse result so the submit handler can reuse it.
 let bulkEntryParsed = null;
 
+// Grows the textarea to fit its content instead of scrolling internally, so
+// the modal body's own scrollbar is the only one — shared with the validation
+// list below it — rather than a separate scroll region per element.
+function autoResizeBulkEntryInput() {
+    const input = document.getElementById('bulkEntryInput');
+    if (!input) return;
+    input.style.height = 'auto';
+    input.style.height = input.scrollHeight + 'px';
+}
+
 function resetBulkEntryFields() {
     const input = document.getElementById('bulkEntryInput');
-    if (input) { input.value = ''; input.disabled = false; }
+    if (input) { input.value = ''; input.disabled = false; input.style.height = ''; }
     const validation = document.getElementById('bulkEntryValidation');
     if (validation) { validation.style.display = 'none'; validation.innerHTML = ''; }
     const cancelBtn = document.getElementById('cashbookEntryCancelBtn');
@@ -565,6 +490,7 @@ function resetBulkEntryFields() {
     setBulkEntryProgress('');
     bulkEntryParsed = null;
     setBulkEntrySubmitEnabled(false);
+    closeBulkEntryInfoCard();
 }
 
 // True while bulk entries are being created; blocks closing the modal mid-run.
@@ -600,11 +526,16 @@ function extractOrderNumberFromText(text) {
     return null;
 }
 
+// Bulk-entry KIND tokens: FROM/CR mean money received (credit), TO/DR mean
+// money paid out (debit) — Cr/Dr follow the cash account's own perspective
+// (cash is debited on receipt, credited on payment).
+const BULK_ENTRY_KIND_TO_ENTRY_TYPE = { FROM: 'credit', CR: 'credit', TO: 'debit', DR: 'debit' };
+
 /**
  * Parse one line of bulk-entry text.
  * Format: <KIND>: <AMOUNT> <LEDGER> [(<PARTICULARS>)]
- * KIND is IN (inflow to LEDGER) or OUT (outflow from LEDGER). Particulars are
- * optional; when omitted, the same default text as the manual entry form is used.
+ * KIND is From/Cr (credit to LEDGER) or To/Dr (debit from LEDGER). Particulars
+ * are optional; when omitted, the same default text as the manual entry form is used.
  * Returns { ok, errors: [str], lineNo, raw, kind, amount, particulars, entries: [{entry_type, amount, description, folio}] }
  */
 function parseBulkEntryLine(raw, lineNo) {
@@ -612,12 +543,12 @@ function parseBulkEntryLine(raw, lineNo) {
     const line = String(raw || '').trim();
     if (!line) { result.blank = true; return result; }
 
-    // Find the KIND token (IN / OUT followed by ':') anywhere in the line and
-    // ignore anything before it. This lets pasted lines keep prefixes like a
-    // WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: IN: 16400 ...".
-    const kindMatch = line.match(/\b(IN|OUT)\s*:\s*(.*)$/i);
+    // Find the KIND token (From/To/Cr/Dr followed by ':') anywhere in the line
+    // and ignore anything before it. This lets pasted lines keep prefixes like
+    // a WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: From: 16400 ...".
+    const kindMatch = line.match(/\b(FROM|TO|CR|DR)\s*:\s*(.*)$/i);
     if (!kindMatch) {
-        result.errors.push('Missing "<KIND>:" prefix (use IN: or OUT:).');
+        result.errors.push('Missing "<KIND>:" prefix (use From:, To:, Cr: or Dr:).');
         return result;
     }
     const kind = kindMatch[1].toUpperCase();
@@ -661,11 +592,11 @@ function parseBulkEntryLine(raw, lineNo) {
 
     if (result.errors.length > 0) return result;
 
-    const entryType = kind === 'IN' ? 'inflow' : 'outflow';
-    // An inflow to the "Orders" ledger is an order-advance entry; tag it with the
+    const entryType = BULK_ENTRY_KIND_TO_ENTRY_TYPE[kind];
+    // A credit to the "Orders" ledger is an order-advance entry; tag it with the
     // order number parsed from the particulars (or the "Order# ..." shorthand)
     // so advance reconciliation works.
-    const orderNumber = orderShorthand ? orderShorthand[1] : (kind === 'IN' ? extractOrderNumberFromText(particulars) : null);
+    const orderNumber = orderShorthand ? orderShorthand[1] : (entryType === 'credit' ? extractOrderNumberFromText(particulars) : null);
     const description = particulars || (orderNumber && ledger.id === ORDERS_LEDGER_ID
         ? orderAdvanceParticularPlaceholder(orderNumber)
         : cashbookEntryParticularPlaceholder(entryType, ledger.id));
@@ -718,7 +649,7 @@ function validateBulkEntry() {
         if (p.ok) {
             const summary = p.entries
                 .map(e => {
-                    const dir = e.entry_type === 'inflow' ? '▲ in' : '▼ out';
+                    const dir = e.entry_type === 'credit' ? '▲ in' : '▼ out';
                     const tag = e.order_number ? ` [Order #${escapeHtml(e.order_number)}]` : '';
                     return `${dir} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}${tag}`;
                 })
@@ -856,7 +787,7 @@ async function createCashbookEntry(payload) {
 }
 
 // POSTs a batch of cashbook entries as one atomic request (used for two-sided
-// entries so the paired inflow/outflow rows can't half-succeed), applies the
+// entries so the paired credit/debit rows can't half-succeed), applies the
 // returned ledger balance patches, and updates Cash In Hand immediately.
 // Returns the created/replayed entries (each carries ledger_balances).
 async function postCashbookEntriesBulk(payloads) {

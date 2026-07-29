@@ -3,7 +3,7 @@ Advance reconciliation status helpers.
 
 An order's advance can come from two places:
   - Shopify: stored on orders.advance_amount
-  - Cashbook: order-advance inflow entries posted to the Orders ledger, tagged with
+  - Cashbook: order-advance credit entries posted to the Orders ledger, tagged with
     the order_number column on cashbook_entries
 
 advance_status (stored on orders.advance_status) reconciles the two:
@@ -65,7 +65,7 @@ def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
     """
     Sum order-advance cashbook entries per order number.
 
-    Order-advance entries are inflows on the Orders ledger that carry an order_number.
+    Order-advance entries are credits on the Orders ledger that carry an order_number.
     Returns a map of order_number (str) -> total advance amount from the cashbook.
     """
     totals: Dict[str, float] = {}
@@ -73,7 +73,7 @@ def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
         lambda: supabase.table("cashbook_entries")
         .select("order_number, amount, entry_type")
         .eq("folio", ORDERS_LEDGER_ID)
-        .eq("entry_type", "inflow")
+        .eq("entry_type", "credit")
         .not_.is_("order_number", "null")
     )
     for row in rows:

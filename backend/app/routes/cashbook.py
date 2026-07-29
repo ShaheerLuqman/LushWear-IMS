@@ -14,7 +14,7 @@ from app.advance_status import recompute_advance_statuses
 
 router = APIRouter(prefix="/cashbook", tags=["cashbook"])
 
-ENTRY_TYPES = {"inflow", "outflow"}
+ENTRY_TYPES = {"credit", "debit"}
 
 
 def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
@@ -178,7 +178,7 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     if "entry_type" in payload and payload["entry_type"] not in ENTRY_TYPES:
-        raise HTTPException(status_code=400, detail="entry_type must be inflow or outflow")
+        raise HTTPException(status_code=400, detail="entry_type must be credit or debit")
     if "amount" in payload and (payload["amount"] is None or float(payload["amount"]) <= 0):
         raise HTTPException(status_code=400, detail="amount must be greater than 0")
     if not payload:
@@ -267,8 +267,8 @@ def _fetch_daily_balance(supabase, target_date: date) -> dict:
     return {
         "balance_date": target_date.isoformat(),
         "opening_balance": opening,
-        "total_inflow": 0.0,
-        "total_outflow": 0.0,
+        "total_credit": 0.0,
+        "total_debit": 0.0,
         "closing_balance": opening,
     }
 

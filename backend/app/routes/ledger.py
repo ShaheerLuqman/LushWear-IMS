@@ -161,8 +161,8 @@ async def list_ledger_entries(ledger_id: str):
             "ledger_id": ledger_id,
             "entry_date": entry["entry_date"],
             "particulars": entry.get("description") or "",
-            "incoming": amount if entry_type == "inflow" else 0,
-            "outgoing": amount if entry_type == "outflow" else 0,
+            "incoming": amount if entry_type == "credit" else 0,
+            "outgoing": amount if entry_type == "debit" else 0,
             "created_at": entry.get("created_at"),
             "updated_at": entry.get("updated_at"),
         })

@@ -1201,7 +1201,7 @@ function buildCashbookGridColumns(side) {
             pinnedRowCellRenderer: () => ''
         },
         {
-            headerName: side === 'inflow' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
+            headerName: side === 'credit' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
             field: 'amount',
             width: 100,
             filter: 'agNumberColumnFilter',
@@ -1270,7 +1270,7 @@ function initCashbookIncomingGrid() {
     if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: buildCashbookGridColumns('inflow'),
+        columnDefs: buildCashbookGridColumns('credit'),
         rowData: [],
         pinnedBottomRowData: [],
         defaultColDef: {
@@ -1305,7 +1305,7 @@ function initCashbookIncomingGrid() {
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
                 const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
                 if (hasDescription && hasAmount && hasFolio) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'inflow');
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'credit');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
@@ -1322,7 +1322,7 @@ function initCashbookOutgoingGrid() {
     if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: buildCashbookGridColumns('outflow'),
+        columnDefs: buildCashbookGridColumns('debit'),
         rowData: [],
         pinnedBottomRowData: [],
         defaultColDef: {
@@ -1357,7 +1357,7 @@ function initCashbookOutgoingGrid() {
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
                 const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
                 if (hasDescription && hasAmount && hasFolio) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'outflow');
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'debit');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });

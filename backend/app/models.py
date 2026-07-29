@@ -8,12 +8,14 @@ def _lower(v):
 
 
 # entry_type is case-normalised before matching so existing clients sending
-# "INFLOW"/"Inflow" keep working (the route used to lower() it after parsing).
-EntryType = Annotated[Literal["inflow", "outflow"], BeforeValidator(_lower)]
+# "CREDIT"/"Credit" keep working (the route used to lower() it after parsing).
+# credit = money received from the ledger (folio); debit = money paid to it.
+EntryType = Annotated[Literal["credit", "debit"], BeforeValidator(_lower)]
 PieceReceived = Literal["Pending", "Done", "Received"]
-# Drives both display grouping and balance-sign behavior (see the Bank-only
-# special case in cashbook.py/renderer.js) — closed set, not free text.
-LedgerType = Literal["Bank", "Expense", "Payable Vendors", "Receivable Vendors", "Sales", "Investors"]
+# Standard accounting Nature — closed set, not free text, since a typo here
+# silently creates an untracked bucket. Drives display grouping only;
+# recalc_ledger_balance's formula is the same for every ledger regardless of it.
+LedgerType = Literal["Asset", "Liability", "Equity", "Revenue", "Expense"]
 # Rejects "" and whitespace-only, which the routes strip and 400 on anyway.
 NonBlankStr = Annotated[str, Field(min_length=1), BeforeValidator(lambda v: v.strip() if isinstance(v, str) else v)]
 
@@ -192,8 +194,8 @@ class CashbookDailyBalance(BaseModel):
     id: Optional[str] = None
     balance_date: date
     opening_balance: float = 0.0
-    total_inflow: float = 0.0
-    total_outflow: float = 0.0
+    total_credit: float = 0.0
+    total_debit: float = 0.0
     closing_balance: float = 0.0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -245,8 +247,10 @@ class LedgerUpdate(BaseModel):
 
 class Ledger(LedgerBase):
     id: str
-    # Current running balance (opening_balance + incoming - outgoing), from
-    # ledger_balances. 0 for a ledger with no opening balance and no entries.
+    # Current running balance: opening_balance + Debit - Credit — see
+    # recalc_ledger_balance in supabase_schema.sql. Same formula for every
+    # ledger regardless of Nature. From ledger_balances. 0 for a ledger with
+    # no opening balance and no entries.
     balance: float = 0.0
     # Only populated by GET /ledgers/{id} (folded in alongside the row fetch
     # for the edit-ledger delete-button guard); omitted (None) from list_ledgers,

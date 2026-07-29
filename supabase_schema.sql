@@ -126,22 +126,22 @@ CREATE TABLE IF NOT EXISTS sync_status (
 -- ============================================================================
 -- Cashbook & ledgers
 -- ----------------------------------------------------------------------------
--- Records daily inflow/outflow entries with carried-forward balances.
+-- Records daily debit/credit entries with carried-forward balances.
 -- Ledger summaries are derived from cashbook_entries where folio = ledger.id
 -- (there is no separate ledger_entries table).
 -- ============================================================================
 
 -- Ledgers: individual accounts (suppliers, customers, expense heads, …).
--- type: drives both display grouping and balance-sign behavior (see the
--- Bank-only special case in cashbook.py/renderer.js) — a fixed, closed set
--- rather than free text, since a typo here silently creates an untracked
--- bucket with the wrong balance sign.
+-- type: standard accounting Nature — drives display grouping only (see
+-- recalc_ledger_balance below, whose formula is the same for every ledger
+-- regardless of Nature) — a fixed, closed set rather than free text, since a
+-- typo here silently creates an untracked bucket.
 CREATE TABLE IF NOT EXISTS ledgers (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     name        VARCHAR(255) NOT NULL,
     type        VARCHAR(100) NOT NULL
                 CONSTRAINT ledgers_type_check
-                CHECK (type IN ('Bank', 'Expense', 'Payable Vendors', 'Receivable Vendors', 'Sales', 'Investors')),
+                CHECK (type IN ('Asset', 'Liability', 'Equity', 'Revenue', 'Expense')),
     created_at  TIMESTAMPTZ DEFAULT NOW(),
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
@@ -167,11 +167,24 @@ BEGIN
     END IF;
 END $$;
 
+-- Migrates the old business-category `type` values to standard accounting
+-- Nature categories. Self-guarding via the WHERE clause — a no-op once no
+-- rows carry the old values.
+UPDATE ledgers SET type = CASE type
+    WHEN 'Bank' THEN 'Asset'
+    WHEN 'Receivable Vendors' THEN 'Asset'
+    WHEN 'Payable Vendors' THEN 'Liability'
+    WHEN 'Investors' THEN 'Equity'
+    WHEN 'Sales' THEN 'Revenue'
+    ELSE type
+END
+WHERE type IN ('Bank', 'Receivable Vendors', 'Payable Vendors', 'Investors', 'Sales');
+
 -- Idempotent either way: applies the CHECK constraint after a migration
 -- (the inline CREATE TABLE definition only ran on a fresh install).
 ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_type_check;
 ALTER TABLE ledgers ADD CONSTRAINT ledgers_type_check
-    CHECK (type IN ('Bank', 'Expense', 'Payable Vendors', 'Receivable Vendors', 'Sales', 'Investors'));
+    CHECK (type IN ('Asset', 'Liability', 'Equity', 'Revenue', 'Expense'));
 
 -- Whether this ledger's balance is included in the Cash In Hand total (set via
 -- a checkbox on the create/edit ledger UI, not implied by `type`). Backfill
@@ -206,7 +219,7 @@ END $$;
 CREATE TABLE IF NOT EXISTS cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     entry_date    DATE NOT NULL,
-    entry_type    VARCHAR(10) NOT NULL CHECK (entry_type IN ('inflow', 'outflow')),
+    entry_type    VARCHAR(10) NOT NULL CHECK (entry_type IN ('credit', 'debit')),
     amount        DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     description   TEXT,
     folio         UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
@@ -232,8 +245,8 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     balance_date     DATE NOT NULL UNIQUE,
     opening_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-    total_inflow     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-    total_outflow    DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    total_credit     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    total_debit      DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     closing_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     created_at       TIMESTAMPTZ DEFAULT NOW(),
     updated_at       TIMESTAMPTZ DEFAULT NOW()
@@ -371,33 +384,33 @@ BEGIN
 
     WITH day_totals AS (
         SELECT entry_date AS balance_date,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)  AS total_inflow,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0) AS total_outflow
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0) AS total_credit,
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)  AS total_debit
         FROM cashbook_entries
         WHERE entry_date >= p_from_date
         GROUP BY entry_date
     ),
     running AS (
         SELECT balance_date,
-               total_inflow,
-               total_outflow,
-               v_opening + SUM(total_inflow - total_outflow)
+               total_credit,
+               total_debit,
+               v_opening + SUM(total_credit - total_debit)
                    OVER (ORDER BY balance_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_balance
         FROM day_totals
     )
     INSERT INTO cashbook_daily_balances
-        (balance_date, opening_balance, total_inflow, total_outflow, closing_balance, updated_at)
+        (balance_date, opening_balance, total_credit, total_debit, closing_balance, updated_at)
     SELECT balance_date,
-           closing_balance - total_inflow + total_outflow,
-           total_inflow,
-           total_outflow,
+           closing_balance - total_credit + total_debit,
+           total_credit,
+           total_debit,
            closing_balance,
            NOW()
     FROM running
     ON CONFLICT (balance_date) DO UPDATE SET
         opening_balance = EXCLUDED.opening_balance,
-        total_inflow     = EXCLUDED.total_inflow,
-        total_outflow    = EXCLUDED.total_outflow,
+        total_credit     = EXCLUDED.total_credit,
+        total_debit      = EXCLUDED.total_debit,
         closing_balance  = EXCLUDED.closing_balance,
         updated_at       = NOW();
 END;
@@ -434,8 +447,10 @@ FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
 -- Recomputes ledger_balances for a single ledger from scratch, seeded from
--- ledgers.opening_balance. Deletes the row on a zero balance (missing row
--- already means 0, so there's nothing to gain by keeping a zero row around).
+-- ledgers.opening_balance. Consistent for every ledger regardless of Nature:
+-- New Balance = Previous Balance + Debit - Credit. Deletes the row on a zero
+-- balance (missing row already means 0, so there's nothing to gain by
+-- keeping a zero row around).
 CREATE OR REPLACE FUNCTION recalc_ledger_balance(p_ledger_id UUID)
 RETURNS void
 LANGUAGE plpgsql
@@ -445,8 +460,8 @@ DECLARE
 BEGIN
     SELECT
         (SELECT opening_balance FROM ledgers WHERE id = p_ledger_id)
-      + COALESCE(SUM(amount) FILTER (WHERE entry_type = 'inflow'), 0)
-      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'outflow'), 0)
+      + COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)
+      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0)
     INTO v_balance
     FROM cashbook_entries
     WHERE folio = p_ledger_id;

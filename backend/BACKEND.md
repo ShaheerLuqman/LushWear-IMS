@@ -128,7 +128,7 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
   (courier, tracking, totals, advance, cost, items, line_items). This is the most
   complex and business-critical code in the repo.
 - **Advance reconciliation** (`advance_status.py`): cross-checks Shopify advance
-  vs. cashbook order-advance inflows and stamps a 1–5 status on each order.
+  vs. cashbook order-advance credits and stamps a 1–5 status on each order.
 - **PDF generation** (`services/pdf/`): invoices, packaging lists, and load sheets.
   The invoice enriches each order with a live Shopify lookup, falling back to the
   DB row when Shopify is unavailable.

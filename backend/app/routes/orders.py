@@ -2384,7 +2384,7 @@ async def get_month_summary_detail(month: int, year: int):
                     .execute()
                 )
                 for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                    if (e.get("entry_type") or "").strip().lower() == "debit":
                         shopify_expense += float(e.get("amount") or 0)
             elif "ad" in name:
                 entries_resp = (
@@ -2396,7 +2396,7 @@ async def get_month_summary_detail(month: int, year: int):
                     .execute()
                 )
                 for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                    if (e.get("entry_type") or "").strip().lower() == "debit":
                         ad_expense += float(e.get("amount") or 0)
             elif is_expense_type:
                 # Other expenses: Expense-type ledgers excluding shopify and ad
@@ -2409,7 +2409,7 @@ async def get_month_summary_detail(month: int, year: int):
                     .execute()
                 )
                 for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "outflow":
+                    if (e.get("entry_type") or "").strip().lower() == "debit":
                         other_expense += float(e.get("amount") or 0)
 
         return {

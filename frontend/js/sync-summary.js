@@ -513,8 +513,10 @@ function initForms() {
     document.getElementById('cashbookEntryModeSingle')?.addEventListener('click', () => setCashbookEntryMode('single'));
     document.getElementById('cashbookEntryModeBulk')?.addEventListener('click', () => setCashbookEntryMode('bulk'));
     document.getElementById('bulkEntrySubmitBtn')?.addEventListener('click', submitBulkEntry);
+    initBulkEntryInfoCard();
     // Re-validate as the user types (debounced lightly) and reset submit state.
     document.getElementById('bulkEntryInput')?.addEventListener('input', () => {
+        autoResizeBulkEntryInput();
         setBulkEntrySubmitEnabled(false);
         clearTimeout(window.__bulkEntryDebounce);
         window.__bulkEntryDebounce = setTimeout(validateBulkEntry, 300);
@@ -556,16 +558,16 @@ function initForms() {
     document.getElementById('cashbookEntryInSkip')?.addEventListener('change', (e) => {
         if (e.target.checked) {
             const other = document.getElementById('cashbookEntryOutSkip');
-            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('outflow', false); }
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('debit', false); }
         }
-        setCashbookEntrySideSkipped('inflow', e.target.checked);
+        setCashbookEntrySideSkipped('credit', e.target.checked);
     });
     document.getElementById('cashbookEntryOutSkip')?.addEventListener('change', (e) => {
         if (e.target.checked) {
             const other = document.getElementById('cashbookEntryInSkip');
-            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('inflow', false); }
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('credit', false); }
         }
-        setCashbookEntrySideSkipped('outflow', e.target.checked);
+        setCashbookEntrySideSkipped('debit', e.target.checked);
     });
     // Back to Month Summary button
     const backToMonthSummaryBtn = document.getElementById('backToMonthSummaryBtn');
@@ -587,8 +589,7 @@ function initForms() {
             const name = document.getElementById('createLedgerName').value.trim();
             const type = document.getElementById('createLedgerType').value;
             const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
-            const openingBalanceAmount = document.getElementById('createLedgerOpeningBalanceAmount').value;
-            const openingBalanceSide = document.getElementById('createLedgerOpeningBalanceSide').value;
+            const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
@@ -597,7 +598,6 @@ function initForms() {
                 showToast('Select a type', 'error');
                 return;
             }
-            const openingBalance = openingBalanceToSigned(openingBalanceAmount, openingBalanceSide);
             createLedger(name, type, includeInCashInHand, openingBalance);
         });
     }

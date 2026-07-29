@@ -59,7 +59,7 @@ class TestLedgers:
         assert r.status_code == 404
 
     def test_create_rejects_blank_name(self, make_client):
-        r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Bank"})
+        r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Asset"})
         assert r.status_code == 422
 
     def test_delete_blocked_while_cashbook_entries_reference_it(self, make_client, ledger_row):
@@ -118,7 +118,7 @@ class TestProducts:
 class TestCashbook:
     def test_create_rejects_non_positive_amount(self, make_client):
         client = make_client({"cashbook_entries": []})
-        payload = {"entry_date": "2026-07-18", "entry_type": "inflow", "amount": 0, "folio": "abc"}
+        payload = {"entry_date": "2026-07-18", "entry_type": "credit", "amount": 0, "folio": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code == 422
 
     def test_create_rejects_unknown_entry_type(self, make_client):
@@ -127,9 +127,9 @@ class TestCashbook:
         assert client.post("/api/cashbook/entries", json=payload).status_code == 422
 
     def test_entry_type_casing_is_normalised(self, make_client):
-        # Clients that historically sent "INFLOW" must keep working.
+        # Clients that historically sent "CREDIT" must keep working.
         client = make_client({"cashbook_entries": []})
-        payload = {"entry_date": "2026-07-18", "entry_type": "INFLOW", "amount": 10, "folio": "abc"}
+        payload = {"entry_date": "2026-07-18", "entry_type": "CREDIT", "amount": 10, "folio": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code != 422
 
     def test_update_of_missing_entry_is_404(self, make_client):

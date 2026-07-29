@@ -324,26 +324,20 @@
                                     <input type="text" id="createLedgerName" class="form-input" placeholder="e.g. Main Bank Account" required>
                                 </div>
                                 <div class="form-group">
-                                    <label for="createLedgerType">Type *</label>
+                                    <label for="createLedgerType">Type (Nature) *</label>
                                     <select id="createLedgerType" class="form-input" required>
                                         <option value="">Select type...</option>
-                                        <option value="Bank">Bank</option>
-                                        <option value="Expense">Expense</option>
-                                        <option value="Payable Vendors">Payable Vendors</option>
-                                        <option value="Receivable Vendors">Receivable Vendors</option>
-                                        <option value="Sales">Sales</option>
-                                        <option value="Investors">Investors</option>
+                                        <option value="Asset">Asset (Cash, Bank, Accounts Receivable, Inventory, Equipment)</option>
+                                        <option value="Liability">Liability (Accounts Payable, Loans, Taxes Payable)</option>
+                                        <option value="Equity">Equity (Owner's Capital, Investor's Capital)</option>
+                                        <option value="Revenue">Revenue (Sales, Service Revenue)</option>
+                                        <option value="Expense">Expense (Rent, Salaries, Advertisement, Fuel, Office Supplies)</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label for="createLedgerOpeningBalanceAmount">Opening balance</label>
-                                    <div class="opening-balance-row">
-                                        <input type="number" id="createLedgerOpeningBalanceAmount" class="form-input" placeholder="0.00" step="0.01" min="0">
-                                        <select id="createLedgerOpeningBalanceSide" class="form-input">
-                                            <option value="debit">Debit</option>
-                                            <option value="credit">Credit</option>
-                                        </select>
-                                    </div>
+                                    <label for="createLedgerOpeningBalance">Opening balance</label>
+                                    <input type="number" id="createLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
+                                    <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
                                 </div>
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="createLedgerCashInHand">
@@ -430,22 +424,27 @@
                                 </div>
                             </form>
                             <div id="cashbookEntryBulkPanel" style="display: none;">
-                                <div class="bulk-entry-help">
-                                    <p>One entry per line. Format:
-                                    <b><code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
-                                    <ul>
-                                        <li><strong>IN</strong> — incoming to LEDGER. e.g. <b><code>IN: 2064 TCS (Received order payment)</code></b></li>
-                                        <li><strong>OUT</strong> — outgoing from LEDGER. e.g. <b><code>OUT: 2064 Meezan Bank (Received order payment)</code></b></li>
-                                    </ul>
-                                    <p>Particulars are optional — omit them and a default description is generated.</p>
-                                    <p>Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger:</p>
-                                    <code>IN: 3500 Order# 11473<br>OUT: 3500 Meezan Bank</code>
-                                </div>
                                 <div class="form-group">
-                                    <label for="bulkEntryInput">Entries</label>
-                                    <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="6" spellcheck="false" placeholder='IN: 2064 TCS (Received order payment)'></textarea>
+                                    <div class="bulk-entry-label-row">
+                                        <label for="bulkEntryInput">Entries</label>
+                                        <div class="bulk-entry-info-wrap">
+                                            <button type="button" id="bulkEntryInfoBtn" class="bulk-entry-info-btn" aria-expanded="false" aria-controls="bulkEntryInfoCard">ⓘ Format help</button>
+                                            <div id="bulkEntryInfoCard" class="bulk-entry-help bulk-entry-info-card">
+                                                <p>One entry per line. Format:
+                                                <b><code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
+                                                <ul>
+                                                    <li><strong>From</strong> / <strong>Cr</strong> — incoming to LEDGER. e.g. <b><code>From: 2064 TCS (Received order payment)</code></b></li>
+                                                    <li><strong>To</strong> / <strong>Dr</strong> — outgoing from LEDGER. e.g. <b><code>To: 2064 Meezan Bank (Received order payment)</code></b></li>
+                                                </ul>
+                                                <p>Particulars are optional — omit them and a default description is generated.</p>
+                                                <p>Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger:</p>
+                                                <code>From: 3500 Order# 11473<br>To: 3500 Meezan Bank</code>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="6" spellcheck="false" placeholder='From: 2064 TCS (Received order payment)'></textarea>
+                                    <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
                                 </div>
-                                <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
                                 <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
                             </div>
                         </div>
@@ -471,26 +470,20 @@
                                     <input type="text" id="editLedgerName" class="form-input" placeholder="e.g. Main Bank Account" required>
                                 </div>
                                 <div class="form-group">
-                                    <label for="editLedgerType">Type *</label>
+                                    <label for="editLedgerType">Type (Nature) *</label>
                                     <select id="editLedgerType" class="form-input" required>
                                         <option value="">Select type...</option>
-                                        <option value="Bank">Bank</option>
-                                        <option value="Expense">Expense</option>
-                                        <option value="Payable Vendors">Payable Vendors</option>
-                                        <option value="Receivable Vendors">Receivable Vendors</option>
-                                        <option value="Sales">Sales</option>
-                                        <option value="Investors">Investors</option>
+                                        <option value="Asset">Asset (Cash, Bank, Accounts Receivable, Inventory, Equipment)</option>
+                                        <option value="Liability">Liability (Accounts Payable, Loans, Taxes Payable)</option>
+                                        <option value="Equity">Equity (Owner's Capital, Investor's Capital)</option>
+                                        <option value="Revenue">Revenue (Sales, Service Revenue)</option>
+                                        <option value="Expense">Expense (Rent, Salaries, Advertisement, Fuel, Office Supplies)</option>
                                     </select>
                                 </div>
                                 <div class="form-group">
-                                    <label for="editLedgerOpeningBalanceAmount">Opening balance</label>
-                                    <div class="opening-balance-row">
-                                        <input type="number" id="editLedgerOpeningBalanceAmount" class="form-input" placeholder="0.00" step="0.01" min="0">
-                                        <select id="editLedgerOpeningBalanceSide" class="form-input">
-                                            <option value="debit">Debit</option>
-                                            <option value="credit">Credit</option>
-                                        </select>
-                                    </div>
+                                    <label for="editLedgerOpeningBalance">Opening balance</label>
+                                    <input type="number" id="editLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
+                                    <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
                                 </div>
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="editLedgerCashInHand">
