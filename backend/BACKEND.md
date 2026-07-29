@@ -160,25 +160,30 @@ Ordered roughly by impact-to-effort.
 
 ### 4.1 Correctness & data integrity (highest priority)
 
-- **Wrap multi-write operations in transactions.** *(Still open.)* Sync and CSV
-  upload issue many independent PostgREST calls. A failure halfway through
-  leaves the DB partially updated with no rollback.
-  PostgREST can't do interactive transactions, so move multi-step mutations into
-  **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection** for
-  the write-heavy paths. At minimum, keep the sync idempotent and restartable.
+- **Wrap multi-write operations in transactions.** *(Mostly done — see §7
+  "Resolved".)* The genuine per-row write loops (CSV upload,
+  `recompute_advance_statuses`) are now single batched `upsert`s, so each is one
+  atomic Postgres statement instead of N independent PostgREST round trips. The
+  sync's own `orders` upserts were already batched/idempotent (`on_conflict`,
+  chunked at 1000) — see §7 "Deferred elsewhere" for why that residual gap
+  (partial failure between chunks on a very large sync) is accepted rather than
+  wrapped in a transactional RPC.
 
 ### 4.3 Performance
 
 - **Push filtering/sorting/aggregation into Postgres.** `products` variant
   grouping is done (`select("*, variants(*)")` embed, no more fetching both
-  full tables and grouping in Python). Still open: `get_all_orders`'s numeric
+  full tables and grouping in Python). `get_month_summary_list` now uses the
+  `get_month_summary_periods` RPC (see §7 "Resolved") instead of fetching every
+  order's dates and bucketing in Python. Still open: `get_all_orders`'s numeric
   re-sort (attempted via a generated column, reverted at the time — the
   `create_replacement_order` "-R" path has since been removed, see §7, so this
-  is worth retrying) and month summaries, which still fetch pages and sort/sum
-  in Python.
-- **Batch the per-row updates.** The CSV upload and parts of sync still issue
-  one `UPDATE` per row in a Python loop (`batch_update_cost_prices` now does a
-  single batched `upsert`, apply the same elsewhere).
+  is worth retrying) and `get_month_summary_detail`'s aggregation (sums/counts
+  over a period's orders), which still happens in Python.
+- **Batch the per-row updates.** *(Done.)* The CSV upload
+  (`upload_postex_csv`) and `recompute_advance_statuses` (shared by the sync and
+  every cashbook write) now do a single batched `upsert` each, matching
+  `batch_update_cost_prices`'s pattern.
 - **Offload PDF generation.** ReportLab in the request path blocks a worker and
   can be slow for large batches. Consider a background task/queue and stream the
   result, or at least cap batch sizes.
@@ -287,20 +292,59 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
 > re-processing unchanged orders. Making the sync incremental would both speed it
 > up and shrink the surface of future changes to `services/shopify_sync.py`.
 
-### Next up: §4.1
-
-- [ ] **Wrap multi-write operations in transactions** — sync and CSV upload
-      issue many independent PostgREST calls; a failure halfway through leaves
-      the DB partially updated with no rollback. PostgREST
-      can't do interactive transactions, so move multi-step mutations into
-      **Postgres functions (RPC)** or a **direct `psycopg`/SQLAlchemy connection**
-      for the write-heavy paths. At minimum, keep the sync idempotent and
-      restartable. Bundled in: **`month-summary`'s Postgres pushdown** (§4.3) —
-      it needs the same RPC plumbing (`get_month_summary_list` fetches every
-      order's date columns to bucket them in Python; no schema change needed,
-      the bucketing logic just moves into the function).
-
 ### Resolved
+
+**Wrap multi-write operations in transactions** (§4.1) — audited every
+multi-write path (sync, CSV upload, cashbook) before changing anything, since
+BACKEND.md/TODO.md's own notes on this were partly stale (see below). Findings:
+the sync's `orders` upserts (`services/shopify_sync.py`) and the
+cashbook-balance writes (`recalc_cashbook_daily_balances`/`recalc_ledger_balance`
+triggers, `supabase_schema.sql`) were already atomic single statements — no
+change needed there. Two genuine one-`UPDATE`/`PATCH`-per-row loops remained:
+- `upload_postex_csv` (`routes/orders.py`) issued one `.update().eq("id", ...)`
+  per matched CSV row. Now builds one payload list and does a single batched
+  `upsert(..., on_conflict="id")` (chunked at 1000, same as the sync), matching
+  `batch_update_cost_prices`'s existing pattern.
+- `recompute_advance_statuses` (`app/advance_status.py`) did the per-row write
+  via a `ThreadPoolExecutor` over individual `client.table("orders").update()`
+  calls — the most-repeated per-row write in the codebase, since it's called
+  from both the sync (`shopify_sync.py`) and every cashbook create/update/delete
+  (`routes/cashbook.py`'s `_safe_recompute_advance_statuses`). Now the same
+  batched-`upsert` treatment, using the passed-in `supabase` client directly
+  (no more per-call `create_client`/threads for the write side; the concurrent
+  `create_client` reads for large scoped chunks are unchanged).
+
+Deliberately **not** merged into one transaction with the cashbook write that
+triggers it: `_safe_recompute_advance_statuses` already documents that a
+recompute failure must not fail the cashbook write ("a failure here shouldn't
+fail the cashbook write that triggered it") — wrapping both in one Postgres
+transaction would reverse that intentional decoupling. No direct
+`psycopg`/SQLAlchemy connection was needed for any of this — batching into a
+single `upsert` is already one atomic Postgres statement per call, which was
+the actual gap (many independent statements), not a lack of transaction
+support in PostgREST.
+
+Bundled in, per the original task: **`month-summary`'s Postgres pushdown**
+(§4.3). `get_month_summary_list` (`routes/orders.py`) fetched
+`order_receiving_date`/`created_at` for every order and bucketed them into
+(month, year) reporting periods in Python. Replaced with
+`get_month_summary_periods()`, a new Postgres function
+(`supabase/migrations/20260730000000_get_month_summary_periods_function.sql`,
+mirrored into `supabase_schema.sql`) that does the same day-based period
+bucketing in SQL and returns the distinct periods directly; the route now
+calls it via `.rpc("get_month_summary_periods")` — the first `.rpc()` call
+anywhere in this codebase. `get_month_summary_detail`'s heavier aggregation
+(sums/counts per period) was explicitly out of scope and still runs in Python
+(§4.3).
+
+Note on stale docs found during the audit: this section's old wording ("sync
+and CSV upload issue many independent PostgREST calls") predated the sync's
+move to batched upserts, and `../TODO.md` §4 (referenced by "Deferred
+elsewhere" below) no longer exists in `TODO.md` — the concurrency-guard/
+transactional-multi-writes design notes it once held are gone; what's below is
+reconstructed from the current code, not that section.
+
+**`order_number` is now `INTEGER`**, not `VARCHAR(20)`
 
 **`order_number` is now `INTEGER`**, not `VARCHAR(20)`
 (`supabase/migrations/20260728010000_order_number_to_integer.sql`). It was kept
@@ -345,15 +389,16 @@ that the column is a real `INTEGER`, this can move into the Postgres query
 
 ### Deferred elsewhere
 
-**Concurrency guard** (old D4) was investigated and moved to
-[`../TODO.md`](../TODO.md) §4 with its full design and findings — notably that
+**Concurrency guard** (old D4) was investigated — notably that
 `pg_advisory_lock` is unusable through PostgREST. The orders sync itself is now
 covered via a conditional-`UPDATE` lock on `sync_status`'s `in_progress` column
 (claimed via `UPDATE ... WHERE in_progress = false`, race-free since Postgres
-serializes concurrent UPDATEs on one row); `../TODO.md` §4 is about the remaining
-CSV-upload write sequences. **Transactional multi-writes** (old D5)
-remains deferred there too — the sync's batched upserts are already atomic so the
-real transactional gap is in the cashbook, not the sync.
+serializes concurrent UPDATEs on one row). (This used to point at `../TODO.md`
+§4 for the full design/findings; that section no longer exists in `TODO.md` —
+see the stale-docs note under "Resolved" above.) **Transactional multi-writes**
+(old D5) is resolved above — the sync's batched `orders` upserts and the
+cashbook-balance triggers were already atomic; the actual per-row gaps (CSV
+upload, `recompute_advance_statuses`) are now batched too.
 
 ---
 

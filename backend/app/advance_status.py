@@ -133,11 +133,11 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
             to_update.append((o["id"], new_status))
 
     if to_update:
-        def do_update(item):
-            order_id, status = item
-            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-            client.table("orders").update({"advance_status": status}).eq("id", order_id).execute()
-        with ThreadPoolExecutor(max_workers=min(_CONCURRENCY, len(to_update))) as pool:
-            list(pool.map(do_update, to_update))
+        # Same batch_size as the orders upserts in shopify_sync.py - chunks a full
+        # (unscoped) recompute, which can cover every order in the table.
+        batch_size = 1000
+        payload = [{"id": order_id, "advance_status": status} for order_id, status in to_update]
+        for i in range(0, len(payload), batch_size):
+            supabase.table("orders").upsert(payload[i:i + batch_size], on_conflict="id").execute()
 
     return len(to_update)

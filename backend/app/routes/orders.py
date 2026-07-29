@@ -223,6 +223,8 @@ async def upload_postex_csv(
         cancelled_order_numbers = []
         updated_order_ids = []
         amount_mismatches = []  # { order_number, receivable, csv_net_amount, total_amount, advance_amount, delivery_charge, tax_amount }
+        orders_to_upsert = []
+        current_time = datetime.now(timezone.utc).isoformat()
 
         for r in rows:
             order_num = r["order_number"]
@@ -235,16 +237,17 @@ async def upload_postex_csv(
                 continue
             matched_order_numbers.append(order_num)
             update_data = {
+                "id": order["id"],
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
                 "courier": "PostEx",
-                "updated_at": datetime.now(timezone.utc).isoformat(),
+                "updated_at": current_time,
             }
             if r.get("tracking_number"):
                 update_data["tracking_number"] = r["tracking_number"]
             if assignment_number is not None and assignment_number.strip():
                 update_data["folio"] = assignment_number.strip()
-            supabase.table("orders").update(update_data).eq("id", order["id"]).execute()
+            orders_to_upsert.append(update_data)
             updated_order_ids.append(order["id"])
             updated_count += 1
 
@@ -272,6 +275,11 @@ async def upload_postex_csv(
                         "tax_amount": tax_amount,
                         "order_status": order_status or None,
                     })
+
+        if orders_to_upsert:
+            batch_size = 1000
+            for i in range(0, len(orders_to_upsert), batch_size):
+                supabase.table("orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), and tracking for {updated_count} order(s)."
@@ -2191,51 +2199,8 @@ async def get_month_summary_list():
     """Get list of all available months with order data"""
     try:
         supabase = get_supabase()
-        orders = fetch_all(
-            lambda: supabase.table("orders").select("order_receiving_date, created_at").order("id")
-        )
-
-        # Extract unique months from orders
-        months_set = set()
-        for order in orders:
-            # Use order_receiving_date if available, otherwise created_at
-            date_str = order.get("order_receiving_date") or order.get("created_at")
-            if date_str:
-                try:
-                    # Parse ISO date string
-                    dt = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    # Convert to PKT for period calculation
-                    if dt.tzinfo:
-                        dt_pkt = dt.astimezone(PKT_TIMEZONE)
-                    else:
-                        dt_pkt = dt.replace(tzinfo=timezone.utc).astimezone(PKT_TIMEZONE)
-                    
-                    # Determine which period this order belongs to
-                    # Period is month's 22 to next month's 21
-                    day = dt_pkt.day
-                    month = dt_pkt.month
-                    year = dt_pkt.year
-                    
-                    # If day < 22, it belongs to previous month's period
-                    if day < 22:
-                        if month == 1:
-                            period_month = 12
-                            period_year = year - 1
-                        else:
-                            period_month = month - 1
-                            period_year = year
-                    else:
-                        period_month = month
-                        period_year = year
-                    
-                    months_set.add((period_month, period_year))
-                except Exception:
-                    continue
-        
-        # Convert to list and sort (newest first)
-        months_list = sorted(months_set, key=lambda x: (x[1], x[0]), reverse=True)
-        
-        return [{"month": m, "year": y} for m, y in months_list]
+        periods = supabase.rpc("get_month_summary_periods").execute().data or []
+        return [{"month": p["month"], "year": p["year"]} for p in periods]
     except HTTPException:
         raise
     except Exception:

@@ -23,11 +23,15 @@ class FakeQuery:
 
 
 class FakeSupabase:
-    def __init__(self, tables):
+    def __init__(self, tables, rpc_results=None):
         self.tables = tables
+        self.rpc_results = rpc_results or {}
 
     def table(self, name):
         return FakeQuery(self.tables.get(name, []))
+
+    def rpc(self, name, params=None):
+        return FakeQuery(self.rpc_results.get(name, []))
 
 
 @pytest.fixture
@@ -38,8 +42,8 @@ def make_client():
 
     created = []
 
-    def _factory(tables=None):
-        fake = FakeSupabase(tables or {})
+    def _factory(tables=None, rpc_results=None):
+        fake = FakeSupabase(tables or {}, rpc_results)
         main.app.dependency_overrides[require_auth] = lambda: {"sub": "test"}
 
         import app.routes.orders as orders

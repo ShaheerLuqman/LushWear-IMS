@@ -7,6 +7,7 @@ from app.advance_status import (
     ADV_NONE,
     ADV_SHOPIFY_ONLY,
     compute_advance_status,
+    recompute_advance_statuses,
 )
 
 
@@ -51,3 +52,66 @@ def test_sub_cent_amount_counts_as_no_advance():
 
 def test_negative_advance_is_treated_as_present():
     assert compute_advance_status(-100, 0) == ADV_SHOPIFY_ONLY
+
+
+class _FakeTable:
+    """Chainable stand-in for one supabase-py table, recording `upsert` calls so
+    the write-path tests can assert it was a single batched call, not one
+    per changed order."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.upsert_calls = []
+
+    def __getattr__(self, name):
+        if name == "not_":
+            return self
+        def _chain(*_a, **_k):
+            return self
+        return _chain
+
+    def upsert(self, payload, on_conflict=None, **_k):
+        self.upsert_calls.append(payload)
+        return self
+
+    def execute(self):
+        return type("Resp", (), {"data": list(self._rows)})()
+
+
+class _FakeSupabase:
+    def __init__(self, tables):
+        self._tables = tables
+
+    def table(self, name):
+        return self._tables[name]
+
+
+class TestRecomputeAdvanceStatuses:
+    def test_persists_changed_orders_as_a_single_batched_upsert(self):
+        orders_table = _FakeTable([
+            {"id": "o1", "order_number": 100, "advance_amount": 500.0, "advance_status": ADV_NONE},
+            {"id": "o2", "order_number": 101, "advance_amount": 0.0, "advance_status": ADV_NONE},
+        ])
+        cashbook_table = _FakeTable([
+            {"order_number": "100", "amount": 500.0, "entry_type": "credit"},
+        ])
+        supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
+
+        updated = recompute_advance_statuses(supabase, order_numbers=["100", "101"])
+
+        # Order 100 now matches (Shopify 500 vs cashbook 500) - status changes from
+        # ADV_NONE to ADV_MATCH. Order 101 has no advance either side - unchanged.
+        assert updated == 1
+        assert orders_table.upsert_calls == [[{"id": "o1", "advance_status": ADV_MATCH}]]
+
+    def test_no_changed_orders_means_no_write(self):
+        orders_table = _FakeTable([
+            {"id": "o1", "order_number": 100, "advance_amount": 0.0, "advance_status": ADV_NONE},
+        ])
+        cashbook_table = _FakeTable([])
+        supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
+
+        updated = recompute_advance_statuses(supabase, order_numbers=["100"])
+
+        assert updated == 0
+        assert orders_table.upsert_calls == []

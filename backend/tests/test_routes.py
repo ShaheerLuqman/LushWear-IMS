@@ -48,6 +48,56 @@ class TestOrders:
         assert client.get("/api/orders/?month=6&year=2026").status_code == 200
 
 
+class TestMonthSummaryList:
+    def test_returns_periods_from_the_rpc_as_is(self, make_client):
+        client = make_client({}, rpc_results={
+            "get_month_summary_periods": [{"month": 7, "year": 2026}, {"month": 6, "year": 2026}],
+        })
+        r = client.get("/api/orders/month-summary/list")
+        assert r.status_code == 200
+        assert r.json() == [{"month": 7, "year": 2026}, {"month": 6, "year": 2026}]
+
+    def test_no_orders_returns_empty_list(self, make_client):
+        client = make_client({}, rpc_results={"get_month_summary_periods": []})
+        r = client.get("/api/orders/month-summary/list")
+        assert r.status_code == 200
+        assert r.json() == []
+
+
+class TestPostexCsvUpload:
+    def _csv(self, *rows):
+        header = b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n"
+        body = b"".join(f"{num},{charge}\n".encode() for num, charge in rows)
+        return header + body
+
+    def test_matches_updates_and_skips_cancelled_and_unmatched_orders(self, make_client):
+        client = make_client({"orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0, "order_status": "unfulfilled"},
+            {"id": "o2", "order_number": 101, "total_amount": 500.0, "advance_amount": 0.0, "order_status": "cancelled"},
+        ]})
+        csv_bytes = self._csv((100, 200), (101, 150), (999, 50))
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", csv_bytes, "text/csv")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["updated"] == 1
+        assert body["matched_order_numbers"] == ["100"]
+        assert body["updated_order_ids"] == ["o1"]
+        assert body["cancelled_order_numbers"] == ["101"]
+        assert body["unmatched_count"] == 1
+        assert "999" in body["message"]
+
+    def test_non_csv_file_is_rejected(self, make_client):
+        client = make_client({"orders": []})
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.txt", b"not a csv", "text/plain")},
+        )
+        assert r.status_code == 400
+
+
 class TestLedgers:
     def test_list(self, make_client, ledger_row):
         r = make_client({"ledgers": [ledger_row]}).get("/api/ledgers/")
