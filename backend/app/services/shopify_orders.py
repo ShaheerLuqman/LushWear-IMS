@@ -7,11 +7,12 @@ offline-testable.
 Extracted verbatim from routes/orders.py.
 """
 
+import asyncio
 from typing import Optional
 
 import httpx
 
-from app.config import settings
+from app.org_settings import OrgIntegrationSettings
 
 
 def _shopify_order_matches_db_order(db_order_number: str, o: dict) -> bool:
@@ -32,10 +33,10 @@ def _shopify_order_matches_db_order(db_order_number: str, o: dict) -> bool:
     return onum_str == want
 
 
-async def _fetch_shopify_order_by_order_number(order_number: str) -> Optional[dict]:
+async def _fetch_shopify_order_by_order_number(order_number: str, org_creds: OrgIntegrationSettings) -> Optional[dict]:
     """Fetch a single order from Shopify Admin REST API by order number (e.g. 6563)."""
-    store_url = settings.shopify_store_url
-    token = settings.shopify_access_token
+    store_url = org_creds.shopify_store_url
+    token = org_creds.shopify_access_token
     if not store_url or not token:
         return None
     store_url = store_url.strip().rstrip("/")
@@ -46,7 +47,7 @@ async def _fetch_shopify_order_by_order_number(order_number: str) -> Optional[di
     num = str(order_number).strip().lstrip("#")
     if not num:
         return None
-    base = f"https://{store_url}/admin/api/{settings.SHOPIFY_API_VERSION}/orders.json"
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/orders.json"
     headers = {
         "X-Shopify-Access-Token": token,
         "Content-Type": "application/json",

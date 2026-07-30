@@ -25,6 +25,8 @@ from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.config import settings
 from app.database import get_supabase
+from app.org_scope import org_table
+from app.org_settings import OrgIntegrationSettings, get_org_integration_settings
 
 logger = logging.getLogger("app.orders")
 
@@ -201,7 +203,7 @@ SHOPIFY_SYNC_PARTITIONS = 4
 
 
 async def _fetch_shopify_orders_in_range(
-    start: datetime, end: datetime, n_partitions: int = SHOPIFY_SYNC_PARTITIONS
+    start: datetime, end: datetime, org_creds: OrgIntegrationSettings, n_partitions: int = SHOPIFY_SYNC_PARTITIONS
 ) -> Tuple[List[dict], int]:
     """Fetch orders whose `updated_at` falls in [start, end) by splitting the range into
     `n_partitions` chunks and fetching them concurrently. Shopify's cursor pagination is
@@ -224,7 +226,7 @@ async def _fetch_shopify_orders_in_range(
             f"&updated_at_min={w_start.strftime('%Y-%m-%dT%H:%M:%S')}"
             f"&updated_at_max={w_end.strftime('%Y-%m-%dT%H:%M:%S')}"
         )
-        return await shopify.fetch_all("orders", query)
+        return await shopify.fetch_all("orders", query, org_creds)
 
     windows = [
         (start + i * partition_length, start + (i + 1) * partition_length)
@@ -269,9 +271,9 @@ _SYNC_STATUS_ORDERS_ID = "shopify_orders"
 _SYNC_LOCK_STALE_AFTER = timedelta(minutes=4)
 
 
-def _get_sync_status_row(supabase) -> Dict[str, Any]:
+def _get_sync_status_row(supabase, org_id: str) -> Dict[str, Any]:
     resp = (
-        supabase.table("sync_status")
+        org_table(supabase, org_id, "sync_status")
         .select("last_synced_at, in_progress")
         .eq("id", _SYNC_STATUS_ORDERS_ID)
         .execute()
@@ -280,43 +282,43 @@ def _get_sync_status_row(supabase) -> Dict[str, Any]:
     return rows[0] if rows else {"last_synced_at": None, "in_progress": False}
 
 
-def _get_last_synced_at(supabase) -> Optional[str]:
-    return _get_sync_status_row(supabase).get("last_synced_at")
+def _get_last_synced_at(supabase, org_id: str) -> Optional[str]:
+    return _get_sync_status_row(supabase, org_id).get("last_synced_at")
 
 
-def _set_last_synced_at(supabase, when_iso: str) -> None:
-    supabase.table("sync_status").update({
+def _set_last_synced_at(supabase, org_id: str, when_iso: str) -> None:
+    org_table(supabase, org_id, "sync_status").update({
         "last_synced_at": when_iso,
         "updated_at": when_iso,
     }).eq("id", _SYNC_STATUS_ORDERS_ID).execute()
 
 
-def _release_stale_sync_lock(supabase) -> None:
+def _release_stale_sync_lock(supabase, org_id: str) -> None:
     """Clears a lock left behind by a crashed/killed sync. Plain AND'd filters
     (eq + eq + lt) - PostgREST/Postgres handle this combination everywhere else
     in this file (see the order_receiving_date range filters below), unlike the
     OR'd single-UPDATE version this replaced, which had no precedent in this
     codebase and turned out not to reclaim stale locks correctly."""
     stale_cutoff = (datetime.now(timezone.utc) - _SYNC_LOCK_STALE_AFTER).isoformat()
-    supabase.table("sync_status").update({"in_progress": False}).eq(
+    org_table(supabase, org_id, "sync_status").update({"in_progress": False}).eq(
         "id", _SYNC_STATUS_ORDERS_ID
     ).eq("in_progress", True).lt("lock_acquired_at", stale_cutoff).execute()
 
 
-def _try_acquire_sync_lock(supabase) -> bool:
+def _try_acquire_sync_lock(supabase, org_id: str) -> bool:
     """Claim the sync lock with a conditional UPDATE (in_progress: false -> true).
     Postgres serializes concurrent UPDATEs on the same row, so at most one caller
     can ever flip it - race-free without an advisory lock (unusable through
     PostgREST anyway)."""
-    supabase.table("sync_status").upsert(
+    org_table(supabase, org_id, "sync_status").upsert(
         {"id": _SYNC_STATUS_ORDERS_ID, "in_progress": False},
-        on_conflict="id",
+        on_conflict="org_id,id",
         ignore_duplicates=True,
     ).execute()
-    _release_stale_sync_lock(supabase)
+    _release_stale_sync_lock(supabase, org_id)
     now_iso = datetime.now(timezone.utc).isoformat()
     resp = (
-        supabase.table("sync_status")
+        org_table(supabase, org_id, "sync_status")
         .update({"in_progress": True, "lock_acquired_at": now_iso})
         .eq("id", _SYNC_STATUS_ORDERS_ID)
         .eq("in_progress", False)
@@ -325,8 +327,8 @@ def _try_acquire_sync_lock(supabase) -> bool:
     return bool(resp.data)
 
 
-def _release_sync_lock(supabase) -> None:
-    supabase.table("sync_status").update({"in_progress": False}).eq(
+def _release_sync_lock(supabase, org_id: str) -> None:
+    org_table(supabase, org_id, "sync_status").update({"in_progress": False}).eq(
         "id", _SYNC_STATUS_ORDERS_ID
     ).execute()
 
@@ -337,13 +339,13 @@ def _release_sync_lock(supabase) -> None:
 _BULK_CONCURRENCY = 20
 
 
-async def _sync_shopify_orders() -> dict:
+async def _sync_shopify_orders(org_id: str) -> dict:
     """The frontend decides when to auto-sync (see ledgers.js); this just guarantees
-    at most one sync runs at a time, whether triggered by one tab, several tabs, or
-    the manual button while an auto-sync is in flight."""
+    at most one sync runs at a time per org, whether triggered by one tab, several
+    tabs, or the manual button while an auto-sync is in flight."""
     supabase = get_supabase()
 
-    if not _try_acquire_sync_lock(supabase):
+    if not _try_acquire_sync_lock(supabase, org_id):
         # Named distinctly from the reconciliation "skipped" count below (orders that
         # didn't need changes) - both being called "skipped" made every real sync with
         # skipped_count > 0 (i.e. nearly every sync) look like a no-op to callers.
@@ -352,13 +354,14 @@ async def _sync_shopify_orders() -> dict:
     try:
         t_start = time.perf_counter()
         now = datetime.now(timezone.utc)
+        org_creds = get_org_integration_settings(org_id)
 
         # Incremental: resume from the last successful sync's checkpoint instead of always
         # re-fetching a fixed window - see _fetch_shopify_orders_in_range for why this is
         # both correct and, after the first run, dramatically cheaper (a periodic sync's
         # window is usually minutes wide, not SHOPIFY_SYNC_WINDOW_DAYS days).
-        window_start = _compute_sync_window_start(_get_last_synced_at(supabase), now)
-        all_orders, page_count = await _fetch_shopify_orders_in_range(window_start, now)
+        window_start = _compute_sync_window_start(_get_last_synced_at(supabase, org_id), now)
+        all_orders, page_count = await _fetch_shopify_orders_in_range(window_start, now, org_creds)
         t_shopify_fetch = time.perf_counter()
 
         # Only the orders Shopify actually returned need a DB row to diff against - scoping
@@ -390,7 +393,7 @@ async def _sync_shopify_orders() -> dict:
         async def select_concurrently(table: str, select_cols: str, in_col: str = None, in_vals: Optional[List[int]] = None):
             def run():
                 client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-                q = client.table(table).select(select_cols)
+                q = org_table(client, org_id, table).select(select_cols)
                 if in_col is not None:
                     q = q.in_(in_col, in_vals)
                 return q.execute().data or []
@@ -966,7 +969,7 @@ async def _sync_shopify_orders() -> dict:
             batch_size = 1000
             for i in range(0, len(orders_to_insert), batch_size):
                 batch = orders_to_insert[i:i + batch_size]
-                supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
+                org_table(supabase, org_id, "orders").upsert(batch, on_conflict="org_id,order_number").execute()
                 created_count += len(batch)
 
         updated_count = 0
@@ -974,13 +977,13 @@ async def _sync_shopify_orders() -> dict:
             batch_size = 1000
             for i in range(0, len(orders_to_update), batch_size):
                 batch = orders_to_update[i:i + batch_size]
-                supabase.table("orders").upsert(batch, on_conflict="order_number").execute()
+                org_table(supabase, org_id, "orders").upsert(batch, on_conflict="org_id,order_number").execute()
                 updated_count += len(batch)
         t_upserts = time.perf_counter()
 
         if original_orders_to_reset_piece_received:
             originals_resp = (
-                supabase.table("orders")
+                org_table(supabase, org_id, "orders")
                 .select("id, piece_received")
                 .in_("order_number", list(original_orders_to_reset_piece_received))
                 .execute()
@@ -990,7 +993,7 @@ async def _sync_shopify_orders() -> dict:
                 if (row.get("piece_received") or "").strip().lower() == "done"
             ]
             if ids_to_reset:
-                supabase.table("orders").update({
+                org_table(supabase, org_id, "orders").update({
                     "piece_received": "Pending",
                     "updated_at": current_time,
                 }).in_("id", ids_to_reset).execute()
@@ -1003,7 +1006,7 @@ async def _sync_shopify_orders() -> dict:
         # Shopify advance amounts may have changed; recompute advance statuses, scoped to the
         # orders Shopify actually returned (same reasoning as existing_orders_all above).
         try:
-            recompute_advance_statuses(supabase, order_numbers=shopify_order_numbers)
+            recompute_advance_statuses(supabase, org_id, order_numbers=shopify_order_numbers)
         except Exception as e:
             logger.warning("[sync-shopify] advance status recompute failed: %s", e)
         t_advance_recompute = time.perf_counter()
@@ -1030,7 +1033,7 @@ async def _sync_shopify_orders() -> dict:
         # since re-processing an unchanged order is already a no-op (orders_to_skip).
         last_synced_at = now.isoformat()
         try:
-            _set_last_synced_at(supabase, last_synced_at)
+            _set_last_synced_at(supabase, org_id, last_synced_at)
         except Exception as e:
             logger.warning("[sync-shopify] failed to persist last_synced_at: %s", e)
 
@@ -1065,4 +1068,4 @@ async def _sync_shopify_orders() -> dict:
         logger.exception("Shopify order sync failed")
         raise HTTPException(status_code=500, detail="Error syncing orders")
     finally:
-        _release_sync_lock(supabase)
+        _release_sync_lock(supabase, org_id)

@@ -119,7 +119,17 @@ async def auth_bootstrap(body: BootstrapBody, x_bootstrap_token: Optional[str] =
     if not claim.data:
         raise HTTPException(status_code=400, detail="Bootstrap has already been completed")
 
-    org = supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
+    # The org-scoping migration (20260730070000) backfills a "LushWear" org for
+    # any pre-existing data before this endpoint is ever called - reuse that
+    # org instead of unconditionally inserting a second one, which would leave
+    # this first admin in an empty org while all the migrated data sits under
+    # the other one.
+    existing_orgs = (
+        supabase.table("organizations").select("*").order("created_at").limit(1).execute().data
+    )
+    org = existing_orgs[0] if existing_orgs else (
+        supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
+    )
     user = supabase.table("users").insert({
         "org_id": org["id"],
         "email": body.email,

@@ -2,18 +2,11 @@ from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import hash_password, require_auth
+from app.auth import get_org_id, hash_password
 from app.database import get_supabase
 from app.models import UserCreate, UserPublic, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
-
-
-def _org_id(payload: dict) -> str:
-    org_id = payload.get("org_id")
-    if not org_id:
-        raise HTTPException(status_code=403, detail="No organization for this session")
-    return org_id
 
 
 def _active_admin_count(supabase, org_id: str, exclude_user_id: Optional[str] = None) -> int:
@@ -33,8 +26,7 @@ def _active_admin_count(supabase, org_id: str, exclude_user_id: Optional[str] = 
 
 
 @router.get("/", response_model=List[UserPublic])
-async def list_users(payload: dict = Depends(require_auth)):
-    org_id = _org_id(payload)
+async def list_users(org_id: str = Depends(get_org_id)):
     return (
         get_supabase()
         .table("users")
@@ -48,8 +40,7 @@ async def list_users(payload: dict = Depends(require_auth)):
 
 
 @router.post("/", response_model=UserPublic)
-async def create_user(body: UserCreate, payload: dict = Depends(require_auth)):
-    org_id = _org_id(payload)
+async def create_user(body: UserCreate, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("email", body.email).limit(1).execute().data
     if existing:
@@ -65,10 +56,9 @@ async def create_user(body: UserCreate, payload: dict = Depends(require_auth)):
 
 
 @router.put("/{user_id}", response_model=UserPublic)
-async def update_user(user_id: str, body: UserUpdate, payload: dict = Depends(require_auth)):
+async def update_user(user_id: str, body: UserUpdate, org_id: str = Depends(get_org_id)):
     """Update a user's role/is_active. Scoped to the caller's own org - a user
     id from a different org 404s, same as if it didn't exist."""
-    org_id = _org_id(payload)
     supabase = get_supabase()
     existing_rows = (
         supabase.table("users").select("*").eq("id", user_id).eq("org_id", org_id).limit(1).execute().data

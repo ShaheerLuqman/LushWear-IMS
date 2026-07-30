@@ -1,12 +1,11 @@
 from datetime import datetime, timezone
 from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from pydantic import AfterValidator, BaseModel
 
-from app.client_ip import get_client_ip
 from app.database import get_supabase
-from app.auth import create_token, hash_password, verify_password
+from app.auth import hash_password, verify_password
 
 router = APIRouter(prefix="/app-pin", tags=["app-pin"])
 
@@ -24,15 +23,6 @@ def _validate_pin(pin: str) -> str:
 Pin = Annotated[str, AfterValidator(_validate_pin)]
 
 
-class PinVerifyBody(BaseModel):
-    pin: Pin
-
-
-class PinSetupBody(BaseModel):
-    pin: Pin
-    confirm_pin: Pin
-
-
 class PinChangeBody(BaseModel):
     current_pin: Pin
     new_pin: Pin
@@ -41,6 +31,10 @@ class PinChangeBody(BaseModel):
 
 class _Lockout:
     """Per-client brute-force lockout, backed by the `pin_lockouts` table.
+
+    No longer used by any route here - /verify (the only caller) is retired
+    (see pin_verify below). Kept, with its test (test_app_pin_lockout.py),
+    until ORGANIZATIONS_USERS_PLAN.md's Phase 4 drops this whole file.
 
     After ``max_attempts`` failed /verify attempts within ``window`` seconds, the
     client is locked out for ``window`` seconds. Externalized to Supabase (was an
@@ -91,9 +85,6 @@ class _Lockout:
         get_supabase().table("pin_lockouts").delete().eq("client_key", key).execute()
 
 
-_lockout = _Lockout()
-
-
 def _get_existing_hash() -> Optional[str]:
     rows = (
         get_supabase()
@@ -133,31 +124,17 @@ async def pin_status():
 
 
 @router.post("/verify")
-async def pin_verify(body: PinVerifyBody, request: Request):
-    """Check PIN against stored hash. Rate-limited to deter brute force."""
-    key = get_client_ip(request)
-    _lockout.check(key)
-
-    stored = _get_existing_hash()
-    if not stored:
-        raise HTTPException(status_code=400, detail="No PIN has been set yet")
-    if not verify_password(body.pin, stored):
-        _lockout.record_failure(key)
-        raise HTTPException(status_code=401, detail="Incorrect PIN")
-    _lockout.clear(key)
-    return {"ok": True, "token": create_token()}
+async def pin_verify():
+    """Retired (ORGANIZATIONS_USERS_PLAN.md Phase 2) - use POST /auth/login instead.
+    Kept mounted (rather than removed) only so old clients get a clear error
+    instead of a generic 404."""
+    raise HTTPException(status_code=410, detail="PIN login has been retired. Use email/password login instead.")
 
 
 @router.post("/setup")
-async def pin_setup(body: PinSetupBody):
-    """First-time PIN creation (only when none exists)."""
-    if body.pin != body.confirm_pin:
-        raise HTTPException(status_code=400, detail="PINs do not match")
-    if _get_existing_hash():
-        raise HTTPException(status_code=400, detail="A PIN is already set. Use change PIN instead.")
-
-    _store_hash(body.pin, insert=True)
-    return {"ok": True, "token": create_token()}
+async def pin_setup():
+    """Retired (ORGANIZATIONS_USERS_PLAN.md Phase 2) - use POST /auth/bootstrap instead."""
+    raise HTTPException(status_code=410, detail="PIN setup has been retired. Use the Organizations & Users bootstrap flow instead.")
 
 
 @router.post("/change")

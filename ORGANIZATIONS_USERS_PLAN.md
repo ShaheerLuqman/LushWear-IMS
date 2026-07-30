@@ -47,7 +47,13 @@ Because a second org is expected to onboard soon after this ships, **org-scoping
 
 **Tests**: login success/failure/lockout (mirrors `backend/tests/test_app_pin_lockout.py`'s structure), bootstrap race behavior, `require_role` gating.
 
-## Phase 2 — Org-scoping cutover (the correctness-critical phase)
+## Phase 2 — Org-scoping cutover (the correctness-critical phase) — ✅ implemented, migrations not yet applied
+
+**Not yet done: run the new migrations against the real Supabase DB** (same limitation as Phase 1 - this backend has no direct Postgres driver), **and run `backend/scripts/backfill_org_integration_settings.py` once** (after the migrations, requires `SETTINGS_ENCRYPTION_KEY` set) to carry LushWear's existing Shopify/PostEx credentials from env vars into the new encrypted `org_integration_settings` row. New migrations, in order: `20260730070000_add_org_id_to_business_tables.sql`, `20260730080000_orders_order_number_unique_per_org.sql`, `20260730090000_month_summary_rpcs_org_scoped.sql`, `20260730100000_rls_default_deny_business_tables.sql`, `20260730110000_org_integration_settings_table.sql`.
+
+Beyond the plan as originally written, the implementation also found and fixed: `ledgers.name` and `cashbook_daily_balances.balance_date` were both globally-unique constraints (would have collided the moment a second org existed) and the balance/audit-log trigger functions aggregated with no org filter at all (would have silently summed different orgs' cashbook entries together). All fixed as part of the same migration. 196/196 backend tests pass.
+
+
 
 1. **Disable PIN login first, as step one of this phase**: `/app-pin/verify` and `/app-pin/setup` return `410 Gone` (or are removed outright). Already-issued PIN tokens simply age out within their existing 7-day TTL — no need to force-revoke.
 

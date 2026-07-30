@@ -93,6 +93,75 @@ class TestAuthBootstrap:
         })
         assert r.status_code == 400
 
+    def test_bootstrap_reuses_an_org_already_backfilled_by_migration(self, make_client, monkeypatch):
+        # The org-scoping migration (20260730070000) creates a "LushWear" org
+        # while backfilling pre-existing data, before this endpoint is ever
+        # called. Bootstrap must attach the first admin to that org instead of
+        # inserting a second one - otherwise the admin ends up in an empty org
+        # while all the migrated data sits under the other one.
+        import app.routes.auth as auth_routes
+
+        inserted_orgs = []
+
+        class _OrgAwareQuery:
+            def __init__(self, rows):
+                self._rows = rows
+                self._insert_called = False
+
+            def __getattr__(self, _name):
+                def _chain(*_args, **_kwargs):
+                    return self
+                return _chain
+
+            def insert(self, payload):
+                self._insert_called = True
+                inserted_orgs.append(payload)
+                return self
+
+            def execute(self):
+                if self._insert_called:
+                    return type("Response", (), {"data": [{"id": "new-org", **inserted_orgs[-1]}]})()
+                return type("Response", (), {"data": list(self._rows)})()
+
+        class _PassthroughQuery:
+            def __init__(self, rows):
+                self._rows = rows
+
+            def __getattr__(self, _name):
+                def _chain(*_args, **_kwargs):
+                    return self
+                return _chain
+
+            def execute(self):
+                return type("Response", (), {"data": list(self._rows)})()
+
+        class _FakeSupabase:
+            def __init__(self, tables):
+                self.tables = tables
+
+            def table(self, name):
+                if name == "organizations":
+                    return _OrgAwareQuery(self.tables.get(name, []))
+                return _PassthroughQuery(self.tables.get(name, []))
+
+        fake = _FakeSupabase({
+            "system_bootstrap": [{"id": "default"}],
+            "organizations": [{"id": "existing-lushwear-org", "name": "LushWear"}],
+            "users": [{
+                "id": "u1", "org_id": "existing-lushwear-org", "email": "owner@example.com",
+                "role": "admin", "is_active": True,
+            }],
+        })
+        client = make_client()
+        monkeypatch.setattr(auth_routes, "get_supabase", lambda: fake)
+
+        r = client.post("/api/auth/bootstrap", json={
+            "org_name": "Acme", "email": "owner@example.com", "password": "supersecret1",
+        })
+        assert r.status_code == 200
+        assert inserted_orgs == []
+        assert r.json()["user"]["org_id"] == "existing-lushwear-org"
+
 
 class TestAuthMe:
     def test_returns_the_caller_from_the_token_sub(self, make_client):

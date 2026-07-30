@@ -132,7 +132,7 @@ class TestOrders:
     def test_sync_shopify_orders_returns_the_typed_result(self, make_client, monkeypatch):
         import app.routes.orders as orders_module
 
-        async def fake_sync():
+        async def fake_sync(org_id):
             return {
                 "message": "Orders synced successfully",
                 "last_synced_at": "2026-07-30T12:00:00+00:00",
@@ -150,7 +150,7 @@ class TestOrders:
         fields at all) - the response_model must accept both."""
         import app.routes.orders as orders_module
 
-        async def fake_sync():
+        async def fake_sync(org_id):
             return {"message": "Sync already in progress", "already_syncing": True}
 
         monkeypatch.setattr(orders_module, "_sync_shopify_orders", fake_sync)
@@ -161,7 +161,7 @@ class TestOrders:
     def test_sync_shopify_orders_force_returns_the_typed_shape(self, make_client, monkeypatch):
         import app.routes.orders as orders_module
 
-        async def fake_fetch(order_number):
+        async def fake_fetch(order_number, org_creds):
             return None  # simulates "not found in Shopify" - simplest path through the endpoint
 
         monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
@@ -175,7 +175,7 @@ class TestOrders:
     def test_recalculate_totals_returns_the_typed_shape(self, make_client, monkeypatch):
         import app.routes.orders as orders_module
 
-        async def fake_fetch(order_number):
+        async def fake_fetch(order_number, org_creds):
             return None
 
         monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
@@ -291,7 +291,7 @@ class TestGenerateInvoice:
 
         seen_numbers = []
 
-        async def fake_fetch(num):
+        async def fake_fetch(num, org_creds):
             seen_numbers.append(num)
             return {"shopify_number": num}
 

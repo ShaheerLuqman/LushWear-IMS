@@ -48,3 +48,4 @@ load_sheets/
 # Generated invoices (saved by app)
 invoices/
 
+backups/

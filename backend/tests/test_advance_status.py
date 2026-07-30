@@ -97,12 +97,12 @@ class TestRecomputeAdvanceStatuses:
         ])
         supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
 
-        updated = recompute_advance_statuses(supabase, order_numbers=["100", "101"])
+        updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100", "101"])
 
         # Order 100 now matches (Shopify 500 vs cashbook 500) - status changes from
         # ADV_NONE to ADV_MATCH. Order 101 has no advance either side - unchanged.
         assert updated == 1
-        assert orders_table.upsert_calls == [[{"id": "o1", "advance_status": ADV_MATCH}]]
+        assert orders_table.upsert_calls == [[{"id": "o1", "advance_status": ADV_MATCH, "org_id": "test-org"}]]
 
     def test_no_changed_orders_means_no_write(self):
         orders_table = _FakeTable([
@@ -111,7 +111,7 @@ class TestRecomputeAdvanceStatuses:
         cashbook_table = _FakeTable([])
         supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
 
-        updated = recompute_advance_statuses(supabase, order_numbers=["100"])
+        updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100"])
 
         assert updated == 0
         assert orders_table.upsert_calls == []

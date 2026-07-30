@@ -98,3 +98,13 @@ def require_role(*roles: str):
         return payload
 
     return _dependency
+
+
+async def get_org_id(payload: dict = Depends(require_auth)) -> str:
+    """FastAPI dependency: the caller's own org_id, for `app.org_scope.org_table()`.
+    A token with no org_id claim (the legacy app-PIN shape) 403s here rather
+    than silently scoping to nothing."""
+    org_id = payload.get("org_id")
+    if not org_id:
+        raise HTTPException(status_code=403, detail="No organization for this session")
+    return org_id

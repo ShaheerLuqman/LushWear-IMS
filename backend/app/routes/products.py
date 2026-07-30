@@ -1,15 +1,18 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Dict, Tuple
 from app.models import (
     ProductCreate, ProductUpdate, ProductWithVariants,
     ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
     Variant, VariantCreate, VariantUpdate,
 )
+from app.auth import get_org_id
 from app.config import settings
 from app.database import get_supabase
 from app import shopify
 from app.db_utils import fetch_all
 from app.money import money
+from app.org_scope import org_table
+from app.org_settings import get_org_integration_settings
 from datetime import datetime, timezone
 from supabase import create_client
 import asyncio
@@ -20,18 +23,18 @@ logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-async def _fetch_products_and_variants() -> Tuple[List[dict], List[dict]]:
+async def _fetch_products_and_variants(org_id: str) -> Tuple[List[dict], List[dict]]:
     """Fetch the full products and variants tables concurrently, each on its own client
     (sharing one client's connection across concurrent threads crashes) and paginated via
     fetch_all so a catalog past PostgREST's 1000-row-per-request cap isn't silently
     truncated - unlikely today (139 products / 579 variants) but not guarded against."""
     def fetch_products():
         client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        return fetch_all(lambda: client.table("products").select("*"))
+        return fetch_all(lambda: org_table(client, org_id, "products").select("*"))
 
     def fetch_variants():
         client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        return fetch_all(lambda: client.table("variants").select("*"))
+        return fetch_all(lambda: org_table(client, org_id, "variants").select("*"))
 
     return await asyncio.gather(asyncio.to_thread(fetch_products), asyncio.to_thread(fetch_variants))
 
@@ -48,14 +51,14 @@ def _is_replacement_order(row: dict) -> bool:
 
 
 @router.get("/", response_model=List[ProductWithVariants])
-async def get_all_products():
+async def get_all_products(org_id: str = Depends(get_org_id)):
     """Get all products with their variants"""
     try:
         supabase = get_supabase()
         # variants(*) is a PostgREST embed over the variants -> products FK - one
         # query does the join server-side instead of fetching both full tables
         # and grouping them into a dict here.
-        products = fetch_all(lambda: supabase.table("products").select("*, variants(*)"))
+        products = fetch_all(lambda: org_table(supabase, org_id, "products").select("*, variants(*)"))
 
         for product in products:
             product_variants = product.get("variants") or []
@@ -72,14 +75,15 @@ async def get_all_products():
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/sync-shopify")
-async def sync_shopify_products():
+async def sync_shopify_products(org_id: str = Depends(get_org_id)):
     """Sync products and variants from Shopify"""
     try:
+        org_creds = get_org_integration_settings(org_id)
         # Shopify fetch and the local DB reads are independent - run them concurrently
         # instead of paying for both durations back to back.
         (all_products, page_count), (existing_products, existing_variants) = await asyncio.gather(
-            shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}"),
-            _fetch_products_and_variants(),
+            shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}", org_creds),
+            _fetch_products_and_variants(org_id),
         )
 
         supabase = get_supabase()
@@ -190,19 +194,19 @@ async def sync_shopify_products():
             batch_size = 1000
             for i in range(0, len(products_to_insert), batch_size):
                 batch = products_to_insert[i:i + batch_size]
-                result = supabase.table("products").insert(batch).execute()
+                result = org_table(supabase, org_id, "products").insert(batch).execute()
                 created_products_count += len(batch)
                 # Map shopify_product_id to new product id
                 for product in result.data:
                     product_id_map[product["shopify_product_id"]] = product["id"]
-        
+
         # Update existing products
         updated_products_count = 0
         if products_to_update:
             batch_size = 1000
             for i in range(0, len(products_to_update), batch_size):
                 batch = products_to_update[i:i + batch_size]
-                supabase.table("products").upsert(batch, on_conflict="id").execute()
+                org_table(supabase, org_id, "products").upsert(batch, on_conflict="id").execute()
                 updated_products_count += len(batch)
         
         # Now process variants for all active products
@@ -253,16 +257,16 @@ async def sync_shopify_products():
             batch_size = 1000
             for i in range(0, len(variants_to_insert), batch_size):
                 batch = variants_to_insert[i:i + batch_size]
-                supabase.table("variants").insert(batch).execute()
+                org_table(supabase, org_id, "variants").insert(batch).execute()
                 created_variants_count += len(batch)
-        
+
         # Update existing variants
         updated_variants_count = 0
         if variants_to_update:
             batch_size = 1000
             for i in range(0, len(variants_to_update), batch_size):
                 batch = variants_to_update[i:i + batch_size]
-                supabase.table("variants").upsert(batch, on_conflict="id").execute()
+                org_table(supabase, org_id, "variants").upsert(batch, on_conflict="id").execute()
                 updated_variants_count += len(batch)
         
         # Calculate totals
@@ -312,7 +316,7 @@ async def sync_shopify_products():
         raise HTTPException(status_code=500, detail="Error syncing products")
 
 @router.put("/batch-update-cost-prices")
-async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
+async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
     """Batch update cost prices for products"""
     try:
         supabase = get_supabase()
@@ -324,7 +328,7 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
         ]
         updated_count = 0
         if payload:
-            response = supabase.table("products").upsert(payload, on_conflict="id").execute()
+            response = org_table(supabase, org_id, "products").upsert(payload, on_conflict="id").execute()
             updated_count = len(response.data or [])
 
         return {
@@ -339,7 +343,7 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate):
 
 
 @router.post("/recalculate-order-costs")
-async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProductBody):
+async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProductBody, org_id: str = Depends(get_org_id)):
     """Recompute order cost_price from product costs for orders that include the given product (line starts with \"Name - \")."""
     try:
         supabase = get_supabase()
@@ -348,7 +352,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             raise HTTPException(status_code=400, detail="product_id is required")
 
         prod = (
-            supabase.table("products").select("name").eq("id", product_id).limit(1).execute().data
+            org_table(supabase, org_id, "products").select("name").eq("id", product_id).limit(1).execute().data
         )
         if not prod:
             raise HTTPException(status_code=404, detail="Product not found")
@@ -359,7 +363,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         # Cost lookup by product id (preferred) and by lowercased product name (fallback), both against line_items.
         costs: Dict[str, float] = {}
         costs_by_id: Dict[str, float] = {}
-        for p in supabase.table("products").select("id, name, cost_price").execute().data or []:
+        for p in org_table(supabase, org_id, "products").select("id, name, cost_price").execute().data or []:
             try:
                 cost_val = float(p.get("cost_price") or 0)
             except (TypeError, ValueError):
@@ -391,9 +395,9 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                     order_rows.append(r)
 
         # 1) order_receiving_date on/after cutoff
-        _collect(lambda: supabase.table("orders").select(select_cols).gte("order_receiving_date", after))
+        _collect(lambda: org_table(supabase, org_id, "orders").select(select_cols).gte("order_receiving_date", after))
         # 2) order_receiving_date is null, fall back to created_at
-        _collect(lambda: supabase.table("orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
+        _collect(lambda: org_table(supabase, org_id, "orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
 
         scanned = updated = 0
         updated_order_numbers: List[int] = []
@@ -442,7 +446,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             old = money(row.get("cost_price"))
             if old == new_cost:
                 continue
-            supabase.table("orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
+            org_table(supabase, org_id, "orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
             updated += 1
             num = row.get("order_number")
             if num is not None:
@@ -463,20 +467,20 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
 
 
 @router.get("/{product_id}", response_model=ProductWithVariants)
-async def get_product(product_id: str):
+async def get_product(product_id: str, org_id: str = Depends(get_org_id)):
     """Get a single product with its variants"""
     try:
         supabase = get_supabase()
-        
+
         # Get product
-        response = supabase.table("products").select("*").eq("id", product_id).single().execute()
+        response = org_table(supabase, org_id, "products").select("*").eq("id", product_id).single().execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Product not found")
-        
+
         product = response.data
-        
+
         # Get variants for this product
-        variants_response = supabase.table("variants").select("*").eq("product_id", product_id).execute()
+        variants_response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).execute()
         product["variants"] = variants_response.data or []
         product["total_quantity"] = sum(v.get("quantity", 0) for v in product["variants"])
         
@@ -488,22 +492,22 @@ async def get_product(product_id: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/", response_model=ProductWithVariants)
-async def create_product(product: ProductCreate):
+async def create_product(product: ProductCreate, org_id: str = Depends(get_org_id)):
     """Create a new product with optional variants"""
     try:
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
-        
+
         # Prepare product data (without variants)
         product_data = product.model_dump(exclude={"variants"})
         product_data["created_at"] = current_time
         product_data["updated_at"] = current_time
-        
+
         # Insert product
-        response = supabase.table("products").insert(product_data).execute()
+        response = org_table(supabase, org_id, "products").insert(product_data).execute()
         created_product = response.data[0]
         product_id = created_product["id"]
-        
+
         # Insert variants if provided
         created_variants = []
         if product.variants:
@@ -514,9 +518,9 @@ async def create_product(product: ProductCreate):
                 variant_dict["created_at"] = current_time
                 variant_dict["updated_at"] = current_time
                 variants_data.append(variant_dict)
-            
+
             if variants_data:
-                variants_response = supabase.table("variants").insert(variants_data).execute()
+                variants_response = org_table(supabase, org_id, "variants").insert(variants_data).execute()
                 created_variants = variants_response.data
         
         created_product["variants"] = created_variants
@@ -530,20 +534,20 @@ async def create_product(product: ProductCreate):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.put("/{product_id}")
-async def update_product(product_id: str, product: ProductUpdate):
+async def update_product(product_id: str, product: ProductUpdate, org_id: str = Depends(get_org_id)):
     """Update a product"""
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in product.model_dump().items() if v is not None}
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
-        response = supabase.table("products").update(update_data).eq("id", product_id).execute()
+
+        response = org_table(supabase, org_id, "products").update(update_data).eq("id", product_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Product not found")
-        
+
         # Return product with variants
         updated_product = response.data[0]
-        variants_response = supabase.table("variants").select("*").eq("product_id", product_id).execute()
+        variants_response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).execute()
         updated_product["variants"] = variants_response.data or []
         updated_product["total_quantity"] = sum(v.get("quantity", 0) for v in updated_product["variants"])
         
@@ -555,11 +559,11 @@ async def update_product(product_id: str, product: ProductUpdate):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{product_id}")
-async def delete_product(product_id: str):
+async def delete_product(product_id: str, org_id: str = Depends(get_org_id)):
     """Delete a product (variants are deleted automatically via CASCADE)"""
     try:
         supabase = get_supabase()
-        response = supabase.table("products").delete().eq("id", product_id).execute()
+        response = org_table(supabase, org_id, "products").delete().eq("id", product_id).execute()
         return {"message": "Product deleted successfully"}
     except HTTPException:
         raise
@@ -568,14 +572,14 @@ async def delete_product(product_id: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/search/{query}")
-async def search_products(query: str):
+async def search_products(query: str, org_id: str = Depends(get_org_id)):
     """Search products by name"""
     try:
         supabase = get_supabase()
 
         # Same embed as get_all_products - the join happens in Postgres, not here.
         response = (
-            supabase.table("products")
+            org_table(supabase, org_id, "products")
             .select("*, variants(*)")
             .ilike("name", f"%{query}%")
             .execute()
@@ -599,11 +603,11 @@ async def search_products(query: str):
 # ==================== VARIANT ENDPOINTS ====================
 
 @router.get("/{product_id}/variants", response_model=List[Variant])
-async def get_product_variants(product_id: str):
+async def get_product_variants(product_id: str, org_id: str = Depends(get_org_id)):
     """Get all variants for a product"""
     try:
         supabase = get_supabase()
-        response = supabase.table("variants").select("*").eq("product_id", product_id).order("title").execute()
+        response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).order("title").execute()
         return response.data
     except HTTPException:
         raise
@@ -612,23 +616,23 @@ async def get_product_variants(product_id: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/{product_id}/variants", response_model=Variant)
-async def create_variant(product_id: str, variant: VariantCreate):
+async def create_variant(product_id: str, variant: VariantCreate, org_id: str = Depends(get_org_id)):
     """Create a new variant for a product"""
     try:
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
-        
+
         # Verify product exists
-        product_response = supabase.table("products").select("id").eq("id", product_id).single().execute()
+        product_response = org_table(supabase, org_id, "products").select("id").eq("id", product_id).single().execute()
         if not product_response.data:
             raise HTTPException(status_code=404, detail="Product not found")
-        
+
         variant_data = variant.model_dump()
         variant_data["product_id"] = product_id
         variant_data["created_at"] = current_time
         variant_data["updated_at"] = current_time
-        
-        response = supabase.table("variants").insert(variant_data).execute()
+
+        response = org_table(supabase, org_id, "variants").insert(variant_data).execute()
         return response.data[0]
     except HTTPException:
         raise
@@ -637,17 +641,17 @@ async def create_variant(product_id: str, variant: VariantCreate):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.put("/{product_id}/variants/{variant_id}")
-async def update_variant(product_id: str, variant_id: str, variant: VariantUpdate):
+async def update_variant(product_id: str, variant_id: str, variant: VariantUpdate, org_id: str = Depends(get_org_id)):
     """Update a variant"""
     try:
         supabase = get_supabase()
         update_data = {k: v for k, v in variant.model_dump().items() if v is not None}
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        
-        response = supabase.table("variants").update(update_data).eq("id", variant_id).eq("product_id", product_id).execute()
+
+        response = org_table(supabase, org_id, "variants").update(update_data).eq("id", variant_id).eq("product_id", product_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Variant not found")
-        
+
         return response.data[0]
     except HTTPException:
         raise
@@ -656,11 +660,11 @@ async def update_variant(product_id: str, variant_id: str, variant: VariantUpdat
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.delete("/{product_id}/variants/{variant_id}")
-async def delete_variant(product_id: str, variant_id: str):
+async def delete_variant(product_id: str, variant_id: str, org_id: str = Depends(get_org_id)):
     """Delete a variant"""
     try:
         supabase = get_supabase()
-        response = supabase.table("variants").delete().eq("id", variant_id).eq("product_id", product_id).execute()
+        response = org_table(supabase, org_id, "variants").delete().eq("id", variant_id).eq("product_id", product_id).execute()
         return {"message": "Variant deleted successfully"}
     except HTTPException:
         raise

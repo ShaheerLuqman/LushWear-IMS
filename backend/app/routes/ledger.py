@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Literal
 from pydantic import BaseModel
+from app.auth import get_org_id
 from app.database import get_supabase
 from app.models import (
     Ledger,
     LedgerCreate,
     LedgerUpdate,
 )
+from app.org_scope import org_table
 
 
 class DeleteLedgerResult(BaseModel):
@@ -24,12 +26,12 @@ def _flatten_ledger_balance(row: dict) -> dict:
     return row
 
 
-def _name_taken(supabase, name: str, exclude_id: str = None) -> bool:
-    """Case-insensitive name clash check (mirrors findLedgerByName in
-    renderer.js). Backstopped by idx_ledgers_name_lower for races/non-API
+def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> bool:
+    """Case-insensitive name clash check within this org (mirrors findLedgerByName
+    in renderer.js). Backstopped by idx_ledgers_org_id_name_lower for races/non-API
     writers; this just gives a friendly error for the common case."""
     target = name.strip().lower()
-    resp = supabase.table("ledgers").select("id, name").execute()
+    resp = org_table(supabase, org_id, "ledgers").select("id, name").execute()
     return any(
         row["id"] != exclude_id and (row.get("name") or "").strip().lower() == target
         for row in resp.data or []
@@ -37,10 +39,9 @@ def _name_taken(supabase, name: str, exclude_id: str = None) -> bool:
 
 
 @router.get("/", response_model=List[Ledger])
-async def list_ledgers():
+async def list_ledgers(org_id: str = Depends(get_org_id)):
     response = (
-        get_supabase()
-        .table("ledgers")
+        org_table(get_supabase(), org_id, "ledgers")
         .select("*, ledger_balances(balance)")
         .order("name", desc=False)
         .execute()
@@ -49,7 +50,7 @@ async def list_ledgers():
 
 
 @router.post("/", response_model=Ledger)
-async def create_ledger(ledger: LedgerCreate):
+async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id)):
     name = (ledger.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="Ledger name is required")
@@ -57,10 +58,10 @@ async def create_ledger(ledger: LedgerCreate):
         raise HTTPException(status_code=400, detail="Type is required")
 
     supabase = get_supabase()
-    if _name_taken(supabase, name):
+    if _name_taken(supabase, org_id, name):
         raise HTTPException(status_code=400, detail="A ledger with this name already exists")
 
-    response = supabase.table("ledgers").insert({
+    response = org_table(supabase, org_id, "ledgers").insert({
         "name": name,
         "type": ledger.type,
         "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
@@ -72,11 +73,10 @@ async def create_ledger(ledger: LedgerCreate):
 
 
 @router.get("/{ledger_id}", response_model=Ledger)
-async def get_ledger(ledger_id: str):
+async def get_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     response = (
-        supabase
-        .table("ledgers")
+        org_table(supabase, org_id, "ledgers")
         .select("*")
         .eq("id", ledger_id)
         .execute()
@@ -85,7 +85,7 @@ async def get_ledger(ledger_id: str):
         raise HTTPException(status_code=404, detail="Ledger not found")
 
     entries_resp = (
-        supabase.table("cashbook_entries")
+        org_table(supabase, org_id, "cashbook_entries")
         .select("id")
         .eq("folio", ledger_id)
         .limit(1)
@@ -97,14 +97,14 @@ async def get_ledger(ledger_id: str):
 
 
 @router.put("/{ledger_id}", response_model=Ledger)
-async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
+async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     payload = ledger.model_dump(exclude_unset=True)
     if "name" in payload:
         payload["name"] = (payload["name"] or "").strip()
         if not payload["name"]:
             raise HTTPException(status_code=400, detail="Ledger name cannot be empty")
-        if _name_taken(supabase, payload["name"], exclude_id=ledger_id):
+        if _name_taken(supabase, org_id, payload["name"], exclude_id=ledger_id):
             raise HTTPException(status_code=400, detail="A ledger with this name already exists")
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
@@ -112,8 +112,7 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
         raise HTTPException(status_code=400, detail="No fields to update")
 
     response = (
-        supabase
-        .table("ledgers")
+        org_table(supabase, org_id, "ledgers")
         .update(payload)
         .eq("id", ledger_id)
         .execute()
@@ -124,10 +123,10 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
 
 
 @router.delete("/{ledger_id}", response_model=DeleteLedgerResult)
-async def delete_ledger(ledger_id: str):
+async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     entries_resp = (
-        supabase.table("cashbook_entries")
+        org_table(supabase, org_id, "cashbook_entries")
         .select("id")
         .eq("folio", ledger_id)
         .limit(1)
@@ -139,18 +138,17 @@ async def delete_ledger(ledger_id: str):
             detail="Cannot delete ledger: it has cashbook entries linked to it",
         )
 
-    response = supabase.table("ledgers").delete().eq("id", ledger_id).execute()
+    response = org_table(supabase, org_id, "ledgers").delete().eq("id", ledger_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Ledger not found")
     return {"status": "deleted", "id": ledger_id}
 
 
 @router.get("/{ledger_id}/entries", response_model=List[dict])
-async def list_ledger_entries(ledger_id: str):
+async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id)):
     """Cashbook entries linked to this ledger (via folio), as ledger-format rows."""
     response = (
-        get_supabase()
-        .table("cashbook_entries")
+        org_table(get_supabase(), org_id, "cashbook_entries")
         .select("*")
         .eq("folio", ledger_id)
         .order("entry_date", desc=False)

@@ -20,8 +20,16 @@ import pytest
 
 import app.services.shopify_sync as shopify_sync
 import app.shopify as shopify_module
+from app.org_settings import OrgIntegrationSettings
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "app" / "routes"
+TEST_ORG_ID = "test-org"
+_FAKE_ORG_CREDS = OrgIntegrationSettings(
+    shopify_store_url="test-shop.myshopify.com",
+    shopify_access_token="fake-token",
+    shopify_api_version="2024-07",
+    postex_merchant_token=None,
+)
 
 
 def _load_fixture_orders():
@@ -53,13 +61,18 @@ class _FakeResp:
 
 
 class _StaticTable:
-    """Read-only stand-in for `products`/`variants`: no filters are ever applied
-    to these in the sync, so returning the full seeded set is exact, not approximate."""
+    """Read-only stand-in for `products`/`variants`: no filters (beyond
+    org_table()'s own org_id one, which is a no-op here - a single-org
+    fixture) are ever applied to these in the sync, so returning the full
+    seeded set is exact, not approximate."""
 
     def __init__(self, rows):
         self._rows = rows
 
     def select(self, *_a, **_k):
+        return self
+
+    def eq(self, *_a, **_k):
         return self
 
     def execute(self):
@@ -113,8 +126,16 @@ class _FakeOrdersQuery:
         return self
 
     def upsert(self, batch, on_conflict=None, **_k):
+        # on_conflict may be a composite string ("org_id,order_number") - this
+        # fixture only ever holds one org, so the last component (order_number)
+        # alone is still a unique key here. The raw value is still recorded
+        # (see last_on_conflict below) so a test can assert on it directly -
+        # this fixture accepting any string wouldn't otherwise catch a wrong
+        # or missing on_conflict target.
+        self._store.last_on_conflict = on_conflict
+        key_col = (on_conflict or "").split(",")[-1].strip()
         for row in batch:
-            key = row.get(on_conflict)
+            key = row.get(key_col)
             merged = {**self._store.rows_by_number.get(key, {}), **row}
             merged.setdefault("id", f"gen-{key}")
             self._store.rows_by_number[key] = merged
@@ -147,7 +168,8 @@ class _FakeOrdersQuery:
 
 class _FakeOrdersTable:
     def __init__(self, rows):
-        self.rows_by_number = {r["order_number"]: dict(r) for r in rows}
+        self.rows_by_number = {r["order_number"]: {"org_id": TEST_ORG_ID, **r} for r in rows}
+        self.last_on_conflict = None
 
     def query(self):
         return _FakeOrdersQuery(self)
@@ -158,7 +180,7 @@ class _FakeDB:
         self.orders = _FakeOrdersTable(orders)
         self._products = products
         self._variants = variants
-        self.sync_status = _FakeSyncStatusTable(sync_status or {"id": "shopify_orders", "in_progress": False})
+        self.sync_status = _FakeSyncStatusTable(sync_status or {"org_id": TEST_ORG_ID, "id": "shopify_orders", "in_progress": False})
 
     def table(self, name):
         if name == "orders":
@@ -190,11 +212,23 @@ def synced_once(monkeypatch):
 
     monkeypatch.setattr(shopify_sync, "get_supabase", lambda: fake_db)
     monkeypatch.setattr(shopify_sync, "create_client", lambda *_a, **_k: fake_db)
+    monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
     monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
     monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", fake_recompute)
 
-    result = asyncio.run(shopify_sync._sync_shopify_orders())
+    result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
     return fake_db, result, orders_fixture
+
+
+def test_new_order_upsert_uses_the_org_scoped_on_conflict_target(synced_once):
+    """Regression guard for the org-scoping cutover (ORGANIZATIONS_USERS_PLAN.md
+    Phase 2): a wrong or missing on_conflict target here would let two
+    different orgs' colliding order_numbers silently clobber each other on
+    upsert instead of being kept independent. The generic fakes elsewhere in
+    this file accept any on_conflict string, so this asserts the actual value
+    directly rather than only inferring it worked from row counts."""
+    fake_db, _result, _orders_fixture = synced_once
+    assert fake_db.orders.last_on_conflict == "org_id,order_number"
 
 
 class TestFirstSyncFromEmptyDB:
@@ -239,7 +273,7 @@ def test_second_sync_on_unchanged_data_is_a_no_op(synced_once):
     E3 exists to catch - see D1's freeze-after-fulfilled rules)."""
     _fake_db, first_result, orders_fixture = synced_once
 
-    second_result = asyncio.run(shopify_sync._sync_shopify_orders())
+    second_result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
     assert second_result["created"] == 0
     assert second_result["updated"] == 0
@@ -272,7 +306,7 @@ def test_fulfilled_order_freezes_total_amount_against_a_manual_edit(synced_once)
     manually_edited_total = row["total_amount"] + 12345.0
     row["total_amount"] = manually_edited_total
 
-    asyncio.run(shopify_sync._sync_shopify_orders())
+    asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
     assert fake_db.orders.rows_by_number[order_number]["total_amount"] == manually_edited_total
 
@@ -289,7 +323,7 @@ def test_unfulfilled_order_total_amount_keeps_resyncing_from_shopify(synced_once
     original_total = row["total_amount"]
     row["total_amount"] = original_total + 12345.0
 
-    asyncio.run(shopify_sync._sync_shopify_orders())
+    asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
     assert fake_db.orders.rows_by_number[order_number]["total_amount"] == original_total
 
@@ -310,6 +344,7 @@ class TestIncrementalSyncWindow:
 
         monkeypatch.setattr(shopify_sync, "get_supabase", lambda: fake_db)
         monkeypatch.setattr(shopify_sync, "create_client", lambda *_a, **_k: fake_db)
+        monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
         monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
         monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", lambda *_a, **_k: 0)
         return fake_db, captured_windows
@@ -317,7 +352,7 @@ class TestIncrementalSyncWindow:
     def test_first_sync_uses_the_backfill_window(self, monkeypatch):
         _fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
 
-        asyncio.run(shopify_sync._sync_shopify_orders())
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
         assert len(captured_windows) == 1
         start, end = captured_windows[0]
@@ -328,8 +363,8 @@ class TestIncrementalSyncWindow:
         full SHOPIFY_SYNC_WINDOW_DAYS-day window regardless of when it last ran."""
         _fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
 
-        asyncio.run(shopify_sync._sync_shopify_orders())
-        asyncio.run(shopify_sync._sync_shopify_orders())
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
         assert len(captured_windows) == 2
         first_start, first_end = captured_windows[0]
@@ -346,7 +381,7 @@ class TestIncrementalSyncWindow:
         fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
         fake_db.sync_status.row["last_synced_at"] = "not-a-timestamp"
 
-        asyncio.run(shopify_sync._sync_shopify_orders())
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
         start, end = captured_windows[0]
         assert (end - start) == timedelta(days=shopify_sync.SHOPIFY_SYNC_WINDOW_DAYS)
@@ -359,7 +394,7 @@ class TestFetchRangeFiltersByUpdatedAt:
         picked up by a narrow incremental window."""
         captured = []
 
-        async def fake_fetch_all(resource, query, max_records=None):
+        async def fake_fetch_all(resource, query, org_creds, max_records=None):
             captured.append(query)
             return [], 0
 
@@ -367,7 +402,7 @@ class TestFetchRangeFiltersByUpdatedAt:
 
         start = datetime(2026, 7, 1, tzinfo=timezone.utc)
         end = datetime(2026, 7, 2, tzinfo=timezone.utc)
-        asyncio.run(shopify_sync._fetch_shopify_orders_in_range(start, end, n_partitions=1))
+        asyncio.run(shopify_sync._fetch_shopify_orders_in_range(start, end, _FAKE_ORG_CREDS, n_partitions=1))
 
         assert len(captured) == 1
         assert "updated_at_min=" in captured[0]

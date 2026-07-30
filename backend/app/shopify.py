@@ -6,20 +6,20 @@ from urllib.parse import unquote, urlparse, parse_qs
 import httpx
 from fastapi import HTTPException
 
-from app.config import settings
+from app.org_settings import OrgIntegrationSettings
 
 PAGE_LIMIT = 250
 _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
 
 
-def _credentials() -> tuple[str, str]:
-    store_url = settings.shopify_store_url
-    access_token = settings.shopify_access_token
+def _credentials(org_creds: OrgIntegrationSettings) -> tuple[str, str]:
+    store_url = org_creds.shopify_store_url
+    access_token = org_creds.shopify_access_token
     if not store_url or not access_token:
         raise HTTPException(
             status_code=400,
-            detail="Shopify credentials not configured. Please set SHOPIFY_STORE_URL (or SHOPIFY_API_KEY) and SHOPIFY_ADMIN_API_TOKEN environment variables.",
+            detail="Shopify credentials are not configured for this organization. Set them in Settings > Integrations.",
         )
     store_url = store_url.strip().rstrip("/")
     if store_url.startswith("http://"):
@@ -47,18 +47,20 @@ def _next_page_info(link_header: str) -> str | None:
 
 
 async def fetch_all(
-    resource: str, first_page_query: str, max_records: Optional[int] = None
+    resource: str, first_page_query: str, org_creds: OrgIntegrationSettings, max_records: Optional[int] = None
 ) -> tuple[List[Dict[str, Any]], int]:
     """Page through a Shopify Admin REST collection.
 
     `resource` is the JSON key and endpoint name (e.g. "orders" -> orders.json).
+    `org_creds` is the calling org's own store URL/token/API version - see
+    app.org_settings.get_org_integration_settings().
     `max_records`, if given, stops paging once at least that many records are collected
     (e.g. "most recent N orders" with a `order=created_at+desc` query - there's no date
     boundary to filter on ahead of time, so this is the only way to bound the fetch).
     Returns (records, pages_fetched).
     """
-    store_url, access_token = _credentials()
-    base_url = f"https://{store_url}/admin/api/{settings.SHOPIFY_API_VERSION}/{resource}.json"
+    store_url, access_token = _credentials(org_creds)
+    base_url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/{resource}.json"
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
 
     records: List[Dict[str, Any]] = []
@@ -85,7 +87,7 @@ async def fetch_all(
                     detail=(
                         "Shopify API endpoint not found. Please verify:\n"
                         f"1. Store URL is correct: {store_url}\n"
-                        f"2. API version is valid: {settings.SHOPIFY_API_VERSION}\n"
+                        f"2. API version is valid: {org_creds.shopify_api_version}\n"
                         "3. Access token has correct permissions\n"
                         f"4. Full URL attempted: {api_url}\n"
                         f"Response: {response.text}"

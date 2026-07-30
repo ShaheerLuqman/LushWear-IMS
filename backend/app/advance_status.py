@@ -21,6 +21,7 @@ from supabase import create_client
 from app.config import settings
 from app.db_utils import fetch_all
 from app.money import money
+from app.org_scope import org_table
 
 # Cap on order numbers per `.in_()` query - keeps the request URL well under server/proxy
 # length limits when scoped to a large set (e.g. every order Shopify returned for a sync).
@@ -61,7 +62,7 @@ def compute_advance_status(shopify_advance: float, cashbook_advance: float) -> i
     return ADV_MATCH if abs(shopify - cashbook) < MATCH_TOLERANCE else ADV_MISMATCH
 
 
-def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
+def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
     """
     Sum order-advance cashbook entries per order number.
 
@@ -70,7 +71,7 @@ def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
     """
     totals: Dict[str, float] = {}
     rows = fetch_all(
-        lambda: supabase.table("cashbook_entries")
+        lambda: org_table(supabase, org_id, "cashbook_entries")
         .select("order_number, amount, entry_type")
         .eq("folio", ORDERS_LEDGER_ID)
         .eq("entry_type", "credit")
@@ -90,14 +91,14 @@ def fetch_cashbook_advance_totals(supabase) -> Dict[str, float]:
     return totals
 
 
-def recompute_advance_statuses(supabase, order_numbers=None) -> int:
+def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int:
     """
-    Recompute and persist advance_status on orders.
+    Recompute and persist advance_status on orders, scoped to org_id.
 
     If order_numbers is provided (iterable of str), only those orders are recomputed;
     otherwise all orders are recomputed. Returns the number of orders updated.
     """
-    cashbook_totals = fetch_cashbook_advance_totals(supabase)
+    cashbook_totals = fetch_cashbook_advance_totals(supabase, org_id)
 
     # Build the set of order numbers we need to evaluate. When scoped, we still need
     # any order referenced by a cashbook entry even if its number wasn't passed in.
@@ -113,15 +114,15 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
             # concurrent threads crashes with a stream-read error.
             def fetch_chunk(chunk):
                 client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-                return client.table("orders").select(orders_select).in_("order_number", chunk).execute().data or []
+                return org_table(client, org_id, "orders").select(orders_select).in_("order_number", chunk).execute().data or []
             with ThreadPoolExecutor(max_workers=min(_CONCURRENCY, len(chunks))) as pool:
                 orders = [row for rows in pool.map(fetch_chunk, chunks) for row in rows]
         elif chunks:
-            orders = fetch_all(lambda: supabase.table("orders").select(orders_select).in_("order_number", chunks[0]))
+            orders = fetch_all(lambda: org_table(supabase, org_id, "orders").select(orders_select).in_("order_number", chunks[0]))
         else:
             orders = []
     else:
-        orders = fetch_all(lambda: supabase.table("orders").select(orders_select))
+        orders = fetch_all(lambda: org_table(supabase, org_id, "orders").select(orders_select))
 
     to_update = []
     for o in orders:
@@ -138,6 +139,6 @@ def recompute_advance_statuses(supabase, order_numbers=None) -> int:
         batch_size = 1000
         payload = [{"id": order_id, "advance_status": status} for order_id, status in to_update]
         for i in range(0, len(payload), batch_size):
-            supabase.table("orders").upsert(payload[i:i + batch_size], on_conflict="id").execute()
+            org_table(supabase, org_id, "orders").upsert(payload[i:i + batch_size], on_conflict="id").execute()
 
     return len(to_update)

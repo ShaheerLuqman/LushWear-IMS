@@ -13,93 +13,12 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 
 -- ============================================================================
--- Products & variants
--- ============================================================================
-
--- Products (one row per product).
-CREATE TABLE IF NOT EXISTS products (
-    id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    shopify_product_id  BIGINT UNIQUE,                 -- Shopify sync key
-    name                VARCHAR(255) NOT NULL,
-    price               DECIMAL(10, 2) DEFAULT 0.00,   -- Selling price (same across variants)
-    cost_price          DECIMAL(10, 2),                -- Cost price (same across variants)
-    collection          VARCHAR(255),                  -- Collection name (e.g. from Shopify)
-    image_url           TEXT,
-    created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Variants (one row per variant, linked to a product).
-CREATE TABLE IF NOT EXISTS variants (
-    id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    product_id          UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
-    shopify_variant_id  BIGINT UNIQUE,                 -- Shopify sync key
-    title               VARCHAR(255) NOT NULL,         -- e.g. "S", "M", "Red"
-    quantity            INTEGER DEFAULT 0,
-    created_at          TIMESTAMPTZ DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ DEFAULT NOW()
-);
-
-
--- ============================================================================
--- Orders
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS orders (
-    id                       UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    order_number             INTEGER NOT NULL UNIQUE,
-    courier                  VARCHAR(100) NOT NULL,
-    tracking_number          VARCHAR(255),
-    folio                    VARCHAR(255),
-    order_status             VARCHAR(50) NOT NULL,
-    delivery_status          JSONB,
-    total_amount             DECIMAL(10, 2) NOT NULL,
-    advance_amount           DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    -- Advance reconciliation (Shopify advance_amount vs cashbook order-advance entries):
-    -- 1 = no advance, 2 = shopify only, 3 = cashbook only, 4 = both match, 5 = both mismatch
-    advance_status           SMALLINT NOT NULL DEFAULT 1,
-    delivery_charge          DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    order_receiving_date     TIMESTAMPTZ NOT NULL,
-    -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
-    -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
-    -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.
-    line_items               JSONB NOT NULL DEFAULT '[]',
-    piece_received           TEXT NOT NULL DEFAULT 'Pending'
-                                 CHECK (piece_received IN ('Pending', 'Done', 'Received')),
-    replacement_of_order_no  INTEGER,
-    created_at               TIMESTAMPTZ DEFAULT NOW(),
-    updated_at               TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Legacy items[] (flat "Name - Variant" strings), superseded by structured line_items
--- (JSONB) above. Verified every order either has line_items populated or has no item
--- data in either column (see TODO.md §6) before dropping - safe to re-run, no-ops once
--- the column is gone.
-    ALTER TABLE orders DROP COLUMN IF EXISTS items;
-
-
--- ============================================================================
--- Load sheet logs (courier assignment records)
--- ============================================================================
-
-CREATE TABLE IF NOT EXISTS load_sheet_logs (
-    id                 UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    assignment_number  VARCHAR(100) NOT NULL,
-    rider_name         VARCHAR(255) NOT NULL,
-    order_numbers      JSONB NOT NULL DEFAULT '[]',   -- e.g. ["2721", "2722"]
-    delivery_charge    DECIMAL(10, 2),                -- applied to all orders in this load sheet
-    created_at         TIMESTAMPTZ DEFAULT NOW()
-);
-
-
--- ============================================================================
 -- Organizations & Users (replaces the single shared app-PIN — see
 -- ORGANIZATIONS_USERS_PLAN.md). One row per business (organizations), one row
 -- per login (users), each user scoped to exactly one org. `role` is open text
 -- with a CHECK constraint rather than a Postgres ENUM, matching this repo's
 -- existing convention for small fixed value sets (order_status/advance_status).
+-- Declared first - every business table below references organizations(id).
 -- See supabase/migrations/20260730040000_organizations_and_users_tables.sql.
 -- ============================================================================
 
@@ -121,6 +40,29 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+
+
+-- ============================================================================
+-- Per-org Shopify/PostEx credentials, replacing the global SHOPIFY_*/
+-- POSTEX_MERCHANT_TOKEN env vars - once a second org exists, those globals
+-- would otherwise point every org's "Sync from Shopify" button at the same
+-- (first org's) store. shopify_access_token/postex_merchant_token are
+-- encrypted at the app layer (Fernet, app/org_settings.py, SETTINGS_ENCRYPTION_KEY)
+-- before being stored here - never plaintext, since these are third-party
+-- secrets belonging to external clients, not this app's own credentials.
+-- See supabase/migrations/20260730110000_org_integration_settings_table.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS org_integration_settings (
+    org_id                UUID PRIMARY KEY REFERENCES organizations(id),
+    shopify_store_url     TEXT,
+    shopify_access_token  TEXT,
+    -- Per-org override; falls back to a shared default (app/org_settings.py)
+    -- when unset - it isn't sensitive, so no need to force every org to set it.
+    shopify_api_version   TEXT,
+    postex_merchant_token TEXT,
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 
 
 -- ============================================================================
@@ -193,6 +135,99 @@ $$;
 CREATE TABLE IF NOT EXISTS system_bootstrap (
     id           TEXT PRIMARY KEY DEFAULT 'default',
     completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- Products & variants
+-- ============================================================================
+
+-- Products (one row per product). shopify_product_id stays a plain global
+-- UNIQUE (not per-org) - Shopify's numeric resource ids are globally unique
+-- across the whole platform, unlike the shop-scoped order_number below.
+CREATE TABLE IF NOT EXISTS products (
+    id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id              UUID NOT NULL REFERENCES organizations(id),
+    shopify_product_id  BIGINT UNIQUE,                 -- Shopify sync key
+    name                VARCHAR(255) NOT NULL,
+    price               DECIMAL(10, 2) DEFAULT 0.00,   -- Selling price (same across variants)
+    cost_price          DECIMAL(10, 2),                -- Cost price (same across variants)
+    collection          VARCHAR(255),                  -- Collection name (e.g. from Shopify)
+    image_url           TEXT,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Variants (one row per variant, linked to a product).
+CREATE TABLE IF NOT EXISTS variants (
+    id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id              UUID NOT NULL REFERENCES organizations(id),
+    product_id          UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    shopify_variant_id  BIGINT UNIQUE,                 -- Shopify sync key
+    title               VARCHAR(255) NOT NULL,         -- e.g. "S", "M", "Red"
+    quantity            INTEGER DEFAULT 0,
+    created_at          TIMESTAMPTZ DEFAULT NOW(),
+    updated_at          TIMESTAMPTZ DEFAULT NOW()
+);
+
+
+-- ============================================================================
+-- Orders
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS orders (
+    id                       UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id                   UUID NOT NULL REFERENCES organizations(id),
+    -- order_number is shop-scoped in Shopify (sequential, starts low), unlike
+    -- products/orders' own numeric Shopify resource ids - two different orgs'
+    -- stores can and will produce the same order_number, so uniqueness is
+    -- composite with org_id, not a plain column UNIQUE.
+    order_number             INTEGER NOT NULL,
+    courier                  VARCHAR(100) NOT NULL,
+    tracking_number          VARCHAR(255),
+    folio                    VARCHAR(255),
+    order_status             VARCHAR(50) NOT NULL,
+    delivery_status          JSONB,
+    total_amount             DECIMAL(10, 2) NOT NULL,
+    advance_amount           DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    -- Advance reconciliation (Shopify advance_amount vs cashbook order-advance entries):
+    -- 1 = no advance, 2 = shopify only, 3 = cashbook only, 4 = both match, 5 = both mismatch
+    advance_status           SMALLINT NOT NULL DEFAULT 1,
+    delivery_charge          DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    order_receiving_date     TIMESTAMPTZ NOT NULL,
+    -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
+    -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
+    -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.
+    line_items               JSONB NOT NULL DEFAULT '[]',
+    piece_received           TEXT NOT NULL DEFAULT 'Pending'
+                                 CHECK (piece_received IN ('Pending', 'Done', 'Received')),
+    replacement_of_order_no  INTEGER,
+    created_at               TIMESTAMPTZ DEFAULT NOW(),
+    updated_at               TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT orders_org_id_order_number_key UNIQUE (org_id, order_number)
+);
+
+-- Legacy items[] (flat "Name - Variant" strings), superseded by structured line_items
+-- (JSONB) above. Verified every order either has line_items populated or has no item
+-- data in either column (see TODO.md §6) before dropping - safe to re-run, no-ops once
+-- the column is gone.
+    ALTER TABLE orders DROP COLUMN IF EXISTS items;
+
+
+-- ============================================================================
+-- Load sheet logs (courier assignment records)
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS load_sheet_logs (
+    id                 UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id             UUID NOT NULL REFERENCES organizations(id),
+    assignment_number  VARCHAR(100) NOT NULL,
+    rider_name         VARCHAR(255) NOT NULL,
+    order_numbers      JSONB NOT NULL DEFAULT '[]',   -- e.g. ["2721", "2722"]
+    delivery_charge    DECIMAL(10, 2),                -- applied to all orders in this load sheet
+    created_at         TIMESTAMPTZ DEFAULT NOW()
 );
 
 
@@ -272,20 +307,25 @@ $$;
 
 
 -- ============================================================================
--- Sync status (single row per sync type; currently just the Shopify orders
--- sync). Lets the API expose "last synced" and gate the periodic backend sync
--- on staleness. in_progress/lock_acquired_at are a lock so the periodic sync,
--- a manual sync, and multiple instances can't run concurrently - acquired via
--- a conditional UPDATE, not an advisory lock (unusable through PostgREST).
--- See supabase/migrations/20260728000000_create_sync_status.sql.
+-- Sync status (one row per org per sync type; currently just each org's own
+-- Shopify orders sync). Lets the API expose "last synced" and gate the
+-- periodic backend sync on staleness. in_progress/lock_acquired_at are a lock
+-- so the periodic sync, a manual sync, and multiple instances can't run
+-- concurrently - acquired via a conditional UPDATE, not an advisory lock
+-- (unusable through PostgREST). Keyed by (org_id, id) - was `id` alone
+-- (single global row) before each org synced its own store independently.
+-- See supabase/migrations/20260728000000_create_sync_status.sql and
+-- 20260730070000_add_org_id_to_business_tables.sql.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS sync_status (
-    id               TEXT PRIMARY KEY,
+    org_id           UUID NOT NULL REFERENCES organizations(id),
+    id               TEXT NOT NULL,
     last_synced_at   TIMESTAMPTZ,
     in_progress      BOOLEAN NOT NULL DEFAULT FALSE,
     lock_acquired_at TIMESTAMPTZ,
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (org_id, id)
 );
 
 
@@ -304,6 +344,7 @@ CREATE TABLE IF NOT EXISTS sync_status (
 -- typo here silently creates an untracked bucket.
 CREATE TABLE IF NOT EXISTS ledgers (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id      UUID NOT NULL REFERENCES organizations(id),
     name        VARCHAR(255) NOT NULL,
     type        VARCHAR(100) NOT NULL
                 CONSTRAINT ledgers_type_check
@@ -384,6 +425,7 @@ END $$;
 -- Cashbook entries: all transactions. folio is required and links to a ledger.
 CREATE TABLE IF NOT EXISTS cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id        UUID NOT NULL REFERENCES organizations(id),
     entry_date    DATE NOT NULL,
     entry_type    VARCHAR(10) NOT NULL CHECK (entry_type IN ('credit', 'debit')),
     amount        DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
@@ -407,23 +449,30 @@ ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
 
 -- Daily balances: opening/closing balance per day (auto-maintained by a DB
 -- trigger on cashbook_entries — see "Triggers" section below).
+-- balance_date is unique per org (not globally) - two orgs both posting
+-- entries on the same calendar date must each get their own balance row.
 CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    balance_date     DATE NOT NULL UNIQUE,
+    org_id           UUID NOT NULL REFERENCES organizations(id),
+    balance_date     DATE NOT NULL,
     opening_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     total_credit     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     total_debit      DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     closing_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     created_at       TIMESTAMPTZ DEFAULT NOW(),
-    updated_at       TIMESTAMPTZ DEFAULT NOW()
+    updated_at       TIMESTAMPTZ DEFAULT NOW(),
+    CONSTRAINT cashbook_daily_balances_org_id_balance_date_key UNIQUE (org_id, balance_date)
 );
 
 -- Per-ledger running balance (opening_balance + incoming - outgoing),
 -- auto-maintained by DB triggers on cashbook_entries and on ledgers.opening_balance
 -- — see "Triggers" section below. Only ledgers with a non-zero balance have a
--- row; treat a missing row as 0.
+-- row; treat a missing row as 0. Keyed by ledger_id alone (not org_id, ledger_id)
+-- since ledger_id is already a UUID unique to one org's ledger - org_id is
+-- still added as a plain column so app.org_scope.org_table() has one to filter on.
 CREATE TABLE IF NOT EXISTS ledger_balances (
     ledger_id   UUID PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
+    org_id      UUID NOT NULL REFERENCES organizations(id),
     balance     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
@@ -437,6 +486,7 @@ CREATE TABLE IF NOT EXISTS ledger_balances (
 -- gap only.
 CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id        UUID NOT NULL REFERENCES organizations(id),
     entry_id      UUID NOT NULL,
     entry_date    DATE NOT NULL,
     entry_type    VARCHAR(10) NOT NULL,
@@ -455,8 +505,10 @@ CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
 -- Products & variants
 CREATE INDEX IF NOT EXISTS idx_products_name                ON products(name);
 CREATE INDEX IF NOT EXISTS idx_products_shopify_product_id  ON products(shopify_product_id);
+CREATE INDEX IF NOT EXISTS idx_products_org_id               ON products(org_id);
 CREATE INDEX IF NOT EXISTS idx_variants_product_id          ON variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id  ON variants(shopify_variant_id);
+CREATE INDEX IF NOT EXISTS idx_variants_org_id              ON variants(org_id);
 
 -- Orders
 CREATE INDEX IF NOT EXISTS idx_orders_number                 ON orders(order_number);
@@ -466,38 +518,33 @@ CREATE INDEX IF NOT EXISTS idx_orders_piece_received         ON orders(piece_rec
 CREATE INDEX IF NOT EXISTS idx_orders_order_receiving_date   ON orders(order_receiving_date);
 -- Shopify sync links NNNN-R replacement orders back to their originals via this column.
 CREATE INDEX IF NOT EXISTS idx_orders_replacement_of_order_no ON orders(replacement_of_order_no);
+CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON orders(org_id);
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
 --   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON orders USING GIN (delivery_status);
 
 -- Load sheet logs
 CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at    ON load_sheet_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_org_id        ON load_sheet_logs(org_id);
 
 -- Ledgers: case-insensitive uniqueness so "Bank" and "bank" can't both exist
--- (matches the case-insensitive name match already used by the bulk-entry
--- ledger lookup, frontend/renderer.js findLedgerByName). If this fails to
--- create, an existing pair of ledgers already differs only by case —
--- rename or merge them first.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_name_lower ON ledgers (lower(name));
-
--- Promotes the index above into a real named constraint (Postgres can't put
--- a UNIQUE constraint directly on an expression like lower(name), only on
--- plain columns — this attaches the constraint to the existing index instead
--- of creating a second one). ADD CONSTRAINT has no IF NOT EXISTS, so guard
--- manually for idempotency.
-DO $$
-BEGIN
-    IF NOT EXISTS (
-        SELECT 1 FROM pg_constraint WHERE conname = 'ledgers_name_unique'
-    ) THEN
-        ALTER TABLE ledgers ADD CONSTRAINT ledgers_name_unique UNIQUE USING INDEX idx_ledgers_name_lower;
-    END IF;
-END $$;
+-- within the same org (matches the case-insensitive name match already used
+-- by the bulk-entry ledger lookup, frontend/renderer.js findLedgerByName) -
+-- scoped per org, not global, so two different orgs can each have a "Bank".
+-- If this fails to create, an existing pair of ledgers in the same org
+-- already differs only by case — rename or merge them first.
+-- This index is the uniqueness enforcement itself, not just a lookup aid -
+-- Postgres can't promote a UNIQUE constraint onto an expression like
+-- lower(name) (ADD CONSTRAINT ... USING INDEX rejects expression indexes),
+-- so there is no separate named constraint here.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_id_name_lower ON ledgers (org_id, lower(name));
+CREATE INDEX IF NOT EXISTS idx_ledgers_org_id ON ledgers(org_id);
 
 -- Cashbook
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON cashbook_entries(entry_date);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_type         ON cashbook_entries(entry_type);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries(order_number);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_org_id       ON cashbook_entries(org_id);
 -- Advance reconciliation (advance_status.py) filters on (folio, order_number) together.
 -- This composite also serves queries that filter on folio alone (leading-column prefix),
 -- so a standalone idx_cashbook_entries_folio is redundant and intentionally omitted.
@@ -506,8 +553,11 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio_order_number
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
     ON cashbook_entries(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
+CREATE INDEX IF NOT EXISTS idx_cashbook_daily_balances_org_id ON cashbook_daily_balances(org_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_balances_org_id        ON ledger_balances(org_id);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON cashbook_entry_audit_log(entry_id);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON cashbook_entry_audit_log(deleted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON cashbook_entry_audit_log(org_id);
 
 
 -- ============================================================================
@@ -522,10 +572,18 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON cashbook_e
 -- this into the database means it fires for every writer, not just the API.
 -- ============================================================================
 
--- Recomputes cashbook_daily_balances for balance_date >= p_from_date, chaining
--- the running balance forward from the prior day's closing balance, and drops
--- any balance row left with no entries for its date.
-CREATE OR REPLACE FUNCTION recalc_cashbook_daily_balances(p_from_date DATE)
+-- Recomputes cashbook_daily_balances for balance_date >= p_from_date within
+-- one org, chaining the running balance forward from the prior day's closing
+-- balance, and drops any balance row left with no entries for its date.
+-- p_org_id is required - without it this would sum every org's cashbook
+-- entries together into one shared balance per date.
+--
+-- Postgres identifies functions by name + argument types, so a re-run of this
+-- file against a database that still has the pre-org-scoping single-argument
+-- version would otherwise leave that old overload in place alongside this one.
+DROP FUNCTION IF EXISTS recalc_cashbook_daily_balances(DATE);
+
+CREATE OR REPLACE FUNCTION recalc_cashbook_daily_balances(p_from_date DATE, p_org_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -534,7 +592,7 @@ DECLARE
 BEGIN
     SELECT closing_balance INTO v_opening
     FROM cashbook_daily_balances
-    WHERE balance_date < p_from_date
+    WHERE org_id = p_org_id AND balance_date < p_from_date
     ORDER BY balance_date DESC
     LIMIT 1;
 
@@ -543,9 +601,11 @@ BEGIN
     -- Drop balance rows on/after from_date that no longer have any entries
     -- (covers deletes, including "the last entry on that date was removed").
     DELETE FROM cashbook_daily_balances
-    WHERE balance_date >= p_from_date
+    WHERE org_id = p_org_id
+      AND balance_date >= p_from_date
       AND balance_date NOT IN (
-          SELECT DISTINCT entry_date FROM cashbook_entries WHERE entry_date >= p_from_date
+          SELECT DISTINCT entry_date FROM cashbook_entries
+          WHERE org_id = p_org_id AND entry_date >= p_from_date
       );
 
     WITH day_totals AS (
@@ -553,7 +613,7 @@ BEGIN
                COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0) AS total_credit,
                COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)  AS total_debit
         FROM cashbook_entries
-        WHERE entry_date >= p_from_date
+        WHERE org_id = p_org_id AND entry_date >= p_from_date
         GROUP BY entry_date
     ),
     running AS (
@@ -565,15 +625,16 @@ BEGIN
         FROM day_totals
     )
     INSERT INTO cashbook_daily_balances
-        (balance_date, opening_balance, total_credit, total_debit, closing_balance, updated_at)
-    SELECT balance_date,
+        (org_id, balance_date, opening_balance, total_credit, total_debit, closing_balance, updated_at)
+    SELECT p_org_id,
+           balance_date,
            closing_balance - total_credit + total_debit,
            total_credit,
            total_debit,
            closing_balance,
            NOW()
     FROM running
-    ON CONFLICT (balance_date) DO UPDATE SET
+    ON CONFLICT (org_id, balance_date) DO UPDATE SET
         opening_balance = EXCLUDED.opening_balance,
         total_credit     = EXCLUDED.total_credit,
         total_debit      = EXCLUDED.total_debit,
@@ -588,16 +649,20 @@ LANGUAGE plpgsql
 AS $$
 DECLARE
     v_from DATE;
+    v_org_id UUID;
 BEGIN
     IF TG_OP = 'DELETE' THEN
         v_from := OLD.entry_date;
+        v_org_id := OLD.org_id;
     ELSIF TG_OP = 'UPDATE' THEN
         v_from := LEAST(OLD.entry_date, NEW.entry_date);
+        v_org_id := NEW.org_id;
     ELSE
         v_from := NEW.entry_date;
+        v_org_id := NEW.org_id;
     END IF;
 
-    PERFORM recalc_cashbook_daily_balances(v_from);
+    PERFORM recalc_cashbook_daily_balances(v_from, v_org_id);
 
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
@@ -717,9 +782,9 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     INSERT INTO cashbook_entry_audit_log
-        (entry_id, entry_date, entry_type, amount, description, folio, order_number)
+        (org_id, entry_id, entry_date, entry_type, amount, description, folio, order_number)
     VALUES
-        (OLD.id, OLD.entry_date, OLD.entry_type, OLD.amount, OLD.description, OLD.folio, OLD.order_number);
+        (OLD.org_id, OLD.id, OLD.entry_date, OLD.entry_type, OLD.amount, OLD.description, OLD.folio, OLD.order_number);
     RETURN OLD;
 END;
 $$;
@@ -740,8 +805,8 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     INSERT INTO cashbook_entry_audit_log
-        (entry_id, entry_date, entry_type, amount, description, folio, order_number)
-    SELECT id, entry_date, entry_type, amount, description, folio, order_number
+        (org_id, entry_id, entry_date, entry_type, amount, description, folio, order_number)
+    SELECT org_id, id, entry_date, entry_type, amount, description, folio, order_number
     FROM cashbook_entries;
     RETURN NULL;
 END;
@@ -766,7 +831,14 @@ EXECUTE FUNCTION trg_cashbook_entries_audit_before_truncate();
 -- unlike the Python version this replaces.
 -- ============================================================================
 
-CREATE OR REPLACE FUNCTION get_month_summary_periods()
+-- Postgres identifies functions by name + argument types, so re-running this
+-- file against a database with the pre-org-scoping signatures would otherwise
+-- leave those old overloads (0/4/2 args) in place alongside the new ones.
+DROP FUNCTION IF EXISTS get_month_summary_periods();
+DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE);
+DROP FUNCTION IF EXISTS get_month_summary_carrier_health(TIMESTAMPTZ, TIMESTAMPTZ);
+
+CREATE OR REPLACE FUNCTION get_month_summary_periods(p_org_id UUID)
 RETURNS TABLE(month INT, year INT)
 LANGUAGE sql
 STABLE
@@ -779,6 +851,7 @@ AS $$
         FROM (
             SELECT order_receiving_date AT TIME ZONE INTERVAL '+05:00' AS local_ts
             FROM orders
+            WHERE org_id = p_org_id
         ) t
     )
     SELECT DISTINCT
@@ -802,7 +875,8 @@ CREATE OR REPLACE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
     p_period_end TIMESTAMPTZ,
     p_entry_start DATE,
-    p_entry_end DATE
+    p_entry_end DATE,
+    p_org_id UUID
 )
 RETURNS TABLE(
     total_orders INT,
@@ -827,7 +901,8 @@ AS $$
     WITH period_orders AS (
         SELECT *
         FROM orders
-        WHERE order_receiving_date >= p_period_start
+        WHERE org_id = p_org_id
+          AND order_receiving_date >= p_period_start
           AND order_receiving_date <  p_period_end
           AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'
     ),
@@ -862,7 +937,8 @@ AS $$
             ce.amount
         FROM ledgers l
         JOIN cashbook_entries ce ON ce.folio = l.id
-        WHERE ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
+        WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
+          AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
     ),
     ledger_totals AS (
         SELECT
@@ -897,7 +973,8 @@ $$;
 -- (unfulfilled orders never reached a carrier, so they'd only dilute the ratio).
 CREATE OR REPLACE FUNCTION get_month_summary_carrier_health(
     p_period_start TIMESTAMPTZ,
-    p_period_end TIMESTAMPTZ
+    p_period_end TIMESTAMPTZ,
+    p_org_id UUID
 )
 RETURNS TABLE(
     courier TEXT,
@@ -912,7 +989,8 @@ AS $$
         COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'delivered')::INT AS delivered_count,
         COUNT(*)::INT AS total_count
     FROM orders
-    WHERE order_receiving_date >= p_period_start
+    WHERE org_id = p_org_id
+      AND order_receiving_date >= p_period_start
       AND order_receiving_date <  p_period_end
       AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'
       AND courier IS NOT NULL
@@ -923,11 +1001,26 @@ $$;
 
 
 -- ============================================================================
--- Row Level Security (optional)
+-- Row Level Security (defense-in-depth only - see app/org_scope.py)
 -- ----------------------------------------------------------------------------
--- If RLS is enabled on the project, add permissive policies so the API (service
--- key) can read/write. Example for load_sheet_logs (run if GET returns 500):
---   ALTER TABLE load_sheet_logs ENABLE ROW LEVEL SECURITY;
---   CREATE POLICY "Allow all load_sheet_logs" ON load_sheet_logs
---       FOR ALL USING (true) WITH CHECK (true);
+-- Enabled with NO policies (default-deny for anon/authenticated). This is NOT
+-- the load-bearing access control: the backend always connects with the
+-- Supabase secret/service-role key (backend/app/database.py), which bypasses
+-- RLS entirely. The actual per-org isolation is app.org_scope.org_table(),
+-- enforced by tests/test_org_scope_lint.py. This only protects against a
+-- future accidental use of the anon/publishable key reading these tables
+-- directly. See supabase/migrations/20260730100000_rls_default_deny_business_tables.sql.
 -- ============================================================================
+ALTER TABLE products                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE variants                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE orders                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE load_sheet_logs          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ledgers                  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_entries         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_daily_balances  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ledger_balances          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cashbook_entry_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE sync_status              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE organizations            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE users                    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_integration_settings ENABLE ROW LEVEL SECURITY;
