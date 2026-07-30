@@ -6,17 +6,20 @@ recorded Shopify fixtures (`app/routes/sample_orders.json` /
 Supabase, asserting the resulting created/updated/skipped decisions. This is
 the coverage gap D1 flagged: the diff/freeze rules have no other test.
 
-Only `orders` needs real persistence (a second sync must see the first sync's
-writes to prove idempotency); `products`/`variants`/`sync_status` are static
-reads, so a plain read-only fake covers them.
+`orders` and `sync_status` need real persistence (a second sync must see the first
+sync's writes, both to prove reconciliation idempotency and to exercise the
+incremental-window checkpoint); `products`/`variants` are static reads, so a plain
+read-only fake covers them.
 """
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
 
 import app.services.shopify_sync as shopify_sync
+import app.shopify as shopify_module
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "app" / "routes"
 
@@ -63,20 +66,29 @@ class _StaticTable:
         return _FakeResp(list(self._rows))
 
 
-class _PermissiveTable:
-    """Stand-in for `sync_status`: the sync only checks `bool(resp.data)` on it, so
-    filters can be no-ops as long as the seeded row is always returned."""
+class _FakeSyncStatusTable:
+    """Stand-in for `sync_status`. Stateful (not just permissive) so the incremental
+    sync can be tested reading back a previous run's checkpoint: filters are accepted
+    but not applied (a single sequential test caller here, no lock contention to
+    simulate) - every .update()/.upsert() call's payload is merged in, so a later
+    _get_last_synced_at() sees what an earlier _set_last_synced_at() wrote."""
 
-    def __init__(self, rows):
-        self._rows = rows
+    def __init__(self, row):
+        self.row = dict(row)
 
-    def __getattr__(self, _name):
-        def _chain(*_args, **_kwargs):
+    def __getattr__(self, name):
+        if name in ("update", "upsert"):
+            def _write(payload, **_k):
+                self.row.update(payload)
+                return self
+            return _write
+
+        def _chain(*_a, **_k):
             return self
         return _chain
 
     def execute(self):
-        return _FakeResp(list(self._rows))
+        return _FakeResp([dict(self.row)])
 
 
 class _FakeOrdersQuery:
@@ -142,11 +154,11 @@ class _FakeOrdersTable:
 
 
 class _FakeDB:
-    def __init__(self, orders, products, variants):
+    def __init__(self, orders, products, variants, sync_status=None):
         self.orders = _FakeOrdersTable(orders)
         self._products = products
         self._variants = variants
-        self._sync_status = [{"id": "shopify_orders", "in_progress": False}]
+        self.sync_status = _FakeSyncStatusTable(sync_status or {"id": "shopify_orders", "in_progress": False})
 
     def table(self, name):
         if name == "orders":
@@ -156,7 +168,7 @@ class _FakeDB:
         if name == "variants":
             return _StaticTable(self._variants)
         if name == "sync_status":
-            return _PermissiveTable(self._sync_status)
+            return self.sync_status
         raise AssertionError(f"unexpected table: {name}")
 
 
@@ -280,3 +292,85 @@ def test_unfulfilled_order_total_amount_keeps_resyncing_from_shopify(synced_once
     asyncio.run(shopify_sync._sync_shopify_orders())
 
     assert fake_db.orders.rows_by_number[order_number]["total_amount"] == original_total
+
+
+class TestIncrementalSyncWindow:
+    """Covers the fix for TODO.md's "Sync performance" item: the sync used to always
+    re-fetch a fixed SHOPIFY_SYNC_WINDOW_DAYS-day window, even when almost nothing in
+    it had changed. It now resumes from sync_status.last_synced_at instead."""
+
+    def _run_with_captured_windows(self, monkeypatch):
+        products, variants = _load_fixture_products_and_variants()
+        fake_db = _FakeDB([], products, variants)
+        captured_windows = []
+
+        async def fake_fetch_range(start, end, *_a, **_k):
+            captured_windows.append((start, end))
+            return [], 0
+
+        monkeypatch.setattr(shopify_sync, "get_supabase", lambda: fake_db)
+        monkeypatch.setattr(shopify_sync, "create_client", lambda *_a, **_k: fake_db)
+        monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
+        monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", lambda *_a, **_k: 0)
+        return fake_db, captured_windows
+
+    def test_first_sync_uses_the_backfill_window(self, monkeypatch):
+        _fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
+
+        asyncio.run(shopify_sync._sync_shopify_orders())
+
+        assert len(captured_windows) == 1
+        start, end = captured_windows[0]
+        assert (end - start) == timedelta(days=shopify_sync.SHOPIFY_SYNC_WINDOW_DAYS)
+
+    def test_second_sync_resumes_from_the_first_syncs_checkpoint(self, monkeypatch):
+        """The real regression this guards: without the fix, every sync re-fetches the
+        full SHOPIFY_SYNC_WINDOW_DAYS-day window regardless of when it last ran."""
+        _fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
+
+        asyncio.run(shopify_sync._sync_shopify_orders())
+        asyncio.run(shopify_sync._sync_shopify_orders())
+
+        assert len(captured_windows) == 2
+        first_start, first_end = captured_windows[0]
+        second_start, second_end = captured_windows[1]
+
+        # The second sync's window starts exactly where the first one's ended (its
+        # checkpoint is the first sync's *start* time - see the race-condition note in
+        # shopify_sync.py), not another SHOPIFY_SYNC_WINDOW_DAYS-day window.
+        assert second_start == first_end
+        assert (second_start - first_start) == timedelta(days=shopify_sync.SHOPIFY_SYNC_WINDOW_DAYS)
+        assert (second_end - second_start) < timedelta(days=shopify_sync.SHOPIFY_SYNC_WINDOW_DAYS)
+
+    def test_corrupt_checkpoint_falls_back_to_the_backfill_window(self, monkeypatch):
+        fake_db, captured_windows = self._run_with_captured_windows(monkeypatch)
+        fake_db.sync_status.row["last_synced_at"] = "not-a-timestamp"
+
+        asyncio.run(shopify_sync._sync_shopify_orders())
+
+        start, end = captured_windows[0]
+        assert (end - start) == timedelta(days=shopify_sync.SHOPIFY_SYNC_WINDOW_DAYS)
+
+
+class TestFetchRangeFiltersByUpdatedAt:
+    def test_query_uses_updated_at_not_created_at(self, monkeypatch):
+        """Filtering on updated_at (not created_at) is what makes an order that
+        changes long after it was created - e.g. a very late return - still get
+        picked up by a narrow incremental window."""
+        captured = []
+
+        async def fake_fetch_all(resource, query, max_records=None):
+            captured.append(query)
+            return [], 0
+
+        monkeypatch.setattr(shopify_module, "fetch_all", fake_fetch_all)
+
+        start = datetime(2026, 7, 1, tzinfo=timezone.utc)
+        end = datetime(2026, 7, 2, tzinfo=timezone.utc)
+        asyncio.run(shopify_sync._fetch_shopify_orders_in_range(start, end, n_partitions=1))
+
+        assert len(captured) == 1
+        assert "updated_at_min=" in captured[0]
+        assert "updated_at_max=" in captured[0]
+        assert "created_at_min" not in captured[0]
+        assert "created_at_max" not in captured[0]

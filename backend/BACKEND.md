@@ -10,8 +10,7 @@ improve it. Written for the current state of the `webapp-migration` branch.
 >   direct-frontend reads.
 > - **RLS enabled** on all tables (no policies — public path closed).
 > - Database constraints/indexes/trigger added and **verified live** — see
->   [`DATABASE.md`](DATABASE.md). This supersedes parts of §4.1 below, which are
->   annotated inline where done.
+>   [`DATABASE.md`](DATABASE.md).
 > - Orders now carry structured **`line_items`** (JSONB) alongside the legacy
 >   `items` string array (the legacy column is slated for removal — see
 >   [`TODO.md`](../TODO.md)).
@@ -150,103 +149,17 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
   (removed line items, voided orders, replacement `NNNN-R` orders, PKT period
   boundaries). This is hard-won domain logic.
 
-**Where it will hurt at production scale** — detailed below.
+**Open hardening/feature work is tracked in [`../TODO.md`](../TODO.md), not
+here** — this file stays descriptive (what the backend is and how it's built),
+not a task list.
 
 ---
 
-## 4. Optimization & production-readiness recommendations
-
-Ordered roughly by impact-to-effort.
-
-### 4.4 Auth & multi-tenancy
-
-- Plan the **users/orgs/RBAC** migration the code already anticipates: add
-  `user_id`/`role` claims, per-role dependencies, and RLS policies keyed on the
-  JWT. Do it before you have a second user, not after.
-
----
-
-## 5. Status
+## 4. Status
 
 The de-risking pass is complete: DB constraints/indexes/RLS ([`DATABASE.md`](DATABASE.md)),
 prod-gated config in `main.py`, structured logging with generic error responses,
 Stages A–C, the PDF/CSV extractions, and a 123-test suite that gates both CI and
-the Docker build.
-
-**§7 is the live plan** — it lists only what is left. The users/orgs/RBAC
-migration lives in §6.
-
----
-
-## 6. Feature backlog (backend-touching)
-
-Planned features that require backend work. Full-stack items note their frontend
-counterpart, which is tracked in [`../TODO.md`](../TODO.md). §4 above covers
-technical/hardening improvements; this section is product features. One line each;
-expand into a spec when picked up.
-
-### Platform: Auth & multi-tenancy
-- [ ] **Organizations & Users** — real org/user accounts (replaces the single
-      shared PIN). Prerequisite for RBAC, admin portal, and per-user views.
-      Extends `auth.py`, `models.py`, schema, and RLS policies (see §4.4).
-- [ ] **Revisit cashbook audit trail scope once Users lands** — today
-      `cashbook_entry_audit_log` (2026-07-21) only records *deletions*
-      (`supabase_schema.sql` triggers), not creates/updates, and has no
-      "who" field since there's no per-user identity yet. Decided at the
-      time: full change history isn't worth it without attribution — a
-      log saying "amount changed from X to Y" is much less useful if it
-      can't say who changed it, and edits are recoverable (re-edit to fix)
-      while deletes aren't (data is just gone), which is why delete-only
-      was the deliberate cut point rather than full CRUD tracking. Once
-      real user accounts exist, re-examine whether full update/create
-      history (with attribution) becomes worth adding — see
-      `CASHBOOK_IMPROVEMENTS.md` for the cashbook/ledger context.
-- [ ] **Admin Portal (API)** — endpoints to manage organizations, users, and
-      roles (UI in TODO.md).
-- [ ] **Role-based access to columns** — enforce per-role column visibility/edit
-      server-side (depends on Organizations & Users).
-- [ ] **Live user count** — track/expose currently-active users for the admin
-      portal.
-
-### Performance
-- [ ] **Caching** — cache hot reads (e.g. products, ledgers) to cut Supabase
-      round-trips.
-
-### Data & reporting
-- [ ] **Carrier health in Monthly Summary** — per-carrier delivered/total parcel
-      percentage; extend the `month-summary` endpoints in `orders.py`.
-- [ ] **Shopify webhooks for real-time order ingestion** — replace/augment the
-      manual sync button with `orders/create` / `orders/updated` / `orders/fulfilled`
-      webhooks (HMAC-verified) that trigger reconciliation for the affected order
-      via `services/shopify_orders.py`'s single-order fetch, instead of waiting for
-      a full poll. Webhook delivery isn't guaranteed, so keep the manual button
-      and/or a periodic fallback sync alongside it — this is a trigger for
-      `sync_shopify_orders`'s reconciliation logic, not a replacement for it.
-- [ ] **Notifications** — endpoints + storage for notifications (UI in TODO.md).
-
-### New capabilities
-- [ ] **AI chatbot** — natural-language querying of the data (API/agent layer).
-
-### Observability
-- [ ] **Activity logging / audit trail** — store and track user activity via logs
-      (pairs with the structured-logging work in §4.5).
-
----
-
-## 7. Improvement plan — remaining work
-
-Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298,
-`ledger.py` 129, plus `services/` at ~2,100 lines across six modules.
-
-> **Sync performance** ([`../TODO.md`](../TODO.md) §3) is probably worth doing next:
-> a recent run reported `created=1, skipped=1279` — almost all the work was
-> re-processing unchanged orders. Making the sync incremental would both speed it
-> up and shrink the surface of future changes to `services/shopify_sync.py`.
-
-
-### Remaining §4 items not yet addressed
-
-- [ ] **Remaining untyped `response_model=dict`** (9 left) are operation results —
-      sync stats, `{"status": "deleted"}`, load-sheet logs — not entities. Typing
-      them would mean inventing models for ad-hoc payloads; left as `dict`
-      deliberately.
+the Docker build. Current sizes: `orders.py` 2451 (was 4280), `products.py` 671,
+`cashbook.py` 298, `ledger.py` 129, plus `services/` at ~2,100 lines across six
+modules.

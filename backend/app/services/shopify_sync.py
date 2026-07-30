@@ -187,10 +187,17 @@ SHOPIFY_SYNC_PARTITIONS = 4
 async def _fetch_shopify_orders_in_range(
     start: datetime, end: datetime, n_partitions: int = SHOPIFY_SYNC_PARTITIONS
 ) -> Tuple[List[dict], int]:
-    """Fetch orders in [start, end) by splitting the range into `n_partitions` date-range
-    chunks and fetching them concurrently. Shopify's cursor pagination is inherently
-    sequential *within* one query (each page's cursor depends on the previous page), but
-    independent date ranges have independent cursor chains and can run in parallel."""
+    """Fetch orders whose `updated_at` falls in [start, end) by splitting the range into
+    `n_partitions` chunks and fetching them concurrently. Shopify's cursor pagination is
+    inherently sequential *within* one query (each page's cursor depends on the previous
+    page), but independent date ranges have independent cursor chains and can run in
+    parallel.
+
+    Filters on `updated_at`, not `created_at`: Shopify bumps `updated_at` on any change
+    (fulfillment, financial status, tags, ...), including on orders far outside a recent
+    creation window, so this is what makes _sync_shopify_orders's incremental fetch (see
+    below) both correct - an order created months ago that gets returned today still has
+    a fresh `updated_at` and gets picked up - and cheap on every run after the first."""
     if end <= start:
         return [], 0
     partition_length = (end - start) / n_partitions
@@ -198,8 +205,8 @@ async def _fetch_shopify_orders_in_range(
     async def fetch_window(w_start: datetime, w_end: datetime) -> Tuple[List[dict], int]:
         query = (
             f"status=any&limit={shopify.PAGE_LIMIT}"
-            f"&created_at_min={w_start.strftime('%Y-%m-%dT%H:%M:%S')}"
-            f"&created_at_max={w_end.strftime('%Y-%m-%dT%H:%M:%S')}"
+            f"&updated_at_min={w_start.strftime('%Y-%m-%dT%H:%M:%S')}"
+            f"&updated_at_max={w_end.strftime('%Y-%m-%dT%H:%M:%S')}"
         )
         return await shopify.fetch_all("orders", query)
 
@@ -221,7 +228,24 @@ async def _fetch_shopify_orders_in_range(
     return all_orders, total_pages
 
 
+# Backfill window used only when there's no prior successful sync to resume from
+# (first-ever run, or sync_status.last_synced_at cleared/missing) - every subsequent
+# sync uses last_synced_at as the window start instead (see _sync_shopify_orders).
 SHOPIFY_SYNC_WINDOW_DAYS = 60
+
+
+def _compute_sync_window_start(last_synced_at_raw: Optional[str], now: datetime) -> datetime:
+    """Incremental fetch window start: the last successful sync's checkpoint, or the
+    SHOPIFY_SYNC_WINDOW_DAYS backfill window if there isn't one yet (first-ever sync)
+    or it's unparseable (shouldn't happen, but a corrupt/manually-edited row shouldn't
+    crash the sync)."""
+    if last_synced_at_raw:
+        try:
+            return datetime.fromisoformat(str(last_synced_at_raw).replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            pass
+    return now - timedelta(days=SHOPIFY_SYNC_WINDOW_DAYS)
+
 
 # Row id in `sync_status` for the full Shopify orders sync (see _sync_shopify_orders).
 _SYNC_STATUS_ORDERS_ID = "shopify_orders"
@@ -312,9 +336,13 @@ async def _sync_shopify_orders() -> dict:
     try:
         t_start = time.perf_counter()
         now = datetime.now(timezone.utc)
-        all_orders, page_count = await _fetch_shopify_orders_in_range(
-            now - timedelta(days=SHOPIFY_SYNC_WINDOW_DAYS), now
-        )
+
+        # Incremental: resume from the last successful sync's checkpoint instead of always
+        # re-fetching a fixed window - see _fetch_shopify_orders_in_range for why this is
+        # both correct and, after the first run, dramatically cheaper (a periodic sync's
+        # window is usually minutes wide, not SHOPIFY_SYNC_WINDOW_DAYS days).
+        window_start = _compute_sync_window_start(_get_last_synced_at(supabase), now)
+        all_orders, page_count = await _fetch_shopify_orders_in_range(window_start, now)
         t_shopify_fetch = time.perf_counter()
 
         # Only the orders Shopify actually returned need a DB row to diff against - scoping
@@ -978,7 +1006,13 @@ async def _sync_shopify_orders() -> dict:
             len(all_orders), created_count, updated_count, skipped_count,
         )
 
-        last_synced_at = datetime.now(timezone.utc).isoformat()
+        # Checkpoint at this sync's *start* time, not now (after) - anything Shopify
+        # updated between t_start and here would otherwise fall in the gap between "when
+        # we fetched" and "what we recorded", and never get picked up by the next sync's
+        # window. Using `now` means the next sync's window starts slightly before this
+        # one's did instead, which just re-covers a few seconds of overlap - harmless,
+        # since re-processing an unchanged order is already a no-op (orders_to_skip).
+        last_synced_at = now.isoformat()
         try:
             _set_last_synced_at(supabase, last_synced_at)
         except Exception as e:
