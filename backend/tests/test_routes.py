@@ -18,6 +18,31 @@ class TestHealthAndAuth:
         main.app.dependency_overrides.pop(require_auth, None)  # restore the real gate
         assert client.get("/api/orders/?month=6&year=2026").status_code == 401
 
+    def test_ready_checks_supabase_connectivity(self, make_client):
+        r = make_client({"app_pin": [{"id": "default"}]}).get("/ready")
+        assert r.status_code == 200
+        assert r.json() == {"status": "ready"}
+
+    def test_ready_is_503_when_supabase_is_unreachable(self, make_client, monkeypatch):
+        import app.main as main
+
+        class _BrokenSupabase:
+            def table(self, name):
+                raise RuntimeError("connection refused")
+
+        client = make_client()
+        monkeypatch.setattr(main, "get_supabase", lambda: _BrokenSupabase())
+        r = client.get("/ready")
+        assert r.status_code == 503
+
+    def test_responses_carry_a_request_id_header(self, make_client):
+        r = make_client().get("/health")
+        assert r.headers.get("X-Request-Id")
+
+    def test_client_supplied_request_id_is_echoed_back(self, make_client):
+        r = make_client().get("/health", headers={"X-Request-Id": "abc-123"})
+        assert r.headers.get("X-Request-Id") == "abc-123"
+
 
 class TestOrders:
     def test_list_returns_rows(self, make_client, order_row):

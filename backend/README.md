@@ -15,7 +15,9 @@ server-side; integrates with Shopify and PostEx.
 
 ## Endpoints
 
-- `GET /health` — health check
+- `GET /health` — process liveness (does not touch Supabase)
+- `GET /ready` — liveness + a Supabase connectivity check; poll this for an
+  online/offline signal, not `/health`
 - `POST /api/app-pin/verify` — exchange the PIN for a session token
 - `/api/*` — inventory, orders, cashbook, ledger (require `Authorization: Bearer <token>`)
 

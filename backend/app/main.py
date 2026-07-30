@@ -1,13 +1,16 @@
 import logging
 import os
+import time
+import uuid
 
-from fastapi import FastAPI, Depends, Request
+from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.routes import products, orders, cashbook, ledger, app_pin
 from app.auth import require_auth
 from app.config import settings
+from app.database import get_supabase
 from app.logging_config import configure_logging
 
 configure_logging()
@@ -49,6 +52,25 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def request_id_and_timing(request: Request, call_next):
+    """Stamps every request/response with an id (client-supplied or generated) and
+    logs one line with status + latency - the only per-request instrumentation this
+    app had before was CORS. Added outermost (after CORSMiddleware, so Starlette
+    treats it as the outer wrapper) to cover the full request, not just routing."""
+    request_id = request.headers.get("X-Request-Id") or uuid.uuid4().hex
+    request.state.request_id = request_id
+    start = time.perf_counter()
+    response = await call_next(request)
+    duration_ms = (time.perf_counter() - start) * 1000
+    response.headers["X-Request-Id"] = request_id
+    logger.info(
+        "%s %s -> %d (%.1fms) request_id=%s",
+        request.method, request.url.path, response.status_code, duration_ms, request_id,
+    )
+    return response
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
@@ -71,6 +93,19 @@ async def root():
 @app.get("/health")
 async def health_check():
     return {"status": "healthy"}
+
+
+@app.get("/ready")
+async def ready_check():
+    """Like /health, but actually checks Supabase connectivity - what the
+    frontend's online/offline indicator should poll instead of /health, which
+    only proves this process is up, not that it can reach the database."""
+    try:
+        get_supabase().table("app_pin").select("id").limit(1).execute()
+    except Exception:
+        logger.exception("Readiness check failed")
+        raise HTTPException(status_code=503, detail="Not ready")
+    return {"status": "ready"}
 
 
 if not IS_PROD:

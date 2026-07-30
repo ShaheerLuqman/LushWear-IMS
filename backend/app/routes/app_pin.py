@@ -1,5 +1,3 @@
-import threading
-import time
 from datetime import datetime, timezone
 from typing import Annotated, Optional
 
@@ -59,27 +57,38 @@ class PinChangeBody(BaseModel):
 
 
 class _Lockout:
-    """Per-client brute-force lockout (single-instance, in-memory).
+    """Per-client brute-force lockout, backed by the `pin_lockouts` table.
 
     After ``max_attempts`` failed /verify attempts within ``window`` seconds, the
-    client is locked out for ``window`` seconds. State is process-local, which is
-    correct for the single-instance deployment; a multi-instance setup would need
-    shared state (Supabase/Redis). A successful verify clears the counter.
+    client is locked out for ``window`` seconds. Externalized to Supabase (was an
+    in-memory, per-process dict) so it survives restarts/redeploys and is shared
+    across replicas - see supabase/migrations/20260730020000_pin_lockouts_table.sql.
+    A successful verify clears the row.
     """
 
     def __init__(self, max_attempts: int = 5, window: int = 15 * 60):
         self.max_attempts = max_attempts
         self.window = window
-        self._lock = threading.Lock()
-        self._state: dict[str, dict] = {}  # key -> {"fails", "first_fail", "locked_until"}
 
     def check(self, key: str) -> None:
         """Raise 429 if ``key`` is currently locked out."""
-        now = time.time()
-        with self._lock:
-            locked_until = (self._state.get(key) or {}).get("locked_until", 0)
+        rows = (
+            get_supabase()
+            .table("pin_lockouts")
+            .select("locked_until")
+            .eq("client_key", key)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        locked_until_raw = rows[0].get("locked_until") if rows else None
+        if not locked_until_raw:
+            return
+        locked_until = datetime.fromisoformat(str(locked_until_raw).replace("Z", "+00:00"))
+        now = datetime.now(timezone.utc)
         if locked_until > now:
-            retry_after = int(locked_until - now) + 1
+            retry_after = int((locked_until - now).total_seconds()) + 1
             raise HTTPException(
                 status_code=429,
                 detail=f"Too many incorrect attempts. Try again in {retry_after} seconds.",
@@ -87,19 +96,16 @@ class _Lockout:
             )
 
     def record_failure(self, key: str) -> None:
-        now = time.time()
-        with self._lock:
-            entry = self._state.get(key)
-            if not entry or (now - entry["first_fail"]) > self.window:
-                entry = {"fails": 0, "first_fail": now, "locked_until": 0}
-            entry["fails"] += 1
-            if entry["fails"] >= self.max_attempts:
-                entry["locked_until"] = now + self.window
-            self._state[key] = entry
+        # Atomic (row-locked in Postgres) so concurrent failures from the same
+        # key can't race past max_attempts - see the RPC function for why.
+        get_supabase().rpc("record_pin_lockout_failure", {
+            "p_client_key": key,
+            "p_max_attempts": self.max_attempts,
+            "p_window_seconds": self.window,
+        }).execute()
 
     def clear(self, key: str) -> None:
-        with self._lock:
-            self._state.pop(key, None)
+        get_supabase().table("pin_lockouts").delete().eq("client_key", key).execute()
 
 
 _lockout = _Lockout()

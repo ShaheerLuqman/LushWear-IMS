@@ -160,10 +160,6 @@ Ordered roughly by impact-to-effort.
 
 ### 4.4 Auth & multi-tenancy
 
-- The **in-memory lockout and dev-fallback JWT secret break on multi-instance /
-  restart.** For real production: set `AUTH_SECRET` always (a startup check that
-  refuses to boot without it in prod), and move lockout state to Supabase/Redis
-  so it survives restarts and works across replicas.
 - **Client IP for lockout is `request.client.host`** — behind the Northflank/Vercel
   proxies this is often the proxy IP, so one blocked attacker can lock everyone out
   (or everyone shares one bucket). Read `X-Forwarded-For` (trusted-proxy aware).
@@ -173,9 +169,6 @@ Ordered roughly by impact-to-effort.
 
 ### 4.5 Observability & operations
 
-- **Add request-id middleware, timing metrics, and Sentry** (or equivalent) for
-  error tracking. A `/health` exists — add a `/ready` that actually checks
-  Supabase connectivity.
 - **Rate-limit the whole API**, not just PIN verify (e.g. slowapi), especially
   the expensive sync/PDF endpoints.
 
@@ -258,189 +251,12 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
 > re-processing unchanged orders. Making the sync incremental would both speed it
 > up and shrink the surface of future changes to `services/shopify_sync.py`.
 
-### Resolved
-
-**Wrap multi-write operations in transactions** (§4.1) — audited every
-multi-write path (sync, CSV upload, cashbook) before changing anything, since
-BACKEND.md/TODO.md's own notes on this were partly stale (see below). Findings:
-the sync's `orders` upserts (`services/shopify_sync.py`) and the
-cashbook-balance writes (`recalc_cashbook_daily_balances`/`recalc_ledger_balance`
-triggers, `supabase_schema.sql`) were already atomic single statements — no
-change needed there. Two genuine one-`UPDATE`/`PATCH`-per-row loops remained:
-- `upload_postex_csv` (`routes/orders.py`) issued one `.update().eq("id", ...)`
-  per matched CSV row. Now builds one payload list and does a single batched
-  `upsert(..., on_conflict="id")` (chunked at 1000, same as the sync), matching
-  `batch_update_cost_prices`'s existing pattern.
-- `recompute_advance_statuses` (`app/advance_status.py`) did the per-row write
-  via a `ThreadPoolExecutor` over individual `client.table("orders").update()`
-  calls — the most-repeated per-row write in the codebase, since it's called
-  from both the sync (`shopify_sync.py`) and every cashbook create/update/delete
-  (`routes/cashbook.py`'s `_safe_recompute_advance_statuses`). Now the same
-  batched-`upsert` treatment, using the passed-in `supabase` client directly
-  (no more per-call `create_client`/threads for the write side; the concurrent
-  `create_client` reads for large scoped chunks are unchanged).
-
-Deliberately **not** merged into one transaction with the cashbook write that
-triggers it: `_safe_recompute_advance_statuses` already documents that a
-recompute failure must not fail the cashbook write ("a failure here shouldn't
-fail the cashbook write that triggered it") — wrapping both in one Postgres
-transaction would reverse that intentional decoupling. No direct
-`psycopg`/SQLAlchemy connection was needed for any of this — batching into a
-single `upsert` is already one atomic Postgres statement per call, which was
-the actual gap (many independent statements), not a lack of transaction
-support in PostgREST.
-
-Bundled in, per the original task: **`month-summary`'s Postgres pushdown**
-(§4.3). `get_month_summary_list` (`routes/orders.py`) fetched
-`order_receiving_date`/`created_at` for every order and bucketed them into
-(month, year) reporting periods in Python. Replaced with
-`get_month_summary_periods()`, a new Postgres function
-(`supabase/migrations/20260730000000_get_month_summary_periods_function.sql`,
-mirrored into `supabase_schema.sql`) that does the same day-based period
-bucketing in SQL and returns the distinct periods directly; the route now
-calls it via `.rpc("get_month_summary_periods")` — the first `.rpc()` call
-anywhere in this codebase. `get_month_summary_detail`'s heavier aggregation
-(sums/counts per period) was explicitly out of scope at the time and stayed in
-Python — resolved in a follow-up pass, see below.
-
-Note on stale docs found during the audit: this section's old wording ("sync
-and CSV upload issue many independent PostgREST calls") predated the sync's
-move to batched upserts, and `../TODO.md` §4 (referenced by "Deferred
-elsewhere" below) no longer exists in `TODO.md` — the concurrency-guard/
-transactional-multi-writes design notes it once held are gone; what's below is
-reconstructed from the current code, not that section.
-
-**`order_number` is now `INTEGER`**, not `VARCHAR(20)`
-(`supabase/migrations/20260728010000_order_number_to_integer.sql`). It was kept
-as `VARCHAR` only because the manual `create_replacement_order` endpoint wrote
-`"NNNN-R"` into it; that endpoint (and its "Create Replacement" / "Delete
-Replacement Order" UI) has been removed. Replacement orders are now tracked
-exclusively via Shopify's `NNNN-R` tag convention (`services/shopify_sync.py`),
-which only ever sets the numeric `replacement_of_order_no` column, never
-`order_number` itself. The `-R` suffix shown next to a replacement order in the
-grid (`orders-columns.js`) is display-only, derived from
-`replacement_of_order_no`. `OrderBase.order_number`/`OrderUpdate.order_number`
-in `models.py` were updated from `str` to `int` to match (FastAPI's
-`response_model=List[Order]` on `get_all_orders` validates every response, and
-Pydantic v2 does not coerce `int` → `str`, so the model had to change in the
-same commit as the migration, not after).
-
-**Rest of §4.3's Postgres pushdown** — the two items still open after the
-`order_number`-to-`INTEGER` migration and the `month-summary/list` RPC above.
-- `get_all_orders`'s numeric re-sort: replaced the Python
-  `period_orders.sort(key=_order_recency_key, reverse=True)` tiebreak with a
-  second `.order("order_number", desc=True)` on the query (`order_number` is
-  `INTEGER NOT NULL UNIQUE`, so this is a fully deterministic total order — no
-  custom sort key needed). `_order_recency_key` is now unused and was removed
-  from `ordering.py`; `_order_number_sort_key` stays (still used by
-  `generate_packaging_list_by_numbers`'s unrelated in-memory sorts of
-  not-found/cancelled order numbers).
-- `get_month_summary_detail`'s aggregation: replaced the full `select("*")`
-  fetch of every order in the period plus up to 3 extra `cashbook_entries`
-  round trips (one per matching ledger) with a single
-  `get_month_summary_totals(p_period_start, p_period_end, p_entry_start,
-  p_entry_end)` RPC
-  (`supabase/migrations/20260730010000_get_month_summary_totals_function.sql`,
-  mirrored into `supabase_schema.sql`) that computes every sum/count term for
-  term the same way the Python did. **Not** pushed down:
-  `products_sold_by_collection` — its fuzzy line-item-to-product matching
-  (exact name → variant-suffix-stripped → substring, first match in product
-  list order wins) isn't safely reproducible in SQL, so the route still fetches
-  `order_status, line_items` (trimmed from `select("*")`) for that one
-  computation. Also surfaced, not changed: `net_profit`'s "orders with
-  `delivery_charge` set" filter is now a no-op — `delivery_charge`,
-  `total_amount`, and `cost_price` are all `NOT NULL` in the live schema, so
-  every non-cancelled order already qualifies. The RPC keeps the
-  `delivery_charge IS NOT NULL` filter anyway for literal parity with the
-  Python it replaced, rather than silently changing what counts.
-
-**Offload PDF generation** (§4.3, now fully resolved) — of the two options the
-old bullet posed ("background task/queue... stream the result, or at least cap
-batch sizes"), went with thread-pool offload rather than a real job queue:
-`generate_invoice`, `generate_packaging_list`,
-`generate_packaging_list_by_numbers`, `generate_load_sheet`, and
-`get_load_sheet_log_pdf` (`routes/orders.py`) now call `_generate_pdf_invoice`/
-`_generate_pdf_packaging_list`/`_generate_pdf_load_sheet` via
-`await asyncio.to_thread(...)` instead of calling ReportLab synchronously
-inline. The actual problem was that the CPU-bound rendering ran directly on the
-event loop, blocking *every other request that worker was handling* (including
-health checks) until it finished — not that the response itself needed to
-become asynchronous. `asyncio.to_thread` fixes that with no API change: the
-route still returns the finished PDF in the same request, so the frontend's
-existing `fetch → res.blob() → download` flow (`orders-actions.js`) needed no
-changes. A real background job queue (Celery/RQ + a broker, job-status
-endpoint, frontend polling) was considered and rejected as disproportionate —
-it would add new infra Northflank doesn't currently run, for a problem this
-solves without it. Also added `MAX_PDF_BATCH_ORDERS = 500` as a latency
-backstop on the four user-driven batch endpoints (not
-`get_load_sheet_log_pdf`, which replays an already-committed load-sheet log
-rather than a live user-supplied batch) — offloading to a thread stops one
-large batch from blocking *other* requests, but a single request for, say,
-5,000 orders would still be slow for the client making it; the cap bounds that
-worst case.
-
-**Follow-up: `generate_invoice`'s Shopify enrichment loop.** Found while doing
-the PDF offload above, not part of the original §4.3 wording:
-`generate_invoice` (`routes/orders.py`) enriches each DB order with a live
-Shopify lookup (`_fetch_shopify_order_by_order_number`, one HTTP round trip per
-order, each with its own retry/backoff on 429s) — this was `await`ed
-**sequentially**, one order at a time, so a large invoice batch was dominated
-by Shopify latency, not by PDF rendering (the part just fixed). Rewrote it to
-match the bounded-concurrency pattern `sync_shopify_orders_force` already uses
-for the same fetch function: `asyncio.gather` over the per-order fetches,
-capped by `asyncio.Semaphore(_BULK_CONCURRENCY)` (already 20, shared with that
-other call site) rather than a naive unbounded `gather` — that pattern's own
-comment documents why unbounded concurrency previously crashed the server on
-Windows (uvicorn's selector event loop caps out around ~512 fds). Covered by a
-new regression test (`TestGenerateInvoice` in `tests/test_routes.py`) asserting
-each order still pairs with its own Shopify result after the fetches run
-concurrently, not a neighbor's.
-
-**Enable Dependabot** (§4.6, now fully resolved) — added `.github/dependabot.yml`
-with weekly-schedule entries for the three ecosystems that actually have
-something to update: `pip` (`backend/requirements.txt` /
-`requirements-dev.txt`), `docker` (the `Dockerfile`'s `python:3.11-slim` base
-image), and `github-actions` (`actions/checkout`/`actions/setup-python` in
-`.github/workflows/backend-tests.yml`). No `npm` entry:
-`frontend/package.json` has no `dependencies`/`devDependencies` at all (AG Grid
-etc. load from a CDN, no build step, no lockfile) — nothing there for
-Dependabot to track, so adding an entry for it would just be inert config.
 
 ### Remaining §4 items not yet addressed
 
-- [ ] **Sentry** (or equivalent) for error tracking — structured logging and generic
-      error responses are in place, but nothing aggregates exceptions (§4.5).
-- [ ] **`/ready`** endpoint that actually checks Supabase connectivity — also
-      serves as the online/offline health signal the frontend can poll (§4.5).
-- [ ] **Request-id middleware and timing metrics** — only `CORSMiddleware` is
-      registered today; no per-request id or latency instrumentation (§4.5).
 - [ ] **Rate-limit the API** beyond PIN verify, especially sync/PDF endpoints (§4.5).
-- [ ] **Externalise the PIN lockout state** — it is in-memory, so it resets on
-      redeploy and does not work across replicas (§4.4).
 - [ ] **Trusted-proxy `X-Forwarded-For` handling** for the lockout's client IP (§4.4).
-- [ ] **API versioning** (`/api/v1/...`) before external consumers depend on it (§4.7).
-- [ ] **Client-facing pagination** on list endpoints (§4.7). Partly addressed:
-      `GET /orders/` now requires a `month`/`year` period instead of returning
-      up to 10k rows; cashbook and products still return the full set.
 - [ ] **Remaining untyped `response_model=dict`** (9 left) are operation results —
       sync stats, `{"status": "deleted"}`, load-sheet logs — not entities. Typing
       them would mean inventing models for ad-hoc payloads; left as `dict`
       deliberately.
-
-### Deferred elsewhere
-
-**Concurrency guard** (old D4) was investigated — notably that
-`pg_advisory_lock` is unusable through PostgREST. The orders sync itself is now
-covered via a conditional-`UPDATE` lock on `sync_status`'s `in_progress` column
-(claimed via `UPDATE ... WHERE in_progress = false`, race-free since Postgres
-serializes concurrent UPDATEs on one row). (This used to point at `../TODO.md`
-§4 for the full design/findings; that section no longer exists in `TODO.md` —
-see the stale-docs note under "Resolved" above.) **Transactional multi-writes**
-(old D5) is resolved above — the sync's batched `orders` upserts and the
-cashbook-balance triggers were already atomic; the actual per-row gaps (CSV
-upload, `recompute_advance_statuses`) are now batched too.
-
----
-
-*This document describes the backend as of the `webapp-migration` branch. Line
-counts and file layout will drift — treat section 2 as a snapshot.*
