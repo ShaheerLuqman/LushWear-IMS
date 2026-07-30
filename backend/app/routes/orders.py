@@ -44,7 +44,12 @@ from app.timezones import PKT_TIMEZONE
 logger = logging.getLogger("app.orders")
 router = APIRouter(prefix="/orders", tags=["orders"])
 
-
+# Backstop on user-supplied PDF batch endpoints (invoice/packaging-list/load-sheet) -
+# ReportLab rendering time scales with order count, and this is the cheapest bound on
+# worst-case request latency. The rendering itself runs off the event loop (see
+# asyncio.to_thread below) so a large batch no longer blocks other requests, but it can
+# still make one request very slow; this caps that.
+MAX_PDF_BATCH_ORDERS = 500
 
 
 def _compute_shopify_tax(order: dict) -> float:
@@ -1184,7 +1189,9 @@ async def get_load_sheet_log_pdf(log_id: str):
             raise HTTPException(status_code=404, detail="Orders not found")
         assignment_number = (log_row.get("assignment_number") or "").strip() or None
         rider_name = (log_row.get("rider_name") or "").strip() or None
-        pdf_buffer = _generate_pdf_load_sheet(orders, None, assignment_number=assignment_number, rider_name=rider_name)
+        pdf_buffer = await asyncio.to_thread(
+            _generate_pdf_load_sheet, orders, None, assignment_number=assignment_number, rider_name=rider_name
+        )
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
@@ -2027,22 +2034,32 @@ async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
     try:
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
+        if len(order_ids) > MAX_PDF_BATCH_ORDERS:
+            raise HTTPException(status_code=400, detail=f"Cannot generate an invoice for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
         orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
-        merged: List[dict] = []
-        for o in orders:
-            num = str(o.get("order_number") or "").strip()
-            sp_order = None
-            if num:
+        # Bounded concurrency (shares _BULK_CONCURRENCY with sync_shopify_orders_force's
+        # fetch below): an unbounded gather here once opened one httpx.AsyncClient per
+        # order simultaneously, which on Windows (uvicorn forces the selector event loop
+        # there, capped at ~512 fds by select()) crashed the whole server for large batches.
+        invoice_fetch_sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+        async def _fetch_bounded(num: str):
+            if not num:
+                return None
+            async with invoice_fetch_sem:
                 try:
-                    sp_order = await _fetch_shopify_order_by_order_number(num)
+                    return await _fetch_shopify_order_by_order_number(num)
                 except Exception:
-                    sp_order = None
-            merged.append(_build_invoice_order_context(o, sp_order))
-        pdf_buffer = _generate_pdf_invoice(merged)
+                    return None
+
+        order_numbers = [str(o.get("order_number") or "").strip() for o in orders]
+        sp_orders = await asyncio.gather(*(_fetch_bounded(num) for num in order_numbers))
+        merged = [_build_invoice_order_context(o, sp_order) for o, sp_order in zip(orders, sp_orders)]
+        pdf_buffer = await asyncio.to_thread(_generate_pdf_invoice, merged)
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
@@ -2065,6 +2082,8 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
     try:
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
+        if len(order_ids) > MAX_PDF_BATCH_ORDERS:
+            raise HTTPException(status_code=400, detail=f"Cannot generate a packaging list for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
         orders_response = supabase.table("orders").select("id, order_number, order_status, line_items").in_("id", order_ids).execute()
         orders = orders_response.data or []
@@ -2075,7 +2094,7 @@ async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False))
         if not orders:
             raise HTTPException(status_code=400, detail="All selected orders are cancelled")
         aggregated, sizes = _aggregate_packaging_items(orders)
-        pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
+        pdf_buffer = await asyncio.to_thread(_generate_pdf_packaging_list, aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
@@ -2121,6 +2140,8 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
         order_numbers = list(dict.fromkeys(body.order_numbers))
         if not order_numbers:
             raise HTTPException(status_code=400, detail="No order numbers provided")
+        if len(order_numbers) > MAX_PDF_BATCH_ORDERS:
+            raise HTTPException(status_code=400, detail=f"Cannot generate a packaging list for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
         orders_response = (
             supabase.table("orders")
@@ -2141,7 +2162,7 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
         if not orders:
             raise HTTPException(status_code=400, detail="All matched orders are cancelled")
         aggregated, sizes = _aggregate_packaging_items(orders)
-        pdf_buffer = _generate_pdf_packaging_list(aggregated, sizes, len(orders))
+        pdf_buffer = await asyncio.to_thread(_generate_pdf_packaging_list, aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",
@@ -2165,20 +2186,22 @@ async def generate_load_sheet(order_ids: List[str]):
     try:
         if not order_ids:
             raise HTTPException(status_code=400, detail="No orders selected")
-        
+        if len(order_ids) > MAX_PDF_BATCH_ORDERS:
+            raise HTTPException(status_code=400, detail=f"Cannot generate a load sheet for more than {MAX_PDF_BATCH_ORDERS} orders at once")
+
         # Get orders from database
         supabase = get_supabase()
         orders_response = supabase.table("orders").select("*").in_("id", order_ids).execute()
         orders = orders_response.data
-        
+
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
-        
+
         # Check if template exists (optional - for future use)
         template_path = None
-        
+
         # Generate PDF
-        pdf_buffer = _generate_pdf_load_sheet(orders, template_path)
+        pdf_buffer = await asyncio.to_thread(_generate_pdf_load_sheet, orders, template_path)
         
         # Return PDF file as download
         return Response(

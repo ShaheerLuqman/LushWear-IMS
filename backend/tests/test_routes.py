@@ -114,6 +114,80 @@ class TestMonthSummaryDetail:
         assert r.status_code == 400
 
 
+class TestGenerateInvoice:
+    def test_fetches_shopify_data_concurrently_and_pairs_orders_correctly(self, make_client, monkeypatch):
+        """Regression guard for the sequential-to-concurrent fetch rewrite: each
+        DB order must still end up paired with its own Shopify order, not a
+        neighbor's (an easy mistake to introduce when zipping gathered results)."""
+        import io
+        import app.routes.orders as orders_module
+
+        seen_numbers = []
+
+        async def fake_fetch(num):
+            seen_numbers.append(num)
+            return {"shopify_number": num}
+
+        captured = {}
+
+        def fake_build_context(order, sp_order):
+            return {"db_id": order["id"], "shopify_number": sp_order["shopify_number"] if sp_order else None}
+
+        def fake_generate_pdf(merged):
+            captured["merged"] = merged
+            return io.BytesIO(b"%PDF-fake")
+
+        monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
+        monkeypatch.setattr(orders_module, "_build_invoice_order_context", fake_build_context)
+        monkeypatch.setattr(orders_module, "_generate_pdf_invoice", fake_generate_pdf)
+
+        client = make_client({"orders": [
+            {"id": "o1", "order_number": 100},
+            {"id": "o2", "order_number": 200},
+        ]})
+        r = client.post("/api/orders/generate-invoice", json=["o1", "o2"])
+
+        assert r.status_code == 200
+        assert set(seen_numbers) == {"100", "200"}
+        assert captured["merged"] == [
+            {"db_id": "o1", "shopify_number": "100"},
+            {"db_id": "o2", "shopify_number": "200"},
+        ]
+
+
+class TestPdfBatchCaps:
+    """MAX_PDF_BATCH_ORDERS is checked before any DB/PDF work, so an
+    over-the-cap request 400s even against an empty fake Supabase."""
+
+    def test_generate_invoice_rejects_a_batch_over_the_cap(self, make_client):
+        from app.routes.orders import MAX_PDF_BATCH_ORDERS
+        client = make_client({})
+        order_ids = [f"id-{i}" for i in range(MAX_PDF_BATCH_ORDERS + 1)]
+        r = client.post("/api/orders/generate-invoice", json=order_ids)
+        assert r.status_code == 400
+
+    def test_generate_packaging_list_rejects_a_batch_over_the_cap(self, make_client):
+        from app.routes.orders import MAX_PDF_BATCH_ORDERS
+        client = make_client({})
+        order_ids = [f"id-{i}" for i in range(MAX_PDF_BATCH_ORDERS + 1)]
+        r = client.post("/api/orders/generate-packaging-list", json=order_ids)
+        assert r.status_code == 400
+
+    def test_generate_packaging_list_by_numbers_rejects_a_batch_over_the_cap(self, make_client):
+        from app.routes.orders import MAX_PDF_BATCH_ORDERS
+        client = make_client({})
+        order_numbers = list(range(MAX_PDF_BATCH_ORDERS + 1))
+        r = client.post("/api/orders/generate-packaging-list-by-numbers", json={"order_numbers": order_numbers})
+        assert r.status_code == 400
+
+    def test_generate_load_sheet_rejects_a_batch_over_the_cap(self, make_client):
+        from app.routes.orders import MAX_PDF_BATCH_ORDERS
+        client = make_client({})
+        order_ids = [f"id-{i}" for i in range(MAX_PDF_BATCH_ORDERS + 1)]
+        r = client.post("/api/orders/generate-load-sheet", json=order_ids)
+        assert r.status_code == 400
+
+
 class TestPostexCsvUpload:
     def _csv(self, *rows):
         header = b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n"

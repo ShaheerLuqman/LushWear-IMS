@@ -1,0 +1,22 @@
+version: 2
+updates:
+  # Backend runtime + dev dependencies (requirements.txt / requirements-dev.txt).
+  - package-ecosystem: "pip"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+
+  # Dockerfile base image (python:3.11-slim).
+  - package-ecosystem: "docker"
+    directory: "/backend"
+    schedule:
+      interval: "weekly"
+
+  # Actions used by .github/workflows/backend-tests.yml.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+
+  # frontend/package.json has no dependencies (AG Grid etc. load from a CDN,
+  # no build step) - nothing for an npm entry to track, so it's omitted.

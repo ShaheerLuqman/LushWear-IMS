@@ -158,12 +158,6 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
 
 Ordered roughly by impact-to-effort.
 
-### 4.3 Performance
-
-- **Offload PDF generation.** ReportLab in the request path blocks a worker and
-  can be slow for large batches. Consider a background task/queue and stream the
-  result, or at least cap batch sizes.
-
 ### 4.4 Auth & multi-tenancy
 
 - The **in-memory lockout and dev-fallback JWT secret break on multi-instance /
@@ -184,10 +178,6 @@ Ordered roughly by impact-to-effort.
   Supabase connectivity.
 - **Rate-limit the whole API**, not just PIN verify (e.g. slowapi), especially
   the expensive sync/PDF endpoints.
-
-### 4.6 Config & deploy hygiene
-
-- **Enable Dependabot** (or equivalent) for dependency updates.
 
 ---
 
@@ -363,6 +353,58 @@ same commit as the migration, not after).
   every non-cancelled order already qualifies. The RPC keeps the
   `delivery_charge IS NOT NULL` filter anyway for literal parity with the
   Python it replaced, rather than silently changing what counts.
+
+**Offload PDF generation** (§4.3, now fully resolved) — of the two options the
+old bullet posed ("background task/queue... stream the result, or at least cap
+batch sizes"), went with thread-pool offload rather than a real job queue:
+`generate_invoice`, `generate_packaging_list`,
+`generate_packaging_list_by_numbers`, `generate_load_sheet`, and
+`get_load_sheet_log_pdf` (`routes/orders.py`) now call `_generate_pdf_invoice`/
+`_generate_pdf_packaging_list`/`_generate_pdf_load_sheet` via
+`await asyncio.to_thread(...)` instead of calling ReportLab synchronously
+inline. The actual problem was that the CPU-bound rendering ran directly on the
+event loop, blocking *every other request that worker was handling* (including
+health checks) until it finished — not that the response itself needed to
+become asynchronous. `asyncio.to_thread` fixes that with no API change: the
+route still returns the finished PDF in the same request, so the frontend's
+existing `fetch → res.blob() → download` flow (`orders-actions.js`) needed no
+changes. A real background job queue (Celery/RQ + a broker, job-status
+endpoint, frontend polling) was considered and rejected as disproportionate —
+it would add new infra Northflank doesn't currently run, for a problem this
+solves without it. Also added `MAX_PDF_BATCH_ORDERS = 500` as a latency
+backstop on the four user-driven batch endpoints (not
+`get_load_sheet_log_pdf`, which replays an already-committed load-sheet log
+rather than a live user-supplied batch) — offloading to a thread stops one
+large batch from blocking *other* requests, but a single request for, say,
+5,000 orders would still be slow for the client making it; the cap bounds that
+worst case.
+
+**Follow-up: `generate_invoice`'s Shopify enrichment loop.** Found while doing
+the PDF offload above, not part of the original §4.3 wording:
+`generate_invoice` (`routes/orders.py`) enriches each DB order with a live
+Shopify lookup (`_fetch_shopify_order_by_order_number`, one HTTP round trip per
+order, each with its own retry/backoff on 429s) — this was `await`ed
+**sequentially**, one order at a time, so a large invoice batch was dominated
+by Shopify latency, not by PDF rendering (the part just fixed). Rewrote it to
+match the bounded-concurrency pattern `sync_shopify_orders_force` already uses
+for the same fetch function: `asyncio.gather` over the per-order fetches,
+capped by `asyncio.Semaphore(_BULK_CONCURRENCY)` (already 20, shared with that
+other call site) rather than a naive unbounded `gather` — that pattern's own
+comment documents why unbounded concurrency previously crashed the server on
+Windows (uvicorn's selector event loop caps out around ~512 fds). Covered by a
+new regression test (`TestGenerateInvoice` in `tests/test_routes.py`) asserting
+each order still pairs with its own Shopify result after the fetches run
+concurrently, not a neighbor's.
+
+**Enable Dependabot** (§4.6, now fully resolved) — added `.github/dependabot.yml`
+with weekly-schedule entries for the three ecosystems that actually have
+something to update: `pip` (`backend/requirements.txt` /
+`requirements-dev.txt`), `docker` (the `Dockerfile`'s `python:3.11-slim` base
+image), and `github-actions` (`actions/checkout`/`actions/setup-python` in
+`.github/workflows/backend-tests.yml`). No `npm` entry:
+`frontend/package.json` has no `dependencies`/`devDependencies` at all (AG Grid
+etc. load from a CDN, no build step, no lockfile) — nothing there for
+Dependabot to track, so adding an entry for it would just be inert config.
 
 ### Remaining §4 items not yet addressed
 
