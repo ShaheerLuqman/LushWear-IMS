@@ -64,6 +64,56 @@ class TestMonthSummaryList:
         assert r.json() == []
 
 
+class TestMonthSummaryDetail:
+    def test_combines_rpc_totals_with_python_side_collection_breakdown(self, make_client):
+        totals_row = {
+            "total_orders": 3,
+            "total_gross_sale": 1500.5,
+            "total_return_amount": 100.0,
+            "return_orders_count": 1,
+            "delivered_orders_count": 1,
+            "enroute_orders_count": 1,
+            "unfulfilled_orders_count": 0,
+            "net_sales": 1400.5,
+            "net_profit": 900.25,
+            "dc_charges_delivered": 180.0,
+            "dc_charges_returned": 180.0,
+            "dc_charges_total": 360.0,
+            "shopify_expense": 50.0,
+            "ad_expense": 25.0,
+            "other_expense": 10.0,
+        }
+        client = make_client(
+            {
+                "orders": [
+                    {"order_status": "delivered", "line_items": [{"name": "Silk Robe", "qty": 2, "product_id": None}]},
+                    {"order_status": "cancelled", "line_items": [{"name": "Silk Robe", "qty": 5, "product_id": None}]},
+                ],
+                "products": [{"id": "p1", "name": "Silk Robe", "collection": "Silk Collection", "price": 100.0}],
+            },
+            rpc_results={"get_month_summary_totals": [totals_row]},
+        )
+        r = client.get("/api/orders/month-summary/6/2026")
+        assert r.status_code == 200
+        body = r.json()
+
+        # Totals come straight from the RPC row, not recomputed in Python.
+        assert body["total_orders"] == 3
+        assert body["net_profit"] == 900.25
+        assert body["shopify_expense"] == 50.0
+
+        # Collection breakdown is still computed in Python from the fetched
+        # line_items - the cancelled order's 5 qty must not count.
+        silk = next(c for c in body["products_sold_by_collection"] if c["collection"] == "Silk Collection")
+        assert silk["count"] == 2
+        assert silk["sum"] == 200.0
+
+    def test_invalid_month_is_rejected(self, make_client):
+        client = make_client({"orders": [], "products": []})
+        r = client.get("/api/orders/month-summary/13/2026")
+        assert r.status_code == 400
+
+
 class TestPostexCsvUpload:
     def _csv(self, *rows):
         header = b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n"

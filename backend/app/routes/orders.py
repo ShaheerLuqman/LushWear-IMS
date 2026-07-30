@@ -19,7 +19,7 @@ from app.db_utils import fetch_all
 from app.models import Order, OrderCreate, OrderUpdate
 from app.money import money
 from app.order_pdf import extract_order_numbers
-from app.ordering import _order_number_sort_key, _order_recency_key
+from app.ordering import _order_number_sort_key
 from app.services import postex
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
 from app.services.pdf.load_sheet import _generate_pdf_load_sheet
@@ -148,14 +148,13 @@ async def get_all_orders(
             .gte("order_receiving_date", start_iso)
             .lt("order_receiving_date", end_iso)
             .order("order_receiving_date", desc=True)
+            .order("order_number", desc=True)
         )
         period_orders = _reshape_delivery_status_latest(period_orders)
         t_query = time.perf_counter()
-        period_orders.sort(key=_order_recency_key, reverse=True)
-        t_sort = time.perf_counter()
         logger.info(
-            "[get_all_orders] period=%s-%s query=%.2fs sort=%.3fs total=%.2fs (rows=%d)",
-            month, year, t_query - t_start, t_sort - t_query, t_sort - t_start, len(period_orders),
+            "[get_all_orders] period=%s-%s query=%.2fs (rows=%d)",
+            month, year, t_query - t_start, len(period_orders),
         )
         return period_orders
     except HTTPException:
@@ -2219,61 +2218,27 @@ async def get_month_summary_detail(month: int, year: int):
         
         # Get period start and end dates
         start_iso, end_iso = _period_start_end(month, year)
-        
+        start_date, end_date = _period_start_end_dates(month, year)
+
         supabase = get_supabase()
 
+        totals_resp = supabase.rpc("get_month_summary_totals", {
+            "p_period_start": start_iso,
+            "p_period_end": end_iso,
+            "p_entry_start": start_date,
+            "p_entry_end": end_date,
+        }).execute()
+        totals = (totals_resp.data or [{}])[0]
+
+        # Only order_status/line_items are needed here - the rest of the period's
+        # aggregation (sums/counts) now comes from the get_month_summary_totals RPC.
         orders = fetch_all(
             lambda: supabase.table("orders")
-            .select("*")
+            .select("order_status, line_items")
             .gte("order_receiving_date", start_iso)
             .lt("order_receiving_date", end_iso)
-            .order("order_receiving_date", desc=True)
         )
-        
-        # Exclude cancelled orders from totals and gross sale
         non_cancelled = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
-        
-        # Calculate statistics (cancelled not counted in total orders or gross sale)
-        total_orders = len(non_cancelled)
-        total_gross_sale = sum(float(o.get("total_amount", 0) or 0) for o in non_cancelled)
-        
-        # Count orders by status (from non_cancelled)
-        delivered_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "delivered")
-        returned_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "returned")
-        # Pending = order_status fulfilled/CNA/RFD/ICA
-        enroute_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() in ("fulfilled", "cna", "rfd", "ica"))
-        unfulfilled_count = sum(1 for o in non_cancelled if o.get("order_status", "").lower() == "unfulfilled")
-        
-        # Calculate return amount (sum of total_amount for returned orders)
-        return_orders = [o for o in non_cancelled if o.get("order_status", "").lower() == "returned"]
-        total_return_amount = sum(float(o.get("total_amount", 0) or 0) for o in return_orders)
-        
-        # Net sales = gross sales - return sales
-        net_sales = total_gross_sale - total_return_amount
-
-        # Net profit only for orders that have delivery_charge set (sum of their net sales minus cost).
-        # Frontend's computeNetProfit() (renderer.js) computes the same concept per-row for the
-        # grid/footer, over a filtered/selected set rather than the whole period - a different code
-        # path by design, but the definition should stay in agreement; check both if it changes.
-        orders_with_delivery_set = [o for o in non_cancelled if o.get("delivery_charge") is not None]
-        gross_with_delivery = sum(float(o.get("total_amount", 0) or 0) for o in orders_with_delivery_set)
-        return_amount_with_delivery = sum(
-            float(o.get("total_amount", 0) or 0) for o in orders_with_delivery_set
-            if o.get("order_status", "").lower() == "returned"
-        )
-        cost_with_delivery = sum(float(o.get("cost_price", 0) or 0) for o in orders_with_delivery_set)
-        net_profit = (gross_with_delivery - return_amount_with_delivery) - cost_with_delivery
-
-        # DC charges: sum delivery_charge for all delivered and all returned orders (include even if delivery_charge is null/0)
-        dc_charges_delivered = sum(
-            float(o.get("delivery_charge") or 0) for o in non_cancelled
-            if (o.get("order_status") or "").strip().lower() == "delivered"
-        )
-        dc_charges_returned = sum(
-            float(o.get("delivery_charge") or 0) for o in non_cancelled
-            if (o.get("order_status") or "").strip().lower() == "returned"
-        )
-        dc_charges_total = dc_charges_delivered + dc_charges_returned
 
         # Products sold by collection (5 collections + Others for products without a collection)
         KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
@@ -2329,73 +2294,25 @@ async def get_month_summary_detail(month: int, year: int):
             for c in KNOWN_COLLECTIONS + ["Others"]
         ]
 
-        # Ledger totals for this period (from cashbook entries)
-        start_date, end_date = _period_start_end_dates(month, year)
-        shopify_expense = 0.0
-        ad_expense = 0.0
-        other_expense = 0.0
-        ledgers_resp = supabase.table("ledgers").select("id, name, type").execute()
-        for ledger in ledgers_resp.data or []:
-            name = (ledger.get("name") or "").lower()
-            ledger_type = (ledger.get("type") or "").lower()
-            is_expense_type = "expense" in ledger_type
-            if "shopify" in name:
-                entries_resp = (
-                    supabase.table("cashbook_entries")
-                    .select("entry_type, amount")
-                    .eq("folio", ledger["id"])
-                    .gte("entry_date", start_date)
-                    .lte("entry_date", end_date)
-                    .execute()
-                )
-                for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "debit":
-                        shopify_expense += float(e.get("amount") or 0)
-            elif "ad" in name:
-                entries_resp = (
-                    supabase.table("cashbook_entries")
-                    .select("entry_type, amount")
-                    .eq("folio", ledger["id"])
-                    .gte("entry_date", start_date)
-                    .lte("entry_date", end_date)
-                    .execute()
-                )
-                for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "debit":
-                        ad_expense += float(e.get("amount") or 0)
-            elif is_expense_type:
-                # Other expenses: Expense-type ledgers excluding shopify and ad
-                entries_resp = (
-                    supabase.table("cashbook_entries")
-                    .select("entry_type, amount")
-                    .eq("folio", ledger["id"])
-                    .gte("entry_date", start_date)
-                    .lte("entry_date", end_date)
-                    .execute()
-                )
-                for e in entries_resp.data or []:
-                    if (e.get("entry_type") or "").strip().lower() == "debit":
-                        other_expense += float(e.get("amount") or 0)
-
         return {
             "month": month,
             "year": year,
-            "total_orders": total_orders,
-            "total_gross_sale": round(total_gross_sale, 2),
-            "total_return_amount": round(total_return_amount, 2),
-            "return_orders_count": len(return_orders),
-            "delivered_orders_count": delivered_count,
-            "enroute_orders_count": enroute_count,
-            "unfulfilled_orders_count": unfulfilled_count,
-            "net_sales": round(net_sales, 2),
-            "net_profit": round(net_profit, 2),
-            "dc_charges_delivered": round(dc_charges_delivered, 2),
-            "dc_charges_returned": round(dc_charges_returned, 2),
-            "dc_charges_total": round(dc_charges_total, 2),
+            "total_orders": int(totals.get("total_orders") or 0),
+            "total_gross_sale": round(float(totals.get("total_gross_sale") or 0), 2),
+            "total_return_amount": round(float(totals.get("total_return_amount") or 0), 2),
+            "return_orders_count": int(totals.get("return_orders_count") or 0),
+            "delivered_orders_count": int(totals.get("delivered_orders_count") or 0),
+            "enroute_orders_count": int(totals.get("enroute_orders_count") or 0),
+            "unfulfilled_orders_count": int(totals.get("unfulfilled_orders_count") or 0),
+            "net_sales": round(float(totals.get("net_sales") or 0), 2),
+            "net_profit": round(float(totals.get("net_profit") or 0), 2),
+            "dc_charges_delivered": round(float(totals.get("dc_charges_delivered") or 0), 2),
+            "dc_charges_returned": round(float(totals.get("dc_charges_returned") or 0), 2),
+            "dc_charges_total": round(float(totals.get("dc_charges_total") or 0), 2),
             "products_sold_by_collection": products_sold_by_collection,
-            "shopify_expense": round(shopify_expense, 2),
-            "ad_expense": round(ad_expense, 2),
-            "other_expense": round(other_expense, 2),
+            "shopify_expense": round(float(totals.get("shopify_expense") or 0), 2),
+            "ad_expense": round(float(totals.get("ad_expense") or 0), 2),
+            "other_expense": round(float(totals.get("other_expense") or 0), 2),
         }
     except HTTPException:
         raise

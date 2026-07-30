@@ -158,32 +158,8 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
 
 Ordered roughly by impact-to-effort.
 
-### 4.1 Correctness & data integrity (highest priority)
-
-- **Wrap multi-write operations in transactions.** *(Mostly done — see §7
-  "Resolved".)* The genuine per-row write loops (CSV upload,
-  `recompute_advance_statuses`) are now single batched `upsert`s, so each is one
-  atomic Postgres statement instead of N independent PostgREST round trips. The
-  sync's own `orders` upserts were already batched/idempotent (`on_conflict`,
-  chunked at 1000) — see §7 "Deferred elsewhere" for why that residual gap
-  (partial failure between chunks on a very large sync) is accepted rather than
-  wrapped in a transactional RPC.
-
 ### 4.3 Performance
 
-- **Push filtering/sorting/aggregation into Postgres.** `products` variant
-  grouping is done (`select("*, variants(*)")` embed, no more fetching both
-  full tables and grouping in Python). `get_month_summary_list` now uses the
-  `get_month_summary_periods` RPC (see §7 "Resolved") instead of fetching every
-  order's dates and bucketing in Python. Still open: `get_all_orders`'s numeric
-  re-sort (attempted via a generated column, reverted at the time — the
-  `create_replacement_order` "-R" path has since been removed, see §7, so this
-  is worth retrying) and `get_month_summary_detail`'s aggregation (sums/counts
-  over a period's orders), which still happens in Python.
-- **Batch the per-row updates.** *(Done.)* The CSV upload
-  (`upload_postex_csv`) and `recompute_advance_statuses` (shared by the sync and
-  every cashbook write) now do a single batched `upsert` each, matching
-  `batch_update_cost_prices`'s pattern.
 - **Offload PDF generation.** ReportLab in the request path blocks a worker and
   can be slow for large batches. Consider a background task/queue and stream the
   result, or at least cap batch sizes.
@@ -334,8 +310,8 @@ mirrored into `supabase_schema.sql`) that does the same day-based period
 bucketing in SQL and returns the distinct periods directly; the route now
 calls it via `.rpc("get_month_summary_periods")` — the first `.rpc()` call
 anywhere in this codebase. `get_month_summary_detail`'s heavier aggregation
-(sums/counts per period) was explicitly out of scope and still runs in Python
-(§4.3).
+(sums/counts per period) was explicitly out of scope at the time and stayed in
+Python — resolved in a follow-up pass, see below.
 
 Note on stale docs found during the audit: this section's old wording ("sync
 and CSV upload issue many independent PostgREST calls") predated the sync's
@@ -343,8 +319,6 @@ move to batched upserts, and `../TODO.md` §4 (referenced by "Deferred
 elsewhere" below) no longer exists in `TODO.md` — the concurrency-guard/
 transactional-multi-writes design notes it once held are gone; what's below is
 reconstructed from the current code, not that section.
-
-**`order_number` is now `INTEGER`**, not `VARCHAR(20)`
 
 **`order_number` is now `INTEGER`**, not `VARCHAR(20)`
 (`supabase/migrations/20260728010000_order_number_to_integer.sql`). It was kept
@@ -361,10 +335,34 @@ in `models.py` were updated from `str` to `int` to match (FastAPI's
 Pydantic v2 does not coerce `int` → `str`, so the model had to change in the
 same commit as the migration, not after).
 
-**Still open**: `get_all_orders`'s numeric re-sort (§4.3) currently sorts in
-Python (`_order_recency_key`/`_order_number_sort_key` in `ordering.py`) — now
-that the column is a real `INTEGER`, this can move into the Postgres query
-(`.order("order_number")`) instead, removing the Python sort pass.
+**Rest of §4.3's Postgres pushdown** — the two items still open after the
+`order_number`-to-`INTEGER` migration and the `month-summary/list` RPC above.
+- `get_all_orders`'s numeric re-sort: replaced the Python
+  `period_orders.sort(key=_order_recency_key, reverse=True)` tiebreak with a
+  second `.order("order_number", desc=True)` on the query (`order_number` is
+  `INTEGER NOT NULL UNIQUE`, so this is a fully deterministic total order — no
+  custom sort key needed). `_order_recency_key` is now unused and was removed
+  from `ordering.py`; `_order_number_sort_key` stays (still used by
+  `generate_packaging_list_by_numbers`'s unrelated in-memory sorts of
+  not-found/cancelled order numbers).
+- `get_month_summary_detail`'s aggregation: replaced the full `select("*")`
+  fetch of every order in the period plus up to 3 extra `cashbook_entries`
+  round trips (one per matching ledger) with a single
+  `get_month_summary_totals(p_period_start, p_period_end, p_entry_start,
+  p_entry_end)` RPC
+  (`supabase/migrations/20260730010000_get_month_summary_totals_function.sql`,
+  mirrored into `supabase_schema.sql`) that computes every sum/count term for
+  term the same way the Python did. **Not** pushed down:
+  `products_sold_by_collection` — its fuzzy line-item-to-product matching
+  (exact name → variant-suffix-stripped → substring, first match in product
+  list order wins) isn't safely reproducible in SQL, so the route still fetches
+  `order_status, line_items` (trimmed from `select("*")`) for that one
+  computation. Also surfaced, not changed: `net_profit`'s "orders with
+  `delivery_charge` set" filter is now a no-op — `delivery_charge`,
+  `total_amount`, and `cost_price` are all `NOT NULL` in the live schema, so
+  every non-cancelled order already qualifies. The RPC keeps the
+  `delivery_charge IS NOT NULL` filter anyway for literal parity with the
+  Python it replaced, rather than silently changing what counts.
 
 ### Remaining §4 items not yet addressed
 
