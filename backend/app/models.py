@@ -330,3 +330,22 @@ class BootstrapBody(BaseModel):
     org_name: NonBlankStr
     email: Email
     password: NewPassword
+
+class ChangePasswordBody(BaseModel):
+    current_password: NonBlankStr
+    new_password: NewPassword
+
+class OrgIntegrationSettingsUpdate(BaseModel):
+    """All fields optional - an omitted field keeps whatever is already stored
+    (see app/org_settings.py's upsert_org_integration_settings)."""
+    shopify_store_url: Optional[NonBlankStr] = None
+    shopify_access_token: Optional[NonBlankStr] = None
+    shopify_api_version: Optional[NonBlankStr] = None
+    postex_merchant_token: Optional[NonBlankStr] = None
+
+class OrgIntegrationSettingsPublic(BaseModel):
+    """Secrets are never echoed back - only whether each is configured."""
+    shopify_store_url: Optional[str] = None
+    shopify_api_version: str
+    shopify_access_token_configured: bool
+    postex_merchant_token_configured: bool

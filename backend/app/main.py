@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, app_pin, auth as auth_routes, users
+from app.routes import products, orders, cashbook, ledger, app_pin, auth as auth_routes, users, org_settings
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.logging_config import configure_logging
@@ -19,7 +19,7 @@ from app.rate_limit import limiter
 configure_logging()
 logger = logging.getLogger("app")
 
-IS_PROD = os.getenv("APP_ENV", "development").strip().lower() == "production"
+IS_PROD = os.getenv("APP_ENV", "dev").strip().lower() == "prod"
 
 _origins = [o.strip() for o in os.getenv("ALLOWED_ORIGINS", "*").split(",") if o.strip()] or ["*"]
 _wildcard = _origins == ["*"]
@@ -29,16 +29,16 @@ if IS_PROD:
     if not os.getenv("AUTH_SECRET"):
         # Without it, auth.py signs tokens with a random per-process key that
         # invalidates every session on restart/redeploy.
-        raise RuntimeError("AUTH_SECRET must be set when APP_ENV=production.")
+        raise RuntimeError("AUTH_SECRET must be set when APP_ENV=prod.")
     if _wildcard:
         # allow_origins=["*"] + allow_credentials=True is rejected by browsers.
-        raise RuntimeError("ALLOWED_ORIGINS must list explicit origin(s) when APP_ENV=production.")
+        raise RuntimeError("ALLOWED_ORIGINS must list explicit origin(s) when APP_ENV=prod.")
     if not os.getenv("SETTINGS_ENCRYPTION_KEY"):
         # Without it, app.org_settings can't encrypt/decrypt any org's stored
         # Shopify/PostEx credentials at all - unlike AUTH_SECRET there's no
         # runtime-random fallback, since that would make already-stored
         # encrypted credentials permanently undecryptable, not just re-signable.
-        raise RuntimeError("SETTINGS_ENCRYPTION_KEY must be set when APP_ENV=production.")
+        raise RuntimeError("SETTINGS_ENCRYPTION_KEY must be set when APP_ENV=prod.")
     # Note: there's no longer a single "the" Shopify store to validate at boot
     # (SHOPIFY_STORE_URL) - each org's own credentials (org_integration_settings,
     # via app.org_settings) are validated at sync time instead. See
@@ -98,6 +98,7 @@ app.include_router(orders.router, prefix="/api", dependencies=_auth)
 app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
 app.include_router(ledger.router, prefix="/api", dependencies=_auth)
 app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
+app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 # Open routers — self-gate via the PIN / login+bootstrap, so they bootstrap login.
 # app_pin is retired in ORGANIZATIONS_USERS_PLAN.md's Phase 2 (org-scoping cutover).
 app.include_router(app_pin.router, prefix="/api")

@@ -37,7 +37,7 @@ Because a second org is expected to onboard soon after this ships, **org-scoping
 
 **`backend/app/routes/auth.py`** (new, public router):
 - `GET /auth/status` — mirrors today's PIN "configured" check, but "does any user exist yet."
-- `POST /auth/bootstrap` — creates the first org + first admin user. Race-free via the `system_bootstrap` singleton insert. In production (`APP_ENV=production`), additionally require a `BOOTSTRAP_TOKEN` header — mirrors `main.py`'s existing fail-fast pattern for must-not-ship-half-configured concerns (`AUTH_SECRET`, `ALLOWED_ORIGINS` checks) — so this permanently-mounted endpoint isn't a live unauthenticated org-creation hole after the one time it's used.
+- `POST /auth/bootstrap` — creates the first org + first admin user. Race-free via the `system_bootstrap` singleton insert. In production (`APP_ENV=prod`), additionally require a `BOOTSTRAP_TOKEN` header — mirrors `main.py`'s existing fail-fast pattern for must-not-ship-half-configured concerns (`AUTH_SECRET`, `ALLOWED_ORIGINS` checks) — so this permanently-mounted endpoint isn't a live unauthenticated org-creation hole after the one time it's used.
 - `POST /auth/login` — email+password, lockout via `login_lockouts`.
 - `GET /auth/me` — current user's profile from the token, for the frontend's logged-in-as indicator.
 

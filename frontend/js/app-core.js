@@ -1,14 +1,14 @@
 // Config, session-token auth (patches window.fetch - must load first),
-// shared app state, edit lock, and the PIN gate.
+// shared app state, edit lock, and the login gate.
 
 // API Configuration
 const API_BASE = (typeof window !== 'undefined' && window.API_BASE) || 'http://127.0.0.1:8000/api';
 
 // ============================================
 // Session-token auth
-// The PIN gate exchanges the PIN for a token (see runPinGate). We store it for the
-// session and attach it to every API request via a fetch wrapper. A 401 from a
-// protected route means the token is missing/expired -> re-open the PIN gate.
+// The login gate exchanges email+password for a token (see runAuthGate). We store it
+// for the session and attach it to every API request via a fetch wrapper. A 401 from a
+// protected route means the token is missing/expired -> re-open the login gate.
 // ============================================
 const AUTH_TOKEN_KEY = 'lushwear_auth_token';
 
@@ -23,19 +23,20 @@ function clearAuthToken() {
     try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) { /* ignore */ }
 }
 
-/** True while we are already re-opening the PIN gate after a 401, to avoid repeats. */
+/** True while we are already re-opening the login gate after a 401, to avoid repeats. */
 let _authExpiredHandling = false;
 
 function isAuthBootstrapUrl(url) {
-    // app-pin endpoints are the login itself; their 401s are handled locally (wrong PIN).
-    return url.indexOf(API_BASE + '/app-pin/') === 0;
+    // auth/login and auth/bootstrap are the login itself; their 401s are handled locally
+    // (wrong password) rather than treated as an expired session.
+    return url.indexOf(API_BASE + '/auth/login') === 0 || url.indexOf(API_BASE + '/auth/bootstrap') === 0;
 }
 
 function onAuthExpired() {
     if (_authExpiredHandling) return;
     _authExpiredHandling = true;
     clearAuthToken();
-    try { showToast('Session expired. Please enter your PIN.', 'warning'); } catch (e) { /* ignore */ }
+    try { showToast('Session expired. Please log in again.', 'warning'); } catch (e) { /* ignore */ }
     try { lockApp(); } catch (e) { /* ignore */ }
 }
 
@@ -63,12 +64,12 @@ function onAuthExpired() {
     };
 })();
 
-/** PIN gate form submit handler (removed after success so lock-app can re-open the gate). */
-let pinGateSubmitHandler = null;
+/** Auth gate form submit handler (removed after success so lock-app can re-open the gate). */
+let authGateSubmitHandler = null;
 
 /**
  * Prefetch promise started as soon as the backend is confirmed ready (while the user types
- * their PIN). Awaited in DOMContentLoaded instead of starting a fresh fetch after PIN entry.
+ * their credentials). Awaited in DOMContentLoaded instead of starting a fresh fetch after login.
  */
 let _prefetchOrdersPromise = null;
 
@@ -295,13 +296,13 @@ function initInstallPrompt() {
     }
 }
 
-function initChangePinModal() {
-    const modal = document.getElementById('changePinModal');
-    const form = document.getElementById('changePinForm');
-    const errEl = document.getElementById('changePinError');
-    const openBtn = document.getElementById('settingsChangePinBtn');
-    const closeBtn = document.getElementById('changePinModalClose');
-    const cancelBtn = document.getElementById('changePinCancelBtn');
+function initChangePasswordModal() {
+    const modal = document.getElementById('changePasswordModal');
+    const form = document.getElementById('changePasswordForm');
+    const errEl = document.getElementById('changePasswordError');
+    const openBtn = document.getElementById('settingsChangePasswordBtn');
+    const closeBtn = document.getElementById('changePasswordModalClose');
+    const cancelBtn = document.getElementById('changePasswordCancelBtn');
     if (!modal || !form) {
         return;
     }
@@ -312,7 +313,7 @@ function initChangePinModal() {
         }
         form.reset();
         modal.classList.add('active');
-        const cur = document.getElementById('changePinCurrent');
+        const cur = document.getElementById('changePasswordCurrent');
         if (cur) {
             cur.focus();
         }
@@ -337,38 +338,29 @@ function initChangePinModal() {
         if (errEl) {
             errEl.textContent = '';
         }
-        const current = (document.getElementById('changePinCurrent') || {}).value || '';
-        const newPin = (document.getElementById('changePinNew') || {}).value || '';
-        const confirm = (document.getElementById('changePinNewConfirm') || {}).value || '';
-        if (newPin !== confirm) {
+        const current = (document.getElementById('changePasswordCurrent') || {}).value || '';
+        const newPassword = (document.getElementById('changePasswordNew') || {}).value || '';
+        const confirm = (document.getElementById('changePasswordNewConfirm') || {}).value || '';
+        if (newPassword !== confirm) {
             if (errEl) {
-                errEl.textContent = 'New PINs do not match';
+                errEl.textContent = 'New passwords do not match';
             }
             return;
         }
-        const saveBtn = document.getElementById('changePinSaveBtn');
+        const saveBtn = document.getElementById('changePasswordSaveBtn');
         if (saveBtn) {
             saveBtn.disabled = true;
         }
         try {
-            const r = await fetch(`${API_BASE}/app-pin/change`, {
+            await apiJson('/auth/change-password', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    current_pin: current,
-                    new_pin: newPin,
-                    confirm_pin: confirm
-                })
+                body: { current_password: current, new_password: newPassword }
             });
-            const data = await r.json().catch(() => ({}));
-            if (!r.ok) {
-                throw new Error(apiErrorMessage(data, 'Request failed'));
-            }
-            showToast('PIN updated', 'success');
+            showToast('Password updated', 'success');
             closeModal();
         } catch (ex) {
             if (errEl) {
-                errEl.textContent = ex.message || 'Could not update PIN';
+                errEl.textContent = ex.message || 'Could not update password';
             }
         } finally {
             if (saveBtn) {
@@ -379,20 +371,24 @@ function initChangePinModal() {
 }
 
 /**
- * Block until PIN is verified or first-time setup completes.
- * @returns {Promise<boolean>} false only if server reports app_pin table missing (503).
+ * Block until login succeeds, or first-time org+admin setup completes.
+ * @returns {Promise<boolean>} false only if server reports the Organizations & Users
+ *   tables are missing (503) - i.e. the Phase 2 migrations haven't been applied yet.
  */
-function runPinGate() {
-    const root = document.getElementById('pinGateRoot');
-    const titleEl = document.getElementById('pinGateTitle');
-    const errEl = document.getElementById('pinGateError');
-    const form = document.getElementById('pinGateForm');
-    const pinInput = document.getElementById('pinGatePin');
-    const confirmWrap = document.getElementById('pinGateConfirmWrap');
-    const confirmInput = document.getElementById('pinGateConfirm');
-    const submitBtn = document.getElementById('pinGateSubmit');
-    const waitingEl = document.getElementById('pinGateWaiting');
-    if (!root || !form || !pinInput || !confirmInput || !submitBtn) {
+function runAuthGate() {
+    const root = document.getElementById('authGateRoot');
+    const titleEl = document.getElementById('authGateTitle');
+    const errEl = document.getElementById('authGateError');
+    const form = document.getElementById('authGateForm');
+    const orgNameWrap = document.getElementById('authGateOrgNameWrap');
+    const orgNameInput = document.getElementById('authGateOrgName');
+    const emailInput = document.getElementById('authGateEmail');
+    const passwordInput = document.getElementById('authGatePassword');
+    const confirmWrap = document.getElementById('authGateConfirmWrap');
+    const confirmInput = document.getElementById('authGateConfirmPassword');
+    const submitBtn = document.getElementById('authGateSubmit');
+    const waitingEl = document.getElementById('authGateWaiting');
+    if (!root || !form || !emailInput || !passwordInput || !confirmInput || !submitBtn) {
         return Promise.resolve(true);
     }
 
@@ -401,33 +397,33 @@ function runPinGate() {
     }
     submitBtn.disabled = true;
 
-    if (pinGateSubmitHandler) {
-        form.removeEventListener('submit', pinGateSubmitHandler);
-        pinGateSubmitHandler = null;
+    if (authGateSubmitHandler) {
+        form.removeEventListener('submit', authGateSubmitHandler);
+        authGateSubmitHandler = null;
     }
 
     return new Promise((resolve) => {
-        let configured = false;
+        let hasUsers = false;
 
-        function detachPinGateSubmit() {
-            if (pinGateSubmitHandler && form) {
-                form.removeEventListener('submit', pinGateSubmitHandler);
-                pinGateSubmitHandler = null;
+        function detachAuthGateSubmit() {
+            if (authGateSubmitHandler && form) {
+                form.removeEventListener('submit', authGateSubmitHandler);
+                authGateSubmitHandler = null;
             }
         }
 
         async function loadStatus() {
-            // Hide the PIN form and show connecting state while backend isn't ready
+            // Hide the form and show connecting state while backend isn't ready
             if (form) form.style.display = 'none';
             if (titleEl) titleEl.style.display = 'none';
             if (waitingEl) {
                 waitingEl.style.display = '';
-                waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Connecting to server…';
+                waitingEl.innerHTML = '<span class="auth-gate-spinner"></span>Connecting to server…';
             }
 
             for (;;) {
                 try {
-                    const r = await fetch(`${API_BASE}/app-pin/status`);
+                    const r = await fetch(`${API_BASE}/auth/status`);
                     const data = await r.json().catch(() => ({}));
 
                     if (r.status === 503) {
@@ -439,7 +435,7 @@ function runPinGate() {
                             errEl.textContent = apiErrorMessage(data, 'Request failed');
                         }
                         submitBtn.disabled = true;
-                        detachPinGateSubmit();
+                        detachAuthGateSubmit();
                         resolve(false);
                         return;
                     }
@@ -447,7 +443,7 @@ function runPinGate() {
                         throw new Error(apiErrorMessage(data, 'Request failed'));
                     }
 
-                    // Backend is ready. (Data is loaded after PIN verify, once we hold a
+                    // Backend is ready. (Data is loaded after login, once we hold a
                     // token — protected routes reject unauthenticated prefetches.)
 
                     // Hide connecting state, reveal form
@@ -455,56 +451,67 @@ function runPinGate() {
                     if (form) form.style.display = '';
                     if (titleEl) titleEl.style.display = '';
 
-                    configured = !!data.configured;
+                    hasUsers = !!data.has_users;
                     if (titleEl) {
-                        titleEl.textContent = configured ? 'Enter PIN' : 'Create your PIN';
+                        titleEl.textContent = hasUsers ? 'Log in' : 'Set up your organization';
+                    }
+                    if (orgNameWrap) {
+                        orgNameWrap.style.display = hasUsers ? 'none' : 'flex';
                     }
                     if (confirmWrap) {
-                        confirmWrap.style.display = configured ? 'none' : 'block';
+                        confirmWrap.style.display = hasUsers ? 'none' : 'flex';
                     }
-                    if (configured) {
+                    if (hasUsers) {
                         confirmInput.removeAttribute('required');
+                        orgNameInput.removeAttribute('required');
+                        passwordInput.setAttribute('autocomplete', 'current-password');
                     } else {
                         confirmInput.setAttribute('required', 'required');
+                        orgNameInput.setAttribute('required', 'required');
+                        passwordInput.setAttribute('autocomplete', 'new-password');
                     }
-                    pinInput.value = '';
+                    emailInput.value = '';
+                    passwordInput.value = '';
                     confirmInput.value = '';
-                    pinInput.focus();
+                    orgNameInput.value = '';
+                    emailInput.focus();
                     submitBtn.disabled = false;
                     break;
                 } catch {
                     if (waitingEl) {
                         waitingEl.style.display = '';
-                        waitingEl.innerHTML = '<span class="pin-gate-spinner"></span>Waiting for server…';
+                        waitingEl.innerHTML = '<span class="auth-gate-spinner"></span>Waiting for server…';
                     }
                     await new Promise((t) => setTimeout(t, 800));
                 }
             }
         }
 
-        pinGateSubmitHandler = async function pinGateOnSubmit(ev) {
+        authGateSubmitHandler = async function authGateOnSubmit(ev) {
             ev.preventDefault();
             if (errEl) {
                 errEl.textContent = '';
             }
-            const pin = pinInput.value;
+            const email = emailInput.value.trim();
+            const password = passwordInput.value;
             const confirm = confirmInput.value;
-            if (!configured && pin !== confirm) {
+            const orgName = orgNameInput.value.trim();
+            if (!hasUsers && password !== confirm) {
                 if (errEl) {
-                    errEl.textContent = 'PINs do not match';
+                    errEl.textContent = 'Passwords do not match';
                 }
                 return;
             }
             submitBtn.disabled = true;
             const submitLabel = submitBtn.textContent;
             submitBtn.innerHTML =
-                `<span class="btn-spinner"></span>${configured ? 'Verifying…' : 'Creating PIN…'}`;
+                `<span class="btn-spinner"></span>${hasUsers ? 'Logging in…' : 'Setting up…'}`;
             try {
-                if (!configured) {
-                    const r = await fetch(`${API_BASE}/app-pin/setup`, {
+                if (!hasUsers) {
+                    const r = await fetch(`${API_BASE}/auth/bootstrap`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ pin, confirm_pin: confirm })
+                        body: JSON.stringify({ org_name: orgName, email, password })
                     });
                     const data = await r.json().catch(() => ({}));
                     if (!r.ok) {
@@ -512,32 +519,28 @@ function runPinGate() {
                     }
                     setAuthToken(data.token);
                     root.hidden = true;
-                    pinInput.value = '';
-                    confirmInput.value = '';
-                    detachPinGateSubmit();
+                    detachAuthGateSubmit();
                     resolve(true);
                     return;
                 }
-                const r = await fetch(`${API_BASE}/app-pin/verify`, {
+                const r = await fetch(`${API_BASE}/auth/login`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ pin })
+                    body: JSON.stringify({ email, password })
                 });
                 const data = await r.json().catch(() => ({}));
                 if (!r.ok) {
                     if (errEl) {
                         errEl.textContent =
-                            r.status === 401 ? 'Incorrect PIN' : apiErrorMessage(data, 'Request failed');
+                            r.status === 401 ? 'Incorrect email or password' : apiErrorMessage(data, 'Request failed');
                     }
-                    pinInput.value = '';
-                    pinInput.focus();
+                    passwordInput.value = '';
+                    passwordInput.focus();
                     return;
                 }
                 setAuthToken(data.token);
                 root.hidden = true;
-                pinInput.value = '';
-                confirmInput.value = '';
-                detachPinGateSubmit();
+                detachAuthGateSubmit();
                 resolve(true);
             } catch (ex) {
                 if (errEl) {
@@ -549,7 +552,7 @@ function runPinGate() {
             }
         };
 
-        form.addEventListener('submit', pinGateSubmitHandler);
+        form.addEventListener('submit', authGateSubmitHandler);
         loadStatus();
     });
 }
@@ -557,7 +560,7 @@ function runPinGate() {
 function lockApp() {
     exitOrdersFullScreen();
     const appContainer = document.querySelector('.app-container');
-    const root = document.getElementById('pinGateRoot');
+    const root = document.getElementById('authGateRoot');
     if (!root) {
         return;
     }
@@ -566,7 +569,7 @@ function lockApp() {
         appContainer.style.visibility = 'hidden';
         appContainer.style.opacity = '0';
     }
-    runPinGate().then((ok) => {
+    runAuthGate().then((ok) => {
         if (ok && appContainer) {
             appContainer.style.visibility = 'visible';
             setTimeout(() => {
@@ -598,7 +601,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initLedgerModals();
     initMonthSummaryNav();
     initGrids();
-    initChangePinModal();
+    initChangePasswordModal();
     initSettingsView();
     initInstallPrompt();
     const lockAppBtn = document.getElementById('lockAppBtn');
@@ -606,8 +609,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         lockAppBtn.addEventListener('click', () => lockApp());
     }
 
-    const pinOk = await runPinGate();
-    if (!pinOk) {
+    const authOk = await runAuthGate();
+    if (!authOk) {
         return;
     }
 
@@ -617,7 +620,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     let ordersLoaded = false;
 
-    // If prefetch was started during PIN entry, await that promise; otherwise fetch now.
+    // If prefetch was started during login, await that promise; otherwise fetch now.
     // Products aren't fetched here - nothing on the landing (Orders) view needs them, and
     // Products/Dashboard fetch their own fresh copy when visited (see switchView).
     const loadOrdersPromise = (_prefetchOrdersPromise || loadOrders())
@@ -660,7 +663,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
 /**
  * Handle ?action= deep links (e.g. a phone shortcut to record an entry).
- * Runs after the PIN gate so the target view has data and a valid token.
+ * Runs after the login gate so the target view has data and a valid token.
  */
 async function applyStartupDeepLink() {
     // Also accept the hash form (#action=...): static hosts that redirect

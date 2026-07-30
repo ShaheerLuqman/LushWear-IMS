@@ -28,23 +28,30 @@
 </head>
 
 <body>
-    <!-- PIN gate (before data load) -->
-    <div id="pinGateRoot" class="pin-gate-root">
-        <div class="pin-gate-card">
-            <img src="assets/Logo_Large.png" alt="" class="pin-gate-logo">
-            <h2 id="pinGateTitle" class="pin-gate-title" style="display: none;">Enter PIN</h2>
-            <p id="pinGateWaiting" class="pin-gate-waiting"><span class="pin-gate-spinner"></span>Connecting to server…</p>
-            <form id="pinGateForm" class="pin-gate-form" autocomplete="off" style="display: none;">
-                <label class="pin-gate-label" for="pinGatePin">PIN</label>
-                <input type="password" id="pinGatePin" class="pin-gate-input" inputmode="numeric"
-                    minlength="4" maxlength="64" required autocomplete="new-password" placeholder="••••">
-                <div id="pinGateConfirmWrap" class="pin-gate-confirm-wrap" style="display: none;">
-                    <label class="pin-gate-label" for="pinGateConfirm">Confirm PIN</label>
-                    <input type="password" id="pinGateConfirm" class="pin-gate-input" inputmode="numeric"
-                        minlength="4" maxlength="64" autocomplete="new-password" placeholder="••••">
+    <!-- Auth gate (before data load): email/password login, or first-run org+admin setup -->
+    <div id="authGateRoot" class="auth-gate-root">
+        <div class="auth-gate-card">
+            <img src="assets/Logo_Large.png" alt="" class="auth-gate-logo">
+            <h2 id="authGateTitle" class="auth-gate-title" style="display: none;">Log in</h2>
+            <p id="authGateWaiting" class="auth-gate-waiting"><span class="auth-gate-spinner"></span>Connecting to server…</p>
+            <form id="authGateForm" class="auth-gate-form" autocomplete="off" style="display: none;">
+                <div id="authGateOrgNameWrap" class="auth-gate-extra-field" style="display: none;">
+                    <label class="auth-gate-label" for="authGateOrgName">Organization name</label>
+                    <input type="text" id="authGateOrgName" class="auth-gate-input" maxlength="200" placeholder="e.g. LushWear">
                 </div>
-                <p id="pinGateError" class="pin-gate-error" role="alert"></p>
-                <button type="submit" id="pinGateSubmit" class="btn btn-primary pin-gate-submit">Continue</button>
+                <label class="auth-gate-label" for="authGateEmail">Email</label>
+                <input type="email" id="authGateEmail" class="auth-gate-input"
+                    required autocomplete="username" placeholder="you@example.com">
+                <label class="auth-gate-label" for="authGatePassword">Password</label>
+                <input type="password" id="authGatePassword" class="auth-gate-input"
+                    minlength="8" maxlength="128" required autocomplete="current-password" placeholder="••••••••">
+                <div id="authGateConfirmWrap" class="auth-gate-extra-field" style="display: none;">
+                    <label class="auth-gate-label" for="authGateConfirmPassword">Confirm password</label>
+                    <input type="password" id="authGateConfirmPassword" class="auth-gate-input"
+                        minlength="8" maxlength="128" autocomplete="new-password" placeholder="••••••••">
+                </div>
+                <p id="authGateError" class="auth-gate-error" role="alert"></p>
+                <button type="submit" id="authGateSubmit" class="btn btn-primary auth-gate-submit">Continue</button>
             </form>
         </div>
     </div>
@@ -82,33 +89,33 @@
         </div>
     </div>
 
-    <!-- Change PIN (after unlock) -->
-    <div id="changePinModal" class="modal">
-        <div class="modal-content pin-change-modal-content">
+    <!-- Change password (after login) -->
+    <div id="changePasswordModal" class="modal">
+        <div class="modal-content password-change-modal-content">
             <div class="modal-header">
-                <h2>Change PIN</h2>
-                <button type="button" class="modal-close" id="changePinModalClose" aria-label="Close">&times;</button>
+                <h2>Change password</h2>
+                <button type="button" class="modal-close" id="changePasswordModalClose" aria-label="Close">&times;</button>
             </div>
-            <form id="changePinForm" class="modal-body pin-change-form" autocomplete="off">
+            <form id="changePasswordForm" class="modal-body password-change-form" autocomplete="off">
                 <div class="form-group">
-                    <label for="changePinCurrent">Current PIN</label>
-                    <input type="password" id="changePinCurrent" class="pin-gate-input" inputmode="numeric"
-                        minlength="4" maxlength="64" required autocomplete="current-password">
+                    <label for="changePasswordCurrent">Current password</label>
+                    <input type="password" id="changePasswordCurrent" class="auth-gate-input"
+                        minlength="8" maxlength="128" required autocomplete="current-password">
                 </div>
                 <div class="form-group">
-                    <label for="changePinNew">New PIN</label>
-                    <input type="password" id="changePinNew" class="pin-gate-input" inputmode="numeric"
-                        minlength="4" maxlength="64" required autocomplete="new-password">
+                    <label for="changePasswordNew">New password</label>
+                    <input type="password" id="changePasswordNew" class="auth-gate-input"
+                        minlength="8" maxlength="128" required autocomplete="new-password">
                 </div>
                 <div class="form-group">
-                    <label for="changePinNewConfirm">Confirm new PIN</label>
-                    <input type="password" id="changePinNewConfirm" class="pin-gate-input" inputmode="numeric"
-                        minlength="4" maxlength="64" required autocomplete="new-password">
+                    <label for="changePasswordNewConfirm">Confirm new password</label>
+                    <input type="password" id="changePasswordNewConfirm" class="auth-gate-input"
+                        minlength="8" maxlength="128" required autocomplete="new-password">
                 </div>
-                <p id="changePinError" class="pin-gate-error" role="alert"></p>
+                <p id="changePasswordError" class="auth-gate-error" role="alert"></p>
                 <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="changePinCancelBtn">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="changePinSaveBtn">Save PIN</button>
+                    <button type="button" class="btn btn-secondary" id="changePasswordCancelBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="changePasswordSaveBtn">Save password</button>
                 </div>
             </form>
         </div>
@@ -222,7 +229,7 @@
                         <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
                             <i class="fas fa-file-export" aria-hidden="true"></i>
                         </button>
-                        <button type="button" id="lockAppBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Lock app (enter PIN to unlock)" aria-label="Lock app">
+                        <button type="button" id="lockAppBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Lock app (log in again to unlock)" aria-label="Lock app">
                             <img src="assets/padlock.png" alt="" class="header-lock-app-img" width="18" height="18" decoding="async" draggable="false">
                         </button>
                         <button type="button" id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Full screen (Esc to exit)">
@@ -594,14 +601,68 @@
                         </section>
 
                         <section class="settings-section">
-                            <h2 class="settings-section__title">Security</h2>
+                            <h2 class="settings-section__title">Account</h2>
                             <div class="settings-row">
                                 <div class="settings-row__text">
-                                    <span class="settings-row__label">App PIN</span>
-                                    <span class="settings-row__hint">Change the PIN used to unlock the app.</span>
+                                    <span class="settings-row__label" id="settingsAccountEmail">—</span>
+                                    <span class="settings-row__hint" id="settingsAccountRole"></span>
                                 </div>
-                                <button type="button" id="settingsChangePinBtn" class="btn btn-secondary">Change PIN</button>
+                                <button type="button" id="settingsChangePasswordBtn" class="btn btn-secondary">Change password</button>
                             </div>
+                        </section>
+
+                        <section class="settings-section" id="settingsUsersSection" style="display: none;">
+                            <h2 class="settings-section__title">Users</h2>
+                            <div id="settingsUsersList" class="settings-users-list"></div>
+                            <form id="settingsAddUserForm" class="settings-add-user-form">
+                                <div class="form-group">
+                                    <label for="settingsAddUserEmail">Email</label>
+                                    <input type="email" id="settingsAddUserEmail" class="form-input" required placeholder="teammate@example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsAddUserPassword">Temporary password</label>
+                                    <input type="password" id="settingsAddUserPassword" class="form-input" required minlength="8" placeholder="At least 8 characters" autocomplete="new-password">
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsAddUserRole">Role</label>
+                                    <select id="settingsAddUserRole" class="form-input">
+                                        <option value="staff">Staff</option>
+                                        <option value="admin">Admin</option>
+                                    </select>
+                                </div>
+                                <p id="settingsAddUserError" class="auth-gate-error" role="alert"></p>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Add user</button>
+                                </div>
+                            </form>
+                        </section>
+
+                        <section class="settings-section" id="settingsIntegrationsSection" style="display: none;">
+                            <h2 class="settings-section__title">Integrations</h2>
+                            <form id="settingsIntegrationsForm">
+                                <div class="form-group">
+                                    <label for="settingsShopifyStoreUrl">Shopify store URL</label>
+                                    <input type="text" id="settingsShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsShopifyAccessToken">Shopify access token</label>
+                                    <input type="password" id="settingsShopifyAccessToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="off">
+                                    <span class="form-hint" id="settingsShopifyTokenStatus"></span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsShopifyApiVersion">Shopify API version</label>
+                                    <input type="text" id="settingsShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsPostexToken">PostEx merchant token</label>
+                                    <input type="password" id="settingsPostexToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="off">
+                                    <span class="form-hint" id="settingsPostexTokenStatus"></span>
+                                </div>
+                                <p id="settingsIntegrationsError" class="auth-gate-error" role="alert"></p>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save integrations</button>
+                                </div>
+                            </form>
                         </section>
                     </div>
                 </div>
@@ -918,6 +979,7 @@
          files, which imported bindings do not allow. Load order matters -
          app-core.js patches window.fetch and must come first. -->
     <script src="js/app-core.js"></script>
+    <script src="js/auth-users.js"></script>
     <script src="js/orders-columns.js"></script>
     <script src="js/orders-grid.js"></script>
     <script src="js/orders-actions.js"></script>

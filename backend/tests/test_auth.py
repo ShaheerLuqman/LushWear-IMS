@@ -175,6 +175,31 @@ class TestAuthMe:
         assert r.json()["id"] == "u1"
 
 
+class TestChangePassword:
+    def test_correct_current_password_updates_it(self, make_client):
+        import app.main as main
+        from app.auth import require_auth
+
+        client = make_client({"users": [_user_row("old-password1", id="u1")]})
+        main.app.dependency_overrides[require_auth] = lambda: {"sub": "u1", "org_id": "test-org", "role": "admin"}
+        r = client.post("/api/auth/change-password", json={
+            "current_password": "old-password1", "new_password": "new-password1",
+        })
+        assert r.status_code == 200
+        assert r.json() == {"ok": True}
+
+    def test_wrong_current_password_is_401(self, make_client):
+        import app.main as main
+        from app.auth import require_auth
+
+        client = make_client({"users": [_user_row("old-password1", id="u1")]})
+        main.app.dependency_overrides[require_auth] = lambda: {"sub": "u1", "org_id": "test-org", "role": "admin"}
+        r = client.post("/api/auth/change-password", json={
+            "current_password": "wrong-password1", "new_password": "new-password1",
+        })
+        assert r.status_code == 401
+
+
 class TestRequireRole:
     """Direct unit test of the dependency (no pytest-asyncio in this repo -
     plain asyncio.run instead), same reasoning as the rest of this file's

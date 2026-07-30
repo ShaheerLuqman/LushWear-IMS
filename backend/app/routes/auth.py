@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.auth import create_token, hash_password, require_auth, verify_password
 from app.database import get_supabase
-from app.models import BootstrapBody, LoginBody, UserPublic
+from app.models import BootstrapBody, ChangePasswordBody, LoginBody, UserPublic
 from app.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -104,7 +104,7 @@ async def auth_bootstrap(body: BootstrapBody, x_bootstrap_token: Optional[str] =
     permanently-mounted endpoint isn't a live unauthenticated org-creation hole
     once the one-time bootstrap has happened.
     """
-    is_prod = os.getenv("APP_ENV", "development").strip().lower() == "production"
+    is_prod = os.getenv("APP_ENV", "dev").strip().lower() == "prod"
     if is_prod:
         configured_token = os.getenv("BOOTSTRAP_TOKEN")
         if not configured_token or x_bootstrap_token != configured_token:
@@ -170,3 +170,21 @@ async def auth_me(payload: dict = Depends(require_auth)):
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
     return rows[0]
+
+
+@router.post("/change-password")
+async def auth_change_password(body: ChangePasswordBody, payload: dict = Depends(require_auth)):
+    """Replace the caller's own password; requires the current one."""
+    user_id = payload.get("sub")
+    supabase = get_supabase()
+    rows = supabase.table("users").select("*").eq("id", user_id).limit(1).execute().data or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="User not found")
+    user = rows[0]
+    if not verify_password(body.current_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Current password is incorrect")
+
+    supabase.table("users").update({
+        "password_hash": hash_password(body.new_password),
+    }).eq("id", user_id).execute()
+    return {"ok": True}

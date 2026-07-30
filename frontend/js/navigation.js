@@ -327,6 +327,8 @@ function switchView(viewName, { skipReload = false } = {}) {
             if (loadingEl) loadingEl.style.display = 'none';
             if (contentEl) contentEl.style.display = '';
         });
+    } else if (viewName === 'settings') {
+        loadAccountSettings();
     }
 }
 
