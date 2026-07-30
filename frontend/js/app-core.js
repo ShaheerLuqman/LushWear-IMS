@@ -141,8 +141,8 @@ function initOrdersMoreActionsMenu() {
     });
 }
 
-/** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: locked on open. */
-let editLocked = true;
+/** When true, user cannot edit anything (grids, forms, sync, bulk update, etc.). Default: unlocked on open. */
+let editLocked = false;
 
 function isEditingAllowed() {
     return !editLocked;
@@ -593,7 +593,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     initNavigation();
     initOrdersPeriodFilter();
     initOrdersDateRangeButton();
-    initForms();
+    initOrdersActions();
+    initCashbookActions();
+    initLedgerModals();
+    initMonthSummaryNav();
     initGrids();
     initChangePinModal();
     initSettingsView();
@@ -667,10 +670,6 @@ async function applyStartupDeepLink() {
     if (action !== 'create-entry' && action !== 'bulk-entry') {
         return;
     }
-    // Editing defaults to locked on open, which would make openCashbookEntryModal
-    // bail with a toast. The link exists to record an entry, so unlock for it.
-    editLocked = false;
-    applyEditLockState();
     // The entry modal needs the ledger list, so load before opening rather than
     // letting switchView kick off an un-awaited fetch.
     switchView('cashbook', { skipReload: true });

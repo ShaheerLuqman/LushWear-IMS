@@ -297,6 +297,33 @@ body {
     padding: 0 12px;
 }
 
+.nav-section + .nav-section {
+    margin-top: 12px;
+}
+
+/* Collapses to zero height in the icon rail, same trick as .nav-tooltip -
+   an opacity-0 label still reserves layout space otherwise. */
+.nav-section-label {
+    display: block;
+    height: 0;
+    margin: 0 8px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    opacity: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    transition: opacity 0.12s ease;
+}
+
+.sidebar:hover .nav-section-label {
+    height: auto;
+    margin-bottom: 6px;
+    opacity: 0.7;
+}
+
 .nav-item {
     display: flex;
     align-items: center;
@@ -4236,6 +4263,13 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
         width: auto;
         margin-left: 12px;
         opacity: 1;
+    }
+
+    .nav-section-label,
+    .sidebar:hover .nav-section-label {
+        height: auto;
+        margin-bottom: 6px;
+        opacity: 0.7;
     }
 
     .nav-item,

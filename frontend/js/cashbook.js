@@ -446,6 +446,139 @@ function closeBulkEntryInfoCard() {
     document.getElementById('bulkEntryInfoBtn')?.setAttribute('aria-expanded', 'false');
 }
 
+function initCashbookActions() {
+    const cashbookDateFilter = document.getElementById('cashbookDateFilter');
+    if (cashbookDateFilter) {
+        const applyDateFromInput = () => {
+            const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+            if (parsed) {
+                cashbookSelectedDate = parsed;
+                cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
+                reloadCashbookForCurrentDate();
+            } else if (cashbookDateFilter.value.trim() !== '') {
+                showToast('Enter date as DD/MM/YYYY', 'error');
+                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+            }
+        };
+        cashbookDateFilter.addEventListener('change', applyDateFromInput);
+        cashbookDateFilter.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                applyDateFromInput();
+            }
+        });
+        cashbookDateFilter.addEventListener('blur', () => {
+            if (cashbookDateFilter.value.trim() !== '') {
+                const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+                if (parsed) {
+                    cashbookSelectedDate = parsed;
+                    cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
+                } else {
+                    cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+                }
+            } else {
+                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+            }
+        });
+    }
+    document.getElementById('cashbookTodayBtn')?.addEventListener('click', () => {
+        const today = getTodayDateString();
+        cashbookSelectedDate = today;
+        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(today);
+        reloadCashbookForCurrentDate();
+    });
+    document.getElementById('cashbookPrevDayBtn')?.addEventListener('click', () => {
+        const current = cashbookSelectedDate || getTodayDateString();
+        const [year, month, day] = current.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        date.setDate(date.getDate() - 1);
+        const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        cashbookSelectedDate = newDate;
+        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
+        reloadCashbookForCurrentDate();
+    });
+    document.getElementById('cashbookNextDayBtn')?.addEventListener('click', () => {
+        const current = cashbookSelectedDate || getTodayDateString();
+        const [year, month, day] = current.split('-').map(Number);
+        const date = new Date(year, month - 1, day);
+        date.setDate(date.getDate() + 1);
+        const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+        cashbookSelectedDate = newDate;
+        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
+        reloadCashbookForCurrentDate();
+    });
+
+    // Cashbook/order advance ledger selects: picking "+ Create new ledger..." opens the create ledger modal
+    ['cashbookEntryInLedger', 'cashbookEntryOutLedger'].forEach((id) => {
+        document.getElementById(id)?.addEventListener('change', handleLedgerSelectChange);
+    });
+
+    document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
+    document.getElementById('cashbookEntryOrderAdvance')?.addEventListener('change', (e) => {
+        setCashbookEntryOrderAdvance(e.target.checked);
+    });
+    document.getElementById('cashbookEntryOrderNumber')?.addEventListener('input', refreshCashbookEntryParticularPlaceholders);
+    document.getElementById('cashbookEntryModeSingle')?.addEventListener('click', () => setCashbookEntryMode('single'));
+    document.getElementById('cashbookEntryModeBulk')?.addEventListener('click', () => setCashbookEntryMode('bulk'));
+    document.getElementById('bulkEntrySubmitBtn')?.addEventListener('click', submitBulkEntry);
+    initBulkEntryInfoCard();
+    // Re-validate as the user types (debounced lightly) and reset submit state.
+    document.getElementById('bulkEntryInput')?.addEventListener('input', () => {
+        autoResizeBulkEntryInput();
+        setBulkEntrySubmitEnabled(false);
+        clearTimeout(window.__bulkEntryDebounce);
+        window.__bulkEntryDebounce = setTimeout(validateBulkEntry, 300);
+    });
+    document.getElementById('closeCashbookEntryModal')?.addEventListener('click', closeCashbookEntryModal);
+    document.getElementById('cashbookEntryCancelBtn')?.addEventListener('click', closeCashbookEntryModal);
+    document.getElementById('cashbookEntryModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'cashbookEntryModal') closeCashbookEntryModal();
+    });
+    document.getElementById('cashbookEntryForm')?.addEventListener('submit', (e) => {
+        e.preventDefault();
+        submitCashbookEntryModal();
+    });
+    // Mirror incoming amount into outgoing until the user edits the outgoing amount.
+    document.getElementById('cashbookEntryInAmount')?.addEventListener('input', (e) => {
+        const outAmount = document.getElementById('cashbookEntryOutAmount');
+        // If both fields are now empty, re-arm mirroring (back to default mode).
+        if (e.target.value === '' && outAmount && outAmount.value === '') {
+            cashbookEntryOutAmountTouched = false;
+        }
+        if (!cashbookEntryOutAmountTouched && outAmount) {
+            outAmount.value = e.target.value;
+        }
+    });
+    document.getElementById('cashbookEntryOutAmount')?.addEventListener('input', (e) => {
+        const inAmount = document.getElementById('cashbookEntryInAmount');
+        // If both fields are now empty, re-arm mirroring (back to default mode).
+        if (e.target.value === '' && inAmount && inAmount.value === '') {
+            cashbookEntryOutAmountTouched = false;
+        } else {
+            cashbookEntryOutAmountTouched = true;
+        }
+    });
+    // Update particulars placeholders dynamically as ledgers are chosen.
+    document.getElementById('cashbookEntryInLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
+    document.getElementById('cashbookEntryOutLedger')?.addEventListener('change', refreshCashbookEntryParticularPlaceholders);
+    // Single-sided entry toggles: skip a side's entry and disable its fields.
+    // Only one may be ticked at a time.
+    document.getElementById('cashbookEntryInSkip')?.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            const other = document.getElementById('cashbookEntryOutSkip');
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('debit', false); }
+        }
+        setCashbookEntrySideSkipped('credit', e.target.checked);
+    });
+    document.getElementById('cashbookEntryOutSkip')?.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            const other = document.getElementById('cashbookEntryInSkip');
+            if (other && other.checked) { other.checked = false; setCashbookEntrySideSkipped('credit', false); }
+        }
+        setCashbookEntrySideSkipped('debit', e.target.checked);
+    });
+}
+
 function initBulkEntryInfoCard() {
     const btn = document.getElementById('bulkEntryInfoBtn');
     const wrap = btn ? btn.closest('.bulk-entry-info-wrap') : null;

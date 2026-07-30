@@ -407,6 +407,69 @@ function renderLedgerDetailGrid() {
     ledgerDetailGridApi.refreshCells({ force: true });
 }
 
+function initLedgerModals() {
+    document.getElementById('createLedgerBtn')?.addEventListener('click', () => openCreateLedgerModal());
+
+    const createLedgerForm = document.getElementById('createLedgerForm');
+    if (createLedgerForm) {
+        createLedgerForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (!isEditingAllowed()) {
+                showToast('Editing is locked', 'error');
+                return;
+            }
+            const name = document.getElementById('createLedgerName').value.trim();
+            const type = document.getElementById('createLedgerType').value;
+            const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
+            const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
+            if (!name) {
+                showToast('Enter a ledger name', 'error');
+                return;
+            }
+            if (!type) {
+                showToast('Select a type', 'error');
+                return;
+            }
+            createLedger(name, type, includeInCashInHand, openingBalance);
+        });
+    }
+    document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);
+    document.getElementById('createLedgerCancelBtn')?.addEventListener('click', closeCreateLedgerModal);
+    document.getElementById('createLedgerModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'createLedgerModal') closeCreateLedgerModal();
+    });
+
+    document.getElementById('closeEditLedgerModal')?.addEventListener('click', closeEditLedgerModal);
+    document.getElementById('editLedgerCancelBtn')?.addEventListener('click', closeEditLedgerModal);
+    document.getElementById('editLedgerModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'editLedgerModal') closeEditLedgerModal();
+    });
+    document.querySelector('#editLedgerModal .modal-content')?.addEventListener('click', (e) => e.stopPropagation());
+    const editLedgerForm = document.getElementById('editLedgerForm');
+    if (editLedgerForm) {
+        editLedgerForm.addEventListener('submit', (e) => {
+            e.preventDefault();
+            if (!isEditingAllowed()) {
+                showToast('Editing is locked', 'error');
+                return;
+            }
+            saveEditLedger();
+        });
+    }
+    document.getElementById('editLedgerDeleteBtn')?.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!isEditingAllowed()) {
+            showToast('Editing is locked', 'error');
+            return;
+        }
+        deleteLedgerFromEditModal();
+    });
+
+    document.getElementById('ledgerBackBtn')?.addEventListener('click', () => {
+        switchView('ledgers');
+    });
+}
+
 function initLedgerDetailGrid() {
     const gridDiv = document.getElementById('ledgerDetailGrid');
     if (!gridDiv) return;

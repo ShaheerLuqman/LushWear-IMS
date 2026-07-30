@@ -1,6 +1,171 @@
 // Inline cell saves, order delete, load sheet generation, and load sheet logs.
 
 // ============================================
+// Orders Toolbar & Bulk Actions (init)
+// ============================================
+
+function initOrdersActions() {
+    document.getElementById('syncShopifyBtn')?.addEventListener('click', async () => {
+        await syncShopifyProducts();
+    });
+
+    document.getElementById('bulkUpdateOrderBtn')?.addEventListener('click', openBulkUpdateOrderModal);
+    document.getElementById('bulkUpdateCostPriceBtn')?.addEventListener('click', openBulkUpdateCostPriceModal);
+    document.getElementById('recalculateOrderCostsBtn')?.addEventListener('click', openRecalculateOrderCostsModal);
+    document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
+    document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
+    document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
+    document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
+    document.getElementById('bulkUpdateSelectInGrid')?.addEventListener('click', bulkUpdateSelectInGrid);
+    document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
+
+    // Upload PostEx modal: file name display, upload button, close/cancel
+    document.getElementById('ordersMoreActionUploadPostEx')?.addEventListener('click', openUploadPostExModal);
+    const uploadPostExFileInput = document.getElementById('uploadPostExFileInput');
+    const uploadPostExFileNameEl = document.getElementById('uploadPostExFileName');
+    if (uploadPostExFileInput && uploadPostExFileNameEl) {
+        uploadPostExFileInput.addEventListener('change', () => {
+            const file = uploadPostExFileInput.files?.[0];
+            uploadPostExFileNameEl.textContent = file ? file.name : 'No file chosen';
+        });
+    }
+    document.getElementById('uploadPostExModalUpload')?.addEventListener('click', async () => {
+        const fileInput = document.getElementById('uploadPostExFileInput');
+        const file = fileInput?.files?.[0];
+        if (!file) {
+            showToast('Please select a CSV file', 'error');
+            return;
+        }
+        const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
+        const assignmentNumber = assignmentInput?.value?.trim() || null;
+        await uploadPostExCsv(file, assignmentNumber);
+    });
+    document.getElementById('closeUploadPostExModal')?.addEventListener('click', closeUploadPostExModal);
+    document.getElementById('uploadPostExModalCancel')?.addEventListener('click', closeUploadPostExModal);
+    const uploadPostExModalEl = document.getElementById('uploadPostExModal');
+    if (uploadPostExModalEl) {
+        uploadPostExModalEl.addEventListener('click', (e) => { if (e.target === uploadPostExModalEl) closeUploadPostExModal(); });
+    }
+
+    // Generate Load Sheet modal
+    document.getElementById('ordersMoreActionGenerateLoadSheet')?.addEventListener('click', openGenerateLoadSheetModal);
+    document.getElementById('generateLoadSheetModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'generateLoadSheetModal') closeGenerateLoadSheetModal();
+    });
+    document.getElementById('closeGenerateLoadSheetModal')?.addEventListener('click', closeGenerateLoadSheetModal);
+    document.getElementById('loadSheetModalCancel')?.addEventListener('click', closeGenerateLoadSheetModal);
+    document.getElementById('loadSheetModalConfirm')?.addEventListener('click', confirmGenerateLoadSheet);
+    document.getElementById('loadSheetOrderNumbers')?.addEventListener('input', updateLoadSheetModalState);
+    document.getElementById('loadSheetLogsRefreshBtn')?.addEventListener('click', () => loadLoadSheetLogs());
+
+    // Generate Invoice
+    document.getElementById('ordersMoreActionGenerateInvoice')?.addEventListener('click', async () => {
+        if (!ordersGridApi) {
+            showToast('Orders grid not initialized', 'error');
+            return;
+        }
+        const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+        if (selectedRows.length === 0) {
+            showToast('Please select at least one order', 'error');
+            return;
+        }
+        const orderIds = selectedRows.map(row => row.id).filter(Boolean);
+        if (orderIds.length === 0) {
+            showToast('Selected orders have no ID', 'error');
+            return;
+        }
+        try {
+            const res = await apiRequest('/orders/generate-invoice', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(orderIds),
+                fallback: 'Failed to generate invoice'
+            });
+            const blob = await res.blob();
+            const filename = invoicePdfFilename();
+            const url = window.URL.createObjectURL(blob);
+            const opened = window.open(url, '_blank', 'noopener,noreferrer');
+            if (!opened) {
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = filename;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+            }
+            setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+            showToast(`Invoice generated (${orderIds.length} order(s))`, 'success');
+        } catch (e) {
+            showToast(e.message || 'Failed to generate invoice', 'error');
+        }
+    });
+
+    // Generate Packaging List (opens modal: enter order numbers or upload labels PDF)
+    document.getElementById('ordersMoreActionGeneratePackagingList')?.addEventListener('click', openPackagingListModal);
+    document.getElementById('closePackagingListModal')?.addEventListener('click', closePackagingListModal);
+    document.getElementById('packagingListModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'packagingListModal') closePackagingListModal();
+    });
+    document.getElementById('packagingListOrderNumbers')?.addEventListener('input', updatePackagingListOrderCount);
+    document.getElementById('packagingListUploadPdfBtn')?.addEventListener('click', () => {
+        document.getElementById('packagingListPdfInput')?.click();
+    });
+    document.getElementById('packagingListPdfInput')?.addEventListener('change', handlePackagingListPdfUpload);
+    document.getElementById('packagingListGenerateBtn')?.addEventListener('click', generatePackagingListFromNumbers);
+
+    document.getElementById('refreshDeliveryStatusSelectedBtn')?.addEventListener('click', () => refreshDeliveryStatusSelected());
+    document.getElementById('exportGridExcelBtn')?.addEventListener('click', () => exportCurrentGridToExcel());
+    initOrdersMoreActionsMenu();
+
+    // Order table full screen toggle (icon only; Esc to exit)
+    document.getElementById('ordersFullScreenBtn')?.addEventListener('click', toggleOrdersFullScreen);
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && document.body.classList.contains('orders-table-fullscreen')) {
+            exitOrdersFullScreen();
+        }
+    });
+    // Sync the UI when the browser leaves fullscreen (e.g. user pressed Esc / F11)
+    document.addEventListener('fullscreenchange', () => {
+        if (!document.fullscreenElement && document.body.classList.contains('orders-table-fullscreen')) {
+            syncOrdersFullScreenExit();
+        }
+    });
+}
+
+function toggleOrdersFullScreen() {
+    if (document.body.classList.contains('orders-table-fullscreen')) {
+        exitOrdersFullScreen();
+    } else {
+        document.body.classList.add('orders-table-fullscreen');
+        if (document.documentElement.requestFullscreen) {
+            document.documentElement.requestFullscreen().catch(() => {});
+        }
+        setTimeout(() => {
+            sizeGridColumns(ordersGridApi);
+        }, 100);
+    }
+}
+
+/** Sync UI when fullscreen was exited by the browser (Esc/F11). Do not call exitFullscreen again. */
+function syncOrdersFullScreenExit() {
+    document.body.classList.remove('orders-table-fullscreen');
+    setTimeout(() => {
+        sizeGridColumns(ordersGridApi);
+    }, 100);
+}
+
+/** Exit fullscreen when the user clicks the fullscreen button. */
+function exitOrdersFullScreen() {
+    document.body.classList.remove('orders-table-fullscreen');
+    if (document.fullscreenElement && document.exitFullscreen) {
+        document.exitFullscreen().catch(() => {});
+    }
+    setTimeout(() => {
+        sizeGridColumns(ordersGridApi);
+    }, 100);
+}
+
+// ============================================
 // Save Functions for Editable Cells
 // ============================================
 

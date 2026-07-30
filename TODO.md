@@ -29,89 +29,6 @@ Cashbook/ledger work items live in
 
 ---
 
-## Backend hardening
-
-- [x] **Sync performance** — **Done, 2026-07-30.** A recent run had reported
-      `created=1, skipped=1279` — almost all the work was re-processing unchanged
-      orders. `services/shopify_sync.py`'s sync is now incremental: it resumes
-      from `sync_status.last_synced_at` instead of always re-fetching a fixed
-      `SHOPIFY_SYNC_WINDOW_DAYS`-day window, and filters Shopify's Orders API on
-      `updated_at` rather than `created_at` (`_fetch_shopify_orders_in_range`) -
-      which is also a correctness fix, not just a speedup: the old `created_at`
-      window could never catch a status change (e.g. a late return) on an order
-      created more than `SHOPIFY_SYNC_WINDOW_DAYS` days ago. The checkpoint is
-      recorded as the sync's *start* time, not its end time, to avoid a race
-      where a Shopify update landing mid-sync would fall in the gap and never
-      get picked up.
-- [x] **Remaining untyped `response_model=dict`** — **Done, 2026-07-30.** All 8
-      `response_model=dict` routes now have a real model:
-      `DeleteCashbookEntryResult`, `DeleteLedgerResult`, `FixVoidedTotalsResult`,
-      `ForceSyncOrdersResult`, `RecalculateTotalsResult`, `LoadSheetLogResult`
-      (all local to their route file), plus `create_order` and `create_product`
-      turned out to already return full entities and now use the existing
-      `Order`/`ProductWithVariants` models instead of a fresh one. Also typed
-      `POST /orders/sync-shopify` (`SyncShopifyOrdersResult`, in
-      `services/shopify_sync.py`) and `GET /products/{id}` (`ProductWithVariants`)
-      — both returned dicts with no `response_model` at all, an even more
-      untyped case than the 8 that prompted this. Found and fixed a real bug
-      doing this: `fix_voided_order_totals`'s "no candidates" early return was
-      missing 3 fields (`eligible_candidates_count`, `fetch_batch_size`,
-      `updated_order_numbers`) that its main return always includes — under a
-      strict `response_model` this path would have 500'd. None of these 10
-      endpoints had any test coverage before this, so a shape mismatch would
-      only have surfaced as a production `ResponseValidationError`; added
-      route-level tests for all of them in `tests/test_routes.py`.
-
----
-
-## Frontend code health
-
-- [ ] **Split `initForms()`** (511 lines, `frontend/js/sync-summary.js`) — a flat
-      sequence of independent `addEventListener` blocks that would split cleanly
-      per feature area. Left over from the `renderer.js` split.
-
-### Discussion: is AG Grid still the right table library?
-
-Not a decision to make now — capture the trade-offs before anyone reaches for a
-rewrite, and revisit if one of the pain points below actually bites.
-
-**What we use today:** AG Grid Community 31.0.2, loaded from jsDelivr (no build
-step, no npm dependency). 5 grids: orders, products, cashbook in/out, ledger
-detail. We lean on a fair amount of its surface — 12 `cellRenderer`s, 10
-`valueGetter`s, 27 `valueFormatter`s, 8 `cellEditor`s, `pinnedBottomRowData` for
-the selected-rows footer, `getRowId` for row-level updates after a sync,
-`onCellValueChanged` for inline saves, and ~20 `filterParams` blocks including
-the custom date-range filter. Orders loads up to 1000 rows at a time
-(`RECENT_ORDERS_LIMIT`), so virtualised rendering is doing real work.
-
-**Why it might be worth reconsidering:**
-- ~65 rules in `styles.css` exist purely to restyle AG Grid internals (icons,
-  header layout, popups, paging), and they fight the vendor stylesheet — the
-  filter/sort icon work and the `:is(.ag-theme-alpine, .ag-theme-alpine-dark)`
-  rewrite for dark mode are both symptoms of that.
-- Community edition omits things we may eventually want (row grouping,
-  server-side row model, Excel export with styling — we hand-roll xlsx today).
-- Enterprise is per-developer paid, so those features aren't a cheap upgrade.
-
-**Why replacing it is probably not worth it:**
-- Inline editing + custom cell editors + pinned footer + per-column filters +
-  virtualisation is a lot to reimplement or re-wire, and it touches the single
-  most-used screen in the app.
-- The alternatives trade one set of constraints for another: TanStack Table is
-  headless (we'd own all rendering and styling, which is most of what we already
-  dislike doing), a component-kit table like Ant Design's `<a-table>` (what
-  `kcp-frontend` uses) assumes you've adopted that whole UI kit and Vue, and
-  Handsontable/vxe-table are licensed or Vue-first.
-- We have no build step. Most modern options assume npm + bundler, which is a
-  bigger change than the grid swap itself.
-
-**If it comes up, the questions to answer first:** what specifically is hurting
-(styling friction? a missing feature? bundle size?), and would a targeted fix —
-e.g. dropping our CSS overrides in favour of AG Grid's theming API — solve it
-without a migration.
-
----
-
 # Feature backlog
 
 Planned features across the stack. Full-stack items note both halves, one line
@@ -119,16 +36,6 @@ each, under "Full-stack" below.
 
 ## Frontend / UX
 
-- [x] **Mobile view** — **Done, 2026-07-25.** Deliberately *not* a separate phone
-      layout: the grids keep full-size columns and scroll horizontally, since the
-      product is for big screens and shrinking cells to fit would make the data
-      unreadable. What changed instead (`styles.css` "Responsive / mobile"):
-      `sizeColumnsToFit()` is skipped below 820px via `sizeGridColumns()` (it was
-      squeezing ~2100px of orders columns into the viewport); nav becomes an
-      off-canvas drawer with a hamburger + scrim, since hover-to-expand does
-      nothing on touch; the toolbar wraps to its own scrollable row; modals go
-      full-bleed bottom-sheet; inputs go to 16px to stop iOS focus-zoom;
-      `100dvh` + `env(safe-area-inset-*)` for address bars and notches.
 - [ ] **Better column filtering** — replace the current column filter with a more
       usable mechanism.
 - [ ] **Per-user view persistence** — remember each user's column widths / layout
@@ -146,9 +53,6 @@ each, under "Full-stack" below.
 - [ ] **Carrier health in Monthly Summary** — UI: per-carrier delivered/total
       parcel percentage display. API: extend the `month-summary` endpoints in
       `orders.py`.
-- [ ] **Sync-from-Shopify last-updated time** — show when the last sync ran.
-      Backend already exposes this (`GET /orders/sync-status` ->
-      `last_synced_at`/`in_progress`); frontend wiring only.
 - [ ] **Per-order last-fetched time** — show when each order's delivery status was
       last refreshed.
 - [ ] **Server status indicator** — show "offline" on a health-check failure or
