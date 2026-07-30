@@ -6,7 +6,7 @@
 # Actions (.github/workflows/backend-tests.yml) is the test gate; pass
 # --build-arg SKIP_TESTS=0 to also run the suite as part of this build.
 
-FROM python:3.11-slim AS base
+FROM python:3.14-slim AS base
 
 ENV PIP_NO_CACHE_DIR=1 \
     PYTHONUNBUFFERED=1
