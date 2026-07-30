@@ -160,17 +160,9 @@ Ordered roughly by impact-to-effort.
 
 ### 4.4 Auth & multi-tenancy
 
-- **Client IP for lockout is `request.client.host`** — behind the Northflank/Vercel
-  proxies this is often the proxy IP, so one blocked attacker can lock everyone out
-  (or everyone shares one bucket). Read `X-Forwarded-For` (trusted-proxy aware).
 - Plan the **users/orgs/RBAC** migration the code already anticipates: add
   `user_id`/`role` claims, per-role dependencies, and RLS policies keyed on the
   JWT. Do it before you have a second user, not after.
-
-### 4.5 Observability & operations
-
-- **Rate-limit the whole API**, not just PIN verify (e.g. slowapi), especially
-  the expensive sync/PDF endpoints.
 
 ---
 
@@ -254,8 +246,6 @@ Current sizes: `orders.py` 2451 (was 4280), `products.py` 671, `cashbook.py` 298
 
 ### Remaining §4 items not yet addressed
 
-- [ ] **Rate-limit the API** beyond PIN verify, especially sync/PDF endpoints (§4.5).
-- [ ] **Trusted-proxy `X-Forwarded-For` handling** for the lockout's client IP (§4.4).
 - [ ] **Remaining untyped `response_model=dict`** (9 left) are operation results —
       sync stats, `{"status": "deleted"}`, load-sheet logs — not entities. Typing
       them would mean inventing models for ad-hoc payloads; left as `dict`

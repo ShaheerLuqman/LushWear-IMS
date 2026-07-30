@@ -6,12 +6,16 @@ import uuid
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.middleware import SlowAPIMiddleware
 
 from app.routes import products, orders, cashbook, ledger, app_pin
 from app.auth import require_auth
 from app.config import settings
 from app.database import get_supabase
 from app.logging_config import configure_logging
+from app.rate_limit import limiter
 
 configure_logging()
 logger = logging.getLogger("app")
@@ -50,6 +54,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Rate-limits every route by default (see app/rate_limit.py); routes decorated
+# with @limiter.limit(...) (the expensive sync/PDF endpoints) get their own
+# stricter limit instead of the default.
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 
 @app.middleware("http")

@@ -44,6 +44,29 @@ class TestHealthAndAuth:
         assert r.headers.get("X-Request-Id") == "abc-123"
 
 
+class TestRateLimiting:
+    """The autouse _reset_rate_limiter fixture (conftest.py) clears the limiter's
+    in-memory counters before/after every test, so this doesn't leak into or get
+    tripped by unrelated tests hitting the same endpoints."""
+
+    def test_expensive_pdf_endpoint_has_its_own_stricter_limit(self, make_client):
+        client = make_client({})
+        for _ in range(10):
+            r = client.post("/api/orders/generate-invoice", json=[])
+            assert r.status_code == 400  # "No orders selected" - still counts against the limit
+        r = client.post("/api/orders/generate-invoice", json=[])
+        assert r.status_code == 429
+
+    def test_ordinary_endpoint_is_not_affected_by_the_pdf_endpoints_limit(self, make_client):
+        client = make_client({})
+        for _ in range(10):
+            client.post("/api/orders/generate-invoice", json=[])
+        # generate-invoice is now locked out, but an undecorated route (its own,
+        # much more generous default limit) must be unaffected.
+        r = client.get("/health")
+        assert r.status_code == 200
+
+
 class TestOrders:
     def test_list_returns_rows(self, make_client, order_row):
         r = make_client({"orders": [order_row]}).get("/api/orders/?month=6&year=2026")

@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Body, File, Form, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Body, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from supabase import create_client
@@ -20,6 +20,7 @@ from app.models import Order, OrderCreate, OrderUpdate
 from app.money import money
 from app.order_pdf import extract_order_numbers
 from app.ordering import _order_number_sort_key
+from app.rate_limit import limiter
 from app.services import postex
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
 from app.services.pdf.load_sheet import _generate_pdf_load_sheet
@@ -180,12 +181,15 @@ async def get_sync_status():
 
 
 @router.post("/sync-shopify")
-async def sync_shopify_orders():
+@limiter.limit("10/minute")
+async def sync_shopify_orders(request: Request):
     return await _sync_shopify_orders()
 
 
 @router.post("/upload-postex-csv")
+@limiter.limit("10/minute")
 async def upload_postex_csv(
+    request: Request,
     file: UploadFile = File(...),
     assignment_number: Optional[str] = Form(None),
 ):
@@ -517,7 +521,8 @@ class ForceSyncOrdersBody(BaseModel):
 
 
 @router.post("/sync-shopify-force", response_model=dict)
-async def sync_shopify_orders_force(body: ForceSyncOrdersBody):
+@limiter.limit("10/minute")
+async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody):
     """
     Force-sync specific orders from Shopify by order number.
     Skips normal sync restrictions (delivered/returned freeze, assigned courier guard, etc.).
@@ -1162,7 +1167,8 @@ async def list_load_sheet_logs():
 
 
 @router.get("/load-sheet-logs/{log_id}/pdf")
-async def get_load_sheet_log_pdf(log_id: str):
+@limiter.limit("10/minute")
+async def get_load_sheet_log_pdf(request: Request, log_id: str):
     """Regenerate and download the PDF for a load sheet log."""
     try:
         supabase = get_supabase()
@@ -2029,7 +2035,8 @@ async def delete_order(order_id: str):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("/generate-invoice")
-async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
+@limiter.limit("10/minute")
+async def generate_invoice(request: Request, order_ids: List[str] = Body(..., embed=False)):
     """Generate a PDF invoice with one table per selected order."""
     try:
         if not order_ids:
@@ -2073,7 +2080,8 @@ async def generate_invoice(order_ids: List[str] = Body(..., embed=False)):
 
 
 @router.post("/generate-packaging-list")
-async def generate_packaging_list(order_ids: List[str] = Body(..., embed=False)):
+@limiter.limit("10/minute")
+async def generate_packaging_list(request: Request, order_ids: List[str] = Body(..., embed=False)):
     """
     Generate a combined packaging list PDF for the selected orders.
     Combines identical products across orders and counts each variant, so all
@@ -2131,7 +2139,8 @@ class PackagingListByNumbersBody(BaseModel):
 
 
 @router.post("/generate-packaging-list-by-numbers")
-async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
+@limiter.limit("10/minute")
+async def generate_packaging_list_by_numbers(request: Request, body: PackagingListByNumbersBody):
     """
     Generate a combined packaging list PDF for orders identified by order_number
     (rather than by id). Mirrors /generate-packaging-list.
@@ -2181,7 +2190,8 @@ async def generate_packaging_list_by_numbers(body: PackagingListByNumbersBody):
 
 
 @router.post("/generate-load-sheet")
-async def generate_load_sheet(order_ids: List[str]):
+@limiter.limit("10/minute")
+async def generate_load_sheet(request: Request, order_ids: List[str]):
     """Generate a PDF load sheet from template for selected orders"""
     try:
         if not order_ids:

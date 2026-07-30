@@ -2,6 +2,17 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limiter():
+    """TestClient requests all share one synthetic peer address, so the global
+    default rate limit (app/rate_limit.py) would otherwise accumulate across
+    the whole suite instead of resetting per test."""
+    from app.rate_limit import limiter
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
 class FakeQuery:
     """Chainable stand-in for a supabase-py query builder.
 

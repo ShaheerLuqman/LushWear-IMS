@@ -5,6 +5,7 @@ import bcrypt
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AfterValidator, BaseModel
 
+from app.client_ip import get_client_ip
 from app.database import get_supabase
 from app.auth import create_token
 
@@ -111,10 +112,6 @@ class _Lockout:
 _lockout = _Lockout()
 
 
-def _client_key(request: Request) -> str:
-    return (request.client.host if request.client else None) or "unknown"
-
-
 def _get_existing_hash() -> Optional[str]:
     rows = (
         get_supabase()
@@ -156,7 +153,7 @@ async def pin_status():
 @router.post("/verify")
 async def pin_verify(body: PinVerifyBody, request: Request):
     """Check PIN against stored hash. Rate-limited to deter brute force."""
-    key = _client_key(request)
+    key = get_client_ip(request)
     _lockout.check(key)
 
     stored = _get_existing_hash()
