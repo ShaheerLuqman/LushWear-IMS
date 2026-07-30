@@ -38,7 +38,7 @@ platform-provided `$PORT`).
 | Web framework | FastAPI + Uvicorn (`[standard]`) |
 | Data access | `supabase-py` client (PostgREST over HTTP) |
 | Validation | Pydantic v2 |
-| Auth | Single shared PIN → signed JWT (HS256) |
+| Auth | Email+password (per-org users/roles) → signed JWT (HS256) |
 | PDF | ReportLab, openpyxl (template), pypdf, Pillow |
 | HTTP client | httpx (async) for Shopify/PostEx |
 | Deploy | Docker on Northflank |
@@ -81,7 +81,9 @@ backend/
     │       ├── load_sheet.py       # rider manifest            (229)
     │       └── packaging_list.py   # aggregation + render      (230)
     └── routes/
-        ├── app_pin.py      # PIN status/verify/setup/change (+ lockout)
+        ├── auth.py         # status/login/bootstrap/me/change-password (+ lockout)
+        ├── users.py        # per-org user management (admin-only)
+        ├── org_settings.py # per-org Shopify/PostEx credentials (admin-only)
         ├── products.py     # products + variants + Shopify product sync   (671)
         ├── orders.py       # orders, Shopify sync, summaries             (2451)
         ├── cashbook.py     # cashbook entries + daily balances            (298)
@@ -92,29 +94,46 @@ backend/
 
 1. `main.py` builds the app, adds **CORS**, and mounts routers under `/api`.
 2. Every business router (`products`, `orders`, `cashbook`, `ledger`) is mounted
-   with a global `Depends(require_auth)` — so all of `/api/*` requires a valid
-   Bearer token **except** the `/api/app-pin/*` router, which is open (it's the
-   login gate).
+   with a global `Depends(require_auth)`; `users`/`org_settings` additionally
+   require `Depends(require_role("admin"))` — so all of `/api/*` requires a
+   valid Bearer token **except** the `/api/auth/*` router, which is open (it's
+   the login/bootstrap gate itself).
 3. `require_auth` decodes an HS256 JWT signed with `AUTH_SECRET`.
 4. Handlers call `get_supabase()` (a lazily-initialised module-global client) and
    talk to Postgres through PostgREST.
 
 ### Authentication model
 
-- The whole app is behind **one shared PIN** (see `routes/app_pin.py`).
-- PIN is bcrypt-hashed (cost 8) and stored in an `app_pin` table (single row,
-  id `"default"`).
-- On successful verify/setup the client gets a **7-day JWT**. There are no user
-  accounts, roles, or orgs — `auth.py` explicitly notes this is a stepping stone
-  toward users/orgs/RBAC.
-- Brute-force protection is an **in-memory, per-IP lockout** (5 attempts / 15 min).
+- Multi-tenant: every login belongs to exactly one **organization**
+  (`organizations`/`users` tables), with a `role` of `admin` or `staff`.
+  Username is the user's email; password is bcrypt-hashed (cost 8).
+- `POST /auth/login` issues a **7-day JWT** carrying `sub` (user id), `org_id`,
+  and `role`. `require_auth` verifies the signature; `get_org_id` and
+  `require_role(*roles)` (both in `auth.py`) read those claims to scope
+  business-table queries to the caller's org (see `org_scope.py`) and gate
+  admin-only routes (`users.py`, `org_settings.py`).
+- First login for a brand-new deployment goes through `POST /auth/bootstrap`
+  (creates the first org + first admin user, race-free via a `system_bootstrap`
+  singleton row; requires a `BOOTSTRAP_TOKEN` header when `APP_ENV=prod`).
+- Brute-force protection is a **Supabase-backed, per-email lockout**
+  (`login_lockouts` table + `record_login_lockout_failure` RPC — survives
+  restarts/redeploys and is shared across replicas), plus a per-IP rate limit
+  on `POST /auth/login`.
+- Per-org Shopify/PostEx credentials live in `org_integration_settings`,
+  encrypted at rest (Fernet, `SETTINGS_ENCRYPTION_KEY`) — see
+  `org_settings.py`. There's no longer a single global Shopify store; each org
+  configures its own via `PUT /org-settings`.
+- The previous single-shared-PIN model (`app_pin`/`pin_lockouts` tables,
+  `routes/app_pin.py`) has been fully removed
+  (see [`../ORGANIZATIONS_USERS_PLAN.md`](../ORGANIZATIONS_USERS_PLAN.md)).
 
 ### Data model
 
+`organizations` → `users` (1-N), every business table scoped by `org_id`:
 `products` → `variants` (1-N), `orders` (with JSONB `line_items` + legacy `items`
 string array), `cashbook_entries` → `cashbook_daily_balances`, `ledgers`,
-`app_pin`, `load_sheet_logs`. There is no ORM; tables/columns are referenced by
-string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql)
+`load_sheet_logs`, `org_integration_settings`. There is no ORM; tables/columns
+are referenced by string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql)
 and is documented (with the deliberate soft-link/`order_status` design choices) in
 [`DATABASE.md`](DATABASE.md). Adopting versioned migrations is still open
 ([`TODO.md`](../TODO.md)).
@@ -143,8 +162,8 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
 - Clear separation of routers by domain; Pydantic models are well-organised.
 - Auth is small but thoughtfully designed as an extension point (JWT claims,
   single `require_auth` dependency) rather than something you'll have to rip out.
-- CORS is env-driven, secrets are gitignored, PIN uses bcrypt + lockout — the
-  security basics were taken seriously for a solo/small deployment.
+- CORS is env-driven, secrets are gitignored, passwords use bcrypt + lockout —
+  the security basics were taken seriously for a solo/small deployment.
 - The Shopify/PostEx edge-case handling reflects real operational knowledge
   (removed line items, voided orders, replacement `NNNN-R` orders, PKT period
   boundaries). This is hard-won domain logic.

@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, app_pin, auth as auth_routes, users, org_settings
+from app.routes import products, orders, cashbook, ledger, auth as auth_routes, users, org_settings
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.logging_config import configure_logging
@@ -99,9 +99,7 @@ app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
 app.include_router(ledger.router, prefix="/api", dependencies=_auth)
 app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
-# Open routers — self-gate via the PIN / login+bootstrap, so they bootstrap login.
-# app_pin is retired in ORGANIZATIONS_USERS_PLAN.md's Phase 2 (org-scoping cutover).
-app.include_router(app_pin.router, prefix="/api")
+# Open router — self-gates via login/bootstrap, so it bootstraps login itself.
 app.include_router(auth_routes.router, prefix="/api")
 
 
@@ -121,7 +119,7 @@ async def ready_check():
     frontend's online/offline indicator should poll instead of /health, which
     only proves this process is up, not that it can reach the database."""
     try:
-        get_supabase().table("app_pin").select("id").limit(1).execute()
+        get_supabase().table("organizations").select("id").limit(1).execute()
     except Exception:
         logger.exception("Readiness check failed")
         raise HTTPException(status_code=503, detail="Not ready")

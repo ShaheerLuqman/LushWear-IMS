@@ -1,6 +1,5 @@
 """Unit tests for the Supabase-backed login lockout (app.routes.auth._LoginLockout).
 
-Mirrors test_app_pin_lockout.py's approach (see that file's docstring for why):
 Supabase is faked at the module level, not via the make_client/TestClient
 fixture, since the generic FakeQuery in conftest.py doesn't simulate state
 changing across calls.

@@ -77,7 +77,7 @@ inventory-system/
 │   │   ├── config.py        # Configuration
 │   │   ├── database.py      # Supabase connection
 │   │   ├── models.py        # Pydantic models
-│   │   └── routes/          # API routes (products, orders, cashbook, ledger, app_pin)
+│   │   └── routes/          # API routes (products, orders, cashbook, ledger, auth, users, org_settings)
 │   ├── requirements.txt
 │   └── .env                 # Your credentials (create this)
 │

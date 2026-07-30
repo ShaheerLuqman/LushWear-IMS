@@ -1,7 +1,6 @@
 """Route tests for /api/auth/* (status/login/bootstrap/me) and the
 require_role gate used by /api/users/*. See test_login_lockout.py for the
-lockout mechanism itself (tested in isolation, same reasoning as
-test_app_pin_lockout.py)."""
+lockout mechanism itself, tested in isolation."""
 import asyncio
 
 import pytest

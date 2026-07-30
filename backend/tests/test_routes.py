@@ -19,7 +19,7 @@ class TestHealthAndAuth:
         assert client.get("/api/orders/?month=6&year=2026").status_code == 401
 
     def test_ready_checks_supabase_connectivity(self, make_client):
-        r = make_client({"app_pin": [{"id": "default"}]}).get("/ready")
+        r = make_client({"organizations": [{"id": "org1"}]}).get("/ready")
         assert r.status_code == 200
         assert r.json() == {"status": "ready"}
 

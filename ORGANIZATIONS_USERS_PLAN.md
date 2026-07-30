@@ -17,9 +17,9 @@ Because a second org is expected to onboard soon after this ships, **org-scoping
 - **PIN is retired, not run long-term in parallel.** PIN-issued tokens carry no `org_id` claim. If `/app-pin/verify`/`/app-pin/setup` stayed live through org-scoping going live, they'd become an undocumented backdoor into org #1. They get disabled at the **start** of the org-scoping phase, not deferred to final cleanup.
 - **Per-org third-party credentials.** `SHOPIFY_STORE_URL`/`SHOPIFY_ADMIN_API_TOKEN`/`SHOPIFY_API_VERSION`/`POSTEX_MERCHANT_TOKEN` are currently global env vars (`backend/app/config.py`'s `Settings`), read inline in 3 places: `app/shopify.py`, `app/services/shopify_orders.py`, and 2 call sites in `app/routes/orders.py`. Once org #2 exists these must become per-org DB rows, not shared env vars — otherwise a second org's "Sync from Shopify" button would pull **LushWear's** store into their own data. Encrypted at rest via a new `SETTINGS_ENCRYPTION_KEY` env var (same fail-fast-in-prod pattern as `AUTH_SECRET`) — these are real third-party secrets belonging to external clients (a leaked Shopify token exposes a client's whole store), not just this app's own credentials, so they get a higher bar than the app's own password hashes.
 
-## Phase 1 — Foundation (new auth substrate; PIN still live) — ✅ implemented, migrations not yet applied
+## Phase 1 — Foundation (new auth substrate; PIN still live) — ✅ implemented and applied
 
-**Not yet done: run the 3 new migrations against the real Supabase DB** (this backend has no direct Postgres driver, only the REST client, so this can't be applied from the codebase itself) - `20260730040000_organizations_and_users_tables.sql`, `20260730050000_login_lockouts_table.sql`, `20260730060000_system_bootstrap_table.sql`.
+Migrations `20260730040000_organizations_and_users_tables.sql`, `20260730050000_login_lockouts_table.sql`, `20260730060000_system_bootstrap_table.sql` have been applied to the real Supabase DB.
 
 **New migrations** (`supabase/migrations/`, mirrored into `supabase_schema.sql` per this repo's convention):
 - `organizations` (`id UUID PK`, `name`, `created_at`)
@@ -47,9 +47,9 @@ Because a second org is expected to onboard soon after this ships, **org-scoping
 
 **Tests**: login success/failure/lockout (mirrors `backend/tests/test_app_pin_lockout.py`'s structure), bootstrap race behavior, `require_role` gating.
 
-## Phase 2 — Org-scoping cutover (the correctness-critical phase) — ✅ implemented, migrations not yet applied
+## Phase 2 — Org-scoping cutover (the correctness-critical phase) — ✅ implemented and applied
 
-**Not yet done: run the new migrations against the real Supabase DB** (same limitation as Phase 1 - this backend has no direct Postgres driver), **and run `backend/scripts/backfill_org_integration_settings.py` once** (after the migrations, requires `SETTINGS_ENCRYPTION_KEY` set) to carry LushWear's existing Shopify/PostEx credentials from env vars into the new encrypted `org_integration_settings` row. New migrations, in order: `20260730070000_add_org_id_to_business_tables.sql`, `20260730080000_orders_order_number_unique_per_org.sql`, `20260730090000_month_summary_rpcs_org_scoped.sql`, `20260730100000_rls_default_deny_business_tables.sql`, `20260730110000_org_integration_settings_table.sql`.
+Migrations `20260730070000_add_org_id_to_business_tables.sql`, `20260730080000_orders_order_number_unique_per_org.sql`, `20260730090000_month_summary_rpcs_org_scoped.sql`, `20260730100000_rls_default_deny_business_tables.sql`, `20260730110000_org_integration_settings_table.sql` have been applied to the real Supabase DB. LushWear's Shopify/PostEx credentials were entered directly through the Settings > Integrations UI (Phase 3) rather than via the one-time env-var backfill script, which has since been removed as dead code (Phase 4).
 
 Beyond the plan as originally written, the implementation also found and fixed: `ledgers.name` and `cashbook_daily_balances.balance_date` were both globally-unique constraints (would have collided the moment a second org existed) and the balance/audit-log trigger functions aggregated with no org filter at all (would have silently summed different orgs' cashbook entries together). All fixed as part of the same migration. 196/196 backend tests pass.
 
@@ -73,19 +73,20 @@ Beyond the plan as originally written, the implementation also found and fixed: 
 
 9. **Per-org Shopify/PostEx credentials.** Add `org_integration_settings` (`org_id PK/FK -> organizations`, `shopify_store_url`, `shopify_access_token` encrypted, `shopify_api_version` nullable per-org override — falls back to a shared default if unset, it isn't sensitive so no need to force every org to set it, `postex_merchant_token` encrypted, `updated_at`). Add `app/org_settings.py` with `get_org_integration_settings(org_id)` (fetch + decrypt via `SETTINGS_ENCRYPTION_KEY`) as the **only** place these credentials are read — same chokepoint principle as `org_scope.py` above, not a second set of scattered reads. Refactor the 3 existing inline-`settings.*` read sites (`app/shopify.py`, `app/services/shopify_orders.py`, `app/routes/orders.py`'s 2 PostEx call sites) to receive the calling org's credentials as parameters instead. Remove `main.py`'s prod boot-time check on `settings.shopify_store_url` — there's no longer a single "the" store to validate at boot; validation moves to sync-time, per org. Backfill LushWear's row from today's env vars as part of this rollout (one-time — the new admin Settings > Integrations UI in Phase 3 is the natural way to enter it once).
 
-## Phase 3 — Frontend
+## Phase 3 — Frontend — ✅ implemented
 
-- Replace the PIN fields in `runPinGate()` (`frontend/js/app-core.js`) with email+password, reusing its existing first-run-vs-returning conditional structure — now driven by `GET /auth/status` ("any users exist") instead of the PIN "configured" flag. First-run shows an org+admin bootstrap form instead of PIN setup.
+- Replaced the PIN fields in the login gate (`frontend/js/app-core.js`'s `runAuthGate()`, formerly `runPinGate()`) with email+password, reusing the existing first-run-vs-returning conditional structure — now driven by `GET /auth/status` ("any users exist") instead of the PIN "configured" flag. First-run shows an org+admin bootstrap form instead of PIN setup.
 - `setAuthToken`/`getAuthToken`/`clearAuthToken` (`frontend/js/data-api.js`) are unchanged — still just a JWT string in sessionStorage.
-- Add a "logged in as {email} ({role})" indicator (Settings or header), sourced from `GET /auth/me`.
-- Settings: "Change PIN" → "Change password"; add an admin-only "Users" section (list/invite/change role/deactivate within the org), hidden for `staff` — reuse the same show/hide-by-state pattern `applyEditLockState()` already uses.
-- Add an admin-only "Integrations" section (Shopify store URL/token, PostEx merchant token) next to Users — lets an org admin configure their own org's credentials without a developer hand-editing the DB every time a new client onboards.
-- **Leave `editLocked`/`lockApp()`/`applyEditLockState()` alone.** Reuse `lockApp()`'s clear-token-and-reshow-gate flow as-is for the new login gate. `editLocked` stays a separate, manual, session-only toggle, not tied to role in this plan — it's a natural future hook for role-based default read-only, explicitly not solved now.
+- Added an Account row in Settings (email + role) sourced from `GET /auth/me`, with a "Change password" action (`POST /auth/change-password`).
+- Settings gained an admin-only "Users" section (list/add/change role/deactivate within the org, `frontend/js/auth-users.js`), hidden for `staff`.
+- Added an admin-only "Integrations" section (Shopify store URL/token, PostEx merchant token) next to Users, backed by the new `GET`/`PUT /org-settings` routes — lets an org admin configure their own org's credentials without a developer hand-editing the DB every time a new client onboards.
+- `editLocked`/`lockApp()`/`applyEditLockState()` were left alone as planned. `lockApp()`'s clear-token-and-reshow-gate flow is reused as-is for the new login gate.
 
-## Phase 4 — Cleanup
+## Phase 4 — Cleanup — ✅ implemented
 
-- Drop `app_pin`/`pin_lockouts` tables, `app_pin.py`, `test_app_pin_lockout.py`, once Phases 2–3 are verified live.
-- Update `backend/BACKEND.md`'s "Authentication model" section and `TODO.md` (remove the "Organizations & Users" item; note that "Revisit cashbook audit trail scope" and "Role-based access to columns" are now unblocked, without necessarily implementing them here).
+- Dropped `app_pin`/`pin_lockouts` tables (migration `20260730120000_drop_app_pin_tables.sql`) and the `record_pin_lockout_failure` function; removed `app_pin.py` and `test_app_pin_lockout.py`; removed the app-PIN section from `supabase_schema.sql`.
+- Also removed, as part of the same pass: the now-fully-dead global `SHOPIFY_*`/`POSTEX_MERCHANT_TOKEN` fields from `backend/app/config.py`, and the one-time `backend/scripts/backfill_org_integration_settings.py` (its job is done — LushWear's credentials were entered directly through the Integrations UI instead).
+- Updated `backend/BACKEND.md`'s "Authentication model"/data-model sections and `TODO.md` (removed the "Organizations & Users" item; "Revisit cashbook audit trail scope" and "Role-based access to columns" now note they're unblocked, not yet implemented).
 
 ## Explicitly out of scope (separate existing TODO items)
 

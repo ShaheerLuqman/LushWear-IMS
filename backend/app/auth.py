@@ -1,5 +1,5 @@
-"""Session-token auth, plus password hashing shared with routes/auth.py (and,
-until Phase 4 of ORGANIZATIONS_USERS_PLAN.md, routes/app_pin.py).
+"""Session-token auth, plus password hashing shared with routes/auth.py and
+routes/users.py.
 
 Each user logs in via routes/auth.py (POST /auth/login) and receives a signed
 JWT, which it must then send as `Authorization: Bearer <token>` on every
@@ -7,14 +7,15 @@ protected API call.
 
 `sub` is the user's id; `org_id`/`role` scope every request to one
 organization and gate admin-only routes via `require_role`. A token minted by
-the (soon retired) app-PIN flow has no `org_id`/`role` - see
-ORGANIZATIONS_USERS_PLAN.md's "PIN is retired" note.
+the now-removed app-PIN flow (routes/app_pin.py, dropped in
+ORGANIZATIONS_USERS_PLAN.md's Phase 4) had no `org_id`/`role` - any such token
+still in the wild simply 403s at `get_org_id`/`require_role` rather than being
+silently scoped to nothing; its 7-day TTL means none can still be valid anyway.
 """
 
 import os
 import time
 import secrets
-from typing import Optional
 
 import bcrypt
 import jwt
@@ -23,10 +24,9 @@ from fastapi import Depends, Header, HTTPException
 _ALGORITHM = "HS256"
 _DEFAULT_TTL_HOURS = 24 * 7  # 7 days
 
-# bcrypt cost factor. A short PIN/password is not meaningfully protected
-# against offline cracking by hash cost alone, so the real brute-force defense
-# is the API-side lockout (pin_lockouts / login_lockouts). Kept low for a
-# snappy verify.
+# bcrypt cost factor. A short password is not meaningfully protected against
+# offline cracking by hash cost alone, so the real brute-force defense is the
+# API-side lockout (login_lockouts). Kept low for a snappy verify.
 _BCRYPT_ROUNDS = 8
 
 # Dev fallback secret: generated once per process when AUTH_SECRET is not set.
@@ -66,9 +66,8 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def create_token(user_id: str = "app", org_id: Optional[str] = None, role: Optional[str] = None) -> str:
-    """Issue a signed session token. `user_id="app"`/no org_id/no role is the
-    legacy app-PIN shape (see module docstring) - real logins always pass all three."""
+def create_token(user_id: str, org_id: str, role: str) -> str:
+    """Issue a signed session token, embedding the caller's identity/org/role."""
     now = int(time.time())
     payload = {"sub": user_id, "org_id": org_id, "role": role, "iat": now, "exp": now + _ttl_seconds()}
     return jwt.encode(payload, _get_secret(), algorithm=_ALGORITHM)
@@ -102,8 +101,9 @@ def require_role(*roles: str):
 
 async def get_org_id(payload: dict = Depends(require_auth)) -> str:
     """FastAPI dependency: the caller's own org_id, for `app.org_scope.org_table()`.
-    A token with no org_id claim (the legacy app-PIN shape) 403s here rather
-    than silently scoping to nothing."""
+    A token with no org_id claim 403s here rather than silently scoping to
+    nothing - defends against a stale pre-Phase-4 app-PIN token still being
+    live within its 7-day TTL."""
     org_id = payload.get("org_id")
     if not org_id:
         raise HTTPException(status_code=403, detail="No organization for this session")
