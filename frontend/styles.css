@@ -2798,8 +2798,8 @@ body:has(#ledgersView.active) .content-area {
 }
 
 .grid-status-cancelled {
-    background: rgba(0, 0, 0, 0.15);
-    color: #1a1a1a;
+    background: rgba(107, 114, 128, 0.15);
+    color: #6b7280;
 }
 
 .grid-status-rfd {

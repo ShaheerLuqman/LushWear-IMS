@@ -46,27 +46,18 @@ each, under "Full-stack" below.
 
 - [ ] **Admin Portal** — UI: screens to manage organizations, users, and roles.
       API: endpoints to manage them (see "Backend" below).
-- [ ] **Live user count** — UI: display currently-active users in the admin
-      portal. API: track/expose that count.
 - [ ] **Notifications** — UI: section to view notifications. API: endpoints +
       storage for them.
-- [ ] **Carrier health in Monthly Summary** — UI: per-carrier delivered/total
-      parcel percentage display. API: extend the `month-summary` endpoints in
-      `orders.py`.
-- [ ] **Per-order last-fetched time** — show when each order's delivery status was
-      last refreshed.
-- [ ] **Server status indicator** — show "offline" on a health-check failure or
-      network outage. Backend already has this (`GET /ready`, a real Supabase
-      connectivity check, distinct from `/health`); frontend wiring only.
 
 ## Backend
 
 ### Auth & multi-tenancy
 - [ ] **Organizations & Users** — real org/user accounts (replaces the single
-      shared PIN). Prerequisite for RBAC, admin portal, and per-user views.
-      Extends `auth.py` (add `user_id`/`role` JWT claims, per-role
-      dependencies), `models.py`, schema, and RLS policies keyed on the JWT.
-      Do it before you have a second user, not after.
+      shared PIN), true multi-tenancy (LushWear is org #1, more client orgs
+      join later). Prerequisite for RBAC, admin portal, and per-user views.
+      Do it before you have a second user, not after. Full phased plan (schema,
+      auth.py claim changes, org-scoping cutover, frontend) in
+      [`ORGANIZATIONS_USERS_PLAN.md`](ORGANIZATIONS_USERS_PLAN.md).
 - [ ] **Revisit cashbook audit trail scope once Users lands** — today
       `cashbook_entry_audit_log` (2026-07-21) only records *deletions*
       (`supabase_schema.sql` triggers), not creates/updates, and has no

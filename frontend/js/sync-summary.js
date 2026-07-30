@@ -258,6 +258,20 @@ function displayMonthDetail(data) {
                         <div class="month-detail-line"><span class="month-detail-line-label">Total DC Charges</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_total ?? 0)}</span></div>
                     </div>
                 </section>
+                <section class="month-detail-section">
+                    <h3 class="month-detail-section-heading">Carrier Health</h3>
+                    <div class="month-detail-lines">
+                        ${(data.carrier_health || []).map(row => {
+                            const pct = row.total_count > 0 ? Math.round((row.delivered_count / row.total_count) * 100) : 0;
+                            return `
+                                <div class="month-detail-line">
+                                    <span class="month-detail-line-label">${escapeHtml(row.courier)}</span>
+                                    <span class="month-detail-line-value">${row.delivered_count}/${row.total_count} (${pct}%)</span>
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </section>
             </div>
         </div>
     `;

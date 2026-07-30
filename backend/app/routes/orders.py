@@ -2309,6 +2309,19 @@ async def get_month_summary_detail(month: int, year: int):
         }).execute()
         totals = (totals_resp.data or [{}])[0]
 
+        carrier_health_resp = supabase.rpc("get_month_summary_carrier_health", {
+            "p_period_start": start_iso,
+            "p_period_end": end_iso,
+        }).execute()
+        carrier_health = [
+            {
+                "courier": row["courier"],
+                "delivered_count": int(row.get("delivered_count") or 0),
+                "total_count": int(row.get("total_count") or 0),
+            }
+            for row in (carrier_health_resp.data or [])
+        ]
+
         # Only order_status/line_items are needed here - the rest of the period's
         # aggregation (sums/counts) now comes from the get_month_summary_totals RPC.
         orders = fetch_all(
@@ -2389,6 +2402,7 @@ async def get_month_summary_detail(month: int, year: int):
             "dc_charges_returned": round(float(totals.get("dc_charges_returned") or 0), 2),
             "dc_charges_total": round(float(totals.get("dc_charges_total") or 0), 2),
             "products_sold_by_collection": products_sold_by_collection,
+            "carrier_health": carrier_health,
             "shopify_expense": round(float(totals.get("shopify_expense") or 0), 2),
             "ad_expense": round(float(totals.get("ad_expense") or 0), 2),
             "other_expense": round(float(totals.get("other_expense") or 0), 2),
