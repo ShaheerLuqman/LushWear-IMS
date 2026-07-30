@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, auth as auth_routes, users, org_settings
+from app.routes import products, orders, cashbook, ledger, auth as auth_routes, users, org_settings, admin_portal
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.logging_config import configure_logging
@@ -99,6 +99,9 @@ app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
 app.include_router(ledger.router, prefix="/api", dependencies=_auth)
 app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
+# admin_portal's routes carry mixed per-route dependencies (some superadmin-only,
+# some also allow an already-impersonating token) - see app/routes/admin_portal.py.
+app.include_router(admin_portal.router, prefix="/api")
 # Open router — self-gates via login/bootstrap, so it bootstraps login itself.
 app.include_router(auth_routes.router, prefix="/api")
 

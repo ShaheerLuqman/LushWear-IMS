@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.auth import create_token, hash_password, require_auth, verify_password
 from app.database import get_supabase
-from app.models import BootstrapBody, ChangePasswordBody, LoginBody, UserPublic
+from app.models import AccountPublic, BootstrapBody, ChangePasswordBody, LoginBody, UserPublic
 from app.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -159,10 +159,12 @@ async def auth_login(body: LoginBody, request: Request):
 
     _lockout.clear(body.email)
     token = create_token(user_id=user["id"], org_id=user["org_id"], role=user["role"])
-    return {"ok": True, "token": token, "user": UserPublic.model_validate(user)}
+    # AccountPublic, not UserPublic - the caller may be a superadmin (org_id=None,
+    # role="superadmin"), which UserPublic's org-scoped shape can't represent.
+    return {"ok": True, "token": token, "user": AccountPublic.model_validate(user)}
 
 
-@router.get("/me", response_model=UserPublic)
+@router.get("/me", response_model=AccountPublic)
 async def auth_me(payload: dict = Depends(require_auth)):
     """Current user's profile, from the token's `sub` (user id)."""
     user_id = payload.get("sub")

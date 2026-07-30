@@ -4151,6 +4151,166 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     gap: 4px;
 }
 
+/* Superadmin Portal (admin.html) - standalone page, reuses .settings-*/.auth-gate-*/
+   .modal-* from the main app rather than its own design system. */
+.admin-portal-badge {
+    display: inline-block;
+    align-self: center;
+    padding: 3px 10px;
+    margin-bottom: 12px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.6px;
+    color: var(--accent-primary);
+    background: var(--accent-glow);
+    border-radius: var(--radius-sm);
+}
+
+.admin-portal-root {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 32px 16px 64px;
+}
+
+.admin-portal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 32px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.admin-portal-header__brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.admin-portal-header__logo {
+    width: 36px;
+    height: 36px;
+    object-fit: contain;
+}
+
+.admin-portal-header h1 {
+    font-size: 19px;
+    font-weight: 600;
+    margin: 0 0 2px;
+}
+
+.admin-portal-header .admin-portal-badge {
+    margin: 0;
+    display: inline-block;
+}
+
+.admin-portal-section {
+    margin-bottom: 32px;
+}
+
+.admin-portal-section__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.admin-portal-section__header .settings-section__title {
+    margin: 0;
+}
+
+.admin-portal-empty {
+    padding: 24px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    background: var(--bg-card);
+    border: 1px dashed var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.admin-org-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.admin-org-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 14px 18px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    transition: var(--transition);
+}
+
+.admin-org-card:hover {
+    border-color: var(--accent-primary);
+}
+
+.admin-org-card__info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.admin-org-card__name {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.admin-org-card__meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.admin-org-card__actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+/* Impersonation banner (frontend/js/app-core.js's initImpersonationBanner) -
+   shown in the main app only while viewing an org as superadmin. */
+.impersonation-banner {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 16000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: var(--accent-primary);
+    color: #fff;
+    font-size: 13px;
+}
+
+.impersonation-banner__select {
+    padding: 4px 10px;
+    font-size: 13px;
+    border-radius: var(--radius-sm);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    background: rgba(255, 255, 255, 0.15);
+    color: #fff;
+}
+
+.impersonation-banner__select option {
+    color: var(--text-primary);
+}
+
+.impersonation-banner__exit {
+    padding: 4px 12px;
+    font-size: 13px;
+}
+
 /* Flatpickr ships a light-only stylesheet; recolour its surfaces for dark mode. */
 :root[data-theme="dark"] .flatpickr-calendar {
     background: var(--bg-card);

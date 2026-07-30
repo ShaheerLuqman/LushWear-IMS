@@ -15,11 +15,17 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- ============================================================================
 -- Organizations & Users (replaces the single shared app-PIN — see
 -- ORGANIZATIONS_USERS_PLAN.md). One row per business (organizations), one row
--- per login (users), each user scoped to exactly one org. `role` is open text
--- with a CHECK constraint rather than a Postgres ENUM, matching this repo's
--- existing convention for small fixed value sets (order_status/advance_status).
--- Declared first - every business table below references organizations(id).
+-- per login (users). `role` is open text with a CHECK constraint rather than a
+-- Postgres ENUM, matching this repo's existing convention for small fixed
+-- value sets (order_status/advance_status). Declared first - every business
+-- table below references organizations(id).
 -- See supabase/migrations/20260730040000_organizations_and_users_tables.sql.
+--
+-- `superadmin` (Superadmin Portal plan) is a platform-level role not scoped to
+-- any org - org_id is nullable, but only for that role; the second CHECK below
+-- enforces the pairing at the DB level, not just app-code discipline. Every
+-- other user is still scoped to exactly one org.
+-- See supabase/migrations/20260730130000_add_superadmin_role.sql.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS organizations (
@@ -30,13 +36,15 @@ CREATE TABLE IF NOT EXISTS organizations (
 
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    org_id        UUID NOT NULL REFERENCES organizations(id),
+    org_id        UUID REFERENCES organizations(id),
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('admin', 'staff')),
+    role          TEXT NOT NULL CHECK (role IN ('admin', 'staff', 'superadmin')),
     is_active     BOOLEAN NOT NULL DEFAULT true,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT users_org_id_required_unless_superadmin
+        CHECK ((role = 'superadmin' AND org_id IS NULL) OR (role <> 'superadmin' AND org_id IS NOT NULL))
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);

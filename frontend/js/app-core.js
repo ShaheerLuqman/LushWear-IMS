@@ -609,10 +609,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         lockAppBtn.addEventListener('click', () => lockApp());
     }
 
-    const authOk = await runAuthGate();
+    const impersonating = consumeImpersonationToken();
+    const authOk = impersonating || await runAuthGate();
     if (!authOk) {
         return;
     }
+    initImpersonationBanner();
 
     if (loadingScreen) {
         loadingScreen.style.display = 'flex';
@@ -684,5 +686,91 @@ async function applyStartupDeepLink() {
     // Drop the query/hash so a refresh or back-navigation doesn't re-open the modal.
     history.replaceState(null, '', window.location.pathname);
 
+}
+
+/**
+ * Consumes a Superadmin Portal "View as org" token from #impersonate=<token>
+ * (admin.html opens this app in a new tab that way - see js/admin.js). Using
+ * the hash rather than a ?query param means the token is never sent to the
+ * server in a request and never appears in server access logs.
+ * @returns {boolean} true if a token was found and stored (login gate can be skipped).
+ */
+function consumeImpersonationToken() {
+    const token = new URLSearchParams(window.location.hash.replace(/^#/, '')).get('impersonate');
+    if (!token) return false;
+    setAuthToken(token);
+    history.replaceState(null, '', window.location.pathname);
+    // runAuthGate() is skipped entirely on this path, so nothing else hides the
+    // gate overlay (it's visible by default, showing its "Connecting..." state,
+    // until runAuthGate() would normally hide it on success).
+    const root = document.getElementById('authGateRoot');
+    if (root) root.hidden = true;
+    return true;
+}
+
+/** Decodes a JWT's payload without verifying its signature - fine for a
+ * client-side "should I show this UI" decision, since the server independently
+ * re-validates the signature on every real API call regardless of what the
+ * client displays. JWTs use base64url (not plain base64), hence the swap. */
+function decodeTokenPayload(token) {
+    try {
+        const base64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - base64.length % 4) % 4);
+        return JSON.parse(atob(padded));
+    } catch (e) {
+        return null;
+    }
+}
+
+/** Shows a persistent banner with an org switcher while impersonating (Superadmin
+ * Portal). No-op for a normal login - every token carries `impersonating`, but
+ * it's false unless minted by POST /admin/organizations/{id}/impersonate. */
+async function initImpersonationBanner() {
+    const payload = decodeTokenPayload(getAuthToken());
+    if (!payload || payload.impersonating !== true) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'impersonationBanner';
+    banner.className = 'impersonation-banner';
+    banner.innerHTML =
+        '<span class="impersonation-banner__text">Viewing <strong id="impersonationOrgName">this organization</strong> as superadmin</span>' +
+        '<select id="impersonationSwitchSelect" class="impersonation-banner__select"><option value="">Switch org…</option></select>' +
+        '<button type="button" id="impersonationExitBtn" class="btn btn-secondary impersonation-banner__exit">Exit</button>';
+    document.body.prepend(banner);
+
+    document.getElementById('impersonationExitBtn').addEventListener('click', () => {
+        clearAuthToken();
+        location.reload();
+    });
+
+    try {
+        const orgs = await apiJson('/admin/organizations');
+        const current = orgs.find((o) => o.id === payload.org_id);
+        const nameEl = document.getElementById('impersonationOrgName');
+        if (nameEl) nameEl.textContent = current ? current.name : payload.org_id;
+
+        const select = document.getElementById('impersonationSwitchSelect');
+        orgs.filter((o) => o.id !== payload.org_id).forEach((org) => {
+            const opt = document.createElement('option');
+            opt.value = org.id;
+            opt.textContent = org.name;
+            select.appendChild(opt);
+        });
+        select.addEventListener('change', async () => {
+            const targetOrgId = select.value;
+            if (!targetOrgId) return;
+            try {
+                const data = await apiJson(`/admin/organizations/${targetOrgId}/impersonate`, { method: 'POST' });
+                setAuthToken(data.token);
+                location.reload();
+            } catch (ex) {
+                showToast(ex.message || 'Could not switch organization', 'error');
+                select.value = '';
+            }
+        });
+    } catch (ex) {
+        // Org list failed to load - banner still shows (org name falls back to
+        // the raw id above), just without switch options.
+    }
 }
 

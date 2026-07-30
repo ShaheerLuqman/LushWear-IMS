@@ -16,6 +16,7 @@ silently scoped to nothing; its 7-day TTL means none can still be valid anyway.
 import os
 import time
 import secrets
+from typing import Optional
 
 import bcrypt
 import jwt
@@ -66,10 +67,34 @@ def verify_password(password: str, stored_hash: str) -> bool:
         return False
 
 
-def create_token(user_id: str, org_id: str, role: str) -> str:
-    """Issue a signed session token, embedding the caller's identity/org/role."""
+def create_token(
+    user_id: str,
+    org_id: Optional[str],
+    role: str,
+    *,
+    ttl_hours: Optional[float] = None,
+    impersonating: bool = False,
+) -> str:
+    """Issue a signed session token, embedding the caller's identity/org/role.
+
+    `ttl_hours`/`impersonating` are only passed by the Superadmin Portal's
+    "View as org" flow (routes/admin_portal.py) - a superadmin's own token has
+    org_id=None (see the users_org_id_required_unless_superadmin DB constraint),
+    but an impersonation token needs a real target org_id and a short TTL,
+    plus the `impersonating` claim so `require_superadmin_or_impersonating`
+    can tell a genuine superadmin session apart from one that's just viewing
+    a single org and should only be allowed to switch which org it's viewing.
+    """
     now = int(time.time())
-    payload = {"sub": user_id, "org_id": org_id, "role": role, "iat": now, "exp": now + _ttl_seconds()}
+    ttl = int(ttl_hours * 3600) if ttl_hours is not None else _ttl_seconds()
+    payload = {
+        "sub": user_id,
+        "org_id": org_id,
+        "role": role,
+        "iat": now,
+        "exp": now + ttl,
+        "impersonating": impersonating,
+    }
     return jwt.encode(payload, _get_secret(), algorithm=_ALGORITHM)
 
 
@@ -97,6 +122,19 @@ def require_role(*roles: str):
         return payload
 
     return _dependency
+
+
+async def require_superadmin_or_impersonating(payload: dict = Depends(require_auth)) -> dict:
+    """FastAPI dependency: allows a real superadmin token, or a token already
+    impersonating an org. Used only by the Superadmin Portal's org-listing and
+    impersonate routes, so switching which org you're viewing doesn't require
+    holding onto the original superadmin token in the same browser tab - an
+    impersonation token could only ever have been minted by a real superadmin
+    to begin with, so letting it request a *different* org's impersonation
+    token isn't a privilege escalation, just a continuation of the same trust."""
+    if payload.get("role") != "superadmin" and payload.get("impersonating") is not True:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return payload
 
 
 async def get_org_id(payload: dict = Depends(require_auth)) -> str:

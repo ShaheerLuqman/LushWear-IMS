@@ -44,10 +44,6 @@ each, under "Full-stack" below.
 
 ### Full-stack
 
-- [ ] **Admin Portal** — cross-org superadmin screens (create new organizations,
-      see all orgs/users at once). Per-org user management already exists
-      (Settings > Users, admin-only); creating a *new* org is still a manual/
-      internal operation, not a UI flow.
 - [ ] **Notifications** — UI: section to view notifications. API: endpoints +
       storage for them.
 
@@ -68,6 +64,16 @@ each, under "Full-stack" below.
       `CASHBOOK_IMPROVEMENTS.md` for the cashbook/ledger context.
 - [ ] **Role-based access to columns** — enforce per-role column visibility/edit
       server-side. Unblocked now that real roles (`users.role`) exist.
+- [ ] **Real multi-org user membership** — let one person belong to more than
+      one organization (e.g. someone who owns two client businesses) and
+      switch between them. Deliberately deferred when the Superadmin Portal
+      shipped: today one `users` row = one email = exactly one org; this needs
+      splitting identity from membership (a `user_org_memberships` join
+      table), an org-picker at login, and a real product decision on whether
+      adding an existing email to a new org grants instant access or needs an
+      invite/accept step. Build only once a concrete need exists — the
+      Superadmin Portal's "View as org" already covers occasional cross-org
+      access for support purposes.
 
 ### Performance
 - [ ] **Caching** — cache hot reads (e.g. products, ledgers) to cut Supabase

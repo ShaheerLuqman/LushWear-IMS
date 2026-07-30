@@ -287,7 +287,15 @@ Email = Annotated[str, BeforeValidator(_normalize_email), AfterValidator(_valida
 # login, so tightening this minimum later can't retroactively lock out a user
 # whose existing (shorter, still-valid) password predates the change.
 NewPassword = Annotated[str, AfterValidator(_validate_new_password)]
-Role = Literal["admin", "staff"]
+# Org-scoped roles only - used by the org's own self-service user management
+# (routes/users.py). Deliberately NOT the same type as Role below: widening
+# this one would let an org admin set role="superadmin" on a user in their own
+# org via POST/PUT /users, a real privilege escalation.
+OrgRole = Literal["admin", "staff"]
+# Full role space, including the platform-level role with no org (Superadmin
+# Portal plan) - used for JWT payload semantics and the admin-portal models,
+# never for the org-scoped user management models above.
+Role = Literal["admin", "staff", "superadmin"]
 
 class OrganizationBase(BaseModel):
     name: NonBlankStr
@@ -303,19 +311,34 @@ class Organization(OrganizationBase):
 
 class UserBase(BaseModel):
     email: Email
-    role: Role
+    role: OrgRole
 
 class UserCreate(UserBase):
     password: NewPassword
 
 class UserUpdate(BaseModel):
-    role: Optional[Role] = None
+    role: Optional[OrgRole] = None
     is_active: Optional[bool] = None
 
 class UserPublic(UserBase):
     """User shape returned to clients - never includes password_hash."""
     id: str
     org_id: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class AccountPublic(BaseModel):
+    """GET /auth/me's response shape. Unlike UserPublic (org-scoped users
+    only, admin/staff), this must also represent a superadmin's own account
+    (org_id=None, role="superadmin") - so it uses the full Role type and a
+    nullable org_id rather than inheriting UserBase."""
+    id: str
+    email: Email
+    role: Role
+    org_id: Optional[str] = None
     is_active: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -349,3 +372,14 @@ class OrgIntegrationSettingsPublic(BaseModel):
     shopify_api_version: str
     shopify_access_token_configured: bool
     postex_merchant_token_configured: bool
+
+class SuperadminOrgCreate(BaseModel):
+    """POST /admin/organizations body - creates an org and its first admin
+    user in one step (Superadmin Portal)."""
+    org_name: NonBlankStr
+    admin_email: Email
+    admin_password: NewPassword
+
+class OrganizationWithAdmin(BaseModel):
+    organization: Organization
+    admin_user: UserPublic

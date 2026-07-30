@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data:;">
+    <title>LushWear IMS — Superadmin</title>
+    <link rel="icon" type="image/png" href="assets/Logo.png">
+    <link rel="stylesheet" href="styles.css">
+    <script>
+        document.documentElement.setAttribute('data-theme', localStorage.getItem('lushwear-theme') || 'light');
+    </script>
+</head>
+
+<body>
+    <!-- Login gate -->
+    <div id="adminGateRoot" class="auth-gate-root">
+        <div class="auth-gate-card">
+            <img src="assets/Logo_Large.png" alt="" class="auth-gate-logo">
+            <span class="admin-portal-badge">SUPERADMIN</span>
+            <h2 class="auth-gate-title">Platform login</h2>
+            <form id="adminGateForm" class="auth-gate-form" autocomplete="off">
+                <label class="auth-gate-label" for="adminGateEmail">Email</label>
+                <input type="email" id="adminGateEmail" class="auth-gate-input"
+                    required autocomplete="username" placeholder="you@example.com">
+                <label class="auth-gate-label" for="adminGatePassword">Password</label>
+                <input type="password" id="adminGatePassword" class="auth-gate-input"
+                    required autocomplete="current-password" placeholder="••••••••">
+                <p id="adminGateError" class="auth-gate-error" role="alert"></p>
+                <button type="submit" id="adminGateSubmit" class="btn btn-primary auth-gate-submit">Log in</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Portal -->
+    <div id="adminPortalRoot" class="admin-portal-root" hidden>
+        <header class="admin-portal-header">
+            <div class="admin-portal-header__brand">
+                <img src="assets/Logo.png" alt="" class="admin-portal-header__logo">
+                <div>
+                    <h1>Superadmin Portal</h1>
+                    <span class="admin-portal-badge">PLATFORM ADMIN</span>
+                </div>
+            </div>
+            <button type="button" id="adminLogoutBtn" class="btn btn-secondary">Log out</button>
+        </header>
+
+        <section class="admin-portal-section">
+            <div class="admin-portal-section__header">
+                <h2 class="settings-section__title">Organizations</h2>
+                <button type="button" id="adminOpenCreateOrgBtn" class="btn btn-primary">+ Create organization</button>
+            </div>
+            <p id="adminOrgsLoading" class="admin-portal-empty">Loading organizations…</p>
+            <p id="adminOrgsEmpty" class="admin-portal-empty" style="display: none;">
+                No organizations yet — create the first one above.
+            </p>
+            <div id="adminOrgsList" class="admin-org-list"></div>
+        </section>
+    </div>
+
+    <!-- Create Organization modal -->
+    <div id="adminCreateOrgModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Create organization</h2>
+                <button type="button" class="modal-close" id="adminCreateOrgModalClose" aria-label="Close">&times;</button>
+            </div>
+            <form id="adminCreateOrgForm" class="modal-body">
+                <p class="modal-description">Creates the organization and its first admin user in one step. That admin
+                    logs in themselves afterwards with the credentials you set here.</p>
+                <div class="form-group">
+                    <label for="adminOrgName">Organization name</label>
+                    <input type="text" id="adminOrgName" class="form-input" required placeholder="e.g. Acme Co">
+                </div>
+                <div class="form-group">
+                    <label for="adminOrgAdminEmail">First admin email</label>
+                    <input type="email" id="adminOrgAdminEmail" class="form-input" required placeholder="owner@acme.com">
+                </div>
+                <div class="form-group">
+                    <label for="adminOrgAdminPassword">First admin password</label>
+                    <input type="password" id="adminOrgAdminPassword" class="form-input" required minlength="8"
+                        placeholder="At least 8 characters" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                </div>
+                <p id="adminCreateOrgError" class="auth-gate-error" role="alert"></p>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="adminCreateOrgCancelBtn">Cancel</button>
+                    <button type="submit" class="btn btn-primary">Create organization</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Integrations modal -->
+    <div id="adminIntegrationsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Integrations — <span id="adminIntegrationsOrgName"></span></h2>
+                <button type="button" class="modal-close" id="adminIntegrationsModalClose" aria-label="Close">&times;</button>
+            </div>
+            <form id="adminIntegrationsForm" class="modal-body">
+                <div class="form-group">
+                    <label for="adminShopifyStoreUrl">Shopify store URL</label>
+                    <input type="text" id="adminShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
+                </div>
+                <div class="form-group">
+                    <label for="adminShopifyAccessToken">Shopify access token</label>
+                    <input type="password" id="adminShopifyAccessToken" class="form-input"
+                        placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                    <span class="form-hint" id="adminShopifyTokenStatus"></span>
+                </div>
+                <div class="form-group">
+                    <label for="adminShopifyApiVersion">Shopify API version</label>
+                    <input type="text" id="adminShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
+                </div>
+                <div class="form-group">
+                    <label for="adminPostexToken">PostEx merchant token</label>
+                    <input type="password" id="adminPostexToken" class="form-input"
+                        placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                    <span class="form-hint" id="adminPostexTokenStatus"></span>
+                </div>
+                <p id="adminIntegrationsError" class="auth-gate-error" role="alert"></p>
+                <div class="form-actions">
+                    <button type="button" class="btn btn-secondary" id="adminIntegrationsCloseBtn">Close</button>
+                    <button type="submit" class="btn btn-primary">Save integrations</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+
+    <script src="config.js"></script>
+    <script src="utils.js"></script>
+    <script src="js/admin.js"></script>
+</body>
+
+</html>

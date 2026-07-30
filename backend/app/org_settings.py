@@ -20,6 +20,7 @@ from typing import Optional
 from cryptography.fernet import Fernet, InvalidToken
 
 from app.database import get_supabase
+from app.models import OrgIntegrationSettingsPublic
 
 _DEFAULT_SHOPIFY_API_VERSION = "2024-07"
 
@@ -84,6 +85,18 @@ def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
         shopify_access_token=_decrypt(row.get("shopify_access_token")),
         shopify_api_version=row.get("shopify_api_version") or _DEFAULT_SHOPIFY_API_VERSION,
         postex_merchant_token=_decrypt(row.get("postex_merchant_token")),
+    )
+
+
+def to_public_shape(settings: OrgIntegrationSettings) -> OrgIntegrationSettingsPublic:
+    """Shared response shape for both the self-service (`routes/org_settings.py`)
+    and superadmin (`routes/admin_portal.py`) integration-settings routes -
+    secrets are never echoed back, only whether each is configured."""
+    return OrgIntegrationSettingsPublic(
+        shopify_store_url=settings.shopify_store_url,
+        shopify_api_version=settings.shopify_api_version,
+        shopify_access_token_configured=bool(settings.shopify_access_token),
+        postex_merchant_token_configured=bool(settings.postex_merchant_token),
     )
 
 

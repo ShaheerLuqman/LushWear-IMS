@@ -66,10 +66,11 @@ def make_client():
         import app.routes.ledger as ledger
         import app.routes.auth as auth_routes
         import app.routes.users as users
+        import app.routes.admin_portal as admin_portal
         import app.services.shopify_sync as shopify_sync
         import app.org_settings as org_settings
 
-        patched = [orders, products, cashbook, ledger, auth_routes, users, shopify_sync, org_settings, main]
+        patched = [orders, products, cashbook, ledger, auth_routes, users, admin_portal, shopify_sync, org_settings, main]
         originals = [m.get_supabase for m in patched]
         for m in patched:
             m.get_supabase = lambda _f=fake: _f
