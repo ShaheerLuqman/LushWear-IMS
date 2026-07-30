@@ -32,6 +32,7 @@ from app.services.pdf.packaging_list import (
 from app.services.shopify_orders import _fetch_shopify_order_by_order_number
 from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
+    SyncShopifyOrdersResult,
     _cost_from_line_items,
     _get_sync_status_row,
     _line_items_incomplete,
@@ -180,7 +181,7 @@ async def get_sync_status():
         raise HTTPException(status_code=500, detail="Error fetching sync status")
 
 
-@router.post("/sync-shopify")
+@router.post("/sync-shopify", response_model=SyncShopifyOrdersResult)
 @limiter.limit("10/minute")
 async def sync_shopify_orders(request: Request):
     return await _sync_shopify_orders()
@@ -319,7 +320,19 @@ async def upload_postex_csv(
         raise HTTPException(status_code=500, detail="Error processing CSV")
 
 
-@router.post("/fix-voided-totals", response_model=dict)
+class FixVoidedTotalsResult(BaseModel):
+    updated_count: int
+    checked_count: int
+    voided_in_shopify_count: int
+    shopify_fetch_failed_count: int
+    skipped_not_voided_count: int
+    eligible_candidates_count: int
+    fetch_batch_size: int
+    only_returned_status: bool
+    updated_order_numbers: List[str]
+
+
+@router.post("/fix-voided-totals", response_model=FixVoidedTotalsResult)
 async def fix_voided_order_totals(
     only_returned_status: bool = Query(
         False,
@@ -360,7 +373,10 @@ async def fix_voided_order_totals(
                 "voided_in_shopify_count": 0,
                 "shopify_fetch_failed_count": 0,
                 "skipped_not_voided_count": 0,
+                "eligible_candidates_count": 0,
+                "fetch_batch_size": fetch_batch_size,
                 "only_returned_status": only_returned_status,
+                "updated_order_numbers": [],
             }
 
         logger.info(f"[fix-voided-totals] total candidates={len(orders)}")
@@ -520,7 +536,18 @@ class ForceSyncOrdersBody(BaseModel):
     order_numbers: List[int]
 
 
-@router.post("/sync-shopify-force", response_model=dict)
+class ForceSyncOrdersResult(BaseModel):
+    requested_count: int
+    processed_count: int
+    created_count: int
+    updated_count: int
+    created_order_numbers: List[int]
+    updated_order_numbers: List[int]
+    shopify_fetch_failed_count: int
+    shopify_fetch_failed_order_numbers: List[int]
+
+
+@router.post("/sync-shopify-force", response_model=ForceSyncOrdersResult)
 @limiter.limit("10/minute")
 async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody):
     """
@@ -890,7 +917,15 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody)
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.post("/recalculate-totals", response_model=dict)
+class RecalculateTotalsResult(BaseModel):
+    updated_count: int
+    checked_count: int
+    shopify_fetch_failed_count: int
+    updated_order_numbers: List[int]
+    not_found_in_db: List[int]
+
+
+@router.post("/recalculate-totals", response_model=RecalculateTotalsResult)
 async def recalculate_order_totals(body: RecalculateTotalsBody):
     """
     Recalculate total_amount for specified orders from Shopify.
@@ -1052,8 +1087,19 @@ class LoadSheetLogCreate(BaseModel):
     delivery_charge: Optional[float] = None  # delivery charges to store in log and apply to all orders
 
 
+class LoadSheetLogResult(BaseModel):
+    id: str
+    assignment_number: str
+    rider_name: str
+    order_numbers: List[str]
+    delivery_charge: Optional[float] = None
+    created_at: Optional[datetime] = None
+    # Present only when some of the requested orders were excluded for being cancelled.
+    cancelled_order_numbers: Optional[List[str]] = None
+
+
 # Load Sheet Logs (must be before /{order_id} so "load-sheet-logs" is not matched as order_id)
-@router.post("/load-sheet-logs", response_model=dict)
+@router.post("/load-sheet-logs", response_model=LoadSheetLogResult)
 async def create_load_sheet_log(body: LoadSheetLogCreate):
     """Save a load sheet log (assignment number, rider name, order numbers, delivery_charge). Updates all orders with the given delivery_charge."""
     try:
@@ -1444,7 +1490,7 @@ def _derive_order_status_from_latest(delivery_status_data: dict) -> Optional[str
     
     return None
 
-@router.post("/", response_model=dict)
+@router.post("/", response_model=Order)
 async def create_order(order: OrderCreate):
     """Create a new order"""
     try:

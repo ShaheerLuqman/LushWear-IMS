@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import HTTPException
+from pydantic import BaseModel
 from supabase import create_client
 
 from app import shopify
@@ -26,6 +27,21 @@ from app.config import settings
 from app.database import get_supabase
 
 logger = logging.getLogger("app.orders")
+
+
+class SyncShopifyOrdersResult(BaseModel):
+    """Shape of _sync_shopify_orders's return value - either the "already
+    syncing" short-circuit or a completed run's stats, never a mix of both."""
+    message: str
+    already_syncing: bool = False
+    last_synced_at: Optional[str] = None
+    synced: Optional[int] = None
+    created: Optional[int] = None
+    updated: Optional[int] = None
+    skipped: Optional[int] = None
+    pages_fetched: Optional[int] = None
+    total_orders_from_shopify: Optional[int] = None
+    orders_per_page: Optional[int] = None
 
 # Cap on values per `.in_()` query - keeps the request URL well under server/proxy length
 # limits when scoping a query to a large set of order numbers.

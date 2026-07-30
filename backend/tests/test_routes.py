@@ -95,6 +95,125 @@ class TestOrders:
         assert client.get("/api/orders/?month=13&year=2026").status_code == 422
         assert client.get("/api/orders/?month=6&year=2026").status_code == 200
 
+    def test_create_order_returns_the_typed_order(self, make_client, order_row):
+        # FakeQuery.insert().execute() just echoes the seeded row for the table,
+        # not the request payload - order_row (conftest.py) is a full Order shape.
+        client = make_client({"orders": [order_row]})
+        payload = {
+            "order_number": 123,
+            "courier": "PostEx",
+            "order_status": "unfulfilled",
+            "total_amount": 100.0,
+            "order_receiving_date": "2026-07-30T00:00:00+00:00",
+        }
+        r = client.post("/api/orders/", json=payload)
+        assert r.status_code == 200
+        assert r.json()["id"] == order_row["id"]
+
+    def test_fix_voided_totals_with_no_candidates_returns_the_full_typed_shape(self, make_client):
+        """Regression guard: the no-candidates early return used to omit
+        eligible_candidates_count/fetch_batch_size/updated_order_numbers, which
+        the main return always includes - a real response_model would 500 on
+        this path if the two shapes disagree again."""
+        r = make_client({"orders": []}).post("/api/orders/fix-voided-totals")
+        assert r.status_code == 200
+        assert r.json() == {
+            "updated_count": 0,
+            "checked_count": 0,
+            "voided_in_shopify_count": 0,
+            "shopify_fetch_failed_count": 0,
+            "skipped_not_voided_count": 0,
+            "eligible_candidates_count": 0,
+            "fetch_batch_size": 50,
+            "only_returned_status": False,
+            "updated_order_numbers": [],
+        }
+
+    def test_sync_shopify_orders_returns_the_typed_result(self, make_client, monkeypatch):
+        import app.routes.orders as orders_module
+
+        async def fake_sync():
+            return {
+                "message": "Orders synced successfully",
+                "last_synced_at": "2026-07-30T12:00:00+00:00",
+                "synced": 2, "created": 1, "updated": 1, "skipped": 5,
+                "pages_fetched": 1, "total_orders_from_shopify": 8, "orders_per_page": 250,
+            }
+
+        monkeypatch.setattr(orders_module, "_sync_shopify_orders", fake_sync)
+        r = make_client({}).post("/api/orders/sync-shopify")
+        assert r.status_code == 200
+        assert r.json()["synced"] == 2
+
+    def test_sync_shopify_orders_already_syncing_shape(self, make_client, monkeypatch):
+        """The "already syncing" short-circuit is a different shape (no stats
+        fields at all) - the response_model must accept both."""
+        import app.routes.orders as orders_module
+
+        async def fake_sync():
+            return {"message": "Sync already in progress", "already_syncing": True}
+
+        monkeypatch.setattr(orders_module, "_sync_shopify_orders", fake_sync)
+        r = make_client({}).post("/api/orders/sync-shopify")
+        assert r.status_code == 200
+        assert r.json()["already_syncing"] is True
+
+    def test_sync_shopify_orders_force_returns_the_typed_shape(self, make_client, monkeypatch):
+        import app.routes.orders as orders_module
+
+        async def fake_fetch(order_number):
+            return None  # simulates "not found in Shopify" - simplest path through the endpoint
+
+        monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
+        client = make_client({"products": [], "variants": [], "orders": []})
+        r = client.post("/api/orders/sync-shopify-force", json={"order_numbers": [100]})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["shopify_fetch_failed_count"] == 1
+        assert body["shopify_fetch_failed_order_numbers"] == [100]
+
+    def test_recalculate_totals_returns_the_typed_shape(self, make_client, monkeypatch):
+        import app.routes.orders as orders_module
+
+        async def fake_fetch(order_number):
+            return None
+
+        monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
+        client = make_client({"orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 100.0, "advance_amount": 0.0, "order_status": "unfulfilled"},
+        ]})
+        r = client.post("/api/orders/recalculate-totals", json={"order_numbers": [100]})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["shopify_fetch_failed_count"] == 1
+        assert body["not_found_in_db"] == []
+
+    def test_create_load_sheet_log_returns_the_typed_shape(self, make_client):
+        seeded_log = {
+            "id": "log-1",
+            "assignment_number": "A100",
+            "rider_name": "Rider A",
+            "order_numbers": ["100", "101"],
+            "delivery_charge": 180.0,
+            "created_at": "2026-07-30T12:00:00+00:00",
+        }
+        client = make_client({
+            "orders": [
+                {"order_number": "100", "order_status": "unfulfilled"},
+                {"order_number": "101", "order_status": "unfulfilled"},
+            ],
+            "load_sheet_logs": [seeded_log],
+        })
+        payload = {
+            "assignment_number": "A100",
+            "rider_name": "Rider A",
+            "order_numbers": ["100", "101"],
+            "delivery_charge": 180.0,
+        }
+        r = client.post("/api/orders/load-sheet-logs", json=payload)
+        assert r.status_code == 200
+        assert r.json()["id"] == "log-1"
+
 
 class TestMonthSummaryList:
     def test_returns_periods_from_the_rpc_as_is(self, make_client):
@@ -293,8 +412,25 @@ class TestLedgers:
         assert r.status_code == 400
         assert "cashbook entries" in r.json()["detail"]
 
+    def test_delete_returns_the_typed_result(self, make_client, ledger_row):
+        client = make_client({"ledgers": [ledger_row], "cashbook_entries": []})
+        r = client.delete(f"/api/ledgers/{ledger_row['id']}")
+        assert r.status_code == 200
+        assert r.json() == {"status": "deleted", "id": ledger_row["id"]}
+
 
 class TestProducts:
+    def test_create_returns_the_typed_shape(self, make_client):
+        # FakeQuery.insert().execute() just echoes the seeded row for the table,
+        # not the request payload.
+        client = make_client({"products": [{"id": "p1", "name": "Test Product", "price": 10.0}]})
+        r = client.post("/api/products/", json={"name": "Test Product", "price": 10.0})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == "p1"
+        assert body["variants"] == []
+        assert body["total_quantity"] == 0
+
     def test_list_groups_variants_via_the_embed_not_in_python(self, make_client):
         # Shaped like a real PostgREST `select=*, variants(*)` response: variants
         # already nested under their product, not two flat tables to zip together.
@@ -358,6 +494,19 @@ class TestCashbook:
         client = make_client({"cashbook_entries": []})
         r = client.put("/api/cashbook/entries/nope", json={"description": "x"})
         assert r.status_code == 404
+
+    def test_delete_returns_the_typed_result(self, make_client):
+        client = make_client({
+            "cashbook_entries": [{"order_number": None, "folio": "ledger-1"}],
+            "ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
+        })
+        r = client.delete("/api/cashbook/entries/entry-1")
+        assert r.status_code == 200
+        assert r.json() == {
+            "status": "deleted",
+            "id": "entry-1",
+            "ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
+        }
 
 
 class TestErrorHandling:

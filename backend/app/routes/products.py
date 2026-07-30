@@ -462,7 +462,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.get("/{product_id}")
+@router.get("/{product_id}", response_model=ProductWithVariants)
 async def get_product(product_id: str):
     """Get a single product with its variants"""
     try:
@@ -487,7 +487,7 @@ async def get_product(product_id: str):
         logger.exception("products endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.post("/", response_model=dict)
+@router.post("/", response_model=ProductWithVariants)
 async def create_product(product: ProductCreate):
     """Create a new product with optional variants"""
     try:

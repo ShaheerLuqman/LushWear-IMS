@@ -1,11 +1,17 @@
 from fastapi import APIRouter, HTTPException
-from typing import List
+from typing import List, Literal
+from pydantic import BaseModel
 from app.database import get_supabase
 from app.models import (
     Ledger,
     LedgerCreate,
     LedgerUpdate,
 )
+
+
+class DeleteLedgerResult(BaseModel):
+    status: Literal["deleted"]
+    id: str
 
 router = APIRouter(prefix="/ledgers", tags=["ledgers"])
 
@@ -117,7 +123,7 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate):
     return response.data[0]
 
 
-@router.delete("/{ledger_id}", response_model=dict)
+@router.delete("/{ledger_id}", response_model=DeleteLedgerResult)
 async def delete_ledger(ledger_id: str):
     supabase = get_supabase()
     entries_resp = (

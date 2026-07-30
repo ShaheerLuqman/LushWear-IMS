@@ -1,6 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from typing import List, Literal, Optional
 from datetime import date, timedelta
+from pydantic import BaseModel
 from app.database import get_supabase
 from app.models import (
     CashbookDailyBalance,
@@ -9,6 +10,7 @@ from app.models import (
     CashbookEntryAuditLog,
     CashbookEntryCreate,
     CashbookEntryUpdate,
+    LedgerBalance,
 )
 from app.advance_status import recompute_advance_statuses
 
@@ -201,7 +203,13 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate):
     return entry_out
 
 
-@router.delete("/entries/{entry_id}", response_model=dict)
+class DeleteCashbookEntryResult(BaseModel):
+    status: Literal["deleted"]
+    id: str
+    ledger_balances: List[LedgerBalance]
+
+
+@router.delete("/entries/{entry_id}", response_model=DeleteCashbookEntryResult)
 async def delete_cashbook_entry(entry_id: str):
     supabase = get_supabase()
     old_meta = _get_entry_meta_or_404(supabase, entry_id)

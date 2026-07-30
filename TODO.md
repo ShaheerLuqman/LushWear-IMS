@@ -43,10 +43,24 @@ Cashbook/ledger work items live in
       recorded as the sync's *start* time, not its end time, to avoid a race
       where a Shopify update landing mid-sync would fall in the gap and never
       get picked up.
-- [ ] **Remaining untyped `response_model=dict`** (9 left, `backend/app/routes/`)
-      are operation results — sync stats, `{"status": "deleted"}`, load-sheet
-      logs — not entities. Typing them would mean inventing models for ad-hoc
-      payloads; left as `dict` deliberately.
+- [x] **Remaining untyped `response_model=dict`** — **Done, 2026-07-30.** All 8
+      `response_model=dict` routes now have a real model:
+      `DeleteCashbookEntryResult`, `DeleteLedgerResult`, `FixVoidedTotalsResult`,
+      `ForceSyncOrdersResult`, `RecalculateTotalsResult`, `LoadSheetLogResult`
+      (all local to their route file), plus `create_order` and `create_product`
+      turned out to already return full entities and now use the existing
+      `Order`/`ProductWithVariants` models instead of a fresh one. Also typed
+      `POST /orders/sync-shopify` (`SyncShopifyOrdersResult`, in
+      `services/shopify_sync.py`) and `GET /products/{id}` (`ProductWithVariants`)
+      — both returned dicts with no `response_model` at all, an even more
+      untyped case than the 8 that prompted this. Found and fixed a real bug
+      doing this: `fix_voided_order_totals`'s "no candidates" early return was
+      missing 3 fields (`eligible_candidates_count`, `fetch_batch_size`,
+      `updated_order_numbers`) that its main return always includes — under a
+      strict `response_model` this path would have 500'd. None of these 10
+      endpoints had any test coverage before this, so a shape mismatch would
+      only have surfaced as a production `ResponseValidationError`; added
+      route-level tests for all of them in `tests/test_routes.py`.
 
 ---
 
