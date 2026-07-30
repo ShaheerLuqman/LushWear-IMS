@@ -1,34 +1,16 @@
 from datetime import datetime, timezone
 from typing import Annotated, Optional
 
-import bcrypt
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import AfterValidator, BaseModel
 
 from app.client_ip import get_client_ip
 from app.database import get_supabase
-from app.auth import create_token
+from app.auth import create_token, hash_password, verify_password
 
 router = APIRouter(prefix="/app-pin", tags=["app-pin"])
 
 APP_PIN_ROW_ID = "default"
-
-# bcrypt cost factor. A single short PIN cannot be meaningfully protected against
-# offline cracking by hash cost (the keyspace is tiny), so the real brute-force
-# defense is the API-side lockout below. We keep the cost low for a snappy verify.
-_BCRYPT_ROUNDS = 8
-
-
-def _hash_pin(pin: str) -> str:
-    return bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt(_BCRYPT_ROUNDS)).decode("ascii")
-
-
-def _verify_pin(pin: str, stored_hash: str) -> bool:
-    try:
-        return bcrypt.checkpw(pin.encode("utf-8"), stored_hash.encode("ascii"))
-    except (ValueError, TypeError):
-        # Malformed stored hash — treat as non-match rather than 500.
-        return False
 
 
 def _validate_pin(pin: str) -> str:
@@ -127,7 +109,7 @@ def _get_existing_hash() -> Optional[str]:
 
 
 def _store_hash(pin: str, *, insert: bool) -> None:
-    row = {"pin_hash": _hash_pin(pin), "updated_at": datetime.now(timezone.utc).isoformat()}
+    row = {"pin_hash": hash_password(pin), "updated_at": datetime.now(timezone.utc).isoformat()}
     table = get_supabase().table("app_pin")
     if insert:
         table.insert({"id": APP_PIN_ROW_ID, **row}).execute()
@@ -159,7 +141,7 @@ async def pin_verify(body: PinVerifyBody, request: Request):
     stored = _get_existing_hash()
     if not stored:
         raise HTTPException(status_code=400, detail="No PIN has been set yet")
-    if not _verify_pin(body.pin, stored):
+    if not verify_password(body.pin, stored):
         _lockout.record_failure(key)
         raise HTTPException(status_code=401, detail="Incorrect PIN")
     _lockout.clear(key)
@@ -189,7 +171,7 @@ async def pin_change(body: PinChangeBody):
     stored = _get_existing_hash()
     if not stored:
         raise HTTPException(status_code=400, detail="No PIN has been set yet")
-    if not _verify_pin(body.current_pin, stored):
+    if not verify_password(body.current_pin, stored):
         raise HTTPException(status_code=401, detail="Current PIN is incorrect")
 
     _store_hash(body.new_pin, insert=False)

@@ -95,7 +95,111 @@ CREATE TABLE IF NOT EXISTS load_sheet_logs (
 
 
 -- ============================================================================
+-- Organizations & Users (replaces the single shared app-PIN — see
+-- ORGANIZATIONS_USERS_PLAN.md). One row per business (organizations), one row
+-- per login (users), each user scoped to exactly one org. `role` is open text
+-- with a CHECK constraint rather than a Postgres ENUM, matching this repo's
+-- existing convention for small fixed value sets (order_status/advance_status).
+-- See supabase/migrations/20260730040000_organizations_and_users_tables.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS organizations (
+    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name       TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS users (
+    id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    org_id        UUID NOT NULL REFERENCES organizations(id),
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    role          TEXT NOT NULL CHECK (role IN ('admin', 'staff')),
+    is_active     BOOLEAN NOT NULL DEFAULT true,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+
+
+-- ============================================================================
+-- Login brute-force lockout, keyed by email - same shape/pattern as
+-- pin_lockouts/record_pin_lockout_failure below, just keyed by the credential
+-- being attacked (a user's email) instead of client IP, since each user now
+-- has their own password rather than everyone sharing one PIN.
+-- See supabase/migrations/20260730050000_login_lockouts_table.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS login_lockouts (
+    email         TEXT PRIMARY KEY,
+    fails         INTEGER NOT NULL DEFAULT 0,
+    first_fail_at TIMESTAMPTZ NOT NULL,
+    locked_until  TIMESTAMPTZ,
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE OR REPLACE FUNCTION record_login_lockout_failure(
+    p_email TEXT,
+    p_max_attempts INT,
+    p_window_seconds INT
+)
+RETURNS TABLE(locked_until TIMESTAMPTZ)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_now TIMESTAMPTZ := NOW();
+    v_fails INT;
+    v_first_fail TIMESTAMPTZ;
+    v_locked_until TIMESTAMPTZ;
+BEGIN
+    SELECT fails, first_fail_at INTO v_fails, v_first_fail
+    FROM login_lockouts WHERE email = p_email
+    FOR UPDATE;
+
+    IF v_fails IS NULL OR v_now - v_first_fail > (p_window_seconds || ' seconds')::INTERVAL THEN
+        v_fails := 1;
+        v_first_fail := v_now;
+    ELSE
+        v_fails := v_fails + 1;
+    END IF;
+
+    v_locked_until := CASE WHEN v_fails >= p_max_attempts
+        THEN v_now + (p_window_seconds || ' seconds')::INTERVAL
+        ELSE NULL END;
+
+    INSERT INTO login_lockouts (email, fails, first_fail_at, locked_until, updated_at)
+    VALUES (p_email, v_fails, v_first_fail, v_locked_until, v_now)
+    ON CONFLICT (email) DO UPDATE SET
+        fails = EXCLUDED.fails,
+        first_fail_at = EXCLUDED.first_fail_at,
+        locked_until = EXCLUDED.locked_until,
+        updated_at = EXCLUDED.updated_at;
+
+    RETURN QUERY SELECT v_locked_until;
+END;
+$$;
+
+
+-- ============================================================================
+-- System bootstrap (makes POST /auth/bootstrap race-free). Same single-row-by
+-- -fixed-id pattern as app_pin (id='default'). The route inserts this row with
+-- ON CONFLICT DO NOTHING and only proceeds if the insert actually affected a
+-- row, instead of a plain "SELECT COUNT(*) FROM users" check, which would be
+-- a TOCTOU race under concurrent requests.
+-- See supabase/migrations/20260730060000_system_bootstrap_table.sql.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS system_bootstrap (
+    id           TEXT PRIMARY KEY DEFAULT 'default',
+    completed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+
+-- ============================================================================
 -- App unlock PIN (bcrypt hash only; single row, id = 'default')
+-- Retired once Organizations & Users' Phase 2 (org-scoping cutover) ships -
+-- see ORGANIZATIONS_USERS_PLAN.md Phase 4. Kept live until then.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS app_pin (

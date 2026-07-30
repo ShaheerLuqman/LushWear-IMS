@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(venv/Scripts/python.exe -c \"import ast; ast.parse\\(open\\('app/routes/auth.py'\\).read\\(\\)\\)\")"
+    ]
+  }
+}

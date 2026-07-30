@@ -55,16 +55,21 @@ def make_client():
 
     def _factory(tables=None, rpc_results=None):
         fake = FakeSupabase(tables or {}, rpc_results)
-        main.app.dependency_overrides[require_auth] = lambda: {"sub": "test"}
+        # role="admin" so users.router's require_role("admin") gate (which wraps
+        # require_auth) passes by default too; tests exercising the 403 case
+        # override this further with their own dependency_overrides[require_auth].
+        main.app.dependency_overrides[require_auth] = lambda: {"sub": "test", "org_id": "test-org", "role": "admin"}
 
         import app.routes.orders as orders
         import app.routes.products as products
         import app.routes.cashbook as cashbook
         import app.routes.ledger as ledger
         import app.routes.app_pin as app_pin
+        import app.routes.auth as auth_routes
+        import app.routes.users as users
         import app.services.shopify_sync as shopify_sync
 
-        patched = [orders, products, cashbook, ledger, app_pin, shopify_sync, main]
+        patched = [orders, products, cashbook, ledger, app_pin, auth_routes, users, shopify_sync, main]
         originals = [m.get_supabase for m in patched]
         for m in patched:
             m.get_supabase = lambda _f=fake: _f

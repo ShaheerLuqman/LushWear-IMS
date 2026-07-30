@@ -1,24 +1,33 @@
-"""Lightweight session-token auth.
+"""Session-token auth, plus password hashing shared with routes/auth.py (and,
+until Phase 4 of ORGANIZATIONS_USERS_PLAN.md, routes/app_pin.py).
 
-The app is gated by a single shared PIN (see routes/app_pin.py). On a successful
-PIN verify/setup the client receives a signed JWT, which it must then send as
-`Authorization: Bearer <token>` on every protected API call.
+Each user logs in via routes/auth.py (POST /auth/login) and receives a signed
+JWT, which it must then send as `Authorization: Bearer <token>` on every
+protected API call.
 
-This is intentionally simple (one shared identity). It is designed to grow into
-full users/orgs/RBAC later: the `require_auth` dependency and the token payload
-are the extension points — add `user_id` / `org_id` / `role` claims and per-role
-dependencies without changing the wiring in main.py or the frontend.
+`sub` is the user's id; `org_id`/`role` scope every request to one
+organization and gate admin-only routes via `require_role`. A token minted by
+the (soon retired) app-PIN flow has no `org_id`/`role` - see
+ORGANIZATIONS_USERS_PLAN.md's "PIN is retired" note.
 """
 
 import os
 import time
 import secrets
+from typing import Optional
 
+import bcrypt
 import jwt
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 _ALGORITHM = "HS256"
 _DEFAULT_TTL_HOURS = 24 * 7  # 7 days
+
+# bcrypt cost factor. A short PIN/password is not meaningfully protected
+# against offline cracking by hash cost alone, so the real brute-force defense
+# is the API-side lockout (pin_lockouts / login_lockouts). Kept low for a
+# snappy verify.
+_BCRYPT_ROUNDS = 8
 
 # Dev fallback secret: generated once per process when AUTH_SECRET is not set.
 # Tokens signed with it are invalidated whenever the server restarts. Production
@@ -45,10 +54,23 @@ def _ttl_seconds() -> int:
     return int(hours * 3600)
 
 
-def create_token(subject: str = "app") -> str:
-    """Issue a signed session token."""
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt(_BCRYPT_ROUNDS)).decode("ascii")
+
+
+def verify_password(password: str, stored_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(password.encode("utf-8"), stored_hash.encode("ascii"))
+    except (ValueError, TypeError):
+        # Malformed stored hash — treat as non-match rather than 500.
+        return False
+
+
+def create_token(user_id: str = "app", org_id: Optional[str] = None, role: Optional[str] = None) -> str:
+    """Issue a signed session token. `user_id="app"`/no org_id/no role is the
+    legacy app-PIN shape (see module docstring) - real logins always pass all three."""
     now = int(time.time())
-    payload = {"sub": subject, "iat": now, "exp": now + _ttl_seconds()}
+    payload = {"sub": user_id, "org_id": org_id, "role": role, "iat": now, "exp": now + _ttl_seconds()}
     return jwt.encode(payload, _get_secret(), algorithm=_ALGORITHM)
 
 
@@ -63,3 +85,16 @@ async def require_auth(authorization: str = Header(default=None)) -> dict:
         raise HTTPException(status_code=401, detail="Session expired")
     except jwt.PyJWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+
+def require_role(*roles: str):
+    """FastAPI dependency factory: require the caller's token `role` to be one
+    of `roles`. Use alongside `require_auth` (already applied per-router in
+    main.py) for admin-only routes, e.g. `Depends(require_role("admin"))`."""
+
+    async def _dependency(payload: dict = Depends(require_auth)) -> dict:
+        if payload.get("role") not in roles:
+            raise HTTPException(status_code=403, detail="Insufficient permissions")
+        return payload
+
+    return _dependency

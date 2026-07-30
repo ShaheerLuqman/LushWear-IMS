@@ -1,4 +1,4 @@
-from pydantic import BaseModel, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, AfterValidator, BeforeValidator, ConfigDict, Field
 from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, date
 
@@ -260,3 +260,73 @@ class Ledger(LedgerBase):
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# ==================== ORGANIZATION / USER / AUTH MODELS ====================
+
+def _normalize_email(v):
+    return v.strip().lower() if isinstance(v, str) else v
+
+def _validate_email(v: str) -> str:
+    # Deliberately simple (no email-validator dependency), matching this file's
+    # existing hand-rolled-validator convention (NonBlankStr, EntryType) over
+    # reaching for pydantic[email] for one field.
+    local, _, domain = v.partition("@")
+    if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):
+        raise ValueError("Invalid email address")
+    return v
+
+def _validate_new_password(v: str) -> str:
+    if len(v) < 8:
+        raise ValueError("Password must be at least 8 characters")
+    return v
+
+# Normalized (lowercased/stripped) so the same address always matches one
+# `users.email` row regardless of how a client capitalizes it.
+Email = Annotated[str, BeforeValidator(_normalize_email), AfterValidator(_validate_email)]
+# Only for *setting* a password (create/bootstrap) - deliberately not reused on
+# login, so tightening this minimum later can't retroactively lock out a user
+# whose existing (shorter, still-valid) password predates the change.
+NewPassword = Annotated[str, AfterValidator(_validate_new_password)]
+Role = Literal["admin", "staff"]
+
+class OrganizationBase(BaseModel):
+    name: NonBlankStr
+
+class OrganizationCreate(OrganizationBase):
+    pass
+
+class Organization(OrganizationBase):
+    id: str
+    created_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class UserBase(BaseModel):
+    email: Email
+    role: Role
+
+class UserCreate(UserBase):
+    password: NewPassword
+
+class UserUpdate(BaseModel):
+    role: Optional[Role] = None
+    is_active: Optional[bool] = None
+
+class UserPublic(UserBase):
+    """User shape returned to clients - never includes password_hash."""
+    id: str
+    org_id: str
+    is_active: bool
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class LoginBody(BaseModel):
+    email: Email
+    password: NonBlankStr
+
+class BootstrapBody(BaseModel):
+    org_name: NonBlankStr
+    email: Email
+    password: NewPassword

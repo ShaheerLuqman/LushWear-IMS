@@ -10,8 +10,8 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, app_pin
-from app.auth import require_auth
+from app.routes import products, orders, cashbook, ledger, app_pin, auth as auth_routes, users
+from app.auth import require_auth, require_role
 from app.config import settings
 from app.database import get_supabase
 from app.logging_config import configure_logging
@@ -92,8 +92,11 @@ app.include_router(products.router, prefix="/api", dependencies=_auth)
 app.include_router(orders.router, prefix="/api", dependencies=_auth)
 app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
 app.include_router(ledger.router, prefix="/api", dependencies=_auth)
-# Open router — self-gates via the PIN, so it bootstraps login.
+app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
+# Open routers — self-gate via the PIN / login+bootstrap, so they bootstrap login.
+# app_pin is retired in ORGANIZATIONS_USERS_PLAN.md's Phase 2 (org-scoping cutover).
 app.include_router(app_pin.router, prefix="/api")
+app.include_router(auth_routes.router, prefix="/api")
 
 
 @app.get("/")
