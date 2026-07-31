@@ -32,10 +32,15 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- feature.
 -- ============================================================================
 
+-- enabled_features (Feature Access plan) gates which top-level app sections
+-- (Shopify order management, Finance) this org's users can see/use -
+-- enforced server-side by app/features.py's require_feature, not just a
+-- sidebar hint. See supabase/migrations/20260801000000_org_feature_flags.sql.
 CREATE TABLE IF NOT EXISTS organizations (
-    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name       TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name             TEXT NOT NULL,
+    enabled_features TEXT[] NOT NULL DEFAULT ARRAY['orders', 'finance'],
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS users (
@@ -626,14 +631,19 @@ EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 -- ledgers.opening_balance. Consistent for every ledger regardless of Nature:
 -- New Balance = Previous Balance + Debit - Credit. Deletes the row on a zero
 -- balance (missing row already means 0, so there's nothing to gain by
--- keeping a zero row around).
+-- keeping a zero row around). org_id is derived from ledgers - p_ledger_id is
+-- already unique to one org's ledger. See
+-- supabase/migrations/20260801010000_fix_recalc_ledger_balance_org_id.sql.
 CREATE OR REPLACE FUNCTION recalc_ledger_balance(p_ledger_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_balance NUMERIC(12, 2);
+    v_org_id UUID;
 BEGIN
+    SELECT org_id INTO v_org_id FROM ledgers WHERE id = p_ledger_id;
+
     SELECT
         (SELECT opening_balance FROM ledgers WHERE id = p_ledger_id)
       + COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)
@@ -647,8 +657,8 @@ BEGIN
         RETURN;
     END IF;
 
-    INSERT INTO ledger_balances (ledger_id, balance, updated_at)
-    VALUES (p_ledger_id, v_balance, NOW())
+    INSERT INTO ledger_balances (ledger_id, org_id, balance, updated_at)
+    VALUES (p_ledger_id, v_org_id, v_balance, NOW())
     ON CONFLICT (ledger_id) DO UPDATE SET
         balance    = EXCLUDED.balance,
         updated_at = NOW();

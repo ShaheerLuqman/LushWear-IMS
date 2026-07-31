@@ -2,10 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import create_token, require_superadmin, require_superadmin_or_impersonating
 from app.database import get_supabase
+from app.features import get_org_enabled_features, set_org_enabled_features
 from app.memberships import add_membership, get_or_create_identity, list_org_members
 from app.models import (
     Organization,
     OrganizationWithAdmin,
+    OrgFeaturesPublic,
+    OrgFeaturesUpdate,
     OrgIntegrationSettingsPublic,
     OrgIntegrationSettingsUpdate,
     SuperadminOrgCreate,
@@ -73,6 +76,29 @@ async def read_organization_users(org_id: str):
     still happens from within the org itself, via "View as org"."""
     _get_org_or_404(org_id)
     return list_org_members(org_id)
+
+
+@router.get(
+    "/organizations/{org_id}/features",
+    response_model=OrgFeaturesPublic,
+    dependencies=[Depends(require_superadmin)],
+)
+async def read_organization_features(org_id: str):
+    _get_org_or_404(org_id)
+    return OrgFeaturesPublic(enabled_features=get_org_enabled_features(org_id))
+
+
+@router.put(
+    "/organizations/{org_id}/features",
+    response_model=OrgFeaturesPublic,
+    dependencies=[Depends(require_superadmin)],
+)
+async def update_organization_features(org_id: str, body: OrgFeaturesUpdate):
+    """Toggles which top-level app sections this org's users can see/use -
+    enforced server-side by app/features.py's require_feature, not just a
+    sidebar hint."""
+    _get_org_or_404(org_id)
+    return OrgFeaturesPublic(enabled_features=set_org_enabled_features(org_id, body.enabled_features))
 
 
 @router.get(

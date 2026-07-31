@@ -54,7 +54,13 @@ def make_client():
     created = []
 
     def _factory(tables=None, rpc_results=None):
-        fake = FakeSupabase(tables or {}, rpc_results)
+        tables = dict(tables or {})
+        # Default: both features enabled for "test-org", so the require_feature
+        # router gate (main.py) doesn't 403 every pre-existing orders/products/
+        # cashbook/ledger test - tests exercising a disabled feature pass their
+        # own "organizations" rows to override this.
+        tables.setdefault("organizations", [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}])
+        fake = FakeSupabase(tables, rpc_results)
         # role="admin" so users.router's require_role("admin") gate (which wraps
         # require_auth) passes by default too; tests exercising the 403 case
         # override this further with their own dependency_overrides[require_auth].
@@ -72,10 +78,11 @@ def make_client():
         import app.services.shopify_sync as shopify_sync
         import app.org_settings as org_settings
         import app.memberships as memberships
+        import app.features as features
 
         patched = [
             orders, products, cashbook, ledger, auth_routes, users, admin_portal,
-            shopify_sync, org_settings, memberships, main,
+            shopify_sync, org_settings, memberships, features, main,
         ]
         originals = [m.get_supabase for m in patched]
         for m in patched:

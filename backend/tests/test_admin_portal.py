@@ -38,6 +38,8 @@ class TestAuthorizationTiers:
         }).status_code == 403
         assert client.get("/api/admin/organizations/org1/integration-settings").status_code == 403
         assert client.get("/api/admin/organizations/org1/users").status_code == 403
+        assert client.get("/api/admin/organizations/org1/features").status_code == 403
+        assert client.put("/api/admin/organizations/org1/features", json={"enabled_features": []}).status_code == 403
 
     def test_impersonating_token_can_list_and_switch_but_not_administer(self, make_client):
         client = make_client({
@@ -54,6 +56,8 @@ class TestAuthorizationTiers:
         # Viewing an org's user list requires a real superadmin session too -
         # an impersonating token can act within one org, not audit any org.
         assert client.get("/api/admin/organizations/org1/users").status_code == 403
+        assert client.get("/api/admin/organizations/org1/features").status_code == 403
+        assert client.put("/api/admin/organizations/org1/features", json={"enabled_features": []}).status_code == 403
 
 
 class TestListOrganizations:
@@ -112,6 +116,65 @@ class TestOrganizationUsers:
             ("admin@acme.com", "admin", True),
             ("staff@acme.com", "staff", False),
         }
+
+
+class TestOrganizationFeatures:
+    """Per-org feature toggles (Feature Access plan) - which top-level app
+    sections (Shopify order management, Finance) this org's users can see/use.
+    Strict tier only (require_superadmin) - see TestAuthorizationTiers above."""
+
+    def test_missing_org_is_404(self, make_client):
+        client = make_client({"organizations": []})
+        _as(SUPERADMIN_PAYLOAD)
+        r = client.get("/api/admin/organizations/does-not-exist/features")
+        assert r.status_code == 404
+
+    def test_read_returns_stored_features(self, make_client):
+        client = make_client({
+            "organizations": [{"id": "org1", "name": "Acme", "enabled_features": ["orders"]}],
+        })
+        _as(SUPERADMIN_PAYLOAD)
+        r = client.get("/api/admin/organizations/org1/features")
+        assert r.status_code == 200
+        assert r.json()["enabled_features"] == ["orders"]
+
+    def test_update_is_reflected_on_read(self, make_client, monkeypatch):
+        # Same "fake must remember the write" reasoning as
+        # TestIntegrationSettings.test_update_is_reflected_on_read - the route
+        # updates then reads its own write back.
+        import app.features as features
+        import app.routes.admin_portal as admin_portal
+
+        store = {"id": "org1", "name": "Acme", "enabled_features": ["orders", "finance"]}
+
+        class _StatefulQuery:
+            def __getattr__(self, _name):
+                def _chain(*_args, **_kwargs):
+                    return self
+                return _chain
+
+            def update(self, payload):
+                store.update(payload)
+                return self
+
+            def execute(self):
+                return type("Response", (), {"data": [dict(store)]})()
+
+        class _FakeSupabase:
+            def table(self, name):
+                if name == "organizations":
+                    return _StatefulQuery()
+                return _PassthroughQuery([])
+
+        fake = _FakeSupabase()
+        client = make_client()
+        _as(SUPERADMIN_PAYLOAD)
+        monkeypatch.setattr(admin_portal, "get_supabase", lambda: fake)
+        monkeypatch.setattr(features, "get_supabase", lambda: fake)
+
+        r = client.put("/api/admin/organizations/org1/features", json={"enabled_features": ["finance"]})
+        assert r.status_code == 200
+        assert r.json()["enabled_features"] == ["finance"]
 
 
 class _InsertTrackingQuery:

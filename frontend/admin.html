@@ -14,7 +14,7 @@
     </script>
 </head>
 
-<body>
+<body class="admin-portal-page">
     <!-- Login gate -->
     <div id="adminGateRoot" class="auth-gate-root">
         <div class="auth-gate-card">
@@ -51,7 +51,7 @@
             </div>
         </header>
 
-        <section class="admin-portal-section">
+        <section id="adminOrgListSection" class="admin-portal-section">
             <div class="admin-portal-section__header">
                 <h2 class="settings-section__title">Organizations</h2>
                 <button type="button" id="adminOpenCreateOrgBtn" class="btn btn-primary">+ Create organization</button>
@@ -61,6 +61,75 @@
                 No organizations yet — create the first one above.
             </p>
             <div id="adminOrgsList" class="admin-org-list"></div>
+        </section>
+
+        <!-- Org detail page: everything about one org (users, features,
+             integrations) in one place instead of separate popups. -->
+        <section id="adminOrgDetailView" class="admin-portal-section" hidden>
+            <div class="admin-portal-section__header">
+                <div class="admin-org-detail-heading">
+                    <button type="button" id="adminOrgDetailBackBtn" class="btn btn-secondary btn-sm">← Organizations</button>
+                    <h2 class="settings-section__title" id="adminOrgDetailName"></h2>
+                </div>
+                <button type="button" id="adminOrgDetailViewAsBtn" class="btn btn-primary">View as org</button>
+            </div>
+
+            <div class="settings-section">
+                <h3 class="settings-section__title">Users</h3>
+                <p id="adminUsersLoading" class="admin-portal-empty">Loading users…</p>
+                <p id="adminUsersEmpty" class="admin-portal-empty" style="display: none;">No users in this organization yet.</p>
+                <div id="adminUsersList" class="settings-users-list"></div>
+                <p class="form-hint">Read-only. To add or manage users, use "View as org" and open that org's own Settings &gt; Users.</p>
+            </div>
+
+            <div class="settings-section">
+                <h3 class="settings-section__title">Features</h3>
+                <p class="modal-description">Choose which sections this organization's users can see and use in the sidebar.</p>
+                <form id="adminFeaturesForm">
+                    <label class="ledger-form-toggle">
+                        <input type="checkbox" id="adminFeatureOrders">
+                        <span>Shopify order management (Dashboard, Orders, Products, Month Summary, Load Sheet Logs)</span>
+                    </label>
+                    <label class="ledger-form-toggle">
+                        <input type="checkbox" id="adminFeatureFinance">
+                        <span>Finance (Cashbook, Ledgers)</span>
+                    </label>
+                    <p id="adminFeaturesError" class="auth-gate-error" role="alert"></p>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save features</button>
+                    </div>
+                </form>
+            </div>
+
+            <div class="settings-section">
+                <h3 class="settings-section__title">Integrations</h3>
+                <form id="adminIntegrationsForm">
+                    <div class="form-group">
+                        <label for="adminShopifyStoreUrl">Shopify store URL</label>
+                        <input type="text" id="adminShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
+                    </div>
+                    <div class="form-group">
+                        <label for="adminShopifyAccessToken">Shopify access token</label>
+                        <input type="password" id="adminShopifyAccessToken" class="form-input"
+                            placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                        <span class="form-hint" id="adminShopifyTokenStatus"></span>
+                    </div>
+                    <div class="form-group">
+                        <label for="adminShopifyApiVersion">Shopify API version</label>
+                        <input type="text" id="adminShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
+                    </div>
+                    <div class="form-group">
+                        <label for="adminPostexToken">PostEx merchant token</label>
+                        <input type="password" id="adminPostexToken" class="form-input"
+                            placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                        <span class="form-hint" id="adminPostexTokenStatus"></span>
+                    </div>
+                    <p id="adminIntegrationsError" class="auth-gate-error" role="alert"></p>
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Save integrations</button>
+                    </div>
+                </form>
+            </div>
         </section>
     </div>
 
@@ -93,59 +162,6 @@
                     <button type="submit" class="btn btn-primary">Create organization</button>
                 </div>
             </form>
-        </div>
-    </div>
-
-    <!-- Integrations modal -->
-    <div id="adminIntegrationsModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Integrations — <span id="adminIntegrationsOrgName"></span></h2>
-                <button type="button" class="modal-close" id="adminIntegrationsModalClose" aria-label="Close">&times;</button>
-            </div>
-            <form id="adminIntegrationsForm" class="modal-body">
-                <div class="form-group">
-                    <label for="adminShopifyStoreUrl">Shopify store URL</label>
-                    <input type="text" id="adminShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
-                </div>
-                <div class="form-group">
-                    <label for="adminShopifyAccessToken">Shopify access token</label>
-                    <input type="password" id="adminShopifyAccessToken" class="form-input"
-                        placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                    <span class="form-hint" id="adminShopifyTokenStatus"></span>
-                </div>
-                <div class="form-group">
-                    <label for="adminShopifyApiVersion">Shopify API version</label>
-                    <input type="text" id="adminShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
-                </div>
-                <div class="form-group">
-                    <label for="adminPostexToken">PostEx merchant token</label>
-                    <input type="password" id="adminPostexToken" class="form-input"
-                        placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                    <span class="form-hint" id="adminPostexTokenStatus"></span>
-                </div>
-                <p id="adminIntegrationsError" class="auth-gate-error" role="alert"></p>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="adminIntegrationsCloseBtn">Close</button>
-                    <button type="submit" class="btn btn-primary">Save integrations</button>
-                </div>
-            </form>
-        </div>
-    </div>
-
-    <!-- Users modal (read-only) -->
-    <div id="adminUsersModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Users — <span id="adminUsersOrgName"></span></h2>
-                <button type="button" class="modal-close" id="adminUsersModalClose" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p class="modal-description">Read-only. To add or manage users, use "View as org" and open that org's own Settings > Users.</p>
-                <p id="adminUsersLoading" class="admin-portal-empty">Loading users…</p>
-                <p id="adminUsersEmpty" class="admin-portal-empty" style="display: none;">No users in this organization yet.</p>
-                <div id="adminUsersList" class="settings-users-list"></div>
-            </div>
         </div>
     </div>
 

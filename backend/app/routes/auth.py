@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.auth import create_token, hash_password, require_auth, verify_password
 from app.database import get_supabase
+from app.features import get_org_enabled_features
 from app.models import (
     AccountPublic,
     BootstrapBody,
@@ -217,7 +218,10 @@ async def auth_login(body: LoginBody, request: Request):
         user_id=user["id"], org_id=org_id, role=role,
         is_superadmin=user.get("is_superadmin", False),
     )
-    account = {**user, "org_id": org_id, "role": role}
+    account = {
+        **user, "org_id": org_id, "role": role,
+        "enabled_features": get_org_enabled_features(org_id) if org_id else [],
+    }
     return {"ok": True, "token": token, "user": AccountPublic.model_validate(account)}
 
 
@@ -231,7 +235,11 @@ async def auth_me(payload: dict = Depends(require_auth)):
     rows = get_supabase().table("users").select("*").eq("id", user_id).limit(1).execute().data or []
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
-    account = {**rows[0], "org_id": payload.get("org_id"), "role": payload.get("role")}
+    org_id = payload.get("org_id")
+    account = {
+        **rows[0], "org_id": org_id, "role": payload.get("role"),
+        "enabled_features": get_org_enabled_features(org_id) if org_id else [],
+    }
     return AccountPublic.model_validate(account)
 
 

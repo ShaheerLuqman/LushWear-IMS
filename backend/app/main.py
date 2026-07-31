@@ -13,6 +13,7 @@ from slowapi.middleware import SlowAPIMiddleware
 from app.routes import products, orders, cashbook, ledger, auth as auth_routes, users, org_settings, admin_portal
 from app.auth import require_auth, require_role
 from app.database import get_supabase
+from app.features import require_feature
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
 
@@ -93,10 +94,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 _auth = [Depends(require_auth)]
-app.include_router(products.router, prefix="/api", dependencies=_auth)
-app.include_router(orders.router, prefix="/api", dependencies=_auth)
-app.include_router(cashbook.router, prefix="/api", dependencies=_auth)
-app.include_router(ledger.router, prefix="/api", dependencies=_auth)
+# Products/Orders sit behind the "orders" feature flag (Shopify order
+# management); Cashbook/Ledgers behind "finance" - see app/features.py.
+# Gated at router level so a disabled feature is enforced for every route
+# underneath, not just the ones the sidebar happens to hide.
+app.include_router(products.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
+app.include_router(orders.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
+app.include_router(cashbook.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
+app.include_router(ledger.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 # admin_portal's routes carry mixed per-route dependencies (some superadmin-only,

@@ -73,6 +73,23 @@ let authGateSubmitHandler = null;
  */
 let _prefetchOrdersPromise = null;
 
+/** This org's enabled sections (Feature Access plan), from /auth/me's
+ * enabled_features - resolved once at boot and used to hide disabled sidebar
+ * sections/nav items. Backend enforcement (app/features.py's require_feature)
+ * is the real access control; this is only the UI-hiding half of it. */
+let enabledFeatures = [];
+
+function hasFeature(key) {
+    return enabledFeatures.includes(key);
+}
+
+/** Hides each sidebar nav-section whose feature isn't enabled for this org. */
+function applyFeatureVisibility() {
+    document.querySelectorAll('.nav-section[data-feature-section]').forEach((section) => {
+        section.style.display = hasFeature(section.dataset.featureSection) ? '' : 'none';
+    });
+}
+
 // State
 let products = [];
 let orders = [];
@@ -634,31 +651,46 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
     initOrgSwitcher();
 
+    try {
+        const account = await apiJson('/auth/me');
+        enabledFeatures = account.enabled_features || [];
+    } catch (e) {
+        enabledFeatures = [];
+    }
+    applyFeatureVisibility();
+
     if (loadingScreen) {
         loadingScreen.style.display = 'flex';
     }
 
-    let ordersLoaded = false;
+    // Land on the first section this org actually has enabled, rather than
+    // assuming Orders - a finance-only org would otherwise boot straight into
+    // a hidden/blocked view.
+    const ordersEnabled = hasFeature('orders');
+    const financeEnabled = hasFeature('finance');
+    const defaultView = ordersEnabled ? 'orders' : financeEnabled ? 'cashbook' : 'settings';
+
+    let dataLoaded = false;
 
     // If prefetch was started during login, await that promise; otherwise fetch now.
     // Products aren't fetched here - nothing on the landing (Orders) view needs them, and
     // Products/Dashboard fetch their own fresh copy when visited (see switchView).
-    const loadOrdersPromise = (_prefetchOrdersPromise || loadOrders())
+    const loadDataPromise = (ordersEnabled ? (_prefetchOrdersPromise || loadOrders()) : financeEnabled ? loadCashbook() : Promise.resolve())
         .then(() => {
-            ordersLoaded = true;
+            dataLoaded = true;
         })
         .catch((error) => {
-            console.error('Error loading orders:', error);
-            showToast('Failed to load orders', 'error');
-            ordersLoaded = true;
+            console.error(`Error loading ${defaultView}:`, error);
+            showToast(`Failed to load ${defaultView}`, 'error');
+            dataLoaded = true;
         });
 
-    await loadOrdersPromise;
+    await loadDataPromise;
 
-    if (ordersLoaded) {
-        // Orders are already freshly loaded above - skip switchView's normal reload so
-        // startup doesn't fetch the same data twice before the background syncs kick off.
-        switchView('orders', { skipReload: true });
+    if (dataLoaded) {
+        // The default view's data is already freshly loaded above - skip switchView's
+        // normal reload so startup doesn't fetch the same data twice.
+        switchView(defaultView, { skipReload: true });
         applyEditLockState();
 
         if (loadingScreen) {
@@ -672,10 +704,12 @@ document.addEventListener('DOMContentLoaded', async () => {
             }, 10);
         }
 
-        syncShopifyProducts();
-        initOrdersAutoSync();
-        fetchLoadSheetRiderNames();
-        autoFetchRecentDeliveryStatus();
+        if (ordersEnabled) {
+            syncShopifyProducts();
+            initOrdersAutoSync();
+            fetchLoadSheetRiderNames();
+            autoFetchRecentDeliveryStatus();
+        }
 
         await applyStartupDeepLink();
     }
@@ -691,6 +725,10 @@ async function applyStartupDeepLink() {
     const action = new URLSearchParams(window.location.search).get('action')
         || new URLSearchParams(window.location.hash.replace(/^#/, '')).get('action');
     if (action !== 'create-entry' && action !== 'bulk-entry') {
+        return;
+    }
+    if (!hasFeature('finance')) {
+        history.replaceState(null, '', window.location.pathname);
         return;
     }
     // The entry modal needs the ledger list, so load before opening rather than

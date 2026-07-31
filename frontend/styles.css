@@ -4166,6 +4166,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-radius: var(--radius-sm);
 }
 
+/* admin.html is a standalone page (not the main app's fixed-viewport layout
+   with its own internal scroll areas) - it needs the page itself to scroll. */
+body.admin-portal-page {
+    overflow-y: auto;
+}
+
 .admin-portal-root {
     max-width: 760px;
     margin: 0 auto;
@@ -4251,6 +4257,17 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     transition: var(--transition);
+    cursor: pointer;
+}
+
+.admin-org-detail-heading {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+}
+
+.admin-org-detail-heading .settings-section__title {
+    margin: 0;
 }
 
 .admin-org-card:hover {

@@ -67,7 +67,10 @@ function formatDate(isoString) {
 }
 
 let organizations = [];
-let selectedOrg = null;
+/** The org shown on the detail page (js/admin.js's showOrgDetail/showOrgList) -
+ * shared by the Users/Features/Integrations sections there, since they all
+ * act on whichever org is currently open. */
+let currentDetailOrg = null;
 
 function showLogin() {
     document.getElementById('adminGateRoot').hidden = false;
@@ -86,7 +89,7 @@ function closeModal(id) {
     document.getElementById(id).classList.remove('active');
 }
 
-const MODAL_IDS = ['adminCreateOrgModal', 'adminUsersModal', 'adminIntegrationsModal'];
+const MODAL_IDS = ['adminCreateOrgModal'];
 
 function initModalDismissal() {
     MODAL_IDS.forEach((id) => {
@@ -159,6 +162,8 @@ function renderOrganizations() {
     organizations.forEach((org) => {
         const card = document.createElement('div');
         card.className = 'admin-org-card';
+        card.title = 'Open organization details';
+        card.addEventListener('click', () => showOrgDetail(org));
 
         const info = document.createElement('div');
         info.className = 'admin-org-card__info';
@@ -175,26 +180,15 @@ function renderOrganizations() {
         const controls = document.createElement('div');
         controls.className = 'admin-org-card__actions';
 
-        const usersBtn = document.createElement('button');
-        usersBtn.type = 'button';
-        usersBtn.className = 'btn btn-secondary';
-        usersBtn.textContent = 'Users';
-        usersBtn.addEventListener('click', () => openUsersModal(org));
-        controls.appendChild(usersBtn);
-
-        const integrationsBtn = document.createElement('button');
-        integrationsBtn.type = 'button';
-        integrationsBtn.className = 'btn btn-secondary';
-        integrationsBtn.textContent = 'Integrations';
-        integrationsBtn.addEventListener('click', () => openIntegrationsModal(org));
-        controls.appendChild(integrationsBtn);
-
         const viewAsBtn = document.createElement('button');
         viewAsBtn.type = 'button';
         viewAsBtn.className = 'btn btn-primary';
         viewAsBtn.title = 'Open this organization\'s business app in a new tab';
         viewAsBtn.textContent = 'View as org';
-        viewAsBtn.addEventListener('click', () => viewAsOrganization(org, viewAsBtn));
+        viewAsBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // don't also trigger the card's own "open details" click
+            viewAsOrganization(org, viewAsBtn);
+        });
         controls.appendChild(viewAsBtn);
 
         card.appendChild(controls);
@@ -252,12 +246,26 @@ function initCreateOrgModal() {
     });
 }
 
-function initUsersModal() {
-    document.getElementById('adminUsersModalClose').addEventListener('click', () => closeModal('adminUsersModal'));
+// ---- Org detail page: Users/Features/Integrations for one org, all in one
+// place instead of separate popups (each acts on currentDetailOrg). ----
+
+function showOrgList() {
+    document.getElementById('adminOrgListSection').hidden = false;
+    document.getElementById('adminOrgDetailView').hidden = true;
+    currentDetailOrg = null;
 }
 
-async function openUsersModal(org) {
-    document.getElementById('adminUsersOrgName').textContent = org.name;
+function showOrgDetail(org) {
+    currentDetailOrg = org;
+    document.getElementById('adminOrgListSection').hidden = true;
+    document.getElementById('adminOrgDetailView').hidden = false;
+    document.getElementById('adminOrgDetailName').textContent = org.name;
+    loadOrgUsers(org);
+    loadOrgFeatures(org);
+    loadOrgIntegrations(org);
+}
+
+async function loadOrgUsers(org) {
     const list = document.getElementById('adminUsersList');
     const loadingEl = document.getElementById('adminUsersLoading');
     const emptyEl = document.getElementById('adminUsersEmpty');
@@ -265,7 +273,6 @@ async function openUsersModal(org) {
     emptyEl.style.display = 'none';
     loadingEl.style.display = '';
     loadingEl.textContent = 'Loading users…';
-    openModal('adminUsersModal');
 
     try {
         const users = await adminApiJson(`/admin/organizations/${org.id}/users`);
@@ -296,14 +303,49 @@ async function openUsersModal(org) {
     }
 }
 
+function initFeaturesForm() {
+    document.getElementById('adminFeaturesForm').addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (!currentDetailOrg) return;
+        const errEl = document.getElementById('adminFeaturesError');
+        errEl.textContent = '';
+        const enabled_features = [];
+        if (document.getElementById('adminFeatureOrders').checked) enabled_features.push('orders');
+        if (document.getElementById('adminFeatureFinance').checked) enabled_features.push('finance');
+
+        const submitBtn = e.target.querySelector('button[type="submit"]');
+        submitBtn.disabled = true;
+        try {
+            await adminApiJson(`/admin/organizations/${currentDetailOrg.id}/features`, {
+                method: 'PUT',
+                body: { enabled_features },
+            });
+            showToast('Features saved', 'success');
+        } catch (ex) {
+            errEl.textContent = ex.message || 'Could not save features';
+        } finally {
+            submitBtn.disabled = false;
+        }
+    });
+}
+
+async function loadOrgFeatures(org) {
+    document.getElementById('adminFeaturesError').textContent = '';
+    try {
+        const data = await adminApiJson(`/admin/organizations/${org.id}/features`);
+        const enabled = new Set(data.enabled_features || []);
+        document.getElementById('adminFeatureOrders').checked = enabled.has('orders');
+        document.getElementById('adminFeatureFinance').checked = enabled.has('finance');
+    } catch (ex) {
+        showToast(ex.message || 'Failed to load features', 'error');
+    }
+}
+
 const INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED = 'Configured — leave blank to keep it';
 const INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET = 'Not configured';
 
-async function openIntegrationsModal(org) {
-    selectedOrg = org;
-    document.getElementById('adminIntegrationsOrgName').textContent = org.name;
+async function loadOrgIntegrations(org) {
     document.getElementById('adminIntegrationsError').textContent = '';
-    openModal('adminIntegrationsModal');
 
     const storeUrlEl = document.getElementById('adminShopifyStoreUrl');
     const apiVersionEl = document.getElementById('adminShopifyApiVersion');
@@ -333,16 +375,13 @@ async function openIntegrationsModal(org) {
     }
 }
 
-function initIntegrationsModal() {
+function initIntegrationsForm() {
     const form = document.getElementById('adminIntegrationsForm');
     const errEl = document.getElementById('adminIntegrationsError');
 
-    document.getElementById('adminIntegrationsModalClose').addEventListener('click', () => closeModal('adminIntegrationsModal'));
-    document.getElementById('adminIntegrationsCloseBtn').addEventListener('click', () => closeModal('adminIntegrationsModal'));
-
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
-        if (!selectedOrg) return;
+        if (!currentDetailOrg) return;
         errEl.textContent = '';
         const storeUrl = document.getElementById('adminShopifyStoreUrl').value.trim();
         const apiVersion = document.getElementById('adminShopifyApiVersion').value.trim();
@@ -358,16 +397,25 @@ function initIntegrationsModal() {
         const submitBtn = form.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
         try {
-            const org = selectedOrg;
+            const org = currentDetailOrg;
             await adminApiJson(`/admin/organizations/${org.id}/integration-settings`, { method: 'PUT', body });
             showToast('Integrations saved', 'success');
-            await openIntegrationsModal(org);
+            await loadOrgIntegrations(org);
         } catch (ex) {
             errEl.textContent = ex.message || 'Could not save integrations';
         } finally {
             submitBtn.disabled = false;
         }
     });
+}
+
+function initOrgDetailView() {
+    document.getElementById('adminOrgDetailBackBtn').addEventListener('click', showOrgList);
+    document.getElementById('adminOrgDetailViewAsBtn').addEventListener('click', (e) => {
+        if (currentDetailOrg) viewAsOrganization(currentDetailOrg, e.currentTarget);
+    });
+    initFeaturesForm();
+    initIntegrationsForm();
 }
 
 async function viewAsOrganization(org, triggerBtn) {
@@ -388,8 +436,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initLoginForm();
     initLogoutButton();
     initCreateOrgModal();
-    initUsersModal();
-    initIntegrationsModal();
+    initOrgDetailView();
     initModalDismissal();
 
     if (getSuperadminToken()) {

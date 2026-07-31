@@ -296,6 +296,11 @@ NewPassword = Annotated[str, AfterValidator(_validate_new_password)]
 # ever need to guard against.
 OrgRole = Literal["admin", "staff"]
 
+# The only two feature keys that exist today (Feature Access plan) - controls
+# which top-level app sections (Shopify order management, Finance) an org's
+# users can see/use. Keep in sync with app/features.py's ALL_FEATURES.
+FeatureKey = Literal["orders", "finance"]
+
 class OrganizationBase(BaseModel):
     name: NonBlankStr
 
@@ -346,6 +351,9 @@ class AccountPublic(BaseModel):
     role: Optional[OrgRole] = None
     org_id: Optional[str] = None
     is_superadmin: bool = False
+    # Empty when org_id is None (a pure superadmin's own session has no org
+    # context) - see app/features.py's get_org_enabled_features.
+    enabled_features: List[str] = []
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -399,3 +407,11 @@ class SuperadminOrgCreate(BaseModel):
 class OrganizationWithAdmin(BaseModel):
     organization: Organization
     admin_user: UserPublic
+
+class OrgFeaturesUpdate(BaseModel):
+    """PUT /admin/organizations/{id}/features body (Superadmin Portal) -
+    replaces the org's whole enabled-features set with this list."""
+    enabled_features: List[FeatureKey]
+
+class OrgFeaturesPublic(BaseModel):
+    enabled_features: List[str]
