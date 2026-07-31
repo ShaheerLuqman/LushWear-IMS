@@ -26,10 +26,11 @@ def _active_admin_count(supabase, org_id: str, exclude_user_id: Optional[str] = 
     return len(rows)
 
 
-def _membership_to_public(membership: dict, email: str) -> dict:
+def _membership_to_public(membership: dict, user: dict) -> dict:
     return {
         "id": membership["user_id"],
-        "email": email,
+        "email": user.get("email", ""),
+        "name": user.get("name", ""),
         "role": membership["role"],
         "org_id": membership["org_id"],
         "is_active": membership["is_active"],
@@ -49,9 +50,9 @@ async def create_user(body: UserCreate, org_id: str = Depends(get_org_id)):
     account, grants them an instant membership here instead (Multi-Org User
     Membership plan) - no invite/accept step, they keep using their existing
     password."""
-    user = get_or_create_identity(body.email, body.password)
+    user = get_or_create_identity(body.email, body.password, body.name)
     membership = add_membership(user["id"], org_id, body.role)
-    return _membership_to_public(membership, user["email"])
+    return _membership_to_public(membership, user)
 
 
 @router.put("/{user_id}", response_model=UserPublic)
@@ -93,5 +94,5 @@ async def update_user(user_id: str, body: UserUpdate, org_id: str = Depends(get_
             .data[0]
         )
 
-    user_row = supabase.table("users").select("email").eq("id", user_id).limit(1).execute().data[0]
-    return _membership_to_public(existing, user_row["email"])
+    user_row = supabase.table("users").select("email, name").eq("id", user_id).limit(1).execute().data[0]
+    return _membership_to_public(existing, user_row)

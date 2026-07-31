@@ -159,6 +159,7 @@ async def auth_bootstrap(body: BootstrapBody, x_bootstrap_token: Optional[str] =
     )
     user = supabase.table("users").insert({
         "email": body.email,
+        "name": body.name,
         "password_hash": hash_password(body.password),
     }).execute().data[0]
     supabase.table("org_memberships").insert({

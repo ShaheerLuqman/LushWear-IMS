@@ -14,7 +14,7 @@ function renderUsersList(users) {
 
         const email = document.createElement('span');
         email.className = 'settings-user-row__email';
-        email.textContent = user.email;
+        email.textContent = user.name ? `${user.name} (${user.email})` : user.email;
         row.appendChild(email);
 
         const controls = document.createElement('div');
@@ -85,15 +85,17 @@ function initAddUserForm() {
     form.addEventListener('submit', async (e) => {
         e.preventDefault();
         if (errEl) errEl.textContent = '';
+        const name = document.getElementById('settingsAddUserName').value.trim();
         const email = document.getElementById('settingsAddUserEmail').value.trim();
         const password = document.getElementById('settingsAddUserPassword').value;
         const role = document.getElementById('settingsAddUserRole').value;
         const submitBtn = form.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.disabled = true;
         // Blank means "this email already has an account elsewhere" - just
-        // grants a membership here, no new password needed (Multi-Org User
-        // Membership plan). Omit the field rather than send an empty string.
+        // grants a membership here, no new name/password needed (Multi-Org
+        // User Membership plan). Omit the fields rather than send blanks.
         const body = { email, role };
+        if (name) body.name = name;
         if (password) body.password = password;
         try {
             await apiJson('/users/', { method: 'POST', body });
@@ -176,6 +178,7 @@ async function loadAccountSettings() {
     initAddUserForm();
     initIntegrationsForm();
 
+    const nameEl = document.getElementById('settingsAccountName');
     const emailEl = document.getElementById('settingsAccountEmail');
     const roleEl = document.getElementById('settingsAccountRole');
     const usersSection = document.getElementById('settingsUsersSection');
@@ -187,7 +190,8 @@ async function loadAccountSettings() {
         currentAccount = null;
     }
 
-    if (emailEl) emailEl.textContent = currentAccount ? currentAccount.email : '—';
+    if (nameEl) nameEl.textContent = currentAccount ? (currentAccount.name || currentAccount.email) : '—';
+    if (emailEl) emailEl.textContent = currentAccount && currentAccount.name ? currentAccount.email : '';
     if (roleEl) roleEl.textContent = currentAccount ? (currentAccount.role === 'admin' ? 'Admin' : 'Staff') : '';
 
     const isAdmin = !!currentAccount && currentAccount.role === 'admin';

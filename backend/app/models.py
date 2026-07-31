@@ -318,10 +318,11 @@ class UserBase(BaseModel):
     role: OrgRole
 
 class UserCreate(UserBase):
-    # Optional: required only when `email` doesn't already exist as an
+    # Both optional: required only when `email` doesn't already exist as an
     # identity (see app/memberships.py's get_or_create_identity). Adding an
     # email that already belongs to someone else's account just grants them a
-    # membership in this org - they keep using their existing password.
+    # membership in this org - they keep their existing name and password.
+    name: Optional[NonBlankStr] = None
     password: Optional[NewPassword] = None
 
 class UserUpdate(BaseModel):
@@ -334,6 +335,9 @@ class UserPublic(UserBase):
     identity can appear once per org it belongs to, each with its own role."""
     id: str
     org_id: str
+    # Blank for identities created before users.name existed (see
+    # supabase/migrations/20260801020000_add_name_to_users.sql).
+    name: str = ""
     is_active: bool
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -348,6 +352,7 @@ class AccountPublic(BaseModel):
     session, not as a fixed property of the account."""
     id: str
     email: Email
+    name: str = ""
     role: Optional[OrgRole] = None
     org_id: Optional[str] = None
     is_superadmin: bool = False
@@ -375,6 +380,7 @@ class LoginBody(BaseModel):
 
 class BootstrapBody(BaseModel):
     org_name: NonBlankStr
+    name: NonBlankStr
     email: Email
     password: NewPassword
 
@@ -401,6 +407,7 @@ class SuperadminOrgCreate(BaseModel):
     """POST /admin/organizations body - creates an org and its first admin
     user in one step (Superadmin Portal)."""
     org_name: NonBlankStr
+    admin_name: NonBlankStr
     admin_email: Email
     admin_password: NewPassword
 

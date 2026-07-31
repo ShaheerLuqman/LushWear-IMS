@@ -43,9 +43,13 @@ CREATE TABLE IF NOT EXISTS organizations (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- name defaults to '' for identities created before it existed - see
+-- supabase/migrations/20260801020000_add_name_to_users.sql. New identities
+-- require one via app-level validation (NonBlankStr), not this default.
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email         TEXT NOT NULL UNIQUE,
+    name          TEXT NOT NULL DEFAULT '',
     password_hash TEXT NOT NULL,
     is_superadmin BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),

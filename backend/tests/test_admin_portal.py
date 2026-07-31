@@ -238,7 +238,7 @@ class TestCreateOrganization:
         monkeypatch.setattr(memberships, "get_supabase", lambda: fake)
 
         r = client.post("/api/admin/organizations", json={
-            "org_name": "Acme", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
+            "org_name": "Acme", "admin_name": "Owner", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
         })
         assert r.status_code == 200
         body = r.json()
@@ -272,7 +272,7 @@ class TestCreateOrganization:
         monkeypatch.setattr(memberships, "get_supabase", lambda: fake)
 
         r = client.post("/api/admin/organizations", json={
-            "org_name": "Beta", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
+            "org_name": "Beta", "admin_name": "Owner", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
         })
         assert r.status_code == 200
         body = r.json()

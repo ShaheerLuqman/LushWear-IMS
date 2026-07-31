@@ -102,7 +102,7 @@ class TestCreateUser:
         monkeypatch.setattr(memberships, "get_supabase", lambda: fake)
 
         r = client.post("/api/users/", json={
-            "email": "new@example.com", "password": "supersecret1", "role": "staff",
+            "email": "new@example.com", "name": "New User", "password": "supersecret1", "role": "staff",
         })
         assert r.status_code == 200
         body = r.json()
@@ -177,6 +177,27 @@ class TestCreateUser:
         monkeypatch.setattr(memberships, "get_supabase", lambda: fake)
 
         r = client.post("/api/users/", json={"email": "brandnew@example.com", "role": "staff"})
+        assert r.status_code == 400
+
+    def test_new_email_without_name_is_400(self, make_client, monkeypatch):
+        import app.routes.users as users_routes
+        import app.memberships as memberships
+
+        class _FakeSupabase:
+            def table(self, name):
+                if name == "users":
+                    return _PassthroughQuery([])  # no existing identity
+                return _PassthroughQuery([])
+
+        fake = _FakeSupabase()
+        client = make_client()
+        _as(ADMIN_PAYLOAD)
+        monkeypatch.setattr(users_routes, "get_supabase", lambda: fake)
+        monkeypatch.setattr(memberships, "get_supabase", lambda: fake)
+
+        r = client.post("/api/users/", json={
+            "email": "brandnew@example.com", "password": "supersecret1", "role": "staff",
+        })
         assert r.status_code == 400
 
 

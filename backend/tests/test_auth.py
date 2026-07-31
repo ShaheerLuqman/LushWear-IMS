@@ -116,7 +116,7 @@ class TestAuthBootstrap:
             "org_memberships": [_membership_row(user_id="u1", org_id="org1")],
         })
         r = client.post("/api/auth/bootstrap", json={
-            "org_name": "Acme", "email": "owner@example.com", "password": "supersecret1",
+            "org_name": "Acme", "name": "Owner", "email": "owner@example.com", "password": "supersecret1",
         })
         assert r.status_code == 200
         body = r.json()
@@ -129,7 +129,7 @@ class TestAuthBootstrap:
         # insert - bootstrap has already run once.
         client = make_client({"system_bootstrap": []})
         r = client.post("/api/auth/bootstrap", json={
-            "org_name": "Acme", "email": "owner@example.com", "password": "supersecret1",
+            "org_name": "Acme", "name": "Owner", "email": "owner@example.com", "password": "supersecret1",
         })
         assert r.status_code == 400
 
@@ -194,7 +194,7 @@ class TestAuthBootstrap:
         monkeypatch.setattr(auth_routes, "get_supabase", lambda: fake)
 
         r = client.post("/api/auth/bootstrap", json={
-            "org_name": "Acme", "email": "owner@example.com", "password": "supersecret1",
+            "org_name": "Acme", "name": "Owner", "email": "owner@example.com", "password": "supersecret1",
         })
         assert r.status_code == 200
         assert inserted_orgs == []

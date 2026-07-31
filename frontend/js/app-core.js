@@ -10,18 +10,27 @@ const API_BASE = (typeof window !== 'undefined' && window.API_BASE) || 'http://1
 // for the session and attach it to every API request via a fetch wrapper. A 401 from a
 // protected route means the token is missing/expired -> re-open the login gate.
 // ============================================
+// localStorage (not sessionStorage) so a login survives a new tab or the
+// browser restarting, not just a same-tab reload - it's the JWT's own exp
+// claim that ends a session, not where it happens to be stored.
 const AUTH_TOKEN_KEY = 'lushwear_auth_token';
 
 function getAuthToken() {
-    try { return sessionStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (e) { return ''; }
+    try { return localStorage.getItem(AUTH_TOKEN_KEY) || ''; } catch (e) { return ''; }
 }
 function setAuthToken(token) {
     _authExpiredHandling = false;
-    try { if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) { /* ignore */ }
+    try { if (token) localStorage.setItem(AUTH_TOKEN_KEY, token); } catch (e) { /* ignore */ }
 }
 function clearAuthToken() {
-    try { sessionStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(AUTH_TOKEN_KEY); } catch (e) { /* ignore */ }
 }
+
+/** Same key js/admin.js's Superadmin Portal uses for its own session token -
+ * both pages share one origin, so localStorage already carries a login made
+ * on one page over to the other; tryResumeSession() below is what actually
+ * acts on it. */
+const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
 
 /** True while we are already re-opening the login gate after a 401, to avoid repeats. */
 let _authExpiredHandling = false;
@@ -399,6 +408,8 @@ function runAuthGate() {
     const form = document.getElementById('authGateForm');
     const orgNameWrap = document.getElementById('authGateOrgNameWrap');
     const orgNameInput = document.getElementById('authGateOrgName');
+    const nameWrap = document.getElementById('authGateNameWrap');
+    const nameInput = document.getElementById('authGateName');
     const emailInput = document.getElementById('authGateEmail');
     const passwordInput = document.getElementById('authGatePassword');
     const confirmWrap = document.getElementById('authGateConfirmWrap');
@@ -475,22 +486,28 @@ function runAuthGate() {
                     if (orgNameWrap) {
                         orgNameWrap.style.display = hasUsers ? 'none' : 'flex';
                     }
+                    if (nameWrap) {
+                        nameWrap.style.display = hasUsers ? 'none' : 'flex';
+                    }
                     if (confirmWrap) {
                         confirmWrap.style.display = hasUsers ? 'none' : 'flex';
                     }
                     if (hasUsers) {
                         confirmInput.removeAttribute('required');
                         orgNameInput.removeAttribute('required');
+                        if (nameInput) nameInput.removeAttribute('required');
                         passwordInput.setAttribute('autocomplete', 'current-password');
                     } else {
                         confirmInput.setAttribute('required', 'required');
                         orgNameInput.setAttribute('required', 'required');
+                        if (nameInput) nameInput.setAttribute('required', 'required');
                         passwordInput.setAttribute('autocomplete', 'new-password');
                     }
                     emailInput.value = '';
                     passwordInput.value = '';
                     confirmInput.value = '';
                     orgNameInput.value = '';
+                    if (nameInput) nameInput.value = '';
                     emailInput.focus();
                     submitBtn.disabled = false;
                     break;
@@ -513,6 +530,7 @@ function runAuthGate() {
             const password = passwordInput.value;
             const confirm = confirmInput.value;
             const orgName = orgNameInput.value.trim();
+            const name = nameInput ? nameInput.value.trim() : '';
             if (!hasUsers && password !== confirm) {
                 if (errEl) {
                     errEl.textContent = 'Passwords do not match';
@@ -528,7 +546,7 @@ function runAuthGate() {
                     const r = await fetch(`${API_BASE}/auth/bootstrap`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ org_name: orgName, email, password })
+                        body: JSON.stringify({ org_name: orgName, name, email, password })
                     });
                     const data = await r.json().catch(() => ({}));
                     if (!r.ok) {
@@ -645,19 +663,28 @@ document.addEventListener('DOMContentLoaded', async () => {
     }
 
     const impersonating = consumeImpersonationToken();
-    const authOk = impersonating || await runAuthGate();
+    let resumedAccount = impersonating ? null : await tryResumeSession();
+    if (resumedAccount) {
+        // Bypassing runAuthGate() entirely - it's the one that normally hides
+        // this overlay on success, so do that ourselves here.
+        const gateRoot = document.getElementById('authGateRoot');
+        if (gateRoot) gateRoot.hidden = true;
+    }
+    const authOk = impersonating || !!resumedAccount || await runAuthGate();
     if (!authOk) {
         return;
     }
-    initOrgSwitcher();
 
+    let account = null;
     try {
-        const account = await apiJson('/auth/me');
+        // Already fetched by tryResumeSession() above - no need to ask twice.
+        account = resumedAccount || await apiJson('/auth/me');
         enabledFeatures = account.enabled_features || [];
     } catch (e) {
         enabledFeatures = [];
     }
     applyFeatureVisibility();
+    initUserMenu(account);
 
     if (loadingScreen) {
         loadingScreen.style.display = 'flex';
@@ -830,6 +857,58 @@ async function resolveSuperadminHomeOrgToken() {
 }
 
 /**
+ * Resumes an already-authenticated session at boot instead of always
+ * re-showing the login gate (js/admin.js's own boot check already does this
+ * for the Superadmin Portal - this is the equivalent for the main app).
+ * Checks, in order: (1) this page's own token, still valid; (2) a superadmin
+ * session already established on the Superadmin Portal (admin.html) - same
+ * origin, so it shares this browser's localStorage, and is treated as the
+ * same login rather than asking for credentials again.
+ * @returns {Promise<object|null>} the account (AccountPublic) if a session
+ * was resumed, else null - caller falls back to runAuthGate().
+ */
+async function tryResumeSession() {
+    if (getAuthToken()) {
+        try {
+            return await apiJson('/auth/me');
+        } catch (e) {
+            clearAuthToken();
+        }
+    }
+
+    let superadminToken = '';
+    try { superadminToken = localStorage.getItem(SUPERADMIN_TOKEN_KEY) || ''; } catch (e) { /* ignore */ }
+    if (!superadminToken) return null;
+
+    setAuthToken(superadminToken);
+    try {
+        let account = await apiJson('/auth/me');
+        if (account.is_superadmin !== true) {
+            clearAuthToken();
+            try { localStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (e2) { /* ignore */ }
+            return null;
+        }
+        if (!account.org_id) {
+            const orgToken = await resolveSuperadminHomeOrgToken();
+            if (!orgToken) {
+                clearAuthToken();
+                return null;
+            }
+            setAuthToken(orgToken);
+            account = await apiJson('/auth/me');
+        }
+        return account;
+    } catch (e) {
+        // The shared superadmin token itself is gone/expired (not just this
+        // page's own derived token) - drop it so a reload doesn't keep
+        // silently retrying it.
+        clearAuthToken();
+        try { localStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (e2) { /* ignore */ }
+        return null;
+    }
+}
+
+/**
  * Applies to a regular multi-org member (or a superadmin who also holds a
  * real membership): /auth/login always resolves to their *first* membership
  * as a stable default. If a *different* org was last used on this browser,
@@ -858,38 +937,19 @@ async function switchToLastUsedOrgIfDifferent(currentOrgId) {
  * (GET /admin/organizations lists every org that exists) or a regular member
  * of more than one real org (GET /auth/my-organizations lists just theirs).
  * Hidden for the common single-org case - no menu, no nav item at all. */
-async function initOrgSwitcher() {
-    const payload = decodeTokenPayload(getAuthToken());
-    if (!payload) return;
-    const impersonating = payload.impersonating === true;
+/** Bottom-of-sidebar "who's logged in" button - opens a popup with
+ * organizations to switch to (when there's more than one available),
+ * Settings, and Log out. `account` is the already-fetched /auth/me result
+ * (avoids a second fetch just for the display name). */
+async function initUserMenu(account) {
+    const wrap = document.getElementById('sidebarUserMenuWrap');
+    const btn = document.getElementById('sidebarUserMenuBtn');
+    const menu = document.getElementById('sidebarUserMenu');
+    const label = document.getElementById('sidebarUserMenuLabel');
+    const orgLabel = document.getElementById('sidebarUserMenuOrgLabel');
+    if (!wrap || !btn || !menu || !label) return;
 
-    let orgs;
-    try {
-        orgs = impersonating
-            ? await apiJson('/admin/organizations')
-            : await apiJson('/auth/my-organizations');
-    } catch (ex) {
-        return;
-    }
-    if (!impersonating && orgs.length <= 1) return; // nothing to switch to
-
-    const lockWrap = document.querySelector('.sidebar-lock-wrap');
-    if (!lockWrap || !lockWrap.parentElement) return;
-
-    const wrap = document.createElement('div');
-    wrap.id = 'sidebarOrgSwitchWrap';
-    wrap.className = 'sidebar-org-switch-wrap';
-    wrap.innerHTML =
-        '<button type="button" id="sidebarOrgSwitchBtn" class="nav-item" aria-haspopup="true" aria-expanded="false" title="Switch organization">' +
-            '<span class="nav-icon">🏢</span>' +
-            '<span class="nav-tooltip" id="sidebarOrgSwitchLabel">Switch org</span>' +
-        '</button>' +
-        '<div id="sidebarOrgSwitchMenu" class="sidebar-org-switch-menu" role="menu"></div>';
-    lockWrap.parentElement.insertBefore(wrap, lockWrap);
-
-    const btn = document.getElementById('sidebarOrgSwitchBtn');
-    const menu = document.getElementById('sidebarOrgSwitchMenu');
-    const label = document.getElementById('sidebarOrgSwitchLabel');
+    label.textContent = (account && (account.name || account.email)) || 'Account';
 
     function closeMenu() {
         wrap.classList.remove('open');
@@ -902,8 +962,10 @@ async function initOrgSwitcher() {
         wrap.classList.toggle('open', opening);
         btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
         if (opening) {
+            // Anchored to grow upward - this button sits at the bottom of the sidebar.
             const rect = btn.getBoundingClientRect();
-            menu.style.top = `${rect.top}px`;
+            menu.style.top = 'auto';
+            menu.style.bottom = `${window.innerHeight - rect.bottom}px`;
             menu.style.left = `${rect.right + 8}px`;
         }
     });
@@ -914,53 +976,85 @@ async function initOrgSwitcher() {
         if (e.key === 'Escape') closeMenu();
     });
 
-    async function switchTo(orgId) {
+    menu.innerHTML = '';
+
+    const payload = decodeTokenPayload(getAuthToken());
+    if (payload) {
+        const impersonating = payload.impersonating === true;
+        let orgs = [];
         try {
-            const data = impersonating
-                ? await apiJson(`/admin/organizations/${orgId}/impersonate`, { method: 'POST' })
-                : await apiJson('/auth/switch-org', { method: 'POST', body: { org_id: orgId } });
-            setAuthToken(data.token);
-            rememberLastUsedOrg(orgId);
-            location.reload();
+            orgs = impersonating
+                ? await apiJson('/admin/organizations')
+                : await apiJson('/auth/my-organizations');
         } catch (ex) {
-            showToast(ex.message || 'Could not switch organization', 'error');
+            orgs = [];
+        }
+
+        const current = orgs.find((o) => o.id === payload.org_id);
+        if (orgLabel) orgLabel.textContent = current ? current.name : '';
+
+        if (impersonating || orgs.length > 1) {
+            const sectionLabel = document.createElement('div');
+            sectionLabel.className = 'sidebar-user-menu-section-label';
+            sectionLabel.textContent = 'Organizations';
+            menu.appendChild(sectionLabel);
+
+            async function switchTo(orgId) {
+                try {
+                    const data = impersonating
+                        ? await apiJson(`/admin/organizations/${orgId}/impersonate`, { method: 'POST' })
+                        : await apiJson('/auth/switch-org', { method: 'POST', body: { org_id: orgId } });
+                    setAuthToken(data.token);
+                    rememberLastUsedOrg(orgId);
+                    location.reload();
+                } catch (ex) {
+                    showToast(ex.message || 'Could not switch organization', 'error');
+                }
+            }
+
+            orgs.forEach((org) => {
+                const isCurrent = org.id === payload.org_id;
+                const item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'sidebar-user-menu-item' + (isCurrent ? ' sidebar-user-menu-item--selected' : '');
+                item.textContent = org.name;
+                if (isCurrent) {
+                    item.disabled = true;
+                    item.setAttribute('aria-current', 'true');
+                } else {
+                    item.addEventListener('click', () => { closeMenu(); switchTo(org.id); });
+                }
+                menu.appendChild(item);
+            });
+
+            const divider = document.createElement('div');
+            divider.className = 'sidebar-user-menu-divider';
+            menu.appendChild(divider);
         }
     }
 
-    const current = orgs.find((o) => o.id === payload.org_id);
-    label.textContent = current ? current.name : 'Switch org';
-
-    menu.innerHTML = '';
-    const currentItem = document.createElement('button');
-    currentItem.type = 'button';
-    currentItem.className = 'sidebar-org-switch-item';
-    currentItem.disabled = true;
-    currentItem.textContent = current ? current.name : 'This organization';
-    menu.appendChild(currentItem);
-
-    orgs.filter((o) => o.id !== payload.org_id).forEach((org) => {
-        const item = document.createElement('button');
-        item.type = 'button';
-        item.className = 'sidebar-org-switch-item';
-        item.textContent = org.name;
-        item.addEventListener('click', () => { closeMenu(); switchTo(org.id); });
-        menu.appendChild(item);
+    const settingsItem = document.createElement('button');
+    settingsItem.type = 'button';
+    settingsItem.className = 'sidebar-user-menu-item';
+    settingsItem.textContent = 'Settings';
+    settingsItem.addEventListener('click', () => {
+        closeMenu();
+        switchView('settings');
     });
+    menu.appendChild(settingsItem);
 
-    if (impersonating) {
-        // A real multi-org member switching between their own orgs has
-        // nothing to "exit" - this only makes sense for a superadmin viewing
-        // an org they don't actually belong to.
-        const exitItem = document.createElement('button');
-        exitItem.type = 'button';
-        exitItem.className = 'sidebar-org-switch-item sidebar-org-switch-item--exit';
-        exitItem.textContent = 'Exit impersonation';
-        exitItem.addEventListener('click', () => {
-            closeMenu();
-            clearAuthToken();
-            location.reload();
-        });
-        menu.appendChild(exitItem);
-    }
+    const logoutItem = document.createElement('button');
+    logoutItem.type = 'button';
+    logoutItem.className = 'sidebar-user-menu-item sidebar-user-menu-item--danger';
+    logoutItem.textContent = 'Log out';
+    logoutItem.addEventListener('click', () => {
+        closeMenu();
+        clearAuthToken();
+        // Symmetric with tryResumeSession()'s "same login on either page" -
+        // logging out here also logs out of the Superadmin Portal.
+        try { localStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (ex) { /* ignore */ }
+        location.reload();
+    });
+    menu.appendChild(logoutItem);
 }
 

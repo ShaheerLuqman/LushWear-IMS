@@ -13,10 +13,10 @@ from app.auth import hash_password
 from app.database import get_supabase
 
 
-def get_or_create_identity(email: str, password: Optional[str]) -> dict:
-    """Returns the existing `users` row for `email` if one exists - password is
-    ignored, they already have one - else creates a new identity (`password`
-    is then required)."""
+def get_or_create_identity(email: str, password: Optional[str], name: Optional[str] = None) -> dict:
+    """Returns the existing `users` row for `email` if one exists - password
+    and name are both ignored, they already have an identity - else creates a
+    new one (`password` and `name` are then both required)."""
     supabase = get_supabase()
     existing = supabase.table("users").select("*").eq("email", email).limit(1).execute().data
     if existing:
@@ -26,8 +26,14 @@ def get_or_create_identity(email: str, password: Optional[str]) -> dict:
             status_code=400,
             detail="Password is required to create a new account for this email",
         )
+    if not name:
+        raise HTTPException(
+            status_code=400,
+            detail="Name is required to create a new account for this email",
+        )
     return supabase.table("users").insert({
         "email": email,
+        "name": name,
         "password_hash": hash_password(password),
     }).execute().data[0]
 
@@ -54,9 +60,9 @@ def add_membership(user_id: str, org_id: str, role: str) -> dict:
 
 
 def list_org_members(org_id: str) -> list:
-    """Memberships for an org, joined with each member's email - shared by the
-    org's own self-service user list (routes/users.py) and the Superadmin
-    Portal's read-only per-org view (routes/admin_portal.py)."""
+    """Memberships for an org, joined with each member's email/name - shared
+    by the org's own self-service user list (routes/users.py) and the
+    Superadmin Portal's read-only per-org view (routes/admin_portal.py)."""
     supabase = get_supabase()
     memberships = (
         supabase.table("org_memberships")
@@ -71,12 +77,13 @@ def list_org_members(org_id: str) -> list:
         return []
 
     user_ids = [m["user_id"] for m in memberships]
-    users = supabase.table("users").select("id, email").in_("id", user_ids).execute().data or []
-    emails = {u["id"]: u["email"] for u in users}
+    users = supabase.table("users").select("id, email, name").in_("id", user_ids).execute().data or []
+    by_id = {u["id"]: u for u in users}
     return [
         {
             "id": m["user_id"],
-            "email": emails.get(m["user_id"], ""),
+            "email": by_id.get(m["user_id"], {}).get("email", ""),
+            "name": by_id.get(m["user_id"], {}).get("name", ""),
             "role": m["role"],
             "org_id": m["org_id"],
             "is_active": m["is_active"],

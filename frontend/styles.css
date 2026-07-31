@@ -4298,16 +4298,33 @@ body.admin-portal-page {
     flex-shrink: 0;
 }
 
-/* Org switcher (frontend/js/app-core.js's initImpersonationSidebarSwitch) - a
-   sidebar nav item shown only while impersonating (Superadmin Portal), since
-   that's the only case today where a session has more than one org available.
+/* Sidebar user menu (frontend/js/app-core.js's initUserMenu) - who's logged
+   in, at the bottom of the sidebar; opens a popup with organizations to
+   switch to (when there's more than one available), Settings, and Log out.
    Reuses .nav-item/.nav-icon/.nav-tooltip for the button itself; the popup
-   menu mirrors .orders-more-actions__menu's fixed-position pattern. */
-.sidebar-org-switch-wrap {
+   menu mirrors .orders-more-actions__menu's fixed-position pattern, anchored
+   to grow upward since the button sits at the bottom of the sidebar. */
+.sidebar-user-menu-wrap {
     position: relative;
 }
 
-.sidebar-org-switch-menu {
+/* Name + org name stacked in the button's expand-on-hover label - org name
+   kept visually secondary (smaller, muted) so the person's own name reads
+   as the primary line. */
+.sidebar-user-menu-btn-label {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    line-height: 1.3;
+}
+
+.sidebar-user-menu-btn-org {
+    font-size: 11px;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.sidebar-user-menu {
     display: none;
     position: fixed;
     min-width: 200px;
@@ -4320,11 +4337,26 @@ body.admin-portal-page {
     z-index: 10050;
 }
 
-.sidebar-org-switch-wrap.open .sidebar-org-switch-menu {
+.sidebar-user-menu-wrap.open .sidebar-user-menu {
     display: block;
 }
 
-.sidebar-org-switch-item {
+.sidebar-user-menu-section-label {
+    padding: 6px 12px 2px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.sidebar-user-menu-divider {
+    height: 1px;
+    margin: 6px 4px;
+    background: var(--border-color);
+}
+
+.sidebar-user-menu-item {
     display: block;
     width: 100%;
     padding: 8px 12px;
@@ -4341,20 +4373,33 @@ body.admin-portal-page {
     text-overflow: ellipsis;
 }
 
-.sidebar-org-switch-item:hover:not(:disabled) {
+.sidebar-user-menu-item:hover:not(:disabled) {
     background: var(--bg-tertiary);
 }
 
-.sidebar-org-switch-item:disabled {
+.sidebar-user-menu-item:disabled {
     opacity: 0.6;
     font-weight: 600;
     cursor: default;
 }
 
-.sidebar-org-switch-item--exit {
-    margin-top: 4px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-color);
+.sidebar-user-menu-item--selected {
+    background: var(--accent-glow);
+    color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.sidebar-user-menu-item--selected:disabled {
+    opacity: 1;
+}
+
+.sidebar-user-menu-item--selected::before {
+    content: '✓';
+    display: inline-block;
+    width: 16px;
+}
+
+.sidebar-user-menu-item--danger {
     color: var(--danger, #c94c4c);
 }
 

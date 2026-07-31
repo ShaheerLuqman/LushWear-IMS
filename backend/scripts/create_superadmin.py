@@ -4,7 +4,7 @@ a rare, high-privilege operation with no ongoing need for a self-service flow,
 unlike the org bootstrap (POST /auth/bootstrap) which needed a public endpoint
 before any operator tooling existed.
 
-Usage (from backend/): venv/Scripts/python.exe -m scripts.create_superadmin <email> <password>
+Usage (from backend/): venv/Scripts/python.exe -m scripts.create_superadmin <email> <password> [name]
 """
 import sys
 
@@ -13,9 +13,10 @@ from app.database import get_supabase
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        raise SystemExit("Usage: python -m scripts.create_superadmin <email> <password>")
+    if len(sys.argv) not in (3, 4):
+        raise SystemExit("Usage: python -m scripts.create_superadmin <email> <password> [name]")
     email, password = sys.argv[1], sys.argv[2]
+    name = sys.argv[3] if len(sys.argv) == 4 else ""
 
     supabase = get_supabase()
     existing = supabase.table("users").select("id").eq("email", email).limit(1).execute().data
@@ -24,6 +25,7 @@ def main() -> None:
 
     user = supabase.table("users").insert({
         "email": email,
+        "name": name,
         "password_hash": hash_password(password),
         "is_superadmin": True,
     }).execute().data[0]

@@ -29,19 +29,23 @@ function initThemeToggle() {
     });
 }
 
+// localStorage (not sessionStorage) so this survives a new tab or the browser
+// restarting - and since index.html shares this origin, its own boot check
+// (js/app-core.js's tryResumeSession) reads this same key, so logging in here
+// counts as being logged in there too.
 const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
 
 function getSuperadminToken() {
-    try { return sessionStorage.getItem(SUPERADMIN_TOKEN_KEY) || ''; } catch (e) { return ''; }
+    try { return localStorage.getItem(SUPERADMIN_TOKEN_KEY) || ''; } catch (e) { return ''; }
 }
 function setSuperadminToken(token) {
-    try { if (token) sessionStorage.setItem(SUPERADMIN_TOKEN_KEY, token); } catch (e) { /* ignore */ }
+    try { if (token) localStorage.setItem(SUPERADMIN_TOKEN_KEY, token); } catch (e) { /* ignore */ }
 }
 function clearSuperadminToken() {
-    try { sessionStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (e) { /* ignore */ }
+    try { localStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (e) { /* ignore */ }
 }
 
-/** Shared with app-core.js's resolveSuperadminHomeOrgToken()/initOrgSwitcher()
+/** Shared with app-core.js's resolveSuperadminHomeOrgToken()/initUserMenu()
  * - localStorage (not sessionStorage) so it persists across tabs/visits,
  * letting a superadmin who logs in directly on the main app's own gate
  * (instead of via "View as org" here) resume wherever they last were. */
@@ -226,6 +230,7 @@ function initCreateOrgModal() {
         e.preventDefault();
         errEl.textContent = '';
         const org_name = document.getElementById('adminOrgName').value.trim();
+        const admin_name = document.getElementById('adminOrgAdminName').value.trim();
         const admin_email = document.getElementById('adminOrgAdminEmail').value.trim();
         const admin_password = document.getElementById('adminOrgAdminPassword').value;
         const submitBtn = form.querySelector('button[type="submit"]');
@@ -233,7 +238,7 @@ function initCreateOrgModal() {
         try {
             await adminApiJson('/admin/organizations', {
                 method: 'POST',
-                body: { org_name, admin_email, admin_password },
+                body: { org_name, admin_name, admin_email, admin_password },
             });
             closeModal('adminCreateOrgModal');
             showToast(`${org_name} created`, 'success');
@@ -287,7 +292,7 @@ async function loadOrgUsers(org) {
 
             const email = document.createElement('span');
             email.className = 'settings-user-row__email';
-            email.textContent = user.email;
+            email.textContent = user.name ? `${user.name} (${user.email})` : user.email;
             row.appendChild(email);
 
             const role = document.createElement('span');

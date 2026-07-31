@@ -51,11 +51,12 @@ async def create_organization(body: SuperadminOrgCreate):
     (Multi-Org User Membership plan)."""
     supabase = get_supabase()
     org = supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
-    user = get_or_create_identity(body.admin_email, body.admin_password)
+    user = get_or_create_identity(body.admin_email, body.admin_password, body.admin_name)
     membership = add_membership(user["id"], org["id"], "admin")
     admin_user = {
         "id": user["id"],
         "email": user["email"],
+        "name": user.get("name", ""),
         "role": membership["role"],
         "org_id": membership["org_id"],
         "is_active": membership["is_active"],
