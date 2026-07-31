@@ -90,8 +90,13 @@ function initAddUserForm() {
         const role = document.getElementById('settingsAddUserRole').value;
         const submitBtn = form.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.disabled = true;
+        // Blank means "this email already has an account elsewhere" - just
+        // grants a membership here, no new password needed (Multi-Org User
+        // Membership plan). Omit the field rather than send an empty string.
+        const body = { email, role };
+        if (password) body.password = password;
         try {
-            await apiJson('/users/', { method: 'POST', body: { email, password, role } });
+            await apiJson('/users/', { method: 'POST', body });
             form.reset();
             showToast('User added', 'success');
             await loadUsersSection();

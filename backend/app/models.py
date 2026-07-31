@@ -287,15 +287,14 @@ Email = Annotated[str, BeforeValidator(_normalize_email), AfterValidator(_valida
 # login, so tightening this minimum later can't retroactively lock out a user
 # whose existing (shorter, still-valid) password predates the change.
 NewPassword = Annotated[str, AfterValidator(_validate_new_password)]
-# Org-scoped roles only - used by the org's own self-service user management
-# (routes/users.py). Deliberately NOT the same type as Role below: widening
-# this one would let an org admin set role="superadmin" on a user in their own
-# org via POST/PUT /users, a real privilege escalation.
+# The only two org-scoped roles there are (Multi-Org User Membership plan:
+# `role` lives on an org_memberships row, one per (person, org) pair - a
+# person can have a different role in each org). "superadmin" is deliberately
+# not a value here - it's a separate, org-independent identity flag
+# (users.is_superadmin), not an org role, so it's not a value this type's
+# callers (routes/users.py's org-scoped user management, JWT `role` claims)
+# ever need to guard against.
 OrgRole = Literal["admin", "staff"]
-# Full role space, including the platform-level role with no org (Superadmin
-# Portal plan) - used for JWT payload semantics and the admin-portal models,
-# never for the org-scoped user management models above.
-Role = Literal["admin", "staff", "superadmin"]
 
 class OrganizationBase(BaseModel):
     name: NonBlankStr
@@ -314,14 +313,20 @@ class UserBase(BaseModel):
     role: OrgRole
 
 class UserCreate(UserBase):
-    password: NewPassword
+    # Optional: required only when `email` doesn't already exist as an
+    # identity (see app/memberships.py's get_or_create_identity). Adding an
+    # email that already belongs to someone else's account just grants them a
+    # membership in this org - they keep using their existing password.
+    password: Optional[NewPassword] = None
 
 class UserUpdate(BaseModel):
     role: Optional[OrgRole] = None
     is_active: Optional[bool] = None
 
 class UserPublic(UserBase):
-    """User shape returned to clients - never includes password_hash."""
+    """User shape returned to clients - never includes password_hash. Reflects
+    one org_memberships row (Multi-Org User Membership plan) - the same
+    identity can appear once per org it belongs to, each with its own role."""
     id: str
     org_id: str
     is_active: bool
@@ -331,19 +336,30 @@ class UserPublic(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
 class AccountPublic(BaseModel):
-    """GET /auth/me's response shape. Unlike UserPublic (org-scoped users
-    only, admin/staff), this must also represent a superadmin's own account
-    (org_id=None, role="superadmin") - so it uses the full Role type and a
-    nullable org_id rather than inheriting UserBase."""
+    """GET /auth/me's response shape - the caller's identity plus the
+    *current session's* org/role context (from the token, not a DB row):
+    since a person can belong to multiple orgs with a different role in each
+    (Multi-Org User Membership plan), "current role" only makes sense per
+    session, not as a fixed property of the account."""
     id: str
     email: Email
-    role: Role
+    role: Optional[OrgRole] = None
     org_id: Optional[str] = None
-    is_active: bool
+    is_superadmin: bool = False
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+class MyOrganization(BaseModel):
+    """One entry in GET /auth/my-organizations - the orgs the caller has an
+    active membership in, with their role in each."""
+    id: str
+    name: str
+    role: OrgRole
+
+class SwitchOrgBody(BaseModel):
+    org_id: NonBlankStr
 
 class LoginBody(BaseModel):
     email: Email

@@ -23,10 +23,9 @@ def main() -> None:
         raise SystemExit(f"A user with email {email!r} already exists.")
 
     user = supabase.table("users").insert({
-        "org_id": None,
         "email": email,
         "password_hash": hash_password(password),
-        "role": "superadmin",
+        "is_superadmin": True,
     }).execute().data[0]
     print(f"Created superadmin {user['email']!r} ({user['id']}).")
 

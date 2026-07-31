@@ -104,14 +104,20 @@ backend/
 
 ### Authentication model
 
-- Multi-tenant: every login belongs to exactly one **organization**
-  (`organizations`/`users` tables), with a `role` of `admin` or `staff`.
-  Username is the user's email; password is bcrypt-hashed (cost 8).
-- `POST /auth/login` issues a **7-day JWT** carrying `sub` (user id), `org_id`,
-  and `role`. `require_auth` verifies the signature; `get_org_id` and
-  `require_role(*roles)` (both in `auth.py`) read those claims to scope
-  business-table queries to the caller's org (see `org_scope.py`) and gate
-  admin-only routes (`users.py`, `org_settings.py`).
+- Multi-tenant: `users` is pure identity (email/password, plus the
+  platform-level `is_superadmin` flag); `org_memberships` is the actual source
+  of org access, one row per (person, org) pair with its own `role` (`admin`
+  or `staff`) and `is_active` — so the same person can belong to more than one
+  organization, with a different role in each. Username is the user's email;
+  password is bcrypt-hashed (cost 8).
+- `POST /auth/login` issues a **7-day JWT** carrying `sub` (user id), `org_id`/
+  `role` for the *current* session's org context, and `is_superadmin`
+  (independent of org context). `require_auth` verifies the signature;
+  `get_org_id` and `require_role(*roles)` (both in `auth.py`) read the
+  current-session claims to scope business-table queries to the caller's org
+  (see `org_scope.py`) and gate admin-only routes (`users.py`,
+  `org_settings.py`). `GET /auth/my-organizations` / `POST /auth/switch-org`
+  let a multi-org member discover and move between the orgs they belong to.
 - First login for a brand-new deployment goes through `POST /auth/bootstrap`
   (creates the first org + first admin user, race-free via a `system_bootstrap`
   singleton row; requires a `BOOTSTRAP_TOKEN` header when `APP_ENV=prod`).
@@ -129,7 +135,7 @@ backend/
 
 ### Data model
 
-`organizations` → `users` (1-N), every business table scoped by `org_id`:
+`organizations` ↔ `users` (M-N via `org_memberships`), every business table scoped by `org_id`:
 `products` → `variants` (1-N), `orders` (with JSONB `line_items` + legacy `items`
 string array), `cashbook_entries` → `cashbook_daily_balances`, `ledgers`,
 `load_sheet_logs`, `org_integration_settings`. There is no ORM; tables/columns

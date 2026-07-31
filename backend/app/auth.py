@@ -70,18 +70,25 @@ def verify_password(password: str, stored_hash: str) -> bool:
 def create_token(
     user_id: str,
     org_id: Optional[str],
-    role: str,
+    role: Optional[str],
     *,
+    is_superadmin: bool = False,
     ttl_hours: Optional[float] = None,
     impersonating: bool = False,
 ) -> str:
-    """Issue a signed session token, embedding the caller's identity/org/role.
+    """Issue a signed session token, embedding the caller's identity plus the
+    *current* org/role context (Multi-Org User Membership plan: a person can
+    have a different role in each org they belong to, so `org_id`/`role`
+    describe this session, not a fixed property of the user).
+
+    `is_superadmin` is a separate, org-independent claim - a platform-level
+    flag (see app/memberships.py's callers and routes/admin_portal.py), not an
+    org role, so it stays true regardless of which org (if any) `org_id`
+    currently points at.
 
     `ttl_hours`/`impersonating` are only passed by the Superadmin Portal's
-    "View as org" flow (routes/admin_portal.py) - a superadmin's own token has
-    org_id=None (see the users_org_id_required_unless_superadmin DB constraint),
-    but an impersonation token needs a real target org_id and a short TTL,
-    plus the `impersonating` claim so `require_superadmin_or_impersonating`
+    "View as org" flow (routes/admin_portal.py) - an impersonation token needs
+    a short TTL and the `impersonating` claim so `require_superadmin_or_impersonating`
     can tell a genuine superadmin session apart from one that's just viewing
     a single org and should only be allowed to switch which org it's viewing.
     """
@@ -91,6 +98,7 @@ def create_token(
         "sub": user_id,
         "org_id": org_id,
         "role": role,
+        "is_superadmin": is_superadmin,
         "iat": now,
         "exp": now + ttl,
         "impersonating": impersonating,
@@ -124,6 +132,16 @@ def require_role(*roles: str):
     return _dependency
 
 
+async def require_superadmin(payload: dict = Depends(require_auth)) -> dict:
+    """FastAPI dependency: require the caller's token to carry `is_superadmin`
+    - a platform-level flag, independent of `org_id`/`role` (Multi-Org User
+    Membership plan), so this works regardless of which org (if any) the
+    caller's session is currently scoped to."""
+    if payload.get("is_superadmin") is not True:
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return payload
+
+
 async def require_superadmin_or_impersonating(payload: dict = Depends(require_auth)) -> dict:
     """FastAPI dependency: allows a real superadmin token, or a token already
     impersonating an org. Used only by the Superadmin Portal's org-listing and
@@ -132,7 +150,7 @@ async def require_superadmin_or_impersonating(payload: dict = Depends(require_au
     impersonation token could only ever have been minted by a real superadmin
     to begin with, so letting it request a *different* org's impersonation
     token isn't a privilege escalation, just a continuation of the same trust."""
-    if payload.get("role") != "superadmin" and payload.get("impersonating") is not True:
+    if payload.get("is_superadmin") is not True and payload.get("impersonating") is not True:
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     return payload
 

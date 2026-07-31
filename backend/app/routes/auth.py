@@ -6,7 +6,15 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from app.auth import create_token, hash_password, require_auth, verify_password
 from app.database import get_supabase
-from app.models import AccountPublic, BootstrapBody, ChangePasswordBody, LoginBody, UserPublic
+from app.models import (
+    AccountPublic,
+    BootstrapBody,
+    ChangePasswordBody,
+    LoginBody,
+    MyOrganization,
+    SwitchOrgBody,
+    UserPublic,
+)
 from app.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -79,6 +87,24 @@ def _get_user_by_email(email: str) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def _fetch_active_memberships(user_id: str) -> list:
+    """A person's org_memberships rows (Multi-Org User Membership plan) -
+    ordered by created_at, so the first entry is always their oldest/first
+    org, a stable default when a session needs to pick one without a client
+    telling it which."""
+    return (
+        get_supabase()
+        .table("org_memberships")
+        .select("*")
+        .eq("user_id", user_id)
+        .eq("is_active", True)
+        .order("created_at")
+        .execute()
+        .data
+        or []
+    )
+
+
 @router.get("/status")
 async def auth_status():
     """Whether any user has been created yet (i.e. whether bootstrap has run)."""
@@ -131,14 +157,18 @@ async def auth_bootstrap(body: BootstrapBody, x_bootstrap_token: Optional[str] =
         supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
     )
     user = supabase.table("users").insert({
-        "org_id": org["id"],
         "email": body.email,
         "password_hash": hash_password(body.password),
-        "role": "admin",
     }).execute().data[0]
+    supabase.table("org_memberships").insert({
+        "user_id": user["id"],
+        "org_id": org["id"],
+        "role": "admin",
+    }).execute()
 
-    token = create_token(user_id=user["id"], org_id=org["id"], role=user["role"])
-    return {"ok": True, "token": token, "user": UserPublic.model_validate(user)}
+    token = create_token(user_id=user["id"], org_id=org["id"], role="admin")
+    account = {**user, "org_id": org["id"], "role": "admin", "is_active": True}
+    return {"ok": True, "token": token, "user": UserPublic.model_validate(account)}
 
 
 @router.post("/login")
@@ -147,31 +177,108 @@ async def auth_login(body: LoginBody, request: Request):
     """Email+password login. Lockout is keyed by email; the route also carries
     a stricter IP-side rate limit as a backstop - an email-only lock would
     otherwise let anyone who knows a real address (e.g. a public support inbox)
-    lock that account out for free from any IP."""
+    lock that account out for free from any IP.
+
+    A person may have an active membership in more than one org (Multi-Org
+    User Membership plan). The token is minted against their *first*
+    membership (oldest by created_at) as a stable default - the frontend's own
+    "resolve last-used org" logic then immediately swaps to the right one via
+    POST /auth/switch-org if localStorage says otherwise, exactly the same
+    mechanism already used for a superadmin's "View as org" flow. This keeps
+    /auth/login a single call with an unchanged contract for the common
+    (single-org) case, rather than adding an org-picker step here.
+    """
     _lockout.check(body.email)
 
     user = _get_user_by_email(body.email)
-    if not user or not user.get("is_active") or not verify_password(body.password, user["password_hash"]):
-        # Same generic message whether the email doesn't exist, the account is
-        # deactivated, or the password is wrong - avoids leaking account status.
+    if not user or not verify_password(body.password, user["password_hash"]):
+        # Same generic message whether the email doesn't exist or the password
+        # is wrong - avoids leaking account status.
+        _lockout.record_failure(body.email)
+        raise HTTPException(status_code=401, detail="Incorrect email or password")
+
+    memberships = _fetch_active_memberships(user["id"])
+    if not memberships and not user.get("is_superadmin"):
+        # No active membership anywhere, and not a superadmin - nothing to log
+        # into. Bundled into the same generic failure as a wrong password,
+        # same "don't leak account status" reasoning as above.
         _lockout.record_failure(body.email)
         raise HTTPException(status_code=401, detail="Incorrect email or password")
 
     _lockout.clear(body.email)
-    token = create_token(user_id=user["id"], org_id=user["org_id"], role=user["role"])
-    # AccountPublic, not UserPublic - the caller may be a superadmin (org_id=None,
-    # role="superadmin"), which UserPublic's org-scoped shape can't represent.
-    return {"ok": True, "token": token, "user": AccountPublic.model_validate(user)}
+
+    if memberships:
+        first = memberships[0]
+        org_id, role = first["org_id"], first["role"]
+    else:
+        org_id, role = None, None  # pure superadmin, no memberships
+
+    token = create_token(
+        user_id=user["id"], org_id=org_id, role=role,
+        is_superadmin=user.get("is_superadmin", False),
+    )
+    account = {**user, "org_id": org_id, "role": role}
+    return {"ok": True, "token": token, "user": AccountPublic.model_validate(account)}
 
 
 @router.get("/me", response_model=AccountPublic)
 async def auth_me(payload: dict = Depends(require_auth)):
-    """Current user's profile, from the token's `sub` (user id)."""
+    """Current user's profile: identity from the DB, plus the *current
+    session's* org/role context from the token - a person can have a
+    different role in each org they belong to (Multi-Org User Membership
+    plan), so "current role" only makes sense per session."""
     user_id = payload.get("sub")
     rows = get_supabase().table("users").select("*").eq("id", user_id).limit(1).execute().data or []
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
-    return rows[0]
+    account = {**rows[0], "org_id": payload.get("org_id"), "role": payload.get("role")}
+    return AccountPublic.model_validate(account)
+
+
+@router.get("/my-organizations", response_model=list[MyOrganization])
+async def auth_my_organizations(payload: dict = Depends(require_auth)):
+    """Orgs the caller has an active membership in, with their role in each -
+    lets a multi-org member (or a superadmin who also holds real memberships)
+    discover/switch between orgs they actually belong to. Distinct from the
+    Superadmin Portal's GET /admin/organizations, which lists *every* org that
+    exists, membership or not."""
+    memberships = _fetch_active_memberships(payload.get("sub"))
+    if not memberships:
+        return []
+    org_ids = [m["org_id"] for m in memberships]
+    orgs = get_supabase().table("organizations").select("id, name").in_("id", org_ids).execute().data or []
+    org_names = {o["id"]: o["name"] for o in orgs}
+    return [
+        {"id": m["org_id"], "name": org_names.get(m["org_id"], ""), "role": m["role"]}
+        for m in memberships
+    ]
+
+
+@router.post("/switch-org")
+async def auth_switch_org(body: SwitchOrgBody, payload: dict = Depends(require_auth)):
+    """Mints a token scoped to a different org the caller has an active
+    membership in - a real session switch, not the Superadmin Portal's
+    view-only impersonation (POST /admin/organizations/{id}/impersonate),
+    which bypasses the membership check entirely."""
+    rows = (
+        get_supabase()
+        .table("org_memberships")
+        .select("*")
+        .eq("user_id", payload.get("sub"))
+        .eq("org_id", body.org_id)
+        .eq("is_active", True)
+        .limit(1)
+        .execute()
+        .data
+    )
+    if not rows:
+        raise HTTPException(status_code=403, detail="Not a member of this organization")
+    membership = rows[0]
+    token = create_token(
+        user_id=payload.get("sub"), org_id=membership["org_id"], role=membership["role"],
+        is_superadmin=payload.get("is_superadmin", False),
+    )
+    return {"token": token}
 
 
 @router.post("/change-password")

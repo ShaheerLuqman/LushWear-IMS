@@ -1,13 +1,15 @@
 from fastapi import APIRouter, Depends, HTTPException
 
-from app.auth import create_token, hash_password, require_role, require_superadmin_or_impersonating
+from app.auth import create_token, require_superadmin, require_superadmin_or_impersonating
 from app.database import get_supabase
+from app.memberships import add_membership, get_or_create_identity, list_org_members
 from app.models import (
     Organization,
     OrganizationWithAdmin,
     OrgIntegrationSettingsPublic,
     OrgIntegrationSettingsUpdate,
     SuperadminOrgCreate,
+    UserPublic,
 )
 from app.org_settings import get_org_integration_settings, to_public_shape, upsert_org_integration_settings
 
@@ -37,27 +39,46 @@ async def impersonate_organization(org_id: str, payload: dict = Depends(require_
     return {"token": token}
 
 
-@router.post("/organizations", response_model=OrganizationWithAdmin, dependencies=[Depends(require_role("superadmin"))])
+@router.post("/organizations", response_model=OrganizationWithAdmin, dependencies=[Depends(require_superadmin)])
 async def create_organization(body: SuperadminOrgCreate):
+    """Creates a new org and its first admin in one step. Uses the same
+    identity-then-membership helpers as routes/users.py's self-service "add a
+    user" - if admin_email already belongs to someone else's account, they
+    just get an instant membership here instead of a rejected duplicate
+    (Multi-Org User Membership plan)."""
     supabase = get_supabase()
-    existing = supabase.table("users").select("id").eq("email", body.admin_email).limit(1).execute().data
-    if existing:
-        raise HTTPException(status_code=400, detail="A user with this email already exists")
-
     org = supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
-    admin_user = supabase.table("users").insert({
-        "org_id": org["id"],
-        "email": body.admin_email,
-        "password_hash": hash_password(body.admin_password),
-        "role": "admin",
-    }).execute().data[0]
+    user = get_or_create_identity(body.admin_email, body.admin_password)
+    membership = add_membership(user["id"], org["id"], "admin")
+    admin_user = {
+        "id": user["id"],
+        "email": user["email"],
+        "role": membership["role"],
+        "org_id": membership["org_id"],
+        "is_active": membership["is_active"],
+        "created_at": membership.get("created_at"),
+    }
     return {"organization": org, "admin_user": admin_user}
+
+
+@router.get(
+    "/organizations/{org_id}/users",
+    response_model=list[UserPublic],
+    dependencies=[Depends(require_superadmin)],
+)
+async def read_organization_users(org_id: str):
+    """Read-only view of who has access to an org and what role - lets a
+    superadmin check membership without impersonating in and opening the
+    org's own Settings > Users. Managing users (add/change role/deactivate)
+    still happens from within the org itself, via "View as org"."""
+    _get_org_or_404(org_id)
+    return list_org_members(org_id)
 
 
 @router.get(
     "/organizations/{org_id}/integration-settings",
     response_model=OrgIntegrationSettingsPublic,
-    dependencies=[Depends(require_role("superadmin"))],
+    dependencies=[Depends(require_superadmin)],
 )
 async def read_organization_integration_settings(org_id: str):
     _get_org_or_404(org_id)
@@ -67,7 +88,7 @@ async def read_organization_integration_settings(org_id: str):
 @router.put(
     "/organizations/{org_id}/integration-settings",
     response_model=OrgIntegrationSettingsPublic,
-    dependencies=[Depends(require_role("superadmin"))],
+    dependencies=[Depends(require_superadmin)],
 )
 async def update_organization_integration_settings(org_id: str, body: OrgIntegrationSettingsUpdate):
     _get_org_or_404(org_id)

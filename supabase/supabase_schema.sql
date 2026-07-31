@@ -13,19 +13,23 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 
 -- ============================================================================
--- Organizations & Users (replaces the single shared app-PIN — see
--- ORGANIZATIONS_USERS_PLAN.md). One row per business (organizations), one row
--- per login (users). `role` is open text with a CHECK constraint rather than a
--- Postgres ENUM, matching this repo's existing convention for small fixed
--- value sets (order_status/advance_status). Declared first - every business
--- table below references organizations(id).
--- See supabase/migrations/20260730040000_organizations_and_users_tables.sql.
+-- Organizations, Users & Org Memberships (replaces the single shared app-PIN
+-- — see ORGANIZATIONS_USERS_PLAN.md). `users` is pure identity (one row per
+-- login) plus the platform-level `is_superadmin` flag; `org_memberships` is
+-- the actual source of org access - one row per (person, org) pair, so the
+-- same identity can hold a different role in each org they belong to (Multi-
+-- Org User Membership plan). `role` is open text with a CHECK constraint
+-- rather than a Postgres ENUM, matching this repo's existing convention for
+-- small fixed value sets (order_status/advance_status). Declared first -
+-- every business table below references organizations(id).
+-- See supabase/migrations/20260730040000_organizations_and_users_tables.sql
+-- and 20260730140000_org_memberships_table.sql.
 --
--- `superadmin` (Superadmin Portal plan) is a platform-level role not scoped to
--- any org - org_id is nullable, but only for that role; the second CHECK below
--- enforces the pairing at the DB level, not just app-code discipline. Every
--- other user is still scoped to exactly one org.
--- See supabase/migrations/20260730130000_add_superadmin_role.sql.
+-- `is_superadmin` (Superadmin Portal plan) is a platform-level flag,
+-- independent of org membership - a superadmin may hold zero, one, or more
+-- real memberships (logging into those orgs normally as themselves) while
+-- also being able to view/manage any org via the portal's impersonate
+-- feature.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS organizations (
@@ -36,18 +40,25 @@ CREATE TABLE IF NOT EXISTS organizations (
 
 CREATE TABLE IF NOT EXISTS users (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    org_id        UUID REFERENCES organizations(id),
     email         TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
-    role          TEXT NOT NULL CHECK (role IN ('admin', 'staff', 'superadmin')),
-    is_active     BOOLEAN NOT NULL DEFAULT true,
+    is_superadmin BOOLEAN NOT NULL DEFAULT false,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT users_org_id_required_unless_superadmin
-        CHECK ((role = 'superadmin' AND org_id IS NULL) OR (role <> 'superadmin' AND org_id IS NOT NULL))
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE INDEX IF NOT EXISTS idx_users_org_id ON users(org_id);
+-- is_active lives on the membership, not the identity - deactivating someone
+-- in one org must not affect their access to another.
+CREATE TABLE IF NOT EXISTS org_memberships (
+    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+    role       TEXT NOT NULL CHECK (role IN ('admin', 'staff')),
+    is_active  BOOLEAN NOT NULL DEFAULT true,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (user_id, org_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON org_memberships(org_id);
 
 
 -- ============================================================================
@@ -957,4 +968,5 @@ ALTER TABLE cashbook_entry_audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sync_status              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE organizations            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users                    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE org_memberships          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_integration_settings ENABLE ROW LEVEL SECURITY;

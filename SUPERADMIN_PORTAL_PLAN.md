@@ -2,6 +2,8 @@
 
 **Status: ✅ implemented (backend + frontend), migration not yet applied to the real Supabase DB.**
 
+**Superseded in part by `MULTI_ORG_MEMBERSHIP_PLAN.md`**: `superadmin` is no longer a value of `users.role` with a nullable `org_id` (this doc's original design) — it's now a separate `users.is_superadmin` flag, fully decoupled from org membership, so a superadmin can also hold real memberships. `require_superadmin_or_impersonating` now checks `is_superadmin` instead of `role == "superadmin"`, and the frontend's impersonation banner became a generalized sidebar org switcher (`initOrgSwitcher()`, not `initImpersonationBanner()`). The rest of this doc (impersonate token design, two-tier authorization, portal UI) is unchanged and still accurate.
+
 ## Context
 
 `ORGANIZATIONS_USERS_PLAN.md`'s 4 phases (multi-tenancy, per-org users/roles, per-org Shopify/PostEx credentials, PIN retirement) are fully implemented and applied. That plan explicitly deferred one thing as out-of-scope: **"Full Admin Portal UI (cross-org superadmin screens) — creating new organizations stays a manual/internal operation for now."**

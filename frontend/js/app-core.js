@@ -539,6 +539,24 @@ function runAuthGate() {
                     return;
                 }
                 setAuthToken(data.token);
+                if (data.user && data.user.is_superadmin === true && !data.user.org_id) {
+                    // A pure superadmin (no memberships at all) has no org_id, so this
+                    // token alone can't load any business data - resolve to their
+                    // last-used (or default) org via the portal's impersonate flow.
+                    const orgToken = await resolveSuperadminHomeOrgToken();
+                    if (!orgToken) {
+                        clearAuthToken();
+                        if (errEl) errEl.textContent = 'No organizations exist yet to view.';
+                        return;
+                    }
+                    setAuthToken(orgToken);
+                } else if (data.user && data.user.org_id) {
+                    // Login already resolved a valid org (their first membership, or a
+                    // superadmin who also holds a real one) - if a *different* org was
+                    // last used on this browser, switch to it. Not fatal if this fails;
+                    // login's own default token is already valid on its own.
+                    await switchToLastUsedOrgIfDifferent(data.user.org_id);
+                }
                 root.hidden = true;
                 detachAuthGateSubmit();
                 resolve(true);
@@ -614,7 +632,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (!authOk) {
         return;
     }
-    initImpersonationBanner();
+    initOrgSwitcher();
 
     if (loadingScreen) {
         loadingScreen.style.display = 'flex';
@@ -722,55 +740,189 @@ function decodeTokenPayload(token) {
     }
 }
 
-/** Shows a persistent banner with an org switcher while impersonating (Superadmin
- * Portal). No-op for a normal login - every token carries `impersonating`, but
- * it's false unless minted by POST /admin/organizations/{id}/impersonate. */
-async function initImpersonationBanner() {
-    const payload = decodeTokenPayload(getAuthToken());
-    if (!payload || payload.impersonating !== true) return;
+/** Shared with admin.js's "View as org" (localStorage, not sessionStorage, so
+ * it persists across tabs/visits on this browser) - lets anyone with more
+ * than one org available (a superadmin, or a real multi-org member) resume
+ * wherever they last were on their next login, instead of always landing on
+ * whichever org /auth/login defaults to. */
+const LAST_USED_ORG_KEY = 'lushwear_last_used_org';
 
-    const banner = document.createElement('div');
-    banner.id = 'impersonationBanner';
-    banner.className = 'impersonation-banner';
-    banner.innerHTML =
-        '<span class="impersonation-banner__text">Viewing <strong id="impersonationOrgName">this organization</strong> as superadmin</span>' +
-        '<select id="impersonationSwitchSelect" class="impersonation-banner__select"><option value="">Switch org…</option></select>' +
-        '<button type="button" id="impersonationExitBtn" class="btn btn-secondary impersonation-banner__exit">Exit</button>';
-    document.body.prepend(banner);
+function rememberLastUsedOrg(orgId) {
+    try { localStorage.setItem(LAST_USED_ORG_KEY, orgId); } catch (e) { /* ignore */ }
+}
 
-    document.getElementById('impersonationExitBtn').addEventListener('click', () => {
-        clearAuthToken();
-        location.reload();
-    });
+/**
+ * A superadmin's own account has no org_id when they hold no real memberships
+ * (see Superadmin Portal plan), so logging in directly on this app's gate -
+ * rather than via admin.html's "View as org" - yields a token that can't load
+ * any business data. Resolves an org to view: the last one used on this
+ * browser if it still exists, else the earliest-created org (LushWear, org
+ * #1), and exchanges the superadmin token for a real impersonation token
+ * scoped to it.
+ * @returns {Promise<string|null>} an impersonation token, or null if no org exists at all.
+ */
+async function resolveSuperadminHomeOrgToken() {
+    async function tryImpersonate(orgId) {
+        try {
+            const data = await apiJson(`/admin/organizations/${orgId}/impersonate`, { method: 'POST' });
+            rememberLastUsedOrg(orgId);
+            return data.token;
+        } catch (e) {
+            return null;
+        }
+    }
 
+    let lastOrgId = null;
+    try { lastOrgId = localStorage.getItem(LAST_USED_ORG_KEY); } catch (e) { /* ignore */ }
+    if (lastOrgId) {
+        const token = await tryImpersonate(lastOrgId);
+        if (token) return token;
+    }
+
+    // No stored org, or it no longer resolves (e.g. deleted) - fall back to the
+    // earliest-created org. GET /admin/organizations orders by created_at, so
+    // index 0 is always LushWear (org #1) today.
     try {
         const orgs = await apiJson('/admin/organizations');
-        const current = orgs.find((o) => o.id === payload.org_id);
-        const nameEl = document.getElementById('impersonationOrgName');
-        if (nameEl) nameEl.textContent = current ? current.name : payload.org_id;
+        if (!orgs.length) return null;
+        return await tryImpersonate(orgs[0].id);
+    } catch (e) {
+        return null;
+    }
+}
 
-        const select = document.getElementById('impersonationSwitchSelect');
-        orgs.filter((o) => o.id !== payload.org_id).forEach((org) => {
-            const opt = document.createElement('option');
-            opt.value = org.id;
-            opt.textContent = org.name;
-            select.appendChild(opt);
-        });
-        select.addEventListener('change', async () => {
-            const targetOrgId = select.value;
-            if (!targetOrgId) return;
-            try {
-                const data = await apiJson(`/admin/organizations/${targetOrgId}/impersonate`, { method: 'POST' });
-                setAuthToken(data.token);
-                location.reload();
-            } catch (ex) {
-                showToast(ex.message || 'Could not switch organization', 'error');
-                select.value = '';
-            }
-        });
+/**
+ * Applies to a regular multi-org member (or a superadmin who also holds a
+ * real membership): /auth/login always resolves to their *first* membership
+ * as a stable default. If a *different* org was last used on this browser,
+ * switch to it via /auth/switch-org. Not fatal if this fails (the org may no
+ * longer exist, or the membership may have been revoked) - login's own
+ * default token is already valid on its own.
+ */
+async function switchToLastUsedOrgIfDifferent(currentOrgId) {
+    let lastOrgId = null;
+    try { lastOrgId = localStorage.getItem(LAST_USED_ORG_KEY); } catch (e) { /* ignore */ }
+    if (!lastOrgId || lastOrgId === currentOrgId) {
+        rememberLastUsedOrg(currentOrgId);
+        return;
+    }
+    try {
+        const data = await apiJson('/auth/switch-org', { method: 'POST', body: { org_id: lastOrgId } });
+        setAuthToken(data.token);
+        rememberLastUsedOrg(lastOrgId);
     } catch (ex) {
-        // Org list failed to load - banner still shows (org name falls back to
-        // the raw id above), just without switch options.
+        rememberLastUsedOrg(currentOrgId);
+    }
+}
+
+/** Adds a "switch organization" nav item to the sidebar whenever the current
+ * session has more than one org available: a superadmin impersonating any org
+ * (GET /admin/organizations lists every org that exists) or a regular member
+ * of more than one real org (GET /auth/my-organizations lists just theirs).
+ * Hidden for the common single-org case - no menu, no nav item at all. */
+async function initOrgSwitcher() {
+    const payload = decodeTokenPayload(getAuthToken());
+    if (!payload) return;
+    const impersonating = payload.impersonating === true;
+
+    let orgs;
+    try {
+        orgs = impersonating
+            ? await apiJson('/admin/organizations')
+            : await apiJson('/auth/my-organizations');
+    } catch (ex) {
+        return;
+    }
+    if (!impersonating && orgs.length <= 1) return; // nothing to switch to
+
+    const lockWrap = document.querySelector('.sidebar-lock-wrap');
+    if (!lockWrap || !lockWrap.parentElement) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'sidebarOrgSwitchWrap';
+    wrap.className = 'sidebar-org-switch-wrap';
+    wrap.innerHTML =
+        '<button type="button" id="sidebarOrgSwitchBtn" class="nav-item" aria-haspopup="true" aria-expanded="false" title="Switch organization">' +
+            '<span class="nav-icon">🏢</span>' +
+            '<span class="nav-tooltip" id="sidebarOrgSwitchLabel">Switch org</span>' +
+        '</button>' +
+        '<div id="sidebarOrgSwitchMenu" class="sidebar-org-switch-menu" role="menu"></div>';
+    lockWrap.parentElement.insertBefore(wrap, lockWrap);
+
+    const btn = document.getElementById('sidebarOrgSwitchBtn');
+    const menu = document.getElementById('sidebarOrgSwitchMenu');
+    const label = document.getElementById('sidebarOrgSwitchLabel');
+
+    function closeMenu() {
+        wrap.classList.remove('open');
+        btn.setAttribute('aria-expanded', 'false');
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const opening = !wrap.classList.contains('open');
+        wrap.classList.toggle('open', opening);
+        btn.setAttribute('aria-expanded', opening ? 'true' : 'false');
+        if (opening) {
+            const rect = btn.getBoundingClientRect();
+            menu.style.top = `${rect.top}px`;
+            menu.style.left = `${rect.right + 8}px`;
+        }
+    });
+    document.addEventListener('click', (e) => {
+        if (!wrap.contains(e.target)) closeMenu();
+    });
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') closeMenu();
+    });
+
+    async function switchTo(orgId) {
+        try {
+            const data = impersonating
+                ? await apiJson(`/admin/organizations/${orgId}/impersonate`, { method: 'POST' })
+                : await apiJson('/auth/switch-org', { method: 'POST', body: { org_id: orgId } });
+            setAuthToken(data.token);
+            rememberLastUsedOrg(orgId);
+            location.reload();
+        } catch (ex) {
+            showToast(ex.message || 'Could not switch organization', 'error');
+        }
+    }
+
+    const current = orgs.find((o) => o.id === payload.org_id);
+    label.textContent = current ? current.name : 'Switch org';
+
+    menu.innerHTML = '';
+    const currentItem = document.createElement('button');
+    currentItem.type = 'button';
+    currentItem.className = 'sidebar-org-switch-item';
+    currentItem.disabled = true;
+    currentItem.textContent = current ? current.name : 'This organization';
+    menu.appendChild(currentItem);
+
+    orgs.filter((o) => o.id !== payload.org_id).forEach((org) => {
+        const item = document.createElement('button');
+        item.type = 'button';
+        item.className = 'sidebar-org-switch-item';
+        item.textContent = org.name;
+        item.addEventListener('click', () => { closeMenu(); switchTo(org.id); });
+        menu.appendChild(item);
+    });
+
+    if (impersonating) {
+        // A real multi-org member switching between their own orgs has
+        // nothing to "exit" - this only makes sense for a superadmin viewing
+        // an org they don't actually belong to.
+        const exitItem = document.createElement('button');
+        exitItem.type = 'button';
+        exitItem.className = 'sidebar-org-switch-item sidebar-org-switch-item--exit';
+        exitItem.textContent = 'Exit impersonation';
+        exitItem.addEventListener('click', () => {
+            closeMenu();
+            clearAuthToken();
+            location.reload();
+        });
+        menu.appendChild(exitItem);
     }
 }
 

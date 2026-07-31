@@ -1,6 +1,6 @@
-"""Route tests for /api/auth/* (status/login/bootstrap/me) and the
-require_role gate used by /api/users/*. See test_login_lockout.py for the
-lockout mechanism itself, tested in isolation."""
+"""Route tests for /api/auth/* (status/login/bootstrap/me/my-organizations/
+switch-org) and the require_role gate used by /api/users/*. See
+test_login_lockout.py for the lockout mechanism itself, tested in isolation."""
 import asyncio
 
 import pytest
@@ -10,13 +10,25 @@ from app.auth import hash_password, require_role
 
 
 def _user_row(password, **overrides):
+    """A `users` row - pure identity (Multi-Org User Membership plan): no
+    org_id/role/is_active here, those live on org_memberships rows instead."""
     row = {
         "id": "u1",
-        "org_id": "test-org",
         "email": "admin@example.com",
         "password_hash": hash_password(password),
+        "is_superadmin": False,
+    }
+    row.update(overrides)
+    return row
+
+
+def _membership_row(**overrides):
+    row = {
+        "user_id": "u1",
+        "org_id": "test-org",
         "role": "admin",
         "is_active": True,
+        "created_at": "2026-01-01T00:00:00+00:00",
     }
     row.update(overrides)
     return row
@@ -36,17 +48,27 @@ class TestAuthStatus:
 
 class TestAuthLogin:
     def test_correct_credentials_returns_token(self, make_client):
-        client = make_client({"users": [_user_row("correct-horse")], "login_lockouts": []})
+        client = make_client({
+            "users": [_user_row("correct-horse")],
+            "org_memberships": [_membership_row()],
+            "login_lockouts": [],
+        })
         r = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse"})
         assert r.status_code == 200
         body = r.json()
         assert body["ok"] is True
         assert body["token"]
         assert body["user"]["email"] == "admin@example.com"
+        assert body["user"]["org_id"] == "test-org"
+        assert body["user"]["role"] == "admin"
         assert "password_hash" not in body["user"]
 
     def test_wrong_password_is_401(self, make_client):
-        client = make_client({"users": [_user_row("correct-horse")], "login_lockouts": []})
+        client = make_client({
+            "users": [_user_row("correct-horse")],
+            "org_memberships": [_membership_row()],
+            "login_lockouts": [],
+        })
         r = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "wrong-password"})
         assert r.status_code == 401
 
@@ -55,11 +77,32 @@ class TestAuthLogin:
         r = client.post("/api/auth/login", json={"email": "nobody@example.com", "password": "whatever1"})
         assert r.status_code == 401
 
-    def test_inactive_user_is_401(self, make_client):
-        row = _user_row("correct-horse", is_active=False)
-        client = make_client({"users": [row], "login_lockouts": []})
+    def test_no_active_membership_anywhere_is_401(self, make_client):
+        # Correct password, but no active membership anywhere (simulates the
+        # is_active=True filter excluding everything) and not a superadmin -
+        # nothing to log into.
+        client = make_client({
+            "users": [_user_row("correct-horse")],
+            "org_memberships": [],
+            "login_lockouts": [],
+        })
         r = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse"})
         assert r.status_code == 401
+
+    def test_superadmin_with_no_memberships_can_still_log_in(self, make_client):
+        # A pure superadmin (Superadmin Portal) has no org_memberships row at
+        # all - login must still succeed, with a null org context.
+        client = make_client({
+            "users": [_user_row("correct-horse", is_superadmin=True)],
+            "org_memberships": [],
+            "login_lockouts": [],
+        })
+        r = client.post("/api/auth/login", json={"email": "admin@example.com", "password": "correct-horse"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["user"]["is_superadmin"] is True
+        assert body["user"]["org_id"] is None
+        assert body["user"]["role"] is None
 
 
 class TestAuthBootstrap:
@@ -69,10 +112,8 @@ class TestAuthBootstrap:
             # the row (i.e. this is the first-ever bootstrap call).
             "system_bootstrap": [{"id": "default"}],
             "organizations": [{"id": "org1", "name": "Acme"}],
-            "users": [{
-                "id": "u1", "org_id": "org1", "email": "owner@example.com",
-                "role": "admin", "is_active": True,
-            }],
+            "users": [{"id": "u1", "email": "owner@example.com"}],
+            "org_memberships": [_membership_row(user_id="u1", org_id="org1")],
         })
         r = client.post("/api/auth/bootstrap", json={
             "org_name": "Acme", "email": "owner@example.com", "password": "supersecret1",
@@ -146,10 +187,8 @@ class TestAuthBootstrap:
         fake = _FakeSupabase({
             "system_bootstrap": [{"id": "default"}],
             "organizations": [{"id": "existing-lushwear-org", "name": "LushWear"}],
-            "users": [{
-                "id": "u1", "org_id": "existing-lushwear-org", "email": "owner@example.com",
-                "role": "admin", "is_active": True,
-            }],
+            "users": [{"id": "u1", "email": "owner@example.com"}],
+            "org_memberships": [_membership_row(user_id="u1", org_id="existing-lushwear-org")],
         })
         client = make_client()
         monkeypatch.setattr(auth_routes, "get_supabase", lambda: fake)
@@ -168,10 +207,60 @@ class TestAuthMe:
         from app.auth import require_auth
 
         client = make_client({"users": [_user_row("x", id="u1")]})
-        main.app.dependency_overrides[require_auth] = lambda: {"sub": "u1", "org_id": "test-org", "role": "admin"}
+        main.app.dependency_overrides[require_auth] = lambda: {
+            "sub": "u1", "org_id": "test-org", "role": "admin", "is_superadmin": False,
+        }
         r = client.get("/api/auth/me")
         assert r.status_code == 200
-        assert r.json()["id"] == "u1"
+        body = r.json()
+        assert body["id"] == "u1"
+        assert body["org_id"] == "test-org"
+        assert body["role"] == "admin"
+
+
+class TestMyOrganizations:
+    def test_lists_active_memberships_with_org_names(self, make_client):
+        client = make_client({
+            "org_memberships": [
+                _membership_row(org_id="org1", role="admin"),
+                _membership_row(org_id="org2", role="staff"),
+            ],
+            "organizations": [
+                {"id": "org1", "name": "Acme"},
+                {"id": "org2", "name": "Beta"},
+            ],
+        })
+        r = client.get("/api/auth/my-organizations")
+        assert r.status_code == 200
+        body = r.json()
+        assert {(o["id"], o["name"], o["role"]) for o in body} == {
+            ("org1", "Acme", "admin"), ("org2", "Beta", "staff"),
+        }
+
+    def test_no_memberships_returns_empty_list(self, make_client):
+        client = make_client({"org_memberships": []})
+        r = client.get("/api/auth/my-organizations")
+        assert r.status_code == 200
+        assert r.json() == []
+
+
+class TestSwitchOrg:
+    def test_switches_to_an_org_with_an_active_membership(self, make_client):
+        client = make_client({
+            "org_memberships": [_membership_row(org_id="org2", role="staff")],
+        })
+        r = client.post("/api/auth/switch-org", json={"org_id": "org2"})
+        assert r.status_code == 200
+        import jwt
+        payload = jwt.decode(r.json()["token"], options={"verify_signature": False})
+        assert payload["org_id"] == "org2"
+        assert payload["role"] == "staff"
+        assert payload["impersonating"] is False
+
+    def test_no_membership_in_target_org_is_403(self, make_client):
+        client = make_client({"org_memberships": []})
+        r = client.post("/api/auth/switch-org", json={"org_id": "org-not-a-member-of"})
+        assert r.status_code == 403
 
 
 class TestChangePassword:
@@ -222,13 +311,18 @@ class TestUsersRouterRoleGate:
         import app.main as main
         from app.auth import require_auth
 
-        client = make_client({"users": []})
-        main.app.dependency_overrides[require_auth] = lambda: {"sub": "u2", "org_id": "test-org", "role": "staff"}
+        client = make_client({"org_memberships": []})
+        main.app.dependency_overrides[require_auth] = lambda: {
+            "sub": "u2", "org_id": "test-org", "role": "staff", "is_superadmin": False,
+        }
         r = client.get("/api/users/")
         assert r.status_code == 403
 
     def test_admin_can_list_users(self, make_client):
-        client = make_client({"users": [_user_row("x")]})  # default override role is "admin"
+        client = make_client({
+            "org_memberships": [_membership_row()],  # default override role is "admin"
+            "users": [_user_row("x")],
+        })
         r = client.get("/api/users/")
         assert r.status_code == 200
         assert len(r.json()) == 1

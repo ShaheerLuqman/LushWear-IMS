@@ -4181,6 +4181,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-bottom: 1px solid var(--border-color);
 }
 
+.admin-portal-header__actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
 .admin-portal-header__brand {
     display: flex;
     align-items: center;
@@ -4275,40 +4281,64 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
-/* Impersonation banner (frontend/js/app-core.js's initImpersonationBanner) -
-   shown in the main app only while viewing an org as superadmin. */
-.impersonation-banner {
+/* Org switcher (frontend/js/app-core.js's initImpersonationSidebarSwitch) - a
+   sidebar nav item shown only while impersonating (Superadmin Portal), since
+   that's the only case today where a session has more than one org available.
+   Reuses .nav-item/.nav-icon/.nav-tooltip for the button itself; the popup
+   menu mirrors .orders-more-actions__menu's fixed-position pattern. */
+.sidebar-org-switch-wrap {
+    position: relative;
+}
+
+.sidebar-org-switch-menu {
+    display: none;
     position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    z-index: 16000;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
-    padding: 8px 16px;
-    background: var(--accent-primary);
-    color: #fff;
-    font-size: 13px;
+    min-width: 200px;
+    max-width: 280px;
+    padding: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 10050;
 }
 
-.impersonation-banner__select {
-    padding: 4px 10px;
-    font-size: 13px;
-    border-radius: var(--radius-sm);
-    border: 1px solid rgba(255, 255, 255, 0.4);
-    background: rgba(255, 255, 255, 0.15);
-    color: #fff;
+.sidebar-org-switch-wrap.open .sidebar-org-switch-menu {
+    display: block;
 }
 
-.impersonation-banner__select option {
+.sidebar-org-switch-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    text-align: left;
+    font-family: inherit;
+    font-size: 13px;
     color: var(--text-primary);
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-.impersonation-banner__exit {
-    padding: 4px 12px;
-    font-size: 13px;
+.sidebar-org-switch-item:hover:not(:disabled) {
+    background: var(--bg-tertiary);
+}
+
+.sidebar-org-switch-item:disabled {
+    opacity: 0.6;
+    font-weight: 600;
+    cursor: default;
+}
+
+.sidebar-org-switch-item--exit {
+    margin-top: 4px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border-color);
+    color: var(--danger, #c94c4c);
 }
 
 /* Flatpickr ships a light-only stylesheet; recolour its surfaces for dark mode. */

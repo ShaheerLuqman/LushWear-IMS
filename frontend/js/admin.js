@@ -4,6 +4,31 @@
 
 const API_BASE = window.API_BASE;
 
+// Same key/values as the main app (frontend/js/app-core.js's initSettingsView) -
+// an inline script in <head> already applies whatever's stored here before
+// first paint, so this only needs to sync the toggle buttons and handle clicks.
+const THEME_STORAGE_KEY = 'lushwear-theme';
+
+function applyTheme(theme) {
+    document.documentElement.setAttribute('data-theme', theme);
+    document.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+        const selected = btn.dataset.themeChoice === theme;
+        btn.classList.toggle('active', selected);
+        btn.setAttribute('aria-checked', selected ? 'true' : 'false');
+    });
+}
+
+function initThemeToggle() {
+    applyTheme(localStorage.getItem(THEME_STORAGE_KEY) || 'light');
+    document.querySelectorAll('.settings-theme-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+            const theme = btn.dataset.themeChoice;
+            localStorage.setItem(THEME_STORAGE_KEY, theme);
+            applyTheme(theme);
+        });
+    });
+}
+
 const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
 
 function getSuperadminToken() {
@@ -14,6 +39,16 @@ function setSuperadminToken(token) {
 }
 function clearSuperadminToken() {
     try { sessionStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch (e) { /* ignore */ }
+}
+
+/** Shared with app-core.js's resolveSuperadminHomeOrgToken()/initOrgSwitcher()
+ * - localStorage (not sessionStorage) so it persists across tabs/visits,
+ * letting a superadmin who logs in directly on the main app's own gate
+ * (instead of via "View as org" here) resume wherever they last were. */
+const LAST_USED_ORG_KEY = 'lushwear_last_used_org';
+
+function rememberLastUsedOrg(orgId) {
+    try { localStorage.setItem(LAST_USED_ORG_KEY, orgId); } catch (e) { /* ignore */ }
 }
 
 /** apiJson (utils.js), with the superadmin's own Bearer token attached. */
@@ -51,8 +86,10 @@ function closeModal(id) {
     document.getElementById(id).classList.remove('active');
 }
 
+const MODAL_IDS = ['adminCreateOrgModal', 'adminUsersModal', 'adminIntegrationsModal'];
+
 function initModalDismissal() {
-    ['adminCreateOrgModal', 'adminIntegrationsModal'].forEach((id) => {
+    MODAL_IDS.forEach((id) => {
         const modal = document.getElementById(id);
         modal.addEventListener('click', (e) => {
             if (e.target.id === id) closeModal(id);
@@ -60,8 +97,9 @@ function initModalDismissal() {
     });
     document.addEventListener('keydown', (e) => {
         if (e.key !== 'Escape') return;
-        if (document.getElementById('adminCreateOrgModal').classList.contains('active')) closeModal('adminCreateOrgModal');
-        if (document.getElementById('adminIntegrationsModal').classList.contains('active')) closeModal('adminIntegrationsModal');
+        MODAL_IDS.forEach((id) => {
+            if (document.getElementById(id).classList.contains('active')) closeModal(id);
+        });
     });
 }
 
@@ -82,7 +120,7 @@ function initLoginForm() {
             const data = await apiJson('/auth/login', { method: 'POST', body: { email, password } });
             setSuperadminToken(data.token);
             const me = await adminApiJson('/auth/me');
-            if (me.role !== 'superadmin') {
+            if (me.is_superadmin !== true) {
                 clearSuperadminToken();
                 throw new Error('This account does not have platform admin access.');
             }
@@ -136,6 +174,13 @@ function renderOrganizations() {
 
         const controls = document.createElement('div');
         controls.className = 'admin-org-card__actions';
+
+        const usersBtn = document.createElement('button');
+        usersBtn.type = 'button';
+        usersBtn.className = 'btn btn-secondary';
+        usersBtn.textContent = 'Users';
+        usersBtn.addEventListener('click', () => openUsersModal(org));
+        controls.appendChild(usersBtn);
 
         const integrationsBtn = document.createElement('button');
         integrationsBtn.type = 'button';
@@ -205,6 +250,50 @@ function initCreateOrgModal() {
             submitBtn.disabled = false;
         }
     });
+}
+
+function initUsersModal() {
+    document.getElementById('adminUsersModalClose').addEventListener('click', () => closeModal('adminUsersModal'));
+}
+
+async function openUsersModal(org) {
+    document.getElementById('adminUsersOrgName').textContent = org.name;
+    const list = document.getElementById('adminUsersList');
+    const loadingEl = document.getElementById('adminUsersLoading');
+    const emptyEl = document.getElementById('adminUsersEmpty');
+    list.innerHTML = '';
+    emptyEl.style.display = 'none';
+    loadingEl.style.display = '';
+    loadingEl.textContent = 'Loading users…';
+    openModal('adminUsersModal');
+
+    try {
+        const users = await adminApiJson(`/admin/organizations/${org.id}/users`);
+        loadingEl.style.display = 'none';
+        if (!users.length) {
+            emptyEl.style.display = '';
+            return;
+        }
+        users.forEach((user) => {
+            const row = document.createElement('div');
+            row.className = 'settings-user-row' + (user.is_active ? '' : ' settings-user-row--inactive');
+
+            const email = document.createElement('span');
+            email.className = 'settings-user-row__email';
+            email.textContent = user.email;
+            row.appendChild(email);
+
+            const role = document.createElement('span');
+            role.className = 'settings-user-row__controls';
+            role.textContent = user.role === 'admin' ? 'Admin' : 'Staff';
+            row.appendChild(role);
+
+            list.appendChild(row);
+        });
+    } catch (ex) {
+        loadingEl.style.display = 'none';
+        showToast(ex.message || 'Failed to load users', 'error');
+    }
 }
 
 const INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED = 'Configured — leave blank to keep it';
@@ -285,6 +374,7 @@ async function viewAsOrganization(org, triggerBtn) {
     triggerBtn.disabled = true;
     try {
         const data = await adminApiJson(`/admin/organizations/${org.id}/impersonate`, { method: 'POST' });
+        rememberLastUsedOrg(org.id);
         window.open(`index.html#impersonate=${encodeURIComponent(data.token)}`, '_blank');
     } catch (ex) {
         showToast(ex.message || 'Could not view as organization', 'error');
@@ -294,16 +384,18 @@ async function viewAsOrganization(org, triggerBtn) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    initThemeToggle();
     initLoginForm();
     initLogoutButton();
     initCreateOrgModal();
+    initUsersModal();
     initIntegrationsModal();
     initModalDismissal();
 
     if (getSuperadminToken()) {
         try {
             const me = await adminApiJson('/auth/me');
-            if (me.role === 'superadmin') {
+            if (me.is_superadmin === true) {
                 showPortal();
                 await loadOrganizations();
                 return;

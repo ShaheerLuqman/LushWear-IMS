@@ -58,7 +58,9 @@ def make_client():
         # role="admin" so users.router's require_role("admin") gate (which wraps
         # require_auth) passes by default too; tests exercising the 403 case
         # override this further with their own dependency_overrides[require_auth].
-        main.app.dependency_overrides[require_auth] = lambda: {"sub": "test", "org_id": "test-org", "role": "admin"}
+        main.app.dependency_overrides[require_auth] = lambda: {
+            "sub": "test", "org_id": "test-org", "role": "admin", "is_superadmin": False,
+        }
 
         import app.routes.orders as orders
         import app.routes.products as products
@@ -69,8 +71,12 @@ def make_client():
         import app.routes.admin_portal as admin_portal
         import app.services.shopify_sync as shopify_sync
         import app.org_settings as org_settings
+        import app.memberships as memberships
 
-        patched = [orders, products, cashbook, ledger, auth_routes, users, admin_portal, shopify_sync, org_settings, main]
+        patched = [
+            orders, products, cashbook, ledger, auth_routes, users, admin_portal,
+            shopify_sync, org_settings, memberships, main,
+        ]
         originals = [m.get_supabase for m in patched]
         for m in patched:
             m.get_supabase = lambda _f=fake: _f
