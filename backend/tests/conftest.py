@@ -91,6 +91,7 @@ def make_client():
         import app.routes.cashbook as cashbook
         import app.routes.ledger as ledger
         import app.routes.journal as journal
+        import app.routes.bills as bills
         import app.routes.auth as auth_routes
         import app.routes.users as users
         import app.routes.admin_portal as admin_portal
@@ -100,7 +101,7 @@ def make_client():
         import app.features as features
 
         patched = [
-            orders, products, cashbook, ledger, journal, auth_routes, users, admin_portal,
+            orders, products, cashbook, ledger, journal, bills, auth_routes, users, admin_portal,
             shopify_sync, org_settings, memberships, features, main,
         ]
         originals = [m.get_supabase for m in patched]

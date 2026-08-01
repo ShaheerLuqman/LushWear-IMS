@@ -504,20 +504,68 @@ implicit cash pot is a different account from any user-made ledger called
 "Cash" — that one has entries posted against it as a folio, and merging the two
 would double-count every one of them.
 
-### Phase 2 — Contacts + Purchase Bills (AP)
+### Phase 2 — Purchase Bills (AP)
 
-- [ ] **`contacts`** — customer / supplier / both, address, tax number, payment
-      terms, opening balance (posted as a journal entry, not a loose column).
-- [ ] **`bills`** + **`bill_items`** — following Akaunting's `documents` shape;
-      status workflow, due date, number series, attachment, PDF.
-- [ ] **Payments against a bill** — partial payments supported.
+**Decision: no `contacts` table — a supplier IS a ledger.** The plan originally
+copied Akaunting's `contacts`, but Akaunting needs it because its core has no
+general ledger: the contact row is its only record of who a party is and what
+they owe. Since Phase 1 there is a real general ledger, so a supplier is already
+an account carrying a real balance. That is the Tally model (party ledgers
+grouped under Sundry Creditors), it is mainstream practice in this region, and
+it is how this app has always worked — the original schema described ledgers as
+"suppliers, customers, expense heads", with legacy types `Payable Vendors` /
+`Receivable Vendors`.
+
+Consequences of that decision, all simplifications:
+
+- **No Accounts Payable control account.** The sum of the Liability-nature party
+  ledgers *is* accounts payable. This removes a control-vs-subsidiary
+  reconciliation that would otherwise have to be maintained forever, and
+  supersedes the Phase 1 handoff note that said Phase 2 must seed
+  `accounts_payable`. It does not: it seeds `inventory` and `tax_on_purchases`.
+- **No separate supplier statement.** The supplier's ledger statement already is
+  one, and it now reads from the journal.
+- **Party attributes live on `ledgers`** (phone, email, address, tax number,
+  payment terms) rather than in their own table.
+- **`parent_id` stops being speculative** — it is how party ledgers group under a
+  "Sundry Creditors" heading.
+
+When this would need revisiting: a few hundred suppliers (the trial balance
+would fill with party accounts and want a control account), or one entity traded
+with as both customer and supplier. Both are recoverable later — a contacts
+table can be layered over existing party ledgers without redoing the bills or
+the journal, because the accounting lives in the ledger either way. AP ageing is
+*not* a reason: it comes from bill due dates, not from a party record.
+
+- [ ] **Party fields on `ledgers`** — `is_party`, phone, email, address,
+      `tax_number`, `payment_terms_days`.
+- [ ] **`bills`** + **`bill_items`** — status workflow, due date, number series.
+      **No per-line account.** Every line is stock and posts to Inventory; a
+      bill exists to record what is *owed*, not to categorise spending. Anything
+      paid on the spot (ads, rent, packaging) stays a cashbook entry against its
+      expense ledger, which is fewer steps and already worked. This also drops
+      the `tax_on_purchases`-style temptation to route arbitrary costs through
+      bills.
+- [ ] **Payments against a bill** — partial payments supported. Payments are
+      recorded as **cashbook entries**, not as direct journal postings: the
+      cashbook's `closing_balance` is computed from `cashbook_entries` alone, so
+      a payment that bypassed it would make Cash In Hand disagree with the Cash
+      account's journal balance.
 - [ ] **Posting rules:**
-      - On bill submit: `Dr Inventory / Expense`, `Cr Accounts Payable`
-      - On payment: `Dr Accounts Payable`, `Cr Cash / Bank`
+      - On receive: `Dr Inventory` for the subtotal, `Dr Tax on Purchases`,
+        `Cr <supplier ledger>` for the total
+      - On payment: `Dr <supplier ledger>`, `Cr Cash` (via the cashbook)
 - [ ] **Link bill lines to `products` / `variants`** — receiving stock updates
       quantity and cost price. This is where the IMS half of the app starts
       paying for the accounting half.
-- [ ] **AP Ageing report**, **Supplier statement**.
+- [ ] **Payment status is derived, never stored** — a bill's paid/partially-paid
+      state is computed from its allocations, so stored status and payments can
+      never disagree. Only `draft` / `received` / `cancelled` are stored.
+- [ ] **AP Ageing report**.
+
+Deferred from this phase, and why: **attachments** (needs a Supabase storage
+bucket, which is not configured) and **bill PDFs** (the PDF service exists but a
+bill template is its own piece of work, and nothing downstream needs it yet).
 
 ### Phase 3 — Sales invoices (AR) + posting Shopify orders
 

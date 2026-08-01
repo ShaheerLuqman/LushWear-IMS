@@ -239,6 +239,16 @@ class LedgerBase(BaseModel):
     report_category: Optional[ReportCategory] = None
     # At most one per org (DB-enforced): the ledger order advances post to.
     is_orders_ledger: bool = False
+    # Party fields (Phase 2). A supplier is a ledger rather than a separate
+    # contact, so these live here; they stay empty on non-party accounts like
+    # Rent or Sales. is_party is what the bill supplier picker filters on.
+    is_party: bool = False
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    tax_number: Optional[str] = None
+    # Drives the default due date on a new bill; None = due on receipt.
+    payment_terms_days: Optional[int] = Field(default=None, ge=0)
     # Seeded once at ledger creation; folded into ledger_balances by the
     # recalc_ledger_balance DB trigger so `balance` starts from this instead
     # of 0. Rare to change after creation, but editable (see LedgerUpdate).
@@ -254,6 +264,12 @@ class LedgerUpdate(BaseModel):
     opening_balance: Optional[float] = None
     report_category: Optional[ReportCategory] = None
     is_orders_ledger: Optional[bool] = None
+    is_party: Optional[bool] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+    address: Optional[str] = None
+    tax_number: Optional[str] = None
+    payment_terms_days: Optional[int] = Field(default=None, ge=0)
 
 class Ledger(LedgerBase):
     id: str
@@ -359,6 +375,99 @@ class TrialBalance(BaseModel):
     total_debit: float
     total_credit: float
     balanced: bool
+
+# ==================== PURCHASE BILL MODELS ====================
+# Accounts payable (FINANCE_ACCOUNTING_PLAN.md Phase 2). A supplier is a ledger,
+# not a separate contact — so `supplier_id` is a ledgers.id and the supplier's
+# own account is what a bill credits. There is no Accounts Payable control
+# account.
+
+# Stored status only. Paid / partially paid is derived from the allocations by
+# the bills_with_paid view, so the two can never disagree.
+BillStatus = Literal["draft", "received", "cancelled"]
+
+class BillItemInput(BaseModel):
+    # No per-line account: every line is stock and posts to the org's Inventory
+    # account. Anything paid on the spot (ads, rent, packaging) belongs in the
+    # cashbook against its expense ledger, not on a bill.
+    quantity: float = Field(gt=0)
+    unit_cost: float = Field(ge=0)
+    description: Optional[str] = None
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+
+    @property
+    def amount(self) -> float:
+        return round(self.quantity * self.unit_cost, 2)
+
+class BillItem(BaseModel):
+    id: str
+    quantity: float
+    unit_cost: float
+    amount: float
+    description: Optional[str] = None
+    product_id: Optional[str] = None
+    variant_id: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class BillBase(BaseModel):
+    supplier_id: NonBlankStr
+    bill_date: date
+    due_date: Optional[date] = None
+    supplier_ref: Optional[str] = None
+    tax_amount: float = Field(default=0.0, ge=0)
+    notes: Optional[str] = None
+
+class BillCreate(BillBase):
+    items: List[BillItemInput]
+
+    @model_validator(mode="after")
+    def _needs_lines(self):
+        if not self.items:
+            raise ValueError("a bill needs at least one line")
+        return self
+
+class BillUpdate(BaseModel):
+    supplier_id: Optional[str] = None
+    bill_date: Optional[date] = None
+    due_date: Optional[date] = None
+    supplier_ref: Optional[str] = None
+    tax_amount: Optional[float] = Field(default=None, ge=0)
+    notes: Optional[str] = None
+    # Replaces the whole line set when present — a bill's lines are edited as a
+    # unit, and diffing them per row would buy nothing on a draft.
+    items: Optional[List[BillItemInput]] = None
+
+class Bill(BillBase):
+    id: str
+    bill_number: str
+    status: BillStatus
+    subtotal: float = 0.0
+    total: float = 0.0
+    # From bills_with_paid, which derives settlement from the supplier's ledger
+    # balance applied oldest-bill-first — payments are plain cashbook entries and
+    # are never allocated to a bill. payment_status is the stored status while a
+    # bill is draft/cancelled, and unpaid/partially_paid/paid once received.
+    paid_amount: float = 0.0
+    outstanding: float = 0.0
+    payment_status: Optional[str] = None
+    stock_applied: bool = False
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    items: List[BillItem] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+class ApAgeingRow(BaseModel):
+    supplier_id: str
+    supplier_name: str
+    outstanding: float = 0.0
+    not_due: float = 0.0
+    d1_30: float = 0.0
+    d31_60: float = 0.0
+    d61_90: float = 0.0
+    d90_plus: float = 0.0
 
 # ==================== ORGANIZATION / USER / AUTH MODELS ====================
 

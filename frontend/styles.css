@@ -1265,6 +1265,23 @@ body:has(#ledgersView.active) .content-area {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
 }
 
+/* No spinner arrows on number inputs. Every numeric field in this app is money
+   or a quantity that gets typed, never nudged one unit at a time, and the
+   arrows also swallow horizontal space in the bill line grid. Applied globally
+   so the fields sitting side by side in one modal can't disagree.
+   Scroll-wheel-over-a-focused-field can no longer change a value either, which
+   is a quiet source of wrong amounts. */
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+input[type="number"] {
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
 .form-group textarea {
     resize: vertical;
     min-height: 80px;
@@ -3038,6 +3055,67 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
+/* Fields that sit outside a .form-group.
+   `.form-input` is only a marker class and carries no rules of its own — all
+   field styling comes from `.form-group input/select`. These controls live in
+   filter bars and in the bill line grid, where a .form-group wrapper would
+   break the layout, so they need the same treatment applied directly. */
+.trial-balance-bar .form-input,
+.bill-line .form-input,
+.bill-tax-input {
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 14px;
+    transition: var(--transition);
+    /* Grid tracks would otherwise be forced wider than their column by the
+       input's default intrinsic width. */
+    min-width: 0;
+}
+
+.trial-balance-bar .form-input::placeholder,
+.bill-line .form-input::placeholder {
+    color: var(--text-muted);
+}
+
+.trial-balance-bar .form-input:focus,
+.bill-line .form-input:focus,
+.bill-tax-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Same themed chevron as .form-group select: the native arrow is drawn by the
+   OS and ignores the field's background, so it disappears on dark. */
+.trial-balance-bar select.form-input,
+.bill-line select.form-input {
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+    padding-right: 32px;
+}
+
+:root[data-theme="dark"] .trial-balance-bar select.form-input,
+:root[data-theme="dark"] .bill-line select.form-input {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+}
+
+/* Date and number inputs render native sub-widgets (calendar icon, spinners)
+   that the browser paints from the page's colour scheme, not from our
+   variables — without this they come out dark-on-dark in the dark theme. This
+   is the app's first use of <input type="date">, so it hasn't come up before. */
+:root[data-theme="dark"] {
+    color-scheme: dark;
+}
+
 /* Trial Balance */
 .trial-balance-container {
     display: flex;
@@ -3079,10 +3157,124 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 
-#trialBalanceGrid {
+#trialBalanceGrid,
+#billsGrid,
+#apAgeingGrid {
     flex: 1;
     min-height: 0;
     width: 100%;
+}
+
+/* Purchase bills */
+.bill-modal-content {
+    max-width: 900px;
+    width: 95%;
+}
+
+.bill-form-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.bill-lines-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin: 8px 0 4px;
+}
+
+/* Column widths are shared with .bill-line so the header lines up with the
+   rows; the last track is the remove button. */
+.bill-lines-header,
+.bill-line {
+    display: grid;
+    grid-template-columns: minmax(160px, 1fr) 90px 110px 110px 32px;
+    gap: 8px;
+    align-items: center;
+}
+
+.bill-lines-header {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-muted);
+}
+
+.bill-line + .bill-line {
+    margin-top: 6px;
+}
+
+.bill-line-amount {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.bill-line-remove {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1.3rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+}
+
+.bill-line-remove:hover {
+    color: var(--danger);
+}
+
+.bill-totals {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: flex-end;
+    margin: 10px 0;
+}
+
+.bill-total-line {
+    display: grid;
+    grid-template-columns: 120px 130px;
+    gap: 10px;
+    align-items: center;
+    text-align: right;
+}
+
+.bill-total-line span:last-child {
+    font-variant-numeric: tabular-nums;
+}
+
+.bill-tax-input {
+    text-align: right;
+}
+
+.bill-total-grand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    border-top: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+    padding-top: 6px;
+}
+
+.bill-action-btn + .bill-action-btn {
+    margin-left: 6px;
+}
+
+.bill-status {
+    font-weight: 600;
+}
+
+.bill-status-paid {
+    color: var(--success);
+}
+
+.bill-status-partially_paid,
+.bill-status-unpaid {
+    color: var(--warning);
+}
+
+.bill-status-cancelled {
+    color: var(--text-muted);
+    text-decoration: line-through;
 }
 
 .ledger-cards {

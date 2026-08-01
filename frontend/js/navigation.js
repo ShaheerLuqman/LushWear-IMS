@@ -249,6 +249,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         'ledgers': 'Ledgers',
         'ledgerDetail': 'Ledger',
         'trialBalance': 'Trial Balance',
+        'bills': 'Purchase Bills',
+        'apAgeing': 'Payables Ageing',
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
@@ -312,6 +314,18 @@ function switchView(viewName, { skipReload = false } = {}) {
         loadTrialBalance();
         setTimeout(() => {
             sizeGridColumns(trialBalanceGridApi);
+        }, 100);
+    } else if (viewName === 'bills') {
+        // Ledgers back the supplier column and the line-account picker, so they
+        // have to be loaded before the grid renders.
+        loadLedgersList().then(loadBills);
+        setTimeout(() => {
+            sizeGridColumns(billsGridApi);
+        }, 100);
+    } else if (viewName === 'apAgeing') {
+        loadApAgeing();
+        setTimeout(() => {
+            sizeGridColumns(apAgeingGridApi);
         }, 100);
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail

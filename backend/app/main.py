@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, journal, auth as auth_routes, users, org_settings, admin_portal
+from app.routes import products, orders, cashbook, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.features import require_feature
@@ -103,6 +103,7 @@ app.include_router(orders.router, prefix="/api", dependencies=_auth + [Depends(r
 app.include_router(cashbook.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(ledger.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(journal.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
+app.include_router(bills.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(users.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(require_role("admin"))])
 # admin_portal's routes carry mixed per-route dependencies (some superadmin-only,

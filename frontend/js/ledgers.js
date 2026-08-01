@@ -39,6 +39,14 @@ function applyLedgerBalancePatches(patches) {
 // carries a *negative* stored balance.
 const CREDIT_NORMAL_TYPES = ['Liability', 'Equity', 'Revenue'];
 
+// journal_entries.voucher_type, as shown on a ledger statement.
+const LEDGER_VOUCHER_LABELS = {
+    cashbook: 'Cashbook',
+    bill: 'Bill',
+    opening: 'Opening',
+    manual: 'Journal',
+};
+
 // Stored balances are Debit-positive, so the sign alone gives the side - no
 // per-Nature branch needed here. Shown as a positive number plus Dr/Cr rather
 // than a bare negative, so "Sales: -500,000" reads as "Sales: 500,000 Cr".
@@ -197,9 +205,47 @@ function renderLedgerCards() {
     });
 }
 
+// Party details (Phase 2). A supplier is a ledger rather than a separate
+// contact, so these live on the ledger form; they stay empty on ordinary
+// accounts like Rent or Sales.
+const LEDGER_PARTY_FIELDS = [
+    ['IsParty', 'is_party', 'checkbox'],
+    ['TaxNumber', 'tax_number', 'text'],
+    ['PaymentTerms', 'payment_terms_days', 'number'],
+    ['Phone', 'phone', 'text'],
+    ['Email', 'email', 'text'],
+    ['Address', 'address', 'text'],
+];
+
+function readLedgerPartyFields(prefix) {
+    const body = {};
+    LEDGER_PARTY_FIELDS.forEach(([suffix, key, kind]) => {
+        const el = document.getElementById(`${prefix}Ledger${suffix}`);
+        if (!el) return;
+        if (kind === 'checkbox') {
+            body[key] = el.checked;
+        } else if (kind === 'number') {
+            const value = parseInt(el.value, 10);
+            body[key] = Number.isNaN(value) ? null : value;
+        } else {
+            body[key] = el.value.trim() || null;
+        }
+    });
+    return body;
+}
+
+function fillLedgerPartyFields(prefix, ledger) {
+    LEDGER_PARTY_FIELDS.forEach(([suffix, key, kind]) => {
+        const el = document.getElementById(`${prefix}Ledger${suffix}`);
+        if (!el) return;
+        if (kind === 'checkbox') el.checked = !!(ledger && ledger[key]);
+        else el.value = (ledger && ledger[key] != null) ? ledger[key] : '';
+    });
+}
+
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger) {
+async function createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger, partyFields) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -213,7 +259,8 @@ async function createLedger(name, type, includeInCashInHand, openingBalance, rep
                 include_in_cash_in_hand: !!includeInCashInHand,
                 opening_balance: openingBalance || 0,
                 report_category: reportCategory || null,
-                is_orders_ledger: !!isOrdersLedger
+                is_orders_ledger: !!isOrdersLedger,
+                ...(partyFields || {})
             },
             fallback: 'Failed to create ledger'
         });
@@ -236,6 +283,7 @@ function openCreateLedgerModal(onCreated) {
     document.getElementById('createLedgerReportCategory').value = '';
     document.getElementById('createLedgerCashInHand').checked = false;
     document.getElementById('createLedgerIsOrdersLedger').checked = false;
+    fillLedgerPartyFields('create', null);
     document.getElementById('createLedgerModal').classList.add('active');
 }
 
@@ -274,6 +322,7 @@ async function openEditLedgerModal(ledgerId) {
         if (reportCategorySelect) reportCategorySelect.value = ledger.report_category || '';
         const isOrdersLedgerCheckbox = document.getElementById('editLedgerIsOrdersLedger');
         if (isOrdersLedgerCheckbox) isOrdersLedgerCheckbox.checked = !!ledger.is_orders_ledger;
+        fillLedgerPartyFields('edit', ledger);
 
         const deleteBtn = document.getElementById('editLedgerDeleteBtn');
         const deleteWrap = document.getElementById('editLedgerDeleteWrap');
@@ -317,7 +366,13 @@ async function saveEditLedger() {
     }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
     if (!confirmed) return;
-    const body = { name, type, include_in_cash_in_hand: includeInCashInHand, report_category: reportCategory || null, is_orders_ledger: isOrdersLedger };
+    const body = {
+        name, type,
+        include_in_cash_in_hand: includeInCashInHand,
+        report_category: reportCategory || null,
+        is_orders_ledger: isOrdersLedger,
+        ...readLedgerPartyFields('edit'),
+    };
     if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
     try {
         await apiJson(`/ledgers/${editLedgerId}`, {
@@ -401,29 +456,16 @@ async function loadLedgerEntries(ledgerId) {
 function renderLedgerDetailGrid() {
     if (!ledgerDetailGridApi) return;
 
-    // Compute running balance
-    const sorted = [...ledgerEntries].sort((a, b) => {
-        const dateA = a.entry_date || '';
-        const dateB = b.entry_date || '';
-        if (dateA !== dateB) return dateA.localeCompare(dateB);
-        return String(a.created_at || '').localeCompare(String(b.created_at || ''));
-    });
-
     // New Balance = Previous Balance + Debit - Credit, the same for every ledger
     // regardless of Nature (see recalc_ledger_balance in supabase_schema.sql).
-    // opening_balance follows that convention directly: positive is a Debit
-    // amount, negative is a Credit amount.
-    const openingBalance = parseFloat(currentLedger?.opening_balance) || 0;
-    const openingRow = openingBalance ? [{
-        id: 'opening-balance',
-        entry_date: '',
-        particulars: 'Opening Balance',
-        debit: openingBalance > 0 ? openingBalance : 0,
-        credit: openingBalance < 0 ? -openingBalance : 0,
-    }] : [];
-
+    //
+    // No synthetic opening-balance row: since Phase 1 the opening balance is a
+    // real journal line posted against Opening Balance Equity, so it arrives in
+    // the statement like any other row and adding one here would double it.
+    // The rows are already ordered by the get_ledger_statement RPC, which breaks
+    // same-date ties by posting time so the running balance is stable.
     let running = 0;
-    const rowsWithBalance = [...openingRow, ...sorted].map(entry => {
+    const rowsWithBalance = ledgerEntries.map(entry => {
         const debit = parseFloat(entry.debit) || 0;
         const credit = parseFloat(entry.credit) || 0;
         running += debit - credit;
@@ -435,12 +477,12 @@ function renderLedgerDetailGrid() {
         };
     });
 
-    // Ledger entries are now read-only (derived from cashbook entries)
+    // Read-only: every row is a posted journal line, corrected by posting again
+    // rather than by editing history in place.
     ledgerDetailGridApi.setGridOption('rowData', rowsWithBalance);
     // The Balance column's cellStyle also depends on currentLedger.type, which AG
     // Grid can't see as a dependency. With getRowId in play, setting rowData updates
-    // matching rows (e.g. the synthetic 'opening-balance' id, reused across every
-    // ledger) in place rather than rebuilding them, so cellStyle isn't guaranteed to
+    // matching rows in place rather than rebuilding them, so cellStyle isn't guaranteed to
     // re-run just from the row data change — force it.
     ledgerDetailGridApi.refreshCells({ force: true });
 }
@@ -470,7 +512,8 @@ function initLedgerModals() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger);
+            createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger,
+                readLedgerPartyFields('create'));
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);
@@ -528,6 +571,15 @@ function initLedgerDetailGrid() {
             field: 'particulars',
             flex: 2,
             editable: false,
+        },
+        {
+            headerName: 'Type',
+            field: 'voucher_type',
+            width: 110,
+            editable: false,
+            // What put this line on the account: a cashbook entry, a purchase
+            // bill, the opening balance, or a hand-written journal entry.
+            valueFormatter: (params) => LEDGER_VOUCHER_LABELS[params.value] || params.value || '',
         },
         {
             headerName: 'Debit (Rs)',

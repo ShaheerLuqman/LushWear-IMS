@@ -168,9 +168,17 @@
                             <span class="nav-icon">📚</span>
                             <span class="nav-tooltip">Ledgers</span>
                         </button>
+                        <button class="nav-item" data-view="bills" title="Purchase Bills">
+                            <span class="nav-icon">🧾</span>
+                            <span class="nav-tooltip">Purchase Bills</span>
+                        </button>
                         <button class="nav-item" data-view="trialBalance" title="Trial Balance">
                             <span class="nav-icon">⚖️</span>
                             <span class="nav-tooltip">Trial Balance</span>
+                        </button>
+                        <button class="nav-item" data-view="apAgeing" title="Payables Ageing">
+                            <span class="nav-icon">⏳</span>
+                            <span class="nav-tooltip">Payables Ageing</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
@@ -354,6 +362,107 @@
                     </div>
                 </div>
 
+                <div id="billsView" class="view">
+                    <div class="trial-balance-container">
+                        <div class="trial-balance-bar">
+                            <button id="createBillBtn" class="btn btn-primary">New Bill</button>
+                            <select id="billsStatusFilter" class="form-input trial-balance-date">
+                                <option value="">All statuses</option>
+                                <option value="draft">Draft</option>
+                                <option value="received">Received</option>
+                                <option value="cancelled">Cancelled</option>
+                            </select>
+                        </div>
+                        <div id="billsGrid" class="ag-theme-alpine grid-container"></div>
+                    </div>
+                </div>
+
+                <div id="apAgeingView" class="view">
+                    <div class="trial-balance-container">
+                        <div class="trial-balance-bar">
+                            <label for="apAgeingAsOf">As at</label>
+                            <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
+                            <span id="apAgeingTotal" class="trial-balance-status"></span>
+                        </div>
+                        <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
+                    </div>
+                </div>
+
+                <!-- Create / edit purchase bill -->
+                <div id="billModal" class="modal">
+                    <div class="modal-content bill-modal-content">
+                        <div class="modal-header">
+                            <h2 id="billModalTitle">New Bill</h2>
+                            <button type="button" class="modal-close" id="closeBillModal" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="billForm" class="ledger-form" autocomplete="off">
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="billSupplier">Supplier *</label>
+                                        <select id="billSupplier" class="form-input" required>
+                                            <option value="">Select supplier...</option>
+                                        </select>
+                                        <span class="form-hint">Party ledgers. Mark a ledger as a party in Edit Ledger.</span>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="billSupplierRef">Supplier's bill #</label>
+                                        <input type="text" id="billSupplierRef" class="form-input" placeholder="e.g. INV-2291">
+                                    </div>
+                                </div>
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="billDate">Bill date *</label>
+                                        <input type="date" id="billDate" class="form-input" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="billDueDate">Due date</label>
+                                        <input type="date" id="billDueDate" class="form-input">
+                                        <span class="form-hint">Defaults from the supplier's payment terms.</span>
+                                    </div>
+                                </div>
+
+                                <div class="bill-lines-wrap">
+                                    <div class="bill-lines-header">
+                                        <span>Description</span>
+                                        <span>Qty</span>
+                                        <span>Unit cost</span>
+                                        <span>Amount</span>
+                                        <span></span>
+                                    </div>
+                                    <div id="billLines"></div>
+                                    <button type="button" id="addBillLineBtn" class="btn btn-secondary btn-sm">Add line</button>
+                                </div>
+
+                                <div class="bill-totals">
+                                    <div class="bill-total-line">
+                                        <span>Subtotal</span>
+                                        <span id="billSubtotal">0.00</span>
+                                    </div>
+                                    <div class="bill-total-line">
+                                        <label for="billTax">Tax</label>
+                                        <input type="number" id="billTax" class="form-input bill-tax-input" step="0.01" min="0" value="0">
+                                    </div>
+                                    <div class="bill-total-line bill-total-grand">
+                                        <span>Total</span>
+                                        <span id="billTotal">0.00</span>
+                                    </div>
+                                </div>
+
+                                <div class="form-group">
+                                    <label for="billNotes">Notes</label>
+                                    <input type="text" id="billNotes" class="form-input">
+                                </div>
+
+                                <div class="modal-actions form-actions">
+                                    <button type="button" id="billCancelBtn" class="btn btn-secondary">Cancel</button>
+                                    <button type="submit" class="btn btn-primary">Save draft</button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
                 <!-- Create Ledger Modal -->
                 <div id="createLedgerModal" class="modal">
                     <div class="modal-content">
@@ -401,6 +510,34 @@
                                     <input type="checkbox" id="createLedgerIsOrdersLedger">
                                     <span>Orders ledger (order advances post here)</span>
                                 </label>
+                                <label class="ledger-form-toggle">
+                                    <input type="checkbox" id="createLedgerIsParty">
+                                    <span>Party (supplier or customer)</span>
+                                </label>
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="createLedgerTaxNumber">Tax number (NTN)</label>
+                                        <input type="text" id="createLedgerTaxNumber" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="createLedgerPaymentTerms">Payment terms (days)</label>
+                                        <input type="number" id="createLedgerPaymentTerms" class="form-input" min="0" step="1" placeholder="e.g. 30">
+                                    </div>
+                                </div>
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="createLedgerPhone">Phone</label>
+                                        <input type="text" id="createLedgerPhone" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="createLedgerEmail">Email</label>
+                                        <input type="text" id="createLedgerEmail" class="form-input">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="createLedgerAddress">Address</label>
+                                    <input type="text" id="createLedgerAddress" class="form-input">
+                                </div>
                                 <div class="modal-actions form-actions">
                                     <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
                                     <button type="submit" class="btn btn-primary">Create</button>
@@ -561,6 +698,34 @@
                                     <input type="checkbox" id="editLedgerIsOrdersLedger">
                                     <span>Orders ledger (order advances post here)</span>
                                 </label>
+                                <label class="ledger-form-toggle">
+                                    <input type="checkbox" id="editLedgerIsParty">
+                                    <span>Party (supplier or customer)</span>
+                                </label>
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="editLedgerTaxNumber">Tax number (NTN)</label>
+                                        <input type="text" id="editLedgerTaxNumber" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="editLedgerPaymentTerms">Payment terms (days)</label>
+                                        <input type="number" id="editLedgerPaymentTerms" class="form-input" min="0" step="1" placeholder="e.g. 30">
+                                    </div>
+                                </div>
+                                <div class="bill-form-row">
+                                    <div class="form-group">
+                                        <label for="editLedgerPhone">Phone</label>
+                                        <input type="text" id="editLedgerPhone" class="form-input">
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="editLedgerEmail">Email</label>
+                                        <input type="text" id="editLedgerEmail" class="form-input">
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="editLedgerAddress">Address</label>
+                                    <input type="text" id="editLedgerAddress" class="form-input">
+                                </div>
                                 <div class="modal-actions form-actions edit-ledger-actions">
                                     <span id="editLedgerDeleteWrap" class="ledger-edit-delete-wrap" title="">
                                         <button type="button" class="btn btn-danger ledger-edit-delete-btn" id="editLedgerDeleteBtn">Delete</button>
@@ -1046,6 +1211,7 @@
     <script src="js/cashbook.js"></script>
     <script src="js/ledgers.js"></script>
     <script src="js/trial-balance.js"></script>
+    <script src="js/bills.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/delivery-status.js"></script>

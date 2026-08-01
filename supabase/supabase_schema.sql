@@ -1000,6 +1000,42 @@ BEGIN
 END;
 $$;
 
+-- The ledger statement reads the journal, not cashbook_entries: a received bill
+-- or a manual journal entry moves an account's balance, so it has to appear as a
+-- row explaining why. See
+-- supabase/migrations/20260801130000_ledger_statement_from_journal.sql.
+CREATE OR REPLACE FUNCTION get_ledger_statement(p_org_id UUID, p_ledger_id UUID)
+RETURNS TABLE(
+    id           UUID,
+    entry_date   DATE,
+    particulars  TEXT,
+    debit        NUMERIC,
+    credit       NUMERIC,
+    voucher_type VARCHAR,
+    source_type  VARCHAR
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT jl.id,
+           je.entry_date,
+           -- The line's own description is the specific one ("Bill BILL-0001");
+           -- the entry narration is the fallback for lines posted without one.
+           COALESCE(NULLIF(jl.description, ''), je.narration, '') AS particulars,
+           jl.debit,
+           jl.credit,
+           je.voucher_type,
+           je.source_type
+      FROM journal_lines jl
+      JOIN journal_entries je ON je.id = jl.journal_id
+     WHERE jl.org_id = p_org_id
+       AND jl.account_id = p_ledger_id
+     -- created_at breaks ties within a date so the running balance is stable
+     -- across reloads; the opening entry is dated a day earlier and sorts first.
+     ORDER BY je.entry_date, je.created_at, jl.created_at;
+$$;
+
+
 -- Trial balance as of a date. The two column totals being equal is the proof
 -- that the books balance - the control that did not exist before Phase 1
 -- (FINANCE_ACCOUNTING_PLAN.md A5). Accounts netting to exactly zero are
@@ -1465,6 +1501,406 @@ $$;
 
 
 -- ============================================================================
+-- Purchase bills (accounts payable) — FINANCE_ACCOUNTING_PLAN.md Phase 2
+-- ----------------------------------------------------------------------------
+-- A supplier is a LEDGER, not a row in a separate `contacts` table. Since the
+-- Phase 1 journal exists, a supplier account already carries a real balance, so
+-- the Liability-nature party ledgers collectively ARE accounts payable - there
+-- is no control account and no control-vs-subsidiary reconciliation, and the
+-- supplier statement is simply that ledger's statement.
+--
+-- Must stay after the Journal section: the seeding block calls
+-- ensure_system_ledger and receive_bill calls post_journal_entry.
+-- ============================================================================
+
+-- Phase 2, part 1: purchase bills (accounts payable). See
+-- FINANCE_ACCOUNTING_PLAN.md Phase 2.
+--
+-- A supplier is a LEDGER, not a row in a separate `contacts` table. Since the
+-- Phase 1 journal exists, a supplier account already carries a real balance, so
+-- the sum of the Liability-nature party ledgers *is* accounts payable - no
+-- control account, and no control-vs-subsidiary reconciliation to maintain.
+-- This also means the supplier statement is just that ledger's statement.
+
+-- ---------------------------------------------------------------------------
+-- Party attributes on ledgers
+-- ---------------------------------------------------------------------------
+-- Nullable and only meaningful on party accounts; a Rent or Sales ledger simply
+-- leaves them empty. is_party marks the accounts the bill supplier picker
+-- offers, so it doesn't list every expense head.
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_party           BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS phone              VARCHAR(50);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS email              VARCHAR(255);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS address            TEXT;
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS tax_number         VARCHAR(50);
+-- Drives the default due date on a new bill. NULL = due on receipt.
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
+    CONSTRAINT ledgers_payment_terms_days_check CHECK (payment_terms_days IS NULL OR payment_terms_days >= 0);
+
+-- Any ledger that already has bills posted against it is a party by definition.
+-- (No-op on first run - bills doesn't exist yet - but keeps a re-run honest.)
+
+-- ---------------------------------------------------------------------------
+-- bills
+-- ---------------------------------------------------------------------------
+-- Stored status is only draft/received/cancelled. Paid / partially paid is
+-- DERIVED from the supplier's ledger balance, applied to their bills
+-- oldest-first (see the bills_with_paid view below). Payments are ordinary
+-- cashbook entries against the supplier and are never allocated to a bill, so
+-- there is no stored payment status to drift out of step with reality.
+CREATE TABLE IF NOT EXISTS bills (
+    id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id        UUID NOT NULL REFERENCES organizations(id),
+    -- Our own sequence (BILL-0001). supplier_ref is the number printed on the
+    -- supplier's document, which is theirs to choose and is not unique to us.
+    bill_number   VARCHAR(30) NOT NULL,
+    supplier_ref  VARCHAR(100),
+    supplier_id   UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    bill_date     DATE NOT NULL,
+    due_date      DATE,
+    status        VARCHAR(20) NOT NULL DEFAULT 'draft'
+                  CONSTRAINT bills_status_check CHECK (status IN ('draft', 'received', 'cancelled')),
+    subtotal      DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
+    tax_amount    DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (tax_amount >= 0),
+    total         DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
+    notes         TEXT,
+    -- Whether this bill's lines have been added to variant stock. Guards the
+    -- receive/unreceive transition so stock can't be applied twice or reversed
+    -- for a bill that never applied it.
+    stock_applied BOOLEAN NOT NULL DEFAULT FALSE,
+    created_by    UUID REFERENCES users(id),
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT bills_org_id_bill_number_key UNIQUE (org_id, bill_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_bills_org_supplier ON bills (org_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_bills_org_status   ON bills (org_id, status);
+CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON bills (org_id, due_date);
+
+-- ---------------------------------------------------------------------------
+-- bill_items
+-- ---------------------------------------------------------------------------
+-- No per-line account: every line is stock, and receive_bill debits the org's
+-- Inventory account for the whole subtotal. A purchase bill here is always for
+-- goods - anything paid for on the spot (ads, rent, packaging) is a cashbook
+-- entry against its expense ledger, which is fewer steps and already works.
+-- Bills exist to record what is OWED, not to categorise spending.
+CREATE TABLE IF NOT EXISTS bill_items (
+    id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id      UUID NOT NULL REFERENCES organizations(id),
+    bill_id     UUID NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
+    -- Soft links, matching orders.line_items' convention: a product can be
+    -- deleted without destroying the purchase history that mentions it.
+    product_id  UUID,
+    variant_id  UUID,
+    description TEXT,
+    quantity    NUMERIC(12, 3) NOT NULL CHECK (quantity > 0),
+    unit_cost   DECIMAL(14, 2) NOT NULL CHECK (unit_cost >= 0),
+    amount      DECIMAL(14, 2) NOT NULL CHECK (amount >= 0),
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Removes the column from a database created before the account was dropped:
+-- CREATE TABLE IF NOT EXISTS above only runs on a fresh install.
+-- See supabase/migrations/20260801110000_bills_drop_line_account.sql.
+ALTER TABLE bill_items DROP COLUMN IF EXISTS account_id;
+
+CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items (bill_id);
+CREATE INDEX IF NOT EXISTS idx_bill_items_org_id  ON bill_items (org_id);
+CREATE INDEX IF NOT EXISTS idx_bill_items_variant ON bill_items (variant_id) WHERE variant_id IS NOT NULL;
+
+-- Phase 2, part 2: bill numbering, totals, posting, stock, and AP ageing.
+
+-- Seeds the two system accounts bills post to. Deliberately NOT accounts_payable
+-- (superseding the Phase 1 handoff note): the supplier's own ledger is credited,
+-- so the party ledgers collectively are accounts payable.
+DO $$
+DECLARE
+    org RECORD;
+BEGIN
+    FOR org IN SELECT id FROM organizations LOOP
+        PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
+        PERFORM ensure_system_ledger(org.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
+    END LOOP;
+END $$;
+
+-- Next BILL-nnnn for an org. Races are possible under concurrent creates; the
+-- UNIQUE (org_id, bill_number) constraint is what actually guarantees
+-- uniqueness, and this only has to be right in the ordinary single-user case.
+CREATE OR REPLACE FUNCTION next_bill_number(p_org_id UUID)
+RETURNS VARCHAR
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT 'BILL-' || LPAD(
+        (COALESCE(MAX(SUBSTRING(bill_number FROM 6)::INT), 0) + 1)::TEXT, 4, '0')
+      FROM bills
+     WHERE org_id = p_org_id AND bill_number ~ '^BILL-[0-9]+$';
+$$;
+
+-- Totals are derived from the lines, never trusted from the client.
+CREATE OR REPLACE FUNCTION recalc_bill_totals(p_bill_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_subtotal NUMERIC(14, 2);
+BEGIN
+    SELECT COALESCE(SUM(amount), 0) INTO v_subtotal
+      FROM bill_items WHERE bill_id = p_bill_id;
+
+    UPDATE bills
+       SET subtotal   = v_subtotal,
+           total      = v_subtotal + tax_amount,
+           updated_at = NOW()
+     WHERE id = p_bill_id;
+END;
+$$;
+
+-- Adds (p_sign = 1) or removes (p_sign = -1) this bill's stock.
+--
+-- Caveat worth knowing: receiving updates products.cost_price to the purchase
+-- cost, but un-receiving does NOT restore the previous cost - the old value was
+-- never recorded anywhere. Past orders are unaffected either way, since
+-- orders.cost_price is snapshotted at order time.
+CREATE OR REPLACE FUNCTION apply_bill_stock(p_bill_id UUID, p_sign INT)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- variants.quantity is INTEGER while a bill line can be fractional (fabric
+    -- by the metre), so the movement is rounded to whole units.
+    UPDATE variants v
+       SET quantity   = v.quantity + (p_sign * ROUND(agg.qty))::INT,
+           updated_at = NOW()
+      FROM (
+          SELECT variant_id, SUM(quantity) AS qty
+            FROM bill_items
+           WHERE bill_id = p_bill_id AND variant_id IS NOT NULL
+           GROUP BY variant_id
+      ) agg
+     WHERE v.id = agg.variant_id;
+
+    IF p_sign > 0 THEN
+        UPDATE products p
+           SET cost_price = agg.unit_cost,
+               updated_at = NOW()
+          FROM (
+              SELECT DISTINCT ON (product_id) product_id, unit_cost
+                FROM bill_items
+               WHERE bill_id = p_bill_id AND product_id IS NOT NULL
+               ORDER BY product_id, created_at DESC
+          ) agg
+         WHERE p.id = agg.product_id;
+    END IF;
+END;
+$$;
+
+-- Receive a bill: post it to the journal, add its stock, mark it received.
+-- Idempotent - receiving an already-received bill is a no-op rather than a
+-- second posting.
+CREATE OR REPLACE FUNCTION receive_bill(p_bill_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    b             RECORD;
+    v_inventory   UUID;
+    v_tax_account UUID;
+    v_lines       JSONB;
+BEGIN
+    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Bill % not found', p_bill_id;
+    END IF;
+    IF b.status = 'received' THEN
+        RETURN;
+    END IF;
+    IF b.status = 'cancelled' THEN
+        RAISE EXCEPTION 'Cannot receive a cancelled bill';
+    END IF;
+
+    PERFORM recalc_bill_totals(p_bill_id);
+    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+
+    IF b.total <= 0 THEN
+        RAISE EXCEPTION 'Bill % has nothing to post - add at least one line', b.bill_number;
+    END IF;
+
+    -- Every line is stock, so the whole subtotal is one Inventory debit.
+    v_inventory := ensure_system_ledger(b.org_id, 'inventory', 'Inventory', 'Asset', '1400');
+    v_lines := jsonb_build_array(jsonb_build_object(
+        'account_id', v_inventory,
+        'debit',      b.subtotal,
+        'credit',     0,
+        'description', 'Bill ' || b.bill_number));
+
+    IF b.tax_amount > 0 THEN
+        v_tax_account := ensure_system_ledger(
+            b.org_id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+            'account_id', v_tax_account,
+            'debit',      b.tax_amount,
+            'credit',     0,
+            'description', 'Tax on bill ' || b.bill_number));
+    END IF;
+
+    -- The supplier's own ledger is the credit side - there is no separate
+    -- Accounts Payable control account (FINANCE_ACCOUNTING_PLAN.md Phase 2).
+    v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+        'account_id', b.supplier_id,
+        'debit',      0,
+        'credit',     b.total,
+        'description', 'Bill ' || b.bill_number));
+
+    -- Defensive: post_journal_entry does not replace an existing entry for the
+    -- same source, and idx_journal_entries_source would reject a duplicate.
+    DELETE FROM journal_entries
+     WHERE org_id = b.org_id AND source_type = 'bill' AND source_id = p_bill_id;
+
+    PERFORM post_journal_entry(
+        b.org_id,
+        b.bill_date,
+        v_lines,
+        'Bill ' || b.bill_number || COALESCE(' (' || b.supplier_ref || ')', ''),
+        'bill',
+        b.created_by,
+        'bill',
+        b.id);
+
+    IF NOT b.stock_applied THEN
+        PERFORM apply_bill_stock(p_bill_id, 1);
+        UPDATE bills SET stock_applied = TRUE WHERE id = p_bill_id;
+    END IF;
+
+    UPDATE bills SET status = 'received', updated_at = NOW() WHERE id = p_bill_id;
+END;
+$$;
+
+-- Reopening only has to undo what receiving did. With settlement derived FIFO
+-- from the supplier's ledger there is no allocation that could be left
+-- dangling: removing the bill's credit moves the balance, and the report
+-- follows.
+CREATE OR REPLACE FUNCTION unreceive_bill(p_bill_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    b RECORD;
+BEGIN
+    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION 'Bill % not found', p_bill_id;
+    END IF;
+    IF b.status <> 'received' THEN
+        RETURN;
+    END IF;
+
+    DELETE FROM journal_entries
+     WHERE org_id = b.org_id AND source_type = 'bill' AND source_id = p_bill_id;
+
+    IF b.stock_applied THEN
+        PERFORM apply_bill_stock(p_bill_id, -1);
+        UPDATE bills SET stock_applied = FALSE WHERE id = p_bill_id;
+    END IF;
+
+    UPDATE bills SET status = 'draft', updated_at = NOW() WHERE id = p_bill_id;
+END;
+$$;
+
+-- Bills with settlement derived FIFO from the supplier's ledger balance.
+--
+-- `settled` is every debit on the supplier's account. On a party ledger those
+-- are payments. (An opening balance entered on the debit side would also count
+-- here - enter a supplier's opening balance as a credit, which is the normal
+-- direction for money owed.)
+--
+-- `prior` is the total of that supplier's earlier received bills, so each bill
+-- is settled only once everything before it has been.
+CREATE OR REPLACE VIEW bills_with_paid AS
+WITH settled AS (
+    SELECT account_id AS supplier_id,
+           COALESCE(SUM(debit), 0) AS amount
+      FROM journal_lines
+     GROUP BY account_id
+),
+received AS (
+    SELECT b.id,
+           b.supplier_id,
+           b.total,
+           COALESCE(SUM(b.total) OVER (
+               PARTITION BY b.supplier_id
+               ORDER BY b.bill_date, b.bill_number
+               ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
+           ), 0) AS prior
+      FROM bills b
+     WHERE b.status = 'received'
+),
+allocated AS (
+    SELECT r.id,
+           LEAST(r.total, GREATEST(COALESCE(s.amount, 0) - r.prior, 0)) AS paid
+      FROM received r
+      LEFT JOIN settled s ON s.supplier_id = r.supplier_id
+)
+SELECT b.*,
+       COALESCE(a.paid, 0) AS paid_amount,
+       -- A draft or cancelled bill is not a debt, so it has no outstanding.
+       CASE WHEN b.status = 'received'
+            THEN b.total - COALESCE(a.paid, 0)
+            ELSE 0
+       END AS outstanding,
+       CASE
+           WHEN b.status <> 'received'         THEN b.status
+           WHEN COALESCE(a.paid, 0) >= b.total THEN 'paid'
+           WHEN COALESCE(a.paid, 0) > 0        THEN 'partially_paid'
+           ELSE 'unpaid'
+       END AS payment_status
+  FROM bills b
+  LEFT JOIN allocated a ON a.id = b.id;
+
+-- Ageing now reads the view, so it inherits the same FIFO settlement.
+CREATE OR REPLACE FUNCTION get_ap_ageing(p_org_id UUID, p_as_of DATE)
+RETURNS TABLE(
+    supplier_id   UUID,
+    supplier_name VARCHAR,
+    outstanding   NUMERIC,
+    not_due       NUMERIC,
+    d1_30         NUMERIC,
+    d31_60        NUMERIC,
+    d61_90        NUMERIC,
+    d90_plus      NUMERIC
+)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH open_bills AS (
+        SELECT b.supplier_id,
+               b.outstanding,
+               -- No due date means due on receipt.
+               p_as_of - COALESCE(b.due_date, b.bill_date) AS days_overdue
+          FROM bills_with_paid b
+         WHERE b.org_id = p_org_id
+           AND b.status = 'received'
+           AND b.bill_date <= p_as_of
+           AND b.outstanding > 0
+    )
+    SELECT l.id,
+           l.name,
+           SUM(ob.outstanding),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue <= 0), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN  1 AND 30), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN 31 AND 60), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN 61 AND 90), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue > 90), 0)
+      FROM open_bills ob
+      JOIN ledgers l ON l.id = ob.supplier_id
+     GROUP BY l.id, l.name
+     ORDER BY l.name;
+$$;
+
+
+-- ============================================================================
 -- Journal backfill — MUST stay after recalc_ledger_balance is redefined above
 -- ----------------------------------------------------------------------------
 -- This file is documented as safe to re-run against an existing database, and
@@ -1546,3 +1982,5 @@ ALTER TABLE org_memberships          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_integration_settings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_entries          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE journal_lines            ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bills                    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bill_items               ENABLE ROW LEVEL SECURITY;

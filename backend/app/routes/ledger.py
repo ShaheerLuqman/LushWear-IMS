@@ -194,32 +194,31 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
 
 @router.get("/{ledger_id}/entries", response_model=List[dict])
 async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id)):
-    """Cashbook entries linked to this ledger (via folio), as ledger-format rows.
+    """This account's journal lines, as a statement.
 
-    entry_type is already the folio ledger's own side (see "THE TWO PERSPECTIVES"
-    in supabase_schema.sql), so it maps straight across here - no inversion. The
-    Cashbook screen is the one that reads these entries from cash's side."""
-    response = (
-        org_table(get_supabase(), org_id, "cashbook_entries")
-        .select("*")
-        .eq("folio", ledger_id)
-        .order("entry_date", desc=False)
-        .order("created_at", desc=False)
-        .execute()
-    )
+    Reads the journal rather than cashbook_entries, so everything that moves the
+    balance also explains itself: cashbook entries, purchase bills, manual
+    journal entries and the opening balance are all lines on the same account.
+    Reading cashbook_entries left a received bill changing the supplier's balance
+    with no row to account for it.
 
-    entries = []
-    for entry in response.data or []:
-        amount = float(entry.get("amount") or 0)
-        entry_type = entry.get("entry_type", "")
-        entries.append({
-            "id": entry["id"],
+    The opening balance arrives as a real line here (Phase 1 posts it against
+    Opening Balance Equity), so the statement must not synthesise another one."""
+    resp = get_supabase().rpc("get_ledger_statement", {
+        "p_org_id": org_id,
+        "p_ledger_id": ledger_id,
+    }).execute()
+
+    return [
+        {
+            "id": row["id"],
             "ledger_id": ledger_id,
-            "entry_date": entry["entry_date"],
-            "particulars": entry.get("description") or "",
-            "debit": amount if entry_type == "debit" else 0,
-            "credit": amount if entry_type == "credit" else 0,
-            "created_at": entry.get("created_at"),
-            "updated_at": entry.get("updated_at"),
-        })
-    return entries
+            "entry_date": row["entry_date"],
+            "particulars": row.get("particulars") or "",
+            "debit": float(row.get("debit") or 0),
+            "credit": float(row.get("credit") or 0),
+            "voucher_type": row.get("voucher_type"),
+            "source_type": row.get("source_type"),
+        }
+        for row in resp.data or []
+    ]

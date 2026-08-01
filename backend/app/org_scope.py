@@ -21,6 +21,12 @@ BUSINESS_TABLES = {
     "sync_status",
     "journal_entries",
     "journal_lines",
+    "bills",
+    "bill_items",
+    # A view, not a table (bills + derived paid/outstanding/payment_status), but
+    # it carries org_id and is read exactly like one, so it belongs behind the
+    # same chokepoint.
+    "bills_with_paid",
 }
 
 
