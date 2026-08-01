@@ -536,7 +536,8 @@ Consequences of that decision, all simplifications:
   ledgers *is* accounts payable. This removes a control-vs-subsidiary
   reconciliation that would otherwise have to be maintained forever, and
   supersedes the Phase 1 handoff note that said Phase 2 must seed
-  `accounts_payable`. It does not: it seeds `inventory` and `tax_on_purchases`.
+  `accounts_payable`. It does not: it seeds `inventory`, and creates
+  `tax_on_purchases` on the first bill that carries tax.
 - **No separate supplier statement.** The supplier's ledger statement already is
   one, and it now reads from the journal.
 - **Party attributes live on `ledgers`** (phone, email, address, tax number,

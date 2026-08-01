@@ -125,9 +125,9 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
     if payload.get("include_in_cash_in_hand") and _system_key(supabase, org_id, ledger_id) == "cash":
-        # Cash In Hand already counts this account once, via the cashbook's
-        # closing balance (getPhysicalCashInHand in ledgers.js) — including it
-        # again here would silently double the headline figure. Tempting to tick
+        # Cash In Hand already counts this account once, via its own balance
+        # (getPhysicalCashInHand in ledgers.js) — including it again here would
+        # silently double the headline figure. Tempting to tick
         # precisely because of the account's name, so it is blocked rather than
         # documented.
         raise HTTPException(

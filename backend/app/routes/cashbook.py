@@ -14,12 +14,13 @@ from app.models import (
     LedgerBalance,
 )
 from app.advance_status import recompute_advance_statuses
+from app.ledger_roles import get_system_ledger_id
 from app.org_scope import org_table
 
 router = APIRouter(prefix="/cashbook", tags=["cashbook"])
 
 # The two sides of an entry. NULL on a side means cash, so an entry only moves
-# Cash in Hand when one of these is None.
+# the cash account when one of these is None.
 SIDE_FIELDS = ("from_account_id", "to_account_id")
 
 
@@ -54,8 +55,8 @@ def _get_entry_meta_or_404(supabase, org_id: str, entry_id: str) -> dict:
 
 
 def _sides(row: dict):
-    """Both named accounts of an entry; a None side is cash and has no ledger
-    balance of its own to refresh."""
+    """Both sides of an entry; a None side is cash, resolved to the system cash
+    ledger by _ledger_balances."""
     return [row.get(field) for field in SIDE_FIELDS]
 
 
@@ -63,6 +64,13 @@ def _ledger_balances(supabase, org_id: str, ledger_ids) -> List[dict]:
     """Current balance for each ledger_id, piggybacked on write responses so
     the frontend doesn't need a separate fetch to keep Cash In Hand in sync."""
     ids = {lid for lid in ledger_ids if lid}
+    # Cash In Hand reads the cash ledger's balance (getPhysicalCashInHand in
+    # ledgers.js), so an entry with a cash side has to refresh it like any named
+    # account - the None the side is stored as names no ledger by itself.
+    if any(lid is None for lid in ledger_ids):
+        cash_id = get_system_ledger_id(supabase, org_id, "cash")
+        if cash_id:
+            ids.add(cash_id)
     if not ids:
         return []
     resp = org_table(supabase, org_id, "ledger_balances").select("ledger_id, balance").in_("ledger_id", list(ids)).execute()

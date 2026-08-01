@@ -8,8 +8,7 @@
 function initGrids() {
     initProductsGrid();
     initOrdersGrid();
-    initCashbookDebitGrid();
-    initCashbookCreditGrid();
+    initCashbookGrid();
     initLedgerDetailGrid();
     initTrialBalance();
     initBills();
@@ -916,59 +915,42 @@ function initOrdersGrid() {
     });
 }
 
-function isCashbookSystemOrFooterRow(data) {
-    if (!data || !data.id) return false;
-    const id = String(data.id);
-    return id === '__opening__' || id === '__closing__' || id === '__total_in__' || id === '__total_out__' || data._isSystemRow || data._isFooter;
-}
-
-function getLedgerNameById(id) {
-    if (!id) return '';
-    const ledger = ledgers.find(l => l.id === id);
-    return ledger ? ledger.name : '';
-}
-
 function isCashbookNewRow(data) {
     return data && data.id && String(data.id).startsWith('__new_');
 }
 
 /**
- * Folio cell renderer using custom searchable dropdown.
+ * Account cell renderer using custom searchable dropdown.
  * Creates a clean, native-feeling dropdown with search functionality.
+ * `accountField` is the side this column shows: 'from_account_id' or 'to_account_id'.
  */
-function createFolioCellRenderer(params, side) {
+function createFolioCellRenderer(params, accountField) {
     if (!params || !params.data) return document.createElement('span');
-    if (params.node && params.node.rowPinned === 'bottom') return document.createElement('span');
-    if (isCashbookSystemOrFooterRow(params.data)) return document.createElement('span');
 
     const wrapper = document.createElement('div');
     wrapper.className = 'folio-dropdown';
 
-    // Which side of the entry this grid shows: left grid = TO (debit),
-    // right grid = FROM (credit). A null account on the shown side is cash.
-    const accountField = CASHBOOK_SIDES[side];
     const currentFolio = params.data[accountField] || '';
-    const currentLedger = ledgers.find(l => l.id === currentFolio);
 
-    // An empty side on a SAVED entry is cash, not a missing value — that is how
-    // an ordinary cash entry is stored, so it must read "Cash" rather than look
-    // unfilled. Only a new row is genuinely still asking for an account.
+    // An empty side is cash, not a missing value: it is stored as NULL but the
+    // journal posts it to the cash account, so it reads as that account and its
+    // statement opens from here like any other side's would.
+    const emptyLabel = cashSideLabel();
+    const shownLedger = currentFolio ? ledgers.find(l => l.id === currentFolio) : getCashLedger();
+    const shownLedgerId = shownLedger ? shownLedger.id : '';
+    const displayText = shownLedger ? shownLedger.name : emptyLabel;
+
+    // Cash on both sides moves nothing, so a new row still needs one account.
     const isNewRow = isCashbookNewRow(params.data);
-    const emptyLabel = isNewRow ? 'Select ledger... *' : 'Cash';
-    const displayText = currentLedger ? currentLedger.name : emptyLabel;
-
-    const hasFolio = !!currentFolio;
-    const hasOtherData = (params.data.description && String(params.data.description).trim() !== '') || 
+    const hasOtherData = (params.data.description && String(params.data.description).trim() !== '') ||
                          (params.data.amount != null && params.data.amount > 0);
-    const needsHighlight = isNewRow && !hasFolio && hasOtherData;
+    const needsHighlight = isNewRow && hasOtherData
+        && !params.data.from_account_id && !params.data.to_account_id;
 
     // Display text showing selected ledger (like piece_received shows status)
     const displaySpan = document.createElement('span');
     displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '');
     displaySpan.textContent = displayText;
-    if (!currentLedger) {
-        displaySpan.style.color = 'var(--text-muted)';
-    }
     displaySpan.style.cursor = isEditingAllowed() ? 'pointer' : 'default';
 
     // Main button that shows current selection (hidden, used for dropdown positioning)
@@ -1021,11 +1003,17 @@ function createFolioCellRenderer(params, side) {
 
         function renderOptions(filter = '') {
             const filterLower = filter.toLowerCase();
-            const filtered = ledgers.filter(l => l.name.toLowerCase().includes(filterLower));
-            
+            const filtered = selectableLedgers().filter(l => l.name.toLowerCase().includes(filterLower));
+
             optionsList.innerHTML = '';
-            
-            // Folio is now required - no "None" option
+
+            // Cash is the empty side, not one of the options below it - picking
+            // it clears the side rather than naming the account.
+            const cashOption = document.createElement('div');
+            cashOption.className = 'folio-dropdown-option' + (currentFolio ? '' : ' selected');
+            cashOption.textContent = emptyLabel;
+            cashOption.addEventListener('click', () => selectOption('', emptyLabel));
+            optionsList.appendChild(cashOption);
 
             // Add ledger options
             filtered.forEach(l => {
@@ -1056,31 +1044,22 @@ function createFolioCellRenderer(params, side) {
 
         function selectOption(id, name) {
             params.data[accountField] = id || null;
-            button.querySelector('.folio-dropdown-text').textContent = id ? name : emptyLabel;
-            
-            // Update display text (like piece_received shows selected status)
-            if (id && name) {
-                displaySpan.textContent = name;
-                displaySpan.style.color = '';
-            } else {
-                displaySpan.textContent = emptyLabel;
-                displaySpan.style.color = 'var(--text-muted)';
-            }
-            
-            // Update "Go to Ledger" button state
+            // Clearing the side leaves it on cash, which is an account like any
+            // other here - same label, same statement behind the arrow.
+            const shownName = id ? name : emptyLabel;
+            const goToId = id || (getCashLedger()?.id || '');
+            button.querySelector('.folio-dropdown-text').textContent = shownName;
+            displaySpan.textContent = shownName;
+
             const goToBtn = wrapper._goToLedgerBtn;
             if (goToBtn) {
-                if (id) {
-                    goToBtn.style.opacity = '1';
-                    goToBtn.style.cursor = 'pointer';
-                    goToBtn.title = `Go to ${name}`;
-                } else {
-                    goToBtn.style.opacity = '0.4';
-                    goToBtn.style.cursor = 'not-allowed';
-                    goToBtn.title = 'Select a ledger first';
-                }
+                goToBtn.style.opacity = goToId ? '1' : '0.4';
+                goToBtn.style.cursor = goToId ? 'pointer' : 'not-allowed';
+                goToBtn.title = goToId ? `Go to ${shownName}` : 'Select a ledger first';
+                goToBtn._ledgerId = goToId;
             }
-            
+
+
             if (params.data.id && !isCashbookNewRow(params.data)) {
                 // Update existing entry
                 updateCashbookEntry(params.data.id, { [accountField]: id || null });
@@ -1089,7 +1068,7 @@ function createFolioCellRenderer(params, side) {
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
                 if (hasDescription && hasAmount) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, side);
+                    tryCreateCashbookEntryFromNewRow(params.data);
                 }
             }
             closeDropdown();
@@ -1145,16 +1124,18 @@ function createFolioCellRenderer(params, side) {
     goToLedgerBtn.type = 'button';
     goToLedgerBtn.className = 'folio-goto-btn';
     goToLedgerBtn.innerHTML = '→';
-    goToLedgerBtn.title = currentFolio ? `Go to ${displayText}` : 'Select a ledger first';
-    if (!currentFolio) {
+    goToLedgerBtn.title = shownLedgerId ? `Go to ${displayText}` : 'Select a ledger first';
+    if (!shownLedgerId) {
         goToLedgerBtn.style.opacity = '0.4';
         goToLedgerBtn.style.cursor = 'not-allowed';
     }
+    // Held on the button rather than re-read from the row: a cash side is stored
+    // as NULL, so the row alone cannot say which account to open.
+    goToLedgerBtn._ledgerId = shownLedgerId;
     goToLedgerBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const accountId = params.data[CASHBOOK_SIDES[side]];
-        if (accountId) {
-            openLedgerDetail(accountId);
+        if (goToLedgerBtn._ledgerId) {
+            openLedgerDetail(goToLedgerBtn._ledgerId);
         }
     });
     
@@ -1165,13 +1146,30 @@ function createFolioCellRenderer(params, side) {
     return wrapper;
 }
 
-function buildCashbookGridColumns(side) {
+// The blank row at the bottom is a form, not an entry: its empty cells say what
+// they want rather than reading as a saved row someone left half-filled.
+//
+// Always an element, never a string - AG Grid puts a returned string through
+// innerHTML, which would render a description someone typed as markup.
+function cashbookCellWithPlaceholder(params, placeholder) {
+    const shown = params.valueFormatted != null ? params.valueFormatted : '';
+    const span = document.createElement('span');
+    if (shown === '' && isCashbookNewRow(params.data)) {
+        span.className = 'cashbook-placeholder';
+        span.textContent = placeholder;
+    } else {
+        span.textContent = shown;
+    }
+    return span;
+}
+
+function buildCashbookGridColumns() {
     return [
         {
             headerName: 'Description',
             field: 'description',
             flex: 1,
-            editable: (params) => isEditingAllowed() && !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            editable: () => isEditingAllowed(),
             cellClass: (params) => {
                 if (isCashbookNewRow(params.data)) {
                     // Highlight if amount is filled but description is empty
@@ -1181,17 +1179,16 @@ function buildCashbookGridColumns(side) {
                 }
                 return '';
             },
-            cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
+            cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
-            pinnedRowCellRenderer: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
+            cellRenderer: (params) => cashbookCellWithPlaceholder(params, 'What was this for?'),
             valueSetter: (params) => {
-                if (isCashbookSystemOrFooterRow(params.data) || params.node.rowPinned === 'bottom') return false;
                 const val = String(params.newValue ?? '').trim();
                 if ((params.data.description || '') === val) return false;
                 params.data.description = val;
-                if (!params.node.rowPinned && !isCashbookNewRow(params.data)) {
+                if (!isCashbookNewRow(params.data)) {
                     updateCashbookEntry(params.data.id, { description: val });
-                } else if (isCashbookNewRow(params.data) && params.api) {
+                } else if (params.api) {
                     // Refresh cells to update highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
                 }
@@ -1199,23 +1196,35 @@ function buildCashbookGridColumns(side) {
             }
         },
         {
-            // The two grids are the two sides of the same entries, so the left
-            // shows where money went and the right where it came from.
-            headerName: side === 'debit' ? 'To (Account)' : 'From (Account)',
-            field: side === 'debit' ? 'to_account_id' : 'from_account_id',
+            // Both sides of the entry, named. An empty side is the cash account.
+            // From is the account money came from, i.e. the credited side.
+            headerName: 'From (Credit)',
+            field: 'from_account_id',
             width: 200,
             minWidth: 150,
             filter: false,
             sortable: false,
-            cellRenderer: (params) => createFolioCellRenderer(params, side),
-            pinnedRowCellRenderer: () => ''
+            cellRenderer: (params) => createFolioCellRenderer(params, 'from_account_id'),
+            // Only the Excel export reads this - the renderer draws the cell itself.
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
         },
         {
-            headerName: side === 'debit' ? 'Debit (Rs)' : 'Credit (Rs)',
+            // To is the account money went to, i.e. the debited side.
+            headerName: 'To (Debit)',
+            field: 'to_account_id',
+            width: 200,
+            minWidth: 150,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => createFolioCellRenderer(params, 'to_account_id'),
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
+        },
+        {
+            headerName: 'Amount (Rs)',
             field: 'amount',
-            width: 100,
+            width: 120,
             filter: 'agNumberColumnFilter',
-            editable: (params) => isEditingAllowed() && !isCashbookSystemOrFooterRow(params.data) && params.node.rowPinned !== 'bottom',
+            editable: () => isEditingAllowed(),
             cellClass: (params) => {
                 if (isCashbookNewRow(params.data)) {
                     // Highlight if description is filled but amount is empty
@@ -1225,16 +1234,11 @@ function buildCashbookGridColumns(side) {
                 }
                 return '';
             },
-            cellStyle: (params) => isCashbookSystemOrFooterRow(params.data) ? { fontWeight: '600', cursor: 'default' } : { cursor: 'pointer' },
+            cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => formatCashbookCell(params.value),
-            pinnedRowCellRenderer: (params) => {
-                const val = params.value;
-                if (val == null || val === '') return '';
-                return formatCashbookCell(val);
-            },
+            cellRenderer: (params) => cashbookCellWithPlaceholder(params, '0.00'),
             valueSetter: (params) => {
-                if (params.node.rowPinned === 'bottom') return false;
-                if (params.node.rowPinned === 'top' || isCashbookNewRow(params.data)) {
+                if (isCashbookNewRow(params.data)) {
                     params.data.amount = parseCashbookAmount(params.newValue);
                     // Refresh cells to update highlighting
                     if (params.api) {
@@ -1242,7 +1246,6 @@ function buildCashbookGridColumns(side) {
                     }
                     return true;
                 }
-                if (isCashbookSystemOrFooterRow(params.data)) return false;
                 const next = parseCashbookAmount(params.newValue);
                 if (next === null || next <= 0) return false;
                 params.data.amount = next;
@@ -1260,8 +1263,6 @@ function buildCashbookGridColumns(side) {
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
-                if (params.node.rowPinned) return '';
-                if (isCashbookSystemOrFooterRow(params.data)) return '';
                 if (isCashbookNewRow(params.data)) return '';
                 const btn = document.createElement('button');
                 btn.className = 'cashbook-delete-btn';
@@ -1272,22 +1273,18 @@ function buildCashbookGridColumns(side) {
                     deleteCashbookEntry(params.data.id);
                 });
                 return btn;
-            },
-            pinnedRowCellRenderer: () => ''
+            }
         }
     ];
 }
 
-function initCashbookDebitGrid() {
-    const gridDiv = document.getElementById('cashbookDebitGrid');
+function initCashbookGrid() {
+    const gridDiv = document.getElementById('cashbookGrid');
     if (!gridDiv) return;
 
     const gridOptions = {
-        // `side` is this grid's own column, not the old entry_type: the Debit
-        // grid shows where money went (to_account_id).
-        columnDefs: buildCashbookGridColumns('debit'),
+        columnDefs: buildCashbookGridColumns(),
         rowData: [],
-        pinnedBottomRowData: [],
         defaultColDef: {
             sortable: true,
             resizable: true,
@@ -1301,79 +1298,19 @@ function initCashbookDebitGrid() {
         singleClickEdit: true,
         stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
-        getRowStyle: (params) => {
-            if (params.node.rowPinned === 'bottom') {
-                return { fontWeight: 'bold', borderTop: '2px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' };
-            }
-            if (params.data && params.data.id === '__opening__') {
-                return { fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.03)' };
-            }
-            return null;
-        },
+        getRowClass: (params) => (isCashbookNewRow(params.data) ? 'cashbook-new-row' : ''),
         onGridReady: (params) => {
-            cashbookDebitGridApi = params.api;
+            cashbookGridApi = params.api;
         },
         onCellValueChanged: (params) => {
             if (isCashbookNewRow(params.data)) {
-                // Auto-save when all required fields are filled (description, amount, and folio)
+                // Auto-save once the row is complete: an account on at least one
+                // side (the other one being cash), plus a description and amount.
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                const hasAccount = !!params.data.to_account_id;
+                const hasAccount = !!(params.data.from_account_id || params.data.to_account_id);
                 if (hasDescription && hasAmount && hasAccount) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'debit');
-                } else if (params.api) {
-                    // Refresh the row to update required field highlighting
-                    params.api.refreshCells({ rowNodes: [params.node], force: true });
-                }
-            }
-        }
-    };
-
-    agGrid.createGrid(gridDiv, gridOptions);
-}
-
-function initCashbookCreditGrid() {
-    const gridDiv = document.getElementById('cashbookCreditGrid');
-    if (!gridDiv) return;
-
-    const gridOptions = {
-        // The Credit grid shows where money came from (from_account_id).
-        columnDefs: buildCashbookGridColumns('credit'),
-        rowData: [],
-        pinnedBottomRowData: [],
-        defaultColDef: {
-            sortable: true,
-            resizable: true,
-            filter: true,
-            floatingFilter: true,
-            minWidth: 80
-        },
-        animateRows: true,
-        pagination: false,
-        domLayout: 'normal',
-        singleClickEdit: true,
-        stopEditingWhenCellsLoseFocus: true,
-        getRowId: (params) => params.data.id,
-        getRowStyle: (params) => {
-            if (params.node.rowPinned === 'bottom') {
-                return { fontWeight: 'bold', borderTop: '2px solid var(--border-color)', backgroundColor: 'var(--bg-secondary)' };
-            }
-            if (params.data && params.data.id === '__closing__') {
-                return { fontWeight: '600', backgroundColor: 'rgba(0,0,0,0.03)' };
-            }
-            return null;
-        },
-        onGridReady: (params) => {
-            cashbookCreditGridApi = params.api;
-        },
-        onCellValueChanged: (params) => {
-            if (isCashbookNewRow(params.data)) {
-                // Auto-save when all required fields are filled (description, amount, and folio)
-                const hasDescription = params.data.description && String(params.data.description).trim() !== '';
-                const hasAmount = params.data.amount != null && params.data.amount > 0;
-                const hasAccount = !!params.data.from_account_id;
-                if (hasDescription && hasAmount && hasAccount) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'credit');
+                    tryCreateCashbookEntryFromNewRow(params.data);
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });

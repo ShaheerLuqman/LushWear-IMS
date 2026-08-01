@@ -139,7 +139,7 @@ class TestPostJournalEntry:
 class TestTrialBalance:
     def test_totals_and_balanced_flag(self, make_client):
         client = make_client(rpc_results={"get_trial_balance": [
-            {"account_id": CASH, "code": "1000", "name": "Cash in Hand",
+            {"account_id": CASH, "code": "1000", "name": "Cash",
              "type": "Asset", "debit": 1500.0, "credit": 0.0},
             {"account_id": SALES, "code": "4000", "name": "Sales",
              "type": "Revenue", "debit": 0.0, "credit": 1500.0},
@@ -157,7 +157,7 @@ class TestTrialBalance:
         """If the two totals ever disagree, something wrote around the deferred
         constraint - the report must say so, not quietly round it away."""
         client = make_client(rpc_results={"get_trial_balance": [
-            {"account_id": CASH, "code": "1000", "name": "Cash in Hand",
+            {"account_id": CASH, "code": "1000", "name": "Cash",
              "type": "Asset", "debit": 1500.0, "credit": 0.0},
             {"account_id": SALES, "code": "4000", "name": "Sales",
              "type": "Revenue", "debit": 0.0, "credit": 1400.0},
@@ -177,13 +177,13 @@ class TestTrialBalance:
 
 
 class TestSystemCashAccountGuard:
-    """Cash In Hand already counts the cash account once, through the cashbook's
-    closing balance. Flagging it again would silently double the headline figure
-    — and the account is named "Cash in Hand", so it invites exactly that."""
+    """Cash In Hand already counts the cash account once, through that account's
+    own balance. Flagging it again would silently double the headline figure —
+    and the account is named "Cash", so it invites exactly that."""
 
     def test_cannot_include_the_system_cash_account_in_cash_in_hand(self, make_client):
         client = make_client(tables={"ledgers": [
-            {"id": CASH, "name": "Cash in Hand", "type": "Asset", "system_key": "cash"},
+            {"id": CASH, "name": "Cash", "type": "Asset", "system_key": "cash"},
         ]})
         response = client.put(f"/api/ledgers/{CASH}", json={"include_in_cash_in_hand": True})
 

@@ -55,7 +55,7 @@ class TestSystemKeyIsServerManaged:
     def test_an_ordinary_field_still_updates_on_a_system_ledger(self, make_client):
         """Renaming or recategorising a system account is fine — only its role
         is fixed."""
-        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash in Hand", "cash")]})
+        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash", "cash")]})
         response = client.put(f"/api/ledgers/{CASH}", json={"name": "Cash Box"})
 
         assert response.status_code == 200, response.text
@@ -69,7 +69,7 @@ class TestSystemKeyIsServerManaged:
 
 class TestSystemLedgersCannotBeDeleted:
     def test_deleting_a_system_ledger_is_refused(self, make_client):
-        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash in Hand", "cash")]})
+        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash", "cash")]})
         response = client.delete(f"/api/ledgers/{CASH}")
 
         assert response.status_code == 400

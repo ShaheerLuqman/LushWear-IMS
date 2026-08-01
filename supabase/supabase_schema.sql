@@ -972,13 +972,13 @@ AS $$
 BEGIN
     -- ensure_system_ledger is create-or-return, so this never disturbs an
     -- account an org already has for the role.
-    PERFORM ensure_system_ledger(NEW.id, 'cash', 'Cash in Hand', 'Asset', '1000', TRUE);
+    PERFORM ensure_system_ledger(NEW.id, 'cash', 'Cash', 'Asset', '1000', TRUE);
     PERFORM ensure_system_ledger(NEW.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
     -- Advances received before delivery are money held against goods still
     -- owed, so Orders is a liability rather than revenue.
     PERFORM ensure_system_ledger(NEW.id, 'orders', 'Orders', 'Liability', '2200');
     PERFORM ensure_system_ledger(NEW.id, 'inventory', 'Inventory', 'Asset', '1400');
-    PERFORM ensure_system_ledger(NEW.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
+    -- No tax_on_purchases: receive_bill creates it on the first taxed bill.
     RETURN NEW;
 END;
 $$;
@@ -995,11 +995,10 @@ DECLARE
     org RECORD;
 BEGIN
     FOR org IN SELECT id FROM organizations LOOP
-        PERFORM ensure_system_ledger(org.id, 'cash', 'Cash in Hand', 'Asset', '1000', TRUE);
+        PERFORM ensure_system_ledger(org.id, 'cash', 'Cash', 'Asset', '1000', TRUE);
         PERFORM ensure_system_ledger(org.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
         PERFORM ensure_system_ledger(org.id, 'orders', 'Orders', 'Liability', '2200');
         PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
-        PERFORM ensure_system_ledger(org.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
     END LOOP;
 END $$;
 

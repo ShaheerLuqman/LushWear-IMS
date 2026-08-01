@@ -153,7 +153,7 @@ class CashbookEntryBase(BaseModel):
     """An entry names both of its sides; NULL on a side means cash.
 
     from_account_id is credited (money came from there), to_account_id is
-    debited (money went there). An entry only moves Cash in Hand when one side
+    debited (money went there). An entry only moves the cash account when one side
     is None — which is how a bank-to-supplier transfer stays out of the cash
     balance."""
     entry_date: date

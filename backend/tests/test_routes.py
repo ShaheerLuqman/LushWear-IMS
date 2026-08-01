@@ -623,6 +623,29 @@ class TestCashbook:
             "ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
         }
 
+    def test_a_cash_side_refreshes_the_cash_ledger(self, make_client):
+        """The unnamed side is the cash account, and Cash In Hand is read off that
+        ledger's balance — so it needs refreshing too, even though the entry
+        stores the side as NULL and names no ledger."""
+        client = make_client({
+            "cashbook_entries": [{
+                "order_number": None,
+                "from_account_id": "ledger-1",
+                "to_account_id": None,
+            }],
+            "ledgers": [{"id": "cash-ledger", "system_key": "cash"}],
+            "ledger_balances": [
+                {"ledger_id": "ledger-1", "balance": 42.5},
+                {"ledger_id": "cash-ledger", "balance": 900.0},
+            ],
+        })
+        r = client.delete("/api/cashbook/entries/entry-1")
+        assert r.status_code == 200
+        assert sorted(r.json()["ledger_balances"], key=lambda b: b["ledger_id"]) == [
+            {"ledger_id": "cash-ledger", "balance": 900.0},
+            {"ledger_id": "ledger-1", "balance": 42.5},
+        ]
+
 
 class TestErrorHandling:
     def test_unhandled_errors_return_a_generic_500(self, make_client, monkeypatch):

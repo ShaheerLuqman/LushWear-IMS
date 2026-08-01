@@ -64,26 +64,43 @@ function formatMoney(value) {
     });
 }
 
-// Physical cash in hand = the cashbook's running closing balance, i.e. cash taken
-// in that hasn't been moved to a bank ledger yet.
+// Physical cash in hand = the balance of the Cash system ledger, which
+// every cashbook entry's unnamed side posts to (project_cashbook_entry_to_journal).
 //
-// This is a cumulative balance, not a daily delta. It was previously
-// `closing - opening`, which is only that one day's net movement: browsing to a
-// date with no entries reported zero cash however much was actually on hand, and
-// cash accrued on earlier days was invisible. See FINANCE_ACCOUNTING_PLAN.md §B3.
+// It was the cashbook's daily closing_balance, which only ever knew about
+// cashbook entries: a bill paid in cash, a manual journal line, or an opening
+// balance moved the ledger without moving that figure, so the headline drifted
+// from the account it claims to report.
 //
 // Adding this to the included ledgers' balances does not double-count: every
-// rupee moved into a bank ledger left the cash pot in the same entry, so
-// closing_balance already nets it out.
+// rupee moved into a bank ledger was credited out of Cash by the same entry, and
+// the Cash account itself cannot be flagged include_in_cash_in_hand.
 function getPhysicalCashInHand() {
-    if (!cashbookDailyBalance) return 0;
-    return parseFloat(cashbookDailyBalance.closing_balance) || 0;
+    return parseFloat(getCashLedger()?.balance) || 0;
 }
 
-// Bank-ledger part is computed from the in-memory `ledgers` array (kept in sync by
-// loadLedgersList() on cold loads and applyLedgerBalancePatches() on every cashbook
-// write); the physical part reads the already-loaded `cashbookDailyBalance` — neither
-// needs an extra network call here.
+// The org's cash account, which every cashbook entry's unnamed side posts to.
+// Created with the organization, so it is only ever missing mid-migration.
+function getCashLedger() {
+    return ledgers.find(l => l.system_key === 'cash') || null;
+}
+
+// What an unnamed side is labelled. Reads the account's own name, so renaming it
+// renames it everywhere rather than leaving a hardcoded word to drift from it.
+function cashSideLabel() {
+    return getCashLedger()?.name || 'Cash';
+}
+
+// The accounts a user can name on an entry: everything except cash, which is
+// what leaving a side empty already means. Offering it too would be a second
+// way to write the same entry.
+function selectableLedgers() {
+    return ledgers.filter(l => l.system_key !== 'cash');
+}
+
+// Both parts now come from the in-memory `ledgers` array, kept in sync by
+// loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
+// cashbook write — no extra network call here.
 function updateCashInHand() {
     const cashInHandLedgers = ledgers.filter(l => l.include_in_cash_in_hand);
 
@@ -122,7 +139,7 @@ function updateCashInHandTooltip(physicalCashInHand) {
     tooltipEl.innerHTML = `
         <div class="cash-in-hand-tooltip-section">
             <div class="cash-in-hand-tooltip-header">Cash in Hand:</div>
-            ${cashInHandTooltipItem('Cash', physicalCashInHand)}
+            ${cashInHandTooltipItem(cashSideLabel(), physicalCashInHand)}
         </div>
         <div class="cash-in-hand-tooltip-section">
             <div class="cash-in-hand-tooltip-header">Cash in Bank Ledgers:</div>
@@ -137,9 +154,10 @@ function updateCashInHandTooltip(physicalCashInHand) {
 
 // System ledgers (Cash, Orders, Inventory, …) are created with the organization
 // and are never assigned by a client, so there is nothing to pick — just a note
-// saying why this one can't be deleted.
+// saying why this one can't be deleted. Tax on Purchases is the exception: it is
+// created by the first bill that carries tax, not up front.
 const SYSTEM_LEDGER_LABELS = {
-    cash: 'Cash in Hand',
+    cash: 'Cash',
     opening_balance_equity: 'Opening Balance Equity',
     orders: 'Orders',
     inventory: 'Inventory',
@@ -159,6 +177,31 @@ function renderLedgerSystemNotice(ledger) {
     el.textContent = `System account (${SYSTEM_LEDGER_LABELS[role] || role}) — used by the app, so it can't be deleted.`;
 }
 
+// Ledgers that are bookkeeping plumbing rather than accounts a user reasons
+// about day-to-day. Kept out of the type-grouped sections so they don't sit
+// at equal weight next to Sales, Rent, etc. Only OBE for now.
+const SECTIONED_SYSTEM_KEYS = ['opening_balance_equity'];
+
+function ledgerSectionHtml(title, sectionLedgers) {
+    return `
+        <div class="ledger-section">
+            <h3 class="ledger-section-header">${escapeHtml(title)}</h3>
+            <div class="ledger-section-cards">
+                ${sectionLedgers.map(l => `
+                    <div class="ledger-card" data-id="${l.id}">
+                        <div class="ledger-card-info">
+                            <span class="ledger-card-name">${escapeHtml(l.name)}</span>
+                        </div>
+                        <div class="ledger-card-actions">
+                            <button type="button" class="ledger-edit-btn" data-id="${l.id}" title="Edit ledger" aria-label="Edit ledger"><img src="assets/edit.png" alt="Edit" class="ledger-edit-icon"></button>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
 function renderLedgerCards() {
     const container = document.getElementById('ledgerCards');
     if (!container) return;
@@ -168,9 +211,12 @@ function renderLedgerCards() {
         return;
     }
 
+    const systemLedgers = ledgers.filter(l => SECTIONED_SYSTEM_KEYS.includes(l.system_key));
+    const regularLedgers = ledgers.filter(l => !SECTIONED_SYSTEM_KEYS.includes(l.system_key));
+
     // Group ledgers by type
     const groupedLedgers = {};
-    ledgers.forEach(l => {
+    regularLedgers.forEach(l => {
         const type = l.type || 'Uncategorized';
         if (!groupedLedgers[type]) {
             groupedLedgers[type] = [];
@@ -185,28 +231,11 @@ function renderLedgerCards() {
         return a.localeCompare(b);
     });
 
-    // Build HTML grouped by type
-    let html = '';
-    sortedTypes.forEach(type => {
-        const typeLedgers = groupedLedgers[type];
-        html += `
-            <div class="ledger-section">
-                <h3 class="ledger-section-header">${escapeHtml(type)}</h3>
-                <div class="ledger-section-cards">
-                    ${typeLedgers.map(l => `
-                        <div class="ledger-card" data-id="${l.id}">
-                            <div class="ledger-card-info">
-                                <span class="ledger-card-name">${escapeHtml(l.name)}</span>
-                            </div>
-                            <div class="ledger-card-actions">
-                                <button type="button" class="ledger-edit-btn" data-id="${l.id}" title="Edit ledger" aria-label="Edit ledger"><img src="assets/edit.png" alt="Edit" class="ledger-edit-icon"></button>
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            </div>
-        `;
-    });
+    // Build HTML grouped by type, then the System section last
+    let html = sortedTypes.map(type => ledgerSectionHtml(type, groupedLedgers[type])).join('');
+    if (systemLedgers.length) {
+        html += ledgerSectionHtml('System', systemLedgers);
+    }
 
     container.innerHTML = html;
 
@@ -502,8 +531,9 @@ function renderLedgerDetailGrid() {
     });
 
     // Read-only: every row is a posted journal line, corrected by posting again
-    // rather than by editing history in place.
-    ledgerDetailGridApi.setGridOption('rowData', rowsWithBalance);
+    // rather than by editing history in place. Display is most-recent-first,
+    // but the running balance above must stay computed in chronological order.
+    ledgerDetailGridApi.setGridOption('rowData', rowsWithBalance.slice().reverse());
     // The Balance column's cellStyle also depends on currentLedger.type, which AG
     // Grid can't see as a dependency. With getRowId in play, setting rowData updates
     // matching rows in place rather than rebuilding them, so cellStyle isn't guaranteed to

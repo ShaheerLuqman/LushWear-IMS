@@ -919,45 +919,14 @@ body:has(#ordersView.active) .header-actions {
     width: 100%;
 }
 
-.cashbook-grid-split {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 0;
-    flex: 1;
-    min-height: 0;
-    height: 100%;
-    width: 100%;
-}
-
-.cashbook-grid-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    min-height: 0;
-    flex: 1;
-    height: 100%;
-    width: 100%;
-}
-
-.cashbook-grid-title {
-    display: none;
-}
-
-#cashbookDebitGrid,
-#cashbookCreditGrid {
+#cashbookGrid,
+#cashbookGrid.grid-container {
     flex: 1;
     min-height: 0;
     height: 100%;
     width: 100%;
     border-radius: 0;
     border: none;
-}
-
-#cashbookDebitGrid.grid-container,
-#cashbookCreditGrid.grid-container {
-    border-radius: 0;
-    border: none;
-    min-height: 0;
 }
 
 /* Override content-area padding for table views */
@@ -1445,47 +1414,25 @@ input[type="number"] {
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
-.cashbook-entry-split {
+.cashbook-entry-sides {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 20px;
-    margin-bottom: 8px;
 }
 
-.cashbook-entry-side {
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 12px 16px 16px;
-    margin: 0;
-    min-width: 0;
-}
-
-.cashbook-entry-side legend {
-    padding: 0 6px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.cashbook-entry-skip-toggle {
+.cashbook-entry-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-bottom: 12px;
+    margin-bottom: 16px;
     font-size: 13px;
     color: var(--text-secondary);
     cursor: pointer;
     user-select: none;
 }
 
-.cashbook-entry-skip-toggle input {
+.cashbook-entry-toggle input {
     cursor: pointer;
-}
-
-/* Stand-in for the opposite side's extra toggle: same markup so it reserves an
-   identical row height, but invisible and out of the accessibility tree. */
-.cashbook-entry-toggle-spacer {
-    visibility: hidden;
 }
 
 #createLedgerModal .form-group,
@@ -1513,10 +1460,6 @@ input[type="number"] {
 
 .ledger-form-toggle input {
     cursor: pointer;
-}
-
-.cashbook-entry-side-skipped .form-group {
-    opacity: 0.5;
 }
 
 .upload-postex-file-row {
@@ -1723,10 +1666,6 @@ input[type="number"] {
     }
 
     .cashbook-toolbar {
-        grid-template-columns: 1fr;
-    }
-
-    .cashbook-grid-split {
         grid-template-columns: 1fr;
     }
 }
@@ -3655,6 +3594,19 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border: 1px solid rgba(245, 158, 11, 0.5) !important;
 }
 
+/* The blank row at the foot of the cashbook is where a new entry is typed.
+   Tinted and accented so it reads as the place to start, not as a saved entry
+   somebody left empty. Translucent so it sits on either theme's row colour. */
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.cashbook-new-row {
+    background-color: rgba(139, 92, 246, 0.08) !important;
+    box-shadow: inset 3px 0 0 var(--accent-primary);
+}
+
+.cashbook-placeholder {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 /* Folio dropdown required highlighting */
 .folio-dropdown-btn.folio-required {
     border-color: rgba(245, 158, 11, 0.7) !important;
@@ -4772,7 +4724,7 @@ body.admin-portal-page {
 
     /* Two-column modal forms are cramped well before the modal itself shrinks. */
     .form-grid,
-    .cashbook-entry-split,
+    .cashbook-entry-sides,
     .repl-form-grid {
         grid-template-columns: 1fr;
     }
@@ -4893,10 +4845,6 @@ body.admin-portal-page {
     /* Grids keep full-size columns and scroll; just give them usable height. */
     .grid-container {
         min-height: 60vh;
-    }
-
-    .cashbook-grid-split {
-        grid-template-columns: 1fr;
     }
 
     /* Near-full-bleed modals - a centred 90% box wastes edge space on a phone. */

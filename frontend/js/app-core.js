@@ -103,13 +103,11 @@ function applyFeatureVisibility() {
 let products = [];
 let orders = [];
 let cashbookEntries = [];
-let cashbookDailyBalance = null; // Current day's balance from API
 let cashbookSelectedDate = null;
 let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
-let cashbookDebitGridApi = null;
-let cashbookCreditGridApi = null;
+let cashbookGridApi = null;
 let ledgers = [];
 let ledgerEntries = [];
 let currentLedger = null;
