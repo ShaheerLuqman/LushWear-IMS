@@ -300,8 +300,8 @@ function switchView(viewName, { skipReload = false } = {}) {
     } else if (viewName === 'cashbook') {
         if (!skipReload) loadCashbook();
         setTimeout(() => {
-            sizeGridColumns(cashbookIncomingGridApi);
-            sizeGridColumns(cashbookOutgoingGridApi);
+            sizeGridColumns(cashbookDebitGridApi);
+            sizeGridColumns(cashbookCreditGridApi);
         }, 100);
     } else if (viewName === 'loadSheetLogs') {
         loadLoadSheetLogs();

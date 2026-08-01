@@ -943,8 +943,8 @@ body:has(#ordersView.active) .header-actions {
     display: none;
 }
 
-#cashbookIncomingGrid,
-#cashbookOutgoingGrid {
+#cashbookDebitGrid,
+#cashbookCreditGrid {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -953,8 +953,8 @@ body:has(#ordersView.active) .header-actions {
     border: none;
 }
 
-#cashbookIncomingGrid.grid-container,
-#cashbookOutgoingGrid.grid-container {
+#cashbookDebitGrid.grid-container,
+#cashbookCreditGrid.grid-container {
     border-radius: 0;
     border: none;
     min-height: 0;

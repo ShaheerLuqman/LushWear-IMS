@@ -86,6 +86,12 @@ class _FakeSupabase:
         return self._tables[name]
 
 
+def _orders_ledger_table():
+    """The org's Orders ledger, which advance lookups resolve before reading
+    cashbook entries (ledgers.is_orders_ledger replaced a hardcoded UUID)."""
+    return _FakeTable([{"id": "orders-ledger-id"}])
+
+
 class TestRecomputeAdvanceStatuses:
     def test_persists_changed_orders_as_a_single_batched_upsert(self):
         orders_table = _FakeTable([
@@ -95,7 +101,11 @@ class TestRecomputeAdvanceStatuses:
         cashbook_table = _FakeTable([
             {"order_number": "100", "amount": 500.0, "entry_type": "credit"},
         ])
-        supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
+        supabase = _FakeSupabase({
+            "orders": orders_table,
+            "cashbook_entries": cashbook_table,
+            "ledgers": _orders_ledger_table(),
+        })
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100", "101"])
 
@@ -109,7 +119,11 @@ class TestRecomputeAdvanceStatuses:
             {"id": "o1", "order_number": 100, "advance_amount": 0.0, "advance_status": ADV_NONE},
         ])
         cashbook_table = _FakeTable([])
-        supabase = _FakeSupabase({"orders": orders_table, "cashbook_entries": cashbook_table})
+        supabase = _FakeSupabase({
+            "orders": orders_table,
+            "cashbook_entries": cashbook_table,
+            "ledgers": _orders_ledger_table(),
+        })
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100"])
 

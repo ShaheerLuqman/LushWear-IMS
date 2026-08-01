@@ -31,9 +31,20 @@ IN_QUERY_CHUNK_SIZE = 200
 # many simultaneous connections when scoped to a large set (e.g. a full Shopify sync).
 _CONCURRENCY = 20
 
-# The "Orders" ledger that order advances are always posted to (mirrors the
-# ORDERS_LEDGER_ID constant in the frontend).
-ORDERS_LEDGER_ID = "4bc067af-cf91-4700-8b52-b70ad4a991df"
+def get_orders_ledger_id(supabase, org_id: str):
+    """The ledger this org posts order advances to, or None if it hasn't set one.
+
+    Was a module-level hardcoded UUID, which predated multi-tenancy: every query
+    using it is org-scoped, so for any other org it matched nothing and the
+    advance flow silently no-op'd. See the ledgers.is_orders_ledger migration."""
+    resp = (
+        org_table(supabase, org_id, "ledgers")
+        .select("id")
+        .eq("is_orders_ledger", True)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0]["id"] if resp.data else None
 
 # Status codes
 ADV_NONE = 1
@@ -70,10 +81,14 @@ def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
     Returns a map of order_number (str) -> total advance amount from the cashbook.
     """
     totals: Dict[str, float] = {}
+    orders_ledger_id = get_orders_ledger_id(supabase, org_id)
+    if not orders_ledger_id:
+        return totals
+
     rows = fetch_all(
         lambda: org_table(supabase, org_id, "cashbook_entries")
         .select("order_number, amount, entry_type")
-        .eq("folio", ORDERS_LEDGER_ID)
+        .eq("folio", orders_ledger_id)
         .eq("entry_type", "credit")
         .not_.is_("order_number", "null")
     )

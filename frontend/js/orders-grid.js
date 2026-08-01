@@ -8,8 +8,8 @@
 function initGrids() {
     initProductsGrid();
     initOrdersGrid();
-    initCashbookIncomingGrid();
-    initCashbookOutgoingGrid();
+    initCashbookDebitGrid();
+    initCashbookCreditGrid();
     initLedgerDetailGrid();
 }
 
@@ -1201,7 +1201,10 @@ function buildCashbookGridColumns(side) {
             pinnedRowCellRenderer: () => ''
         },
         {
-            headerName: side === 'credit' ? 'Incoming (Rs)' : 'Outgoing (Rs)',
+            // `side` is the folio ledger's side; the cash book column shows cash's,
+            // which is the opposite one — see "THE TWO PERSPECTIVES" in
+            // supabase_schema.sql. A folio credit is cash received, i.e. a Debit here.
+            headerName: side === 'credit' ? 'Debit (Rs)' : 'Credit (Rs)',
             field: 'amount',
             width: 100,
             filter: 'agNumberColumnFilter',
@@ -1265,8 +1268,8 @@ function buildCashbookGridColumns(side) {
     ];
 }
 
-function initCashbookIncomingGrid() {
-    const gridDiv = document.getElementById('cashbookIncomingGrid');
+function initCashbookDebitGrid() {
+    const gridDiv = document.getElementById('cashbookDebitGrid');
     if (!gridDiv) return;
 
     const gridOptions = {
@@ -1296,7 +1299,7 @@ function initCashbookIncomingGrid() {
             return null;
         },
         onGridReady: (params) => {
-            cashbookIncomingGridApi = params.api;
+            cashbookDebitGridApi = params.api;
         },
         onCellValueChanged: (params) => {
             if (isCashbookNewRow(params.data)) {
@@ -1317,8 +1320,8 @@ function initCashbookIncomingGrid() {
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
-function initCashbookOutgoingGrid() {
-    const gridDiv = document.getElementById('cashbookOutgoingGrid');
+function initCashbookCreditGrid() {
+    const gridDiv = document.getElementById('cashbookCreditGrid');
     if (!gridDiv) return;
 
     const gridOptions = {
@@ -1348,7 +1351,7 @@ function initCashbookOutgoingGrid() {
             return null;
         },
         onGridReady: (params) => {
-            cashbookOutgoingGridApi = params.api;
+            cashbookCreditGridApi = params.api;
         },
         onCellValueChanged: (params) => {
             if (isCashbookNewRow(params.data)) {

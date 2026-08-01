@@ -33,6 +33,22 @@ function applyLedgerBalancePatches(patches) {
     });
 }
 
+// Natures that sit on the Credit side when healthy. Balances are stored
+// Debit-positive for every ledger regardless of Nature (see recalc_ledger_balance
+// in supabase_schema.sql), so a Revenue/Liability/Equity ledger in good standing
+// carries a *negative* stored balance.
+const CREDIT_NORMAL_TYPES = ['Liability', 'Equity', 'Revenue'];
+
+// Stored balances are Debit-positive, so the sign alone gives the side - no
+// per-Nature branch needed here. Shown as a positive number plus Dr/Cr rather
+// than a bare negative, so "Sales: -500,000" reads as "Sales: 500,000 Cr".
+// Zero sits on neither side and gets no suffix.
+function formatBalanceWithSide(value) {
+    const val = parseFloat(value) || 0;
+    if (!val) return formatMoney(0);
+    return `${formatMoney(Math.abs(val))} ${val > 0 ? 'Dr' : 'Cr'}`;
+}
+
 function formatMoney(value) {
     return (parseFloat(value) || 0).toLocaleString('en-US', {
         minimumFractionDigits: 2,
@@ -40,13 +56,20 @@ function formatMoney(value) {
     });
 }
 
-// Physical cash in hand = the last day's net cash movement (closing - opening balance),
-// i.e. cash taken in that hasn't been deposited to a bank ledger yet.
+// Physical cash in hand = the cashbook's running closing balance, i.e. cash taken
+// in that hasn't been moved to a bank ledger yet.
+//
+// This is a cumulative balance, not a daily delta. It was previously
+// `closing - opening`, which is only that one day's net movement: browsing to a
+// date with no entries reported zero cash however much was actually on hand, and
+// cash accrued on earlier days was invisible. See FINANCE_ACCOUNTING_PLAN.md §B3.
+//
+// Adding this to the included ledgers' balances does not double-count: every
+// rupee moved into a bank ledger left the cash pot in the same entry, so
+// closing_balance already nets it out.
 function getPhysicalCashInHand() {
     if (!cashbookDailyBalance) return 0;
-    const closing = parseFloat(cashbookDailyBalance.closing_balance) || 0;
-    const opening = parseFloat(cashbookDailyBalance.opening_balance) || 0;
-    return closing - opening;
+    return parseFloat(cashbookDailyBalance.closing_balance) || 0;
 }
 
 // Bank-ledger part is computed from the in-memory `ledgers` array (kept in sync by
@@ -176,7 +199,7 @@ function renderLedgerCards() {
 
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type, includeInCashInHand, openingBalance) {
+async function createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -184,7 +207,14 @@ async function createLedger(name, type, includeInCashInHand, openingBalance) {
     try {
         const created = await apiJson('/ledgers/', {
             method: 'POST',
-            body: { name, type, include_in_cash_in_hand: !!includeInCashInHand, opening_balance: openingBalance || 0 },
+            body: {
+                name,
+                type,
+                include_in_cash_in_hand: !!includeInCashInHand,
+                opening_balance: openingBalance || 0,
+                report_category: reportCategory || null,
+                is_orders_ledger: !!isOrdersLedger
+            },
             fallback: 'Failed to create ledger'
         });
         const onCreated = createLedgerOnCreateCallback;
@@ -203,7 +233,9 @@ function openCreateLedgerModal(onCreated) {
     document.getElementById('createLedgerName').value = '';
     document.getElementById('createLedgerType').value = '';
     document.getElementById('createLedgerOpeningBalance').value = '';
+    document.getElementById('createLedgerReportCategory').value = '';
     document.getElementById('createLedgerCashInHand').checked = false;
+    document.getElementById('createLedgerIsOrdersLedger').checked = false;
     document.getElementById('createLedgerModal').classList.add('active');
 }
 
@@ -238,6 +270,10 @@ async function openEditLedgerModal(ledgerId) {
         }
         const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
         if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
+        const reportCategorySelect = document.getElementById('editLedgerReportCategory');
+        if (reportCategorySelect) reportCategorySelect.value = ledger.report_category || '';
+        const isOrdersLedgerCheckbox = document.getElementById('editLedgerIsOrdersLedger');
+        if (isOrdersLedgerCheckbox) isOrdersLedgerCheckbox.checked = !!ledger.is_orders_ledger;
 
         const deleteBtn = document.getElementById('editLedgerDeleteBtn');
         const deleteWrap = document.getElementById('editLedgerDeleteWrap');
@@ -268,6 +304,8 @@ async function saveEditLedger() {
     const type = (document.getElementById('editLedgerType').value || '').trim();
     const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
     const openingBalance = parseFloat(document.getElementById('editLedgerOpeningBalance').value) || 0;
+    const reportCategory = document.getElementById('editLedgerReportCategory').value;
+    const isOrdersLedger = document.getElementById('editLedgerIsOrdersLedger').checked;
     if (!name || !type) {
         showToast('Name and type are required', 'error');
         return;
@@ -279,7 +317,7 @@ async function saveEditLedger() {
     }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
     if (!confirmed) return;
-    const body = { name, type, include_in_cash_in_hand: includeInCashInHand };
+    const body = { name, type, include_in_cash_in_hand: includeInCashInHand, report_category: reportCategory || null, is_orders_ledger: isOrdersLedger };
     if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
     try {
         await apiJson(`/ledgers/${editLedgerId}`, {
@@ -374,25 +412,25 @@ function renderLedgerDetailGrid() {
     // New Balance = Previous Balance + Debit - Credit, the same for every ledger
     // regardless of Nature (see recalc_ledger_balance in supabase_schema.sql).
     // opening_balance follows that convention directly: positive is a Debit
-    // amount (outgoing column), negative is a Credit amount (incoming column).
+    // amount, negative is a Credit amount.
     const openingBalance = parseFloat(currentLedger?.opening_balance) || 0;
     const openingRow = openingBalance ? [{
         id: 'opening-balance',
         entry_date: '',
         particulars: 'Opening Balance',
-        incoming: openingBalance < 0 ? -openingBalance : 0,
-        outgoing: openingBalance > 0 ? openingBalance : 0,
+        debit: openingBalance > 0 ? openingBalance : 0,
+        credit: openingBalance < 0 ? -openingBalance : 0,
     }] : [];
 
     let running = 0;
     const rowsWithBalance = [...openingRow, ...sorted].map(entry => {
-        const incoming = parseFloat(entry.incoming) || 0;
-        const outgoing = parseFloat(entry.outgoing) || 0;
-        running += outgoing - incoming;
+        const debit = parseFloat(entry.debit) || 0;
+        const credit = parseFloat(entry.credit) || 0;
+        running += debit - credit;
         return {
             ...entry,
-            incoming: incoming,
-            outgoing: outgoing,
+            debit: debit,
+            credit: credit,
             balance: running
         };
     });
@@ -422,6 +460,8 @@ function initLedgerModals() {
             const type = document.getElementById('createLedgerType').value;
             const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
             const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
+            const reportCategory = document.getElementById('createLedgerReportCategory').value;
+            const isOrdersLedger = document.getElementById('createLedgerIsOrdersLedger').checked;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
@@ -430,7 +470,7 @@ function initLedgerModals() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type, includeInCashInHand, openingBalance);
+            createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, isOrdersLedger);
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);
@@ -491,14 +531,14 @@ function initLedgerDetailGrid() {
         },
         {
             headerName: 'Debit (Rs)',
-            field: 'outgoing',
+            field: 'debit',
             width: 140,
             editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
         },
         {
             headerName: 'Credit (Rs)',
-            field: 'incoming',
+            field: 'credit',
             width: 140,
             editable: false,
             valueFormatter: (params) => formatCashbookCell(params.value),
@@ -506,9 +546,11 @@ function initLedgerDetailGrid() {
         {
             headerName: 'Balance (Rs)',
             field: 'balance',
-            width: 140,
+            width: 160,
             editable: false,
-            valueFormatter: (params) => formatCashbookCell(params.value),
+            valueFormatter: (params) => (params.value === '' || params.value == null
+                ? ''
+                : formatBalanceWithSide(params.value)),
             cellStyle: (params) => {
                 const val = parseFloat(params.value);
                 // Always return an explicit color (never {}) — AG Grid doesn't reliably
@@ -516,12 +558,10 @@ function initLedgerDetailGrid() {
                 // which left cells stuck red after switching from a negative-balance
                 // ledger back to a positive one.
                 if (Number.isNaN(val) || val === 0) return { color: 'var(--text-primary)' };
-                // Liability/Equity/Revenue ledgers are Credit-normal, so their healthy,
-                // expected balance is negative under New Balance = Debit - Credit (see
-                // recalc_ledger_balance in supabase_schema.sql) — red should mean "this
-                // ledger is on the wrong side of normal", not just "the number is negative".
-                const isCreditNormalType = ['Liability', 'Equity', 'Revenue'].includes(currentLedger?.type);
-                const isBad = isCreditNormalType ? val > 0 : val < 0;
+                // The Dr/Cr suffix already carries the side, so red means "on the wrong
+                // side for this Nature", not "negative" — a Credit-normal ledger showing
+                // Dr is the abnormal case, and vice versa.
+                const isBad = CREDIT_NORMAL_TYPES.includes(currentLedger?.type) ? val > 0 : val < 0;
                 return { color: isBad ? 'var(--danger)' : 'var(--text-primary)' };
             }
         }

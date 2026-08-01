@@ -227,10 +227,18 @@ class CashbookEntryAuditLog(BaseModel):
 # Note: Ledger entries are no longer stored separately.
 # Ledgers now show summaries derived from cashbook_entries where folio = ledger.id
 
+# Which Month Summary expense line a ledger's spending rolls up into. Replaces
+# the ledger-name substring matching get_month_summary_totals used to do (see
+# FINANCE_ACCOUNTING_PLAN.md B4). None = excluded from those lines.
+ReportCategory = Literal["shopify", "ad", "other"]
+
 class LedgerBase(BaseModel):
     name: NonBlankStr
     type: LedgerType
     include_in_cash_in_hand: bool = False
+    report_category: Optional[ReportCategory] = None
+    # At most one per org (DB-enforced): the ledger order advances post to.
+    is_orders_ledger: bool = False
     # Seeded once at ledger creation; folded into ledger_balances by the
     # recalc_ledger_balance DB trigger so `balance` starts from this instead
     # of 0. Rare to change after creation, but editable (see LedgerUpdate).
@@ -244,6 +252,8 @@ class LedgerUpdate(BaseModel):
     type: Optional[LedgerType] = None
     include_in_cash_in_hand: Optional[bool] = None
     opening_balance: Optional[float] = None
+    report_category: Optional[ReportCategory] = None
+    is_orders_ledger: Optional[bool] = None
 
 class Ledger(LedgerBase):
     id: str

@@ -289,6 +289,36 @@ CREATE TABLE IF NOT EXISTS sync_status (
 -- Records daily debit/credit entries with carried-forward balances.
 -- Ledger summaries are derived from cashbook_entries where folio = ledger.id
 -- (there is no separate ledger_entries table).
+--
+-- ---------------------------------------------------------------------------
+-- THE TWO PERSPECTIVES - read this before changing any sign in this section.
+-- ---------------------------------------------------------------------------
+-- Every cashbook entry moves money between two accounts: the folio ledger and
+-- cash. Only one of those sides is stored, so each side is read with the
+-- opposite sign, and the two readers below are BOTH correct.
+--
+--   cashbook_entries.entry_type is the FOLIO LEDGER's side:
+--     'credit' = credit the folio ledger, so cash came IN   (a receipt)
+--     'debit'  = debit the folio ledger,  so cash went OUT  (a payment)
+--   recalc_ledger_balance applies it directly:
+--     ledger balance = opening_balance + SUM(debit) - SUM(credit)
+--
+--   cashbook_daily_balances totals are the CASH account's side - always the
+--   opposite one. Standard bookkeeping: cash received is a DEBIT to cash (the
+--   receipts side of a two-column cash book is its debit side).
+--     total_debit  = receipts = SUM(amount) WHERE entry_type = 'credit'
+--     total_credit = payments = SUM(amount) WHERE entry_type = 'debit'
+--     closing_balance = opening_balance + total_debit - total_credit
+--
+-- Consequence, and the thing that looks like a bug but is not: one entry with
+-- entry_type='credit' appears under **Debit** on the Cashbook screen and under
+-- **Credit** on the ledger statement. Two different accounts, both correct.
+-- Do NOT "fix" one to match the other.
+--
+-- This collapses when the double-entry journal lands (see
+-- FINANCE_ACCOUNTING_PLAN.md Phase 1): each side becomes its own journal line
+-- carrying its own account and its own debit-or-credit, so no single column
+-- ever has to describe two accounts again.
 -- ============================================================================
 
 -- Ledgers: individual accounts (suppliers, customers, expense heads, …).
@@ -362,6 +392,24 @@ BEGIN
     END IF;
 END $$;
 
+-- Marks the one ledger per org that order advances post to. Replaces a hardcoded
+-- UUID constant that predated multi-tenancy and left the advance flow inert for
+-- every other org. The partial unique index below enforces "at most one per org".
+-- See supabase/migrations/20260801050000_ledgers_is_orders_ledger.sql.
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_orders_ledger BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_one_orders_ledger_per_org
+    ON ledgers (org_id) WHERE is_orders_ledger;
+
+-- Which Month Summary expense line this ledger's spending rolls into (NULL =
+-- excluded). Replaces get_month_summary_totals' old ledger-*name* substring
+-- matching, where 'ad' also caught "Load Sheet"/"Trade"/"Adnan" and renaming a
+-- ledger silently moved money between P&L lines. See
+-- supabase/migrations/20260801040000_ledgers_report_category.sql.
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS report_category VARCHAR(20);
+ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_report_category_check;
+ALTER TABLE ledgers ADD CONSTRAINT ledgers_report_category_check
+    CHECK (report_category IS NULL OR report_category IN ('shopify', 'ad', 'other'));
+
 -- Opening balance, set once at ledger creation (rarely changed after). Folded
 -- into ledger_balances by recalc_ledger_balance so the running balance always
 -- starts from this instead of 0 — see the ledgers_opening_balance_trigger
@@ -410,8 +458,10 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
     org_id           UUID NOT NULL REFERENCES organizations(id),
     balance_date     DATE NOT NULL,
     opening_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
-    total_credit     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    -- Cash-perspective (see "THE TWO PERSPECTIVES" above): total_debit is money
+    -- received, total_credit is money paid out.
     total_debit      DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    total_credit     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     closing_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     created_at       TIMESTAMPTZ DEFAULT NOW(),
     updated_at       TIMESTAMPTZ DEFAULT NOW(),
@@ -562,36 +612,39 @@ BEGIN
           WHERE org_id = p_org_id AND entry_date >= p_from_date
       );
 
+    -- Folio-side entry_type read from the cash account's side - see "THE TWO
+    -- PERSPECTIVES" at the top of this section. The filters are deliberately
+    -- crossed: a folio 'credit' is a cash receipt, i.e. a debit to cash.
     WITH day_totals AS (
         SELECT entry_date AS balance_date,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0) AS total_credit,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)  AS total_debit
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0) AS total_debit,
+               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)  AS total_credit
         FROM cashbook_entries
         WHERE org_id = p_org_id AND entry_date >= p_from_date
         GROUP BY entry_date
     ),
     running AS (
         SELECT balance_date,
-               total_credit,
                total_debit,
-               v_opening + SUM(total_credit - total_debit)
+               total_credit,
+               v_opening + SUM(total_debit - total_credit)
                    OVER (ORDER BY balance_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_balance
         FROM day_totals
     )
     INSERT INTO cashbook_daily_balances
-        (org_id, balance_date, opening_balance, total_credit, total_debit, closing_balance, updated_at)
+        (org_id, balance_date, opening_balance, total_debit, total_credit, closing_balance, updated_at)
     SELECT p_org_id,
            balance_date,
-           closing_balance - total_credit + total_debit,
-           total_credit,
+           closing_balance - total_debit + total_credit,
            total_debit,
+           total_credit,
            closing_balance,
            NOW()
     FROM running
     ON CONFLICT (org_id, balance_date) DO UPDATE SET
         opening_balance = EXCLUDED.opening_balance,
-        total_credit     = EXCLUDED.total_credit,
         total_debit      = EXCLUDED.total_debit,
+        total_credit     = EXCLUDED.total_credit,
         closing_balance  = EXCLUDED.closing_balance,
         updated_at       = NOW();
 END;

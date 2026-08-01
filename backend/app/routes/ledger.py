@@ -26,6 +26,21 @@ def _flatten_ledger_balance(row: dict) -> dict:
     return row
 
 
+def _orders_ledger_taken(supabase, org_id: str, exclude_id: str = None) -> bool:
+    """Whether this org already has an Orders ledger. Backstopped by
+    idx_ledgers_one_orders_ledger_per_org for races/non-API writers; this just
+    turns the common case into a message instead of a constraint violation.
+    The role is deliberately not moved automatically - silently unsetting the
+    previous Orders ledger would retarget every future advance with no trace."""
+    resp = (
+        org_table(supabase, org_id, "ledgers")
+        .select("id")
+        .eq("is_orders_ledger", True)
+        .execute()
+    )
+    return any(row["id"] != exclude_id for row in resp.data or [])
+
+
 def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> bool:
     """Case-insensitive name clash check within this org (mirrors findLedgerByName
     in renderer.js). Backstopped by idx_ledgers_org_id_name_lower for races/non-API
@@ -60,12 +75,19 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
     supabase = get_supabase()
     if _name_taken(supabase, org_id, name):
         raise HTTPException(status_code=400, detail="A ledger with this name already exists")
+    if ledger.is_orders_ledger and _orders_ledger_taken(supabase, org_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Another ledger is already the Orders ledger. Unset it first.",
+        )
 
     response = org_table(supabase, org_id, "ledgers").insert({
         "name": name,
         "type": ledger.type,
         "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
         "opening_balance": ledger.opening_balance,
+        "report_category": ledger.report_category,
+        "is_orders_ledger": ledger.is_orders_ledger,
     }).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")
@@ -108,6 +130,11 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
             raise HTTPException(status_code=400, detail="A ledger with this name already exists")
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
+    if payload.get("is_orders_ledger") and _orders_ledger_taken(supabase, org_id, exclude_id=ledger_id):
+        raise HTTPException(
+            status_code=400,
+            detail="Another ledger is already the Orders ledger. Unset it first.",
+        )
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
 
@@ -146,7 +173,11 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
 
 @router.get("/{ledger_id}/entries", response_model=List[dict])
 async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id)):
-    """Cashbook entries linked to this ledger (via folio), as ledger-format rows."""
+    """Cashbook entries linked to this ledger (via folio), as ledger-format rows.
+
+    entry_type is already the folio ledger's own side (see "THE TWO PERSPECTIVES"
+    in supabase_schema.sql), so it maps straight across here - no inversion. The
+    Cashbook screen is the one that reads these entries from cash's side."""
     response = (
         org_table(get_supabase(), org_id, "cashbook_entries")
         .select("*")
@@ -165,8 +196,8 @@ async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id))
             "ledger_id": ledger_id,
             "entry_date": entry["entry_date"],
             "particulars": entry.get("description") or "",
-            "incoming": amount if entry_type == "credit" else 0,
-            "outgoing": amount if entry_type == "debit" else 0,
+            "debit": amount if entry_type == "debit" else 0,
+            "credit": amount if entry_type == "credit" else 0,
             "created_at": entry.get("created_at"),
             "updated_at": entry.get("updated_at"),
         })

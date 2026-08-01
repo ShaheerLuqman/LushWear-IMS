@@ -37,7 +37,11 @@ function buildCashbookSideRows(entries, side) {
     }));
 }
 
-function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
+// The cash book's Debit (receipts) side. Reads entry_type='credit' because
+// entry_type is the folio ledger's side and cash always takes the opposite one —
+// see "THE TWO PERSPECTIVES" in supabase_schema.sql. The crossed filter here and
+// in buildCashbookCreditWithClosing below is deliberate, not a bug.
+function buildCashbookDebitWithOpening(entries, carryForward, selectedDate) {
     const opening = parseFloat(carryForward) || 0;
     const rows = buildCashbookSideRows(entries, 'credit');
     const totalCredit = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
@@ -57,7 +61,8 @@ function buildCashbookIncomingWithOpening(entries, carryForward, selectedDate) {
     return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalCredit };
 }
 
-function buildCashbookOutgoingWithClosing(entries, carryForward, selectedDate) {
+// The cash book's Credit (payments) side, closing balance included.
+function buildCashbookCreditWithClosing(entries, carryForward, selectedDate) {
     const creditEntries = (entries || []).filter((e) => e.entry_type === 'credit');
     const debitEntries = (entries || []).filter((e) => e.entry_type === 'debit');
     const totalCredit = creditEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
@@ -107,20 +112,20 @@ function renderCashbook() {
     const openingBalance = cashbookDailyBalance ? parseFloat(cashbookDailyBalance.opening_balance) || 0 : 0;
     const filteredEntries = cashbookEntries.filter((entry) => entry.entry_date === selectedDate);
 
-    const { rowData: incomingRowData, pinnedBottomRowData: incomingPinnedBottom } = buildCashbookIncomingWithOpening(filteredEntries, openingBalance, selectedDate);
-    const { rowData: outgoingRowData, pinnedBottomRowData: outgoingPinnedBottom } = buildCashbookOutgoingWithClosing(filteredEntries, openingBalance, selectedDate);
+    const { rowData: debitRowData, pinnedBottomRowData: debitPinnedBottom } = buildCashbookDebitWithOpening(filteredEntries, openingBalance, selectedDate);
+    const { rowData: creditRowData, pinnedBottomRowData: creditPinnedBottom } = buildCashbookCreditWithClosing(filteredEntries, openingBalance, selectedDate);
 
-    if (cashbookIncomingGridApi) {
-        cashbookIncomingGridApi.setGridOption('rowData', incomingRowData);
-        cashbookIncomingGridApi.setGridOption('pinnedTopRowData', []);
-        cashbookIncomingGridApi.setGridOption('pinnedBottomRowData', incomingPinnedBottom);
-        cashbookIncomingGridApi.setGridOption('pagination', false);
+    if (cashbookDebitGridApi) {
+        cashbookDebitGridApi.setGridOption('rowData', debitRowData);
+        cashbookDebitGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookDebitGridApi.setGridOption('pinnedBottomRowData', debitPinnedBottom);
+        cashbookDebitGridApi.setGridOption('pagination', false);
     }
-    if (cashbookOutgoingGridApi) {
-        cashbookOutgoingGridApi.setGridOption('rowData', outgoingRowData);
-        cashbookOutgoingGridApi.setGridOption('pinnedTopRowData', []);
-        cashbookOutgoingGridApi.setGridOption('pinnedBottomRowData', outgoingPinnedBottom);
-        cashbookOutgoingGridApi.setGridOption('pagination', false);
+    if (cashbookCreditGridApi) {
+        cashbookCreditGridApi.setGridOption('rowData', creditRowData);
+        cashbookCreditGridApi.setGridOption('pinnedTopRowData', []);
+        cashbookCreditGridApi.setGridOption('pinnedBottomRowData', creditPinnedBottom);
+        cashbookCreditGridApi.setGridOption('pagination', false);
     }
 }
 
@@ -162,12 +167,17 @@ function scheduleCashbookReload() {
 
 // --- Create Cashbook Entry modal ---------------------------------------------
 
-// Tracks whether the user has manually edited the outgoing amount. Until they do,
-// the outgoing amount mirrors whatever is typed in the incoming amount.
+// Tracks whether the user has manually edited the Credit amount. Until they do,
+// it mirrors whatever is typed in the Debit amount.
 let cashbookEntryOutAmountTouched = false;
 
-// The "Orders" ledger that order advances are always posted to (hardcoded).
-const ORDERS_LEDGER_ID = '4bc067af-cf91-4700-8b52-b70ad4a991df';
+// The ledger this org posts order advances to, flagged per org (at most one,
+// DB-enforced) rather than the hardcoded UUID this used to be — that constant
+// predated multi-tenancy and left the advance flow inert for every other org.
+// Null until an org marks one, which every caller below already handles.
+function getOrdersLedgerId() {
+    return ledgers.find(l => l.is_orders_ledger)?.id || null;
+}
 
 // Default particulars text for an order advance.
 function orderAdvanceParticularPlaceholder(orderNumber) {
@@ -209,14 +219,14 @@ function isCashbookEntryOrderAdvance() {
 }
 
 /**
- * Toggle order-advance mode: the incoming side is locked to the Orders ledger and
+ * Toggle order-advance mode: the Debit side is locked to the Orders ledger and
  * an order number becomes required.
  */
 function setCashbookEntryOrderAdvance(enabled) {
     const group = document.getElementById('cashbookEntryOrderNumberGroup');
     const orderNumber = document.getElementById('cashbookEntryOrderNumber');
     const inLedger = document.getElementById('cashbookEntryInLedger');
-    // "Paid with Cash" (on the Outgoing side) skips the credit leg, which an
+    // "Paid with Cash" (on the Credit side) skips the folio-credit leg, which an
     // order advance always needs.
     const creditSkip = document.getElementById('cashbookEntryInSkip');
 
@@ -231,13 +241,13 @@ function setCashbookEntryOrderAdvance(enabled) {
         setCashbookEntrySideSkipped('credit', false);
     }
     if (creditSkip) creditSkip.disabled = enabled;
-    // The incoming ledger is always Orders for an advance, so hide the field
+    // The Debit-side ledger is always Orders for an advance, so hide the field
     // rather than showing a locked select.
     const inLedgerGroup = document.getElementById('cashbookEntryInLedgerGroup');
     if (inLedgerGroup) inLedgerGroup.style.display = enabled ? 'none' : '';
     if (inLedger) {
         inLedger.disabled = enabled;
-        if (enabled) inLedger.value = ORDERS_LEDGER_ID;
+        if (enabled) inLedger.value = getOrdersLedgerId() || '';
     }
 
     refreshCashbookEntryParticularPlaceholders();
@@ -401,18 +411,18 @@ async function submitCashbookEntryModal() {
     if (isAdvance && !orderNumber) { showToast('Enter an order number', 'error'); return; }
     // A select silently drops a value with no matching option, so a missing Orders
     // ledger would otherwise surface as a confusing "select a ledger" error.
-    if (isAdvance && !ledgers.some(l => l.id === ORDERS_LEDGER_ID)) {
-        showToast('The Orders ledger is missing. Recreate it to record advances.', 'error');
+    if (isAdvance && !getOrdersLedgerId()) {
+        showToast('No Orders ledger is set. Mark one in Edit Ledger to record advances.', 'error');
         return;
     }
 
     if (!skipIn) {
-        if (!inLedger) { showToast('Select an incoming ledger', 'error'); return; }
-        if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid incoming amount', 'error'); return; }
+        if (!inLedger) { showToast('Select a ledger on the Debit side', 'error'); return; }
+        if (Number.isNaN(inAmount) || inAmount <= 0) { showToast('Enter a valid Debit amount', 'error'); return; }
     }
     if (!skipOut) {
-        if (!outLedger) { showToast('Select an outgoing ledger', 'error'); return; }
-        if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid outgoing amount', 'error'); return; }
+        if (!outLedger) { showToast('Select a ledger on the Credit side', 'error'); return; }
+        if (Number.isNaN(outAmount) || outAmount <= 0) { showToast('Enter a valid Credit amount', 'error'); return; }
     }
 
     const entryDate = cashbookSelectedDate || getTodayDateString();
@@ -538,7 +548,7 @@ function initCashbookActions() {
         e.preventDefault();
         submitCashbookEntryModal();
     });
-    // Mirror incoming amount into outgoing until the user edits the outgoing amount.
+    // Mirror the Debit amount into Credit until the user edits the Credit amount.
     document.getElementById('cashbookEntryInAmount')?.addEventListener('input', (e) => {
         const outAmount = document.getElementById('cashbookEntryOutAmount');
         // If both fields are now empty, re-arm mirroring (back to default mode).
@@ -719,7 +729,7 @@ function parseBulkEntryLine(raw, lineNo) {
     const ledgerName = headMatch[2].trim();
     const orderShorthand = ledgerName.match(/^orders?\s*#?\s*(\d{4,})$/i);
     const ledger = orderShorthand
-        ? ledgers.find(l => l.id === ORDERS_LEDGER_ID) || null
+        ? ledgers.find(l => l.is_orders_ledger) || null
         : findLedgerByName(ledgerName);
     if (!ledger) result.errors.push(orderShorthand ? 'Orders ledger not found.' : `Ledger "${ledgerName}" not found.`);
 
@@ -730,13 +740,13 @@ function parseBulkEntryLine(raw, lineNo) {
     // order number parsed from the particulars (or the "Order# ..." shorthand)
     // so advance reconciliation works.
     const orderNumber = orderShorthand ? orderShorthand[1] : (entryType === 'credit' ? extractOrderNumberFromText(particulars) : null);
-    const description = particulars || (orderNumber && ledger.id === ORDERS_LEDGER_ID
+    const description = particulars || (orderNumber && ledger.is_orders_ledger
         ? orderAdvanceParticularPlaceholder(orderNumber)
         : cashbookEntryParticularPlaceholder(entryType, ledger.id));
     result.particulars = particulars || '';
 
     const entry = { entry_type: entryType, amount: result.amount, description, folio: ledger.id };
-    if (ledger.id === ORDERS_LEDGER_ID && orderNumber) entry.order_number = orderNumber;
+    if (ledger.is_orders_ledger && orderNumber) entry.order_number = orderNumber;
 
     result.entries = [entry];
     result.orderNumber = orderNumber || null;

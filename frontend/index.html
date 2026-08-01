@@ -319,10 +319,10 @@
                 <div id="cashbookView" class="view">
                     <div class="cashbook-grid-split">
                         <div class="cashbook-grid-panel">
-                            <div id="cashbookIncomingGrid" class="ag-theme-alpine grid-container"></div>
+                            <div id="cashbookDebitGrid" class="ag-theme-alpine grid-container"></div>
                         </div>
                         <div class="cashbook-grid-panel">
-                            <div id="cashbookOutgoingGrid" class="ag-theme-alpine grid-container"></div>
+                            <div id="cashbookCreditGrid" class="ag-theme-alpine grid-container"></div>
                         </div>
                     </div>
                 </div>
@@ -364,6 +364,16 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
+                                    <label for="createLedgerReportCategory">Month Summary expense line</label>
+                                    <select id="createLedgerReportCategory" class="form-input">
+                                        <option value="">Not reported</option>
+                                        <option value="shopify">Shopify Charges</option>
+                                        <option value="ad">Ad Expense</option>
+                                        <option value="other">Other Expenses</option>
+                                    </select>
+                                    <span class="form-hint">Which Month Summary line this ledger's spending rolls into.</span>
+                                </div>
+                                <div class="form-group">
                                     <label for="createLedgerOpeningBalance">Opening balance</label>
                                     <input type="number" id="createLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
                                     <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
@@ -371,6 +381,10 @@
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="createLedgerCashInHand">
                                     <span>Include in Cash In Hand</span>
+                                </label>
+                                <label class="ledger-form-toggle">
+                                    <input type="checkbox" id="createLedgerIsOrdersLedger">
+                                    <span>Orders ledger (order advances post here)</span>
                                 </label>
                                 <div class="modal-actions form-actions">
                                     <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
@@ -396,7 +410,7 @@
                             <form id="cashbookEntryForm" class="ledger-form">
                                 <div class="cashbook-entry-split">
                                     <fieldset class="cashbook-entry-side">
-                                        <legend>Incoming</legend>
+                                        <legend>Debit (Received)</legend>
                                         <label class="cashbook-entry-skip-toggle">
                                             <input type="checkbox" id="cashbookEntryOutSkip">
                                             <span>Received as Cash</span>
@@ -425,7 +439,7 @@
                                         </div>
                                     </fieldset>
                                     <fieldset class="cashbook-entry-side">
-                                        <legend>Outgoing</legend>
+                                        <legend>Credit (Paid)</legend>
                                         <label class="cashbook-entry-skip-toggle">
                                             <input type="checkbox" id="cashbookEntryInSkip">
                                             <span>Paid with Cash</span>
@@ -462,8 +476,8 @@
                                                 <p>One entry per line. Format:
                                                 <b><code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
                                                 <ul>
-                                                    <li><strong>From</strong> / <strong>Cr</strong> — incoming to LEDGER. e.g. <b><code>From: 2064 TCS (Received order payment)</code></b></li>
-                                                    <li><strong>To</strong> / <strong>Dr</strong> — outgoing from LEDGER. e.g. <b><code>To: 2064 Meezan Bank (Received order payment)</code></b></li>
+                                                    <li><strong>From</strong> / <strong>Cr</strong> — credits the LEDGER, so cash is received. e.g. <b><code>From: 2064 TCS (Received order payment)</code></b></li>
+                                                    <li><strong>To</strong> / <strong>Dr</strong> — debits the LEDGER, so cash is paid. e.g. <b><code>To: 2064 Meezan Bank (Received order payment)</code></b></li>
                                                 </ul>
                                                 <p>Particulars are optional — omit them and a default description is generated.</p>
                                                 <p>Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger:</p>
@@ -510,6 +524,16 @@
                                     </select>
                                 </div>
                                 <div class="form-group">
+                                    <label for="editLedgerReportCategory">Month Summary expense line</label>
+                                    <select id="editLedgerReportCategory" class="form-input">
+                                        <option value="">Not reported</option>
+                                        <option value="shopify">Shopify Charges</option>
+                                        <option value="ad">Ad Expense</option>
+                                        <option value="other">Other Expenses</option>
+                                    </select>
+                                    <span class="form-hint">Which Month Summary line this ledger's spending rolls into.</span>
+                                </div>
+                                <div class="form-group">
                                     <label for="editLedgerOpeningBalance">Opening balance</label>
                                     <input type="number" id="editLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
                                     <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
@@ -517,6 +541,10 @@
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="editLedgerCashInHand">
                                     <span>Include in Cash In Hand</span>
+                                </label>
+                                <label class="ledger-form-toggle">
+                                    <input type="checkbox" id="editLedgerIsOrdersLedger">
+                                    <span>Orders ledger (order advances post here)</span>
                                 </label>
                                 <div class="modal-actions form-actions edit-ledger-actions">
                                     <span id="editLedgerDeleteWrap" class="ledger-edit-delete-wrap" title="">
