@@ -10,13 +10,13 @@
     --bg-tertiary: #e8e8ec;
     --bg-card: #fafafa;
     --border-color: #d1d1d6;
-    --border-focus: #ec4267;
+    --border-focus: #7c5cfc;
     --text-primary: #1a1a1a;
     --text-secondary: #4a4a4f;
     --text-muted: #8e8e93;
-    --accent-primary: #ec4267;
-    --accent-secondary: #f2617f;
-    --accent-glow: rgba(236, 66, 103, 0.2);
+    --accent-primary: #7c5cfc;
+    --accent-secondary: #8b7bff;
+    --accent-glow: rgba(124, 92, 252, 0.2);
     --accent-nav: #7c5cfc;
     --accent-nav-glow: rgba(124, 92, 252, 0.25);
     --danger: #c45c5c;
@@ -32,11 +32,11 @@
     --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.15);
     --transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 
-    /* AG Grid surfaces, re-declared per theme below. */
-    --grid-bg: #ffffff;
-    --grid-header-bg: #f8f9fa;
+    /* AG Grid surfaces follow the app theme so the grid blends with the page. */
+    --grid-bg: var(--bg-primary);
+    --grid-header-bg: var(--bg-primary);
     --grid-border: #e5e7eb;
-    --grid-row-hover: #f3f0ff;
+    --grid-row-hover: var(--bg-secondary);
     --grid-foreground: #1f2937;
     --grid-header-foreground: #6b7280;
 }
@@ -56,12 +56,11 @@
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.6);
 
-    /* Matched to ag-theme-alpine-dark's own palette so the surfaces we style
-       ourselves (paging panel, popups, menus) blend with the grid. */
-    --grid-bg: #16171e;
-    --grid-header-bg: #1a1b23;
-    --grid-border: #2c2d38;
-    --grid-row-hover: #221f30;
+    /* Keep AG Grid aligned with the app surfaces in dark mode too. */
+    --grid-bg: var(--bg-secondary);
+    --grid-header-bg: var(--bg-secondary);
+    --grid-border: var(--border-color);
+    --grid-row-hover: var(--bg-tertiary);
     --grid-foreground: #f3f3f6;
     --grid-header-foreground: #9494a0;
 }
@@ -2220,6 +2219,53 @@ input[type="number"] {
     --ag-control-panel-background-color: var(--grid-header-bg);
 }
 
+.ag-theme-alpine-dark {
+    --ag-background-color: var(--grid-bg);
+    --ag-header-background-color: var(--grid-header-bg);
+    --ag-even-row-background-color: var(--grid-bg);
+    --ag-odd-row-background-color: color-mix(in srgb, var(--grid-bg) 82%, var(--bg-tertiary) 18%);
+    --ag-row-hover-color: color-mix(in srgb, var(--grid-row-hover) 88%, var(--accent-primary) 12%);
+    --ag-border-color: var(--grid-border);
+    --ag-header-foreground-color: var(--grid-header-foreground);
+    --ag-foreground-color: var(--grid-foreground);
+    --ag-secondary-foreground-color: var(--text-secondary);
+    --ag-filter-tool-panel-background-color: var(--grid-header-bg);
+    --ag-control-panel-background-color: var(--grid-header-bg);
+}
+
+:root[data-theme="dark"] .ag-theme-alpine-dark,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-root-wrapper,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-body-viewport,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-paging-panel,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-menu,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-popup,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-filter-toolpanel-search,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-filter-body-wrapper {
+    background-color: var(--grid-bg) !important;
+    color: var(--grid-foreground) !important;
+    border-color: var(--grid-border) !important;
+}
+
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-header,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-header-row {
+    background-color: var(--grid-header-bg) !important;
+    color: var(--grid-header-foreground) !important;
+}
+
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-even {
+    background-color: var(--grid-bg) !important;
+}
+
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-odd {
+    background-color: color-mix(in srgb, var(--grid-bg) 82%, var(--bg-tertiary) 18%) !important;
+}
+
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row:hover,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.ag-row-hover,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-selected {
+    background-color: var(--ag-row-hover-color) !important;
+}
+
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header {
     font-size: 12px;
     font-weight: 600;
@@ -4369,8 +4415,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     gap: 4px;
 }
 
-/* Superadmin Portal (admin.html) - standalone page, reuses .settings-*/.auth-gate-*/
-   .modal-* from the main app rather than its own design system. */
+/* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
 .admin-portal-badge {
     display: inline-block;
     align-self: center;

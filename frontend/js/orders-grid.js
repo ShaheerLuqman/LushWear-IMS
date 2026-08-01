@@ -318,9 +318,9 @@ ClearFiltersFloatingFilter.prototype.init = function (params) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn-secondary btn-sm orders-clear-filters-btn';
-    const icon = document.createElement('img');
-    icon.src = 'assets/clear_filter.png';
-    icon.alt = 'Clear all filters';
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', 'filter-x');
+    icon.setAttribute('aria-hidden', 'true');
     icon.className = 'orders-clear-filters-icon';
     btn.appendChild(icon);
     btn.title = 'Clear column filters (keeps period selection)';
@@ -328,6 +328,9 @@ ClearFiltersFloatingFilter.prototype.init = function (params) {
         const api = params.api;
         if (api) api.setFilterModel(null);
     });
+    if (window.lucide) {
+        lucide.createIcons({ root: btn });
+    }
     this.eGui.appendChild(btn);
 };
 ClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
@@ -352,15 +355,18 @@ ProductsClearFiltersFloatingFilter.prototype.init = function (params) {
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'btn btn-secondary btn-sm orders-clear-filters-btn';
-    const icon = document.createElement('img');
-    icon.src = 'assets/clear_filter.png';
-    icon.alt = 'Clear all filters';
+    const icon = document.createElement('i');
+    icon.setAttribute('data-lucide', 'filter-x');
+    icon.setAttribute('aria-hidden', 'true');
     icon.className = 'orders-clear-filters-icon';
     btn.appendChild(icon);
     btn.title = 'Clear all filters';
     btn.addEventListener('click', function () {
         if (params.api) params.api.setFilterModel(null);
     });
+    if (window.lucide) {
+        lucide.createIcons({ root: btn });
+    }
     this.eGui.appendChild(btn);
 };
 ProductsClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
