@@ -948,8 +948,9 @@ function createFolioCellRenderer(params, accountField) {
         && !params.data.from_account_id && !params.data.to_account_id;
 
     // Display text showing selected ledger (like piece_received shows status)
+    const isCashSide = !!(shownLedger && shownLedger.system_key === 'cash');
     const displaySpan = document.createElement('span');
-    displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '');
+    displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '') + (isCashSide ? ' folio-cash' : '');
     displaySpan.textContent = displayText;
     displaySpan.style.cursor = isEditingAllowed() ? 'pointer' : 'default';
 
@@ -1123,7 +1124,7 @@ function createFolioCellRenderer(params, accountField) {
     const goToLedgerBtn = document.createElement('button');
     goToLedgerBtn.type = 'button';
     goToLedgerBtn.className = 'folio-goto-btn';
-    goToLedgerBtn.innerHTML = '→';
+    goToLedgerBtn.innerHTML = '<i class="fa-solid fa-arrow-right"></i>';
     goToLedgerBtn.title = shownLedgerId ? `Go to ${displayText}` : 'Select a ledger first';
     if (!shownLedgerId) {
         goToLedgerBtn.style.opacity = '0.4';

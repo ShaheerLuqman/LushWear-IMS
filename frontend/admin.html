@@ -5,10 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <meta http-equiv="Content-Security-Policy"
-        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data:;">
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; font-src https://cdn.jsdelivr.net data:; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data:;">
     <title>LushWear IMS — Superadmin</title>
     <link rel="icon" type="image/png" href="assets/Logo.png">
     <link rel="stylesheet" href="styles.css">
+    <!-- Font Awesome Icons -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6/css/all.min.css">
     <script>
         document.documentElement.setAttribute('data-theme', localStorage.getItem('lushwear-theme') || 'light');
     </script>
@@ -68,7 +70,7 @@
         <section id="adminOrgDetailView" class="admin-portal-section" hidden>
             <div class="admin-portal-section__header">
                 <div class="admin-org-detail-heading">
-                    <button type="button" id="adminOrgDetailBackBtn" class="btn btn-secondary btn-sm">← Organizations</button>
+                    <button type="button" id="adminOrgDetailBackBtn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-arrow-left"></i> Organizations</button>
                     <h2 class="settings-section__title" id="adminOrgDetailName"></h2>
                 </div>
                 <button type="button" id="adminOrgDetailViewAsBtn" class="btn btn-primary">View as org</button>

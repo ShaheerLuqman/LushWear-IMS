@@ -133,70 +133,67 @@
         <div class="sidebar-rail">
             <aside class="sidebar" id="sidebar">
                 <div class="logo">
-                    <img src="assets/Logo.png" alt="Inventory Manager" class="logo-img">
+                    <img src="assets/Logo.png" alt="SoftLush" class="logo-img">
+                    <span class="logo-text">SoftLush</span>
                 </div>
                 <nav class="nav-menu">
                     <div class="nav-section" data-feature-section="orders">
-                        <span class="nav-section-label">Overview</span>
                         <button class="nav-item" data-view="dashboard" title="Dashboard">
-                            <span class="nav-icon">📊</span>
+                            <span class="nav-icon"><i data-lucide="layout-dashboard"></i></span>
                             <span class="nav-tooltip">Dashboard</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
-                        <span class="nav-section-label">Shopify</span>
                         <button class="nav-item active" data-view="orders" title="Orders">
-                            <span class="nav-icon">📦</span>
+                            <span class="nav-icon"><i data-lucide="package"></i></span>
                             <span class="nav-tooltip">Orders</span>
                         </button>
                         <button class="nav-item" data-view="products" title="Products">
-                            <span class="nav-icon">🛍️</span>
+                            <span class="nav-icon"><i data-lucide="shopping-bag"></i></span>
                             <span class="nav-tooltip">Products</span>
                         </button>
                         <button class="nav-item" data-view="monthSummary" title="Month Summary">
-                            <span class="nav-icon">📅</span>
+                            <span class="nav-icon"><i data-lucide="calendar-days"></i></span>
                             <span class="nav-tooltip">Month Summary</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="finance">
-                        <span class="nav-section-label">Finances</span>
                         <button class="nav-item" data-view="cashbook" title="Cashbook">
-                            <span class="nav-icon">💰</span>
+                            <span class="nav-icon"><i data-lucide="wallet"></i></span>
                             <span class="nav-tooltip">Cashbook</span>
                         </button>
                         <button class="nav-item" data-view="ledgers" title="Ledgers">
-                            <span class="nav-icon">📚</span>
+                            <span class="nav-icon"><i data-lucide="book-open"></i></span>
                             <span class="nav-tooltip">Ledgers</span>
                         </button>
                         <button class="nav-item" data-view="bills" title="Purchase Bills">
-                            <span class="nav-icon">🧾</span>
+                            <span class="nav-icon"><i data-lucide="receipt"></i></span>
                             <span class="nav-tooltip">Purchase Bills</span>
                         </button>
                         <button class="nav-item" data-view="trialBalance" title="Trial Balance">
-                            <span class="nav-icon">⚖️</span>
+                            <span class="nav-icon"><i data-lucide="scale"></i></span>
                             <span class="nav-tooltip">Trial Balance</span>
                         </button>
                         <button class="nav-item" data-view="apAgeing" title="Payables Ageing">
-                            <span class="nav-icon">⏳</span>
+                            <span class="nav-icon"><i data-lucide="hourglass"></i></span>
                             <span class="nav-tooltip">Payables Ageing</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
-                        <span class="nav-section-label">Logistics</span>
                         <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
-                            <span class="nav-icon">📋</span>
+                            <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
                             <span class="nav-tooltip">Load Sheet Logs</span>
                         </button>
                     </div>
                 </nav>
                 <div class="sidebar-lock-wrap">
                     <button type="button" id="editLockBtn" class="nav-item sidebar-lock-btn" title="Lock editing">
-                        <span class="nav-icon" id="editLockIcon">🔓</span>
+                        <span class="nav-icon" id="editLockIcon"><i data-lucide="lock-open"></i></span>
                         <span class="nav-tooltip" id="editLockTooltip">Lock editing</span>
                     </button>
                     <div class="sidebar-user-menu-wrap" id="sidebarUserMenuWrap">
                         <button type="button" id="sidebarUserMenuBtn" class="nav-item" aria-haspopup="true" aria-expanded="false" title="Account menu">
-                            <span class="nav-icon">👤</span>
+                            <span class="nav-icon"><i data-lucide="user"></i></span>
                             <span class="nav-tooltip sidebar-user-menu-btn-label">
                                 <span id="sidebarUserMenuLabel">Account</span>
                                 <span id="sidebarUserMenuOrgLabel" class="sidebar-user-menu-btn-org"></span>
@@ -251,11 +248,8 @@
                         <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
                             <i class="fas fa-file-export" aria-hidden="true"></i>
                         </button>
-                        <button type="button" id="lockAppBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Lock app (log in again to unlock)" aria-label="Lock app">
-                            <img src="assets/padlock.png" alt="" class="header-lock-app-img" width="18" height="18" decoding="async" draggable="false">
-                        </button>
                         <button type="button" id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Full screen (Esc to exit)">
-                            <span class="header-fullscreen-icon" aria-hidden="true">⛶</span>
+                            <span class="header-fullscreen-icon" aria-hidden="true"><i data-lucide="maximize"></i></span>
                         </button>
                     </div>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
@@ -265,9 +259,9 @@
                             <span id="cashInHandAmount" class="cash-in-hand-amount">Rs 0.00</span>
                             <div id="cashInHandTooltip" class="cash-in-hand-tooltip"></div>
                         </div>
-                        <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day">◀</button>
+                        <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day"><i data-lucide="chevron-left"></i></button>
                         <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
-                        <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day">▶</button>
+                        <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day"><i data-lucide="chevron-right"></i></button>
                         <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
                         <button id="cashbookCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new cashbook entry">Create Entry</button>
                     </div>
@@ -701,7 +695,7 @@
                 <!-- Ledger Detail View -->
                 <div id="ledgerDetailView" class="view">
                     <div class="ledger-detail-header">
-                        <button id="ledgerBackBtn" class="btn btn-secondary btn-sm">← Back to Ledgers</button>
+                        <button id="ledgerBackBtn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-arrow-left"></i> Back to Ledgers</button>
                         <h2 id="ledgerDetailName" class="ledger-detail-title"></h2>
                     </div>
                     <div id="ledgerDetailGrid" class="ag-theme-alpine grid-container"></div>
@@ -719,7 +713,7 @@
                 <!-- Month Detail View -->
                 <div id="monthDetailView" class="view">
                     <div class="month-detail-header">
-                        <button id="backToMonthSummaryBtn" class="btn btn-secondary">← Back to Month Summary</button>
+                        <button id="backToMonthSummaryBtn" class="btn btn-secondary"><i class="fa-solid fa-arrow-left"></i> Back to Month Summary</button>
                         <h2 id="monthDetailTitle">Month Summary Details</h2>
                     </div>
                     <div class="month-detail-content" id="monthDetailContent">
@@ -1153,6 +1147,7 @@
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.0.2/dist/ag-grid-community.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lucide@1.28.0/dist/umd/lucide.min.js"></script>
     <script src="config.js"></script>
     <script src="utils.js"></script>
     <!-- Plain scripts sharing one global scope, not ES modules: the app keeps ~38

@@ -180,7 +180,10 @@ function applyEditLockState() {
     const lockTooltip = document.getElementById('editLockTooltip');
     if (lockBtn) {
         lockBtn.classList.toggle('locked', locked);
-        if (lockIcon) lockIcon.textContent = locked ? '🔒' : '🔓';
+        if (lockIcon) {
+            lockIcon.innerHTML = `<i data-lucide="${locked ? 'lock' : 'lock-open'}"></i>`;
+            if (window.lucide) lucide.createIcons({ root: lockIcon });
+        }
         if (lockTooltip) lockTooltip.textContent = locked ? 'Unlock editing' : 'Lock editing';
     }
     const editButtons = [
@@ -644,6 +647,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         appContainer.style.opacity = '0';
     }
 
+    if (window.lucide) lucide.createIcons();
     initNavigation();
     initOrdersPeriodFilter();
     initOrdersDateRangeButton();
@@ -655,10 +659,6 @@ document.addEventListener('DOMContentLoaded', async () => {
     initChangePasswordModal();
     initSettingsView();
     initInstallPrompt();
-    const lockAppBtn = document.getElementById('lockAppBtn');
-    if (lockAppBtn) {
-        lockAppBtn.addEventListener('click', () => lockApp());
-    }
 
     const impersonating = consumeImpersonationToken();
     let resumedAccount = impersonating ? null : await tryResumeSession();

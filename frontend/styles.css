@@ -10,13 +10,15 @@
     --bg-tertiary: #e8e8ec;
     --bg-card: #fafafa;
     --border-color: #d1d1d6;
-    --border-focus: #8b5cf6;
+    --border-focus: #ec4267;
     --text-primary: #1a1a1a;
     --text-secondary: #4a4a4f;
     --text-muted: #8e8e93;
-    --accent-primary: #8b5cf6;
-    --accent-secondary: #a78bfa;
-    --accent-glow: rgba(139, 92, 246, 0.2);
+    --accent-primary: #ec4267;
+    --accent-secondary: #f2617f;
+    --accent-glow: rgba(236, 66, 103, 0.2);
+    --accent-nav: #7c5cfc;
+    --accent-nav-glow: rgba(124, 92, 252, 0.25);
     --danger: #c45c5c;
     --warning: #c4a35c;
     --success: #8b5cf6;
@@ -40,28 +42,28 @@
 }
 
 :root[data-theme="dark"] {
-    --bg-primary: #16161a;
-    --bg-secondary: #1d1d22;
-    --bg-tertiary: #2a2a31;
-    --bg-card: #1f1f25;
-    --border-color: #34343d;
-    --text-primary: #f2f2f5;
-    --text-secondary: #b9b9c4;
-    --text-muted: #85858f;
-    --danger: #e07575;
-    --warning: #d9b871;
-    --status-delivered: #71d971;
+    --bg-primary: #0d0e13;
+    --bg-secondary: #121319;
+    --bg-tertiary: #1c1d26;
+    --bg-card: #16171e;
+    --border-color: #262732;
+    --text-primary: #f3f3f6;
+    --text-secondary: #a4a4b0;
+    --text-muted: #6d6d78;
+    --danger: #ef4444;
+    --warning: #eab308;
+    --status-delivered: #22c55e;
     --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
     --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.6);
 
     /* Matched to ag-theme-alpine-dark's own palette so the surfaces we style
        ourselves (paging panel, popups, menus) blend with the grid. */
-    --grid-bg: #181d1f;
-    --grid-header-bg: #222628;
-    --grid-border: #68686e;
-    --grid-row-hover: #2c2740;
-    --grid-foreground: #ffffff;
-    --grid-header-foreground: #a0a0ac;
+    --grid-bg: #16171e;
+    --grid-header-bg: #1a1b23;
+    --grid-border: #2c2d38;
+    --grid-row-hover: #221f30;
+    --grid-foreground: #f3f3f6;
+    --grid-header-foreground: #9494a0;
 }
 
 body {
@@ -259,7 +261,7 @@ body {
     border-right: 1px solid var(--border-color);
     display: flex;
     flex-direction: column;
-    padding: 20px 0;
+    padding: 0 0 20px;
     position: absolute;
     top: 0;
     left: 0;
@@ -272,22 +274,47 @@ body {
     box-shadow: var(--shadow-lg);
 }
 
+/* Same height as .header's min-height, both flush with the top of the screen, so the
+   border-bottom lands level with the header's own bottom edge and the mark is centred
+   in that band top-to-bottom - keep the two heights in sync.
+   Left-anchored at the same fixed inset as .nav-item's icon column so the mark never
+   shifts when the sidebar expands - only .logo-text's width/opacity animates. */
 .logo {
     display: flex;
     align-items: center;
-    justify-content: center;
-    padding: 0 20px 24px;
+    justify-content: flex-start;
+    height: 61px;
+    padding: 0 20px 0 21px;
     border-bottom: 1px solid var(--border-color);
     margin-bottom: 20px;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
 .logo-img {
     display: block;
-    max-width: 100%;
-    height: auto;
+    width: 28px;
     max-height: 48px;
     object-fit: contain;
+    flex-shrink: 0;
+}
+
+.logo-text {
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    width: 0;
+    margin-left: 0;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+}
+
+.sidebar:hover .logo-text {
+    width: auto;
+    margin-left: 12px;
+    opacity: 1;
 }
 
 .nav-menu {
@@ -295,40 +322,24 @@ body {
     padding: 0 12px;
 }
 
+/* Divider between nav groups instead of a text heading. .nav-section is full-width
+   within .nav-menu, so it's already exactly icon-column wide when collapsed and
+   spans the icon+text width once the sidebar expands - no separate transition needed. */
 .nav-section + .nav-section {
     margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
 }
 
-/* Collapses to zero height in the icon rail, same trick as .nav-tooltip -
-   an opacity-0 label still reserves layout space otherwise. */
-.nav-section-label {
-    display: block;
-    height: 0;
-    margin: 0 8px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    opacity: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    transition: opacity 0.12s ease;
-}
-
-.sidebar:hover .nav-section-label {
-    height: auto;
-    margin-bottom: 6px;
-    opacity: 0.7;
-}
-
+/* Left-anchored at a fixed padding in both states so the icon never shifts when the
+   sidebar expands - only .nav-tooltip's width/opacity animates. */
 .nav-item {
     display: flex;
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     position: relative;
     width: 100%;
-    padding: 14px 8px;
+    padding: 14px 8px 14px 9px;
     background: transparent;
     border: none;
     border-radius: var(--radius-md);
@@ -348,18 +359,26 @@ body {
 }
 
 .nav-item.active {
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+    background: var(--accent-nav);
     color: white;
     font-weight: 500;
-    box-shadow: 0 4px 16px var(--accent-glow);
+    box-shadow: 0 4px 16px var(--accent-nav-glow);
 }
 
 .nav-icon {
-    font-size: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     width: 28px;
-    text-align: center;
     flex-shrink: 0;
     line-height: 1;
+}
+
+.nav-icon .lucide {
+    width: 20px;
+    height: 20px;
+    stroke: currentColor;
+    stroke-width: 1.75;
 }
 
 /* Inline label, revealed when the sidebar expands (not a floating tooltip).
@@ -381,12 +400,6 @@ body {
     width: auto;
     margin-left: 12px;
     opacity: 1;
-}
-
-/* Icons hold the rail's centre when collapsed, then anchor left once expanded. */
-.sidebar:hover .nav-item {
-    justify-content: flex-start;
-    padding-left: 13px;
 }
 
 /* Bottom-pinned group: edit lock + settings. */
@@ -423,6 +436,7 @@ body {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    min-height: 61px;
     padding: 12px 20px;
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
@@ -611,21 +625,19 @@ body:has(#ordersView.active) .header-actions {
     line-height: 1;
 }
 
+.header-fullscreen-icon .lucide {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
 .header-actions .header-toolbar-btn-icon-only i {
     font-size: 1rem;
     line-height: 1;
 }
 
-.header-actions .header-toolbar-btn-icon-only .header-lock-app-img {
-    width: 18px;
-    height: 18px;
-    display: block;
-    object-fit: contain;
-    pointer-events: none;
-    user-select: none;
-}
-
-/* Orders: lock + fullscreen are fixed squares */
+/* Orders: fullscreen is a fixed square */
 .header-orders-app-actions {
     display: none;
     flex-direction: row;
@@ -636,7 +648,6 @@ body:has(#ordersView.active) .header-actions {
     min-height: 36px;
 }
 
-.header-orders-app-actions #lockAppBtn.header-toolbar-btn-icon-only,
 .header-orders-app-actions #ordersFullScreenBtn.header-toolbar-btn-icon-only {
     flex: 0 0 36px;
     width: 36px !important;
@@ -647,11 +658,6 @@ body:has(#ordersView.active) .header-actions {
     max-height: 36px !important;
     padding: 0 !important;
     box-sizing: border-box;
-}
-
-.header-orders-app-actions .header-toolbar-btn-icon-only .header-lock-app-img {
-    width: 18px;
-    height: 18px;
 }
 
 .header-orders-app-actions #ordersFullScreenBtn .header-fullscreen-icon {
@@ -1143,6 +1149,13 @@ body:has(#ledgersView.active) .content-area {
     padding: 8px 10px;
     font-size: 10px;
     min-width: 32px;
+}
+
+.btn-icon-sm .lucide {
+    width: 14px;
+    height: 14px;
+    stroke: currentColor;
+    stroke-width: 2;
 }
 
 .btn-success {
@@ -2182,16 +2195,16 @@ input[type="number"] {
    theme's own stylesheet, plus the light-only overrides below. */
 .ag-theme-alpine,
 .ag-theme-alpine-dark {
-    --ag-selected-row-background-color: rgba(139, 92, 246, 0.12);
-    --ag-input-focus-border-color: #8b5cf6;
-    --ag-range-selection-border-color: #8b5cf6;
-    --ag-checkbox-checked-color: #8b5cf6;
+    --ag-selected-row-background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
+    --ag-input-focus-border-color: var(--accent-primary);
+    --ag-range-selection-border-color: var(--accent-primary);
+    --ag-checkbox-checked-color: var(--accent-primary);
     --ag-font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
     --ag-font-size: 14px;
     --ag-cell-horizontal-padding: 16px;
     --ag-row-height: 48px;
     --ag-header-height: 48px;
-    --ag-alpine-active-color: #8b5cf6;
+    --ag-alpine-active-color: var(--accent-primary);
 }
 
 .ag-theme-alpine {
@@ -2262,12 +2275,12 @@ input[type="number"] {
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-button:hover {
-    background: rgba(139, 92, 246, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) input[class^="ag-"]:focus {
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-toolpanel-header,
@@ -2290,7 +2303,7 @@ input[type="number"] {
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-menu-option-active {
-    background: rgba(139, 92, 246, 0.1);
+    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-input {
@@ -2331,7 +2344,7 @@ input[type="number"] {
 .grid-floating-filter-select:focus {
     outline: none;
     border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 /* Date range floating filter wrapper */
@@ -2466,8 +2479,8 @@ input[type="number"] {
 /* Editable cells highlight */
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-cell-inline-editing {
     background: var(--grid-header-bg);
-    border-color: #8b5cf6;
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.15);
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
 }
 
 /* Filtering is already visible in the floating filter row, so the header funnel is
@@ -3453,6 +3466,10 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: rgba(220, 38, 38, 0.15);
 }
 
+.folio-display-text.folio-cash {
+    color: var(--text-muted);
+}
+
 .folio-dropdown-btn {
     display: flex;
     align-items: center;
@@ -3480,6 +3497,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     height: 24px;
     min-width: 24px;
     padding: 0;
+    line-height: 1;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
@@ -3598,7 +3616,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
    Tinted and accented so it reads as the place to start, not as a saved entry
    somebody left empty. Translucent so it sits on either theme's row colour. */
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.cashbook-new-row {
-    background-color: rgba(139, 92, 246, 0.08) !important;
+    background-color: color-mix(in srgb, var(--accent-primary) 8%, transparent) !important;
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
@@ -4764,17 +4782,12 @@ body.admin-portal-page {
     }
 
     .nav-tooltip,
-    .sidebar:hover .nav-tooltip {
+    .sidebar:hover .nav-tooltip,
+    .logo-text,
+    .sidebar:hover .logo-text {
         width: auto;
         margin-left: 12px;
         opacity: 1;
-    }
-
-    .nav-section-label,
-    .sidebar:hover .nav-section-label {
-        height: auto;
-        margin-bottom: 6px;
-        opacity: 0.7;
     }
 
     .nav-item,

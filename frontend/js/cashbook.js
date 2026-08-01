@@ -712,7 +712,7 @@ function validateBulkEntry() {
                     const from = e.from_account_id ? ledgerNameById(e.from_account_id) : cashSideLabel();
                     const to = e.to_account_id ? ledgerNameById(e.to_account_id) : cashSideLabel();
                     const tag = e.order_number ? ` [Order #${escapeHtml(e.order_number)}]` : '';
-                    return `${formatBulkAmount(e.amount)} ${escapeHtml(from)} → ${escapeHtml(to)}${tag}`;
+                    return `${formatBulkAmount(e.amount)} ${escapeHtml(from)} <i class="fa-solid fa-arrow-right"></i> ${escapeHtml(to)}${tag}`;
                 })
                 .join(' , ');
             return `<div class="bulk-entry-line bulk-entry-line-ok">`
