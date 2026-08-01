@@ -7,10 +7,6 @@ def _lower(v):
     return v.strip().lower() if isinstance(v, str) else v
 
 
-# entry_type is case-normalised before matching so existing clients sending
-# "CREDIT"/"Credit" keep working (the route used to lower() it after parsing).
-# credit = money received from the ledger (folio); debit = money paid to it.
-EntryType = Annotated[Literal["credit", "debit"], BeforeValidator(_lower)]
 PieceReceived = Literal["Pending", "Done", "Received"]
 # Standard accounting Nature — closed set, not free text, since a typo here
 # silently creates an untracked bucket. Drives display grouping only;
@@ -154,12 +150,28 @@ class Order(OrderBase):
 # ==================== CASHBOOK MODELS ====================
 
 class CashbookEntryBase(BaseModel):
+    """An entry names both of its sides; NULL on a side means cash.
+
+    from_account_id is credited (money came from there), to_account_id is
+    debited (money went there). An entry only moves Cash in Hand when one side
+    is None — which is how a bank-to-supplier transfer stays out of the cash
+    balance."""
     entry_date: date
-    entry_type: EntryType
     amount: float = Field(gt=0)
     description: Optional[str] = None
-    folio: NonBlankStr  # UUID of the linked ledger
+    from_account_id: Optional[str] = None
+    to_account_id: Optional[str] = None
     order_number: Optional[str] = None  # Set only for order-advance entries
+
+    @model_validator(mode="after")
+    def _two_distinct_sides(self):
+        # Mirrors cashbook_entries_two_sides_check: both None is cash-to-cash,
+        # which moves nothing; equal sides is an account paying itself.
+        if self.from_account_id is None and self.to_account_id is None:
+            raise ValueError("an entry needs a From or a To account (the empty side is cash)")
+        if self.from_account_id is not None and self.from_account_id == self.to_account_id:
+            raise ValueError("From and To cannot be the same account")
+        return self
 
 class CashbookEntryCreate(CashbookEntryBase):
     # Client-generated per submission. Replaying a create with the same key
@@ -169,10 +181,10 @@ class CashbookEntryCreate(CashbookEntryBase):
 
 class CashbookEntryUpdate(BaseModel):
     entry_date: Optional[date] = None
-    entry_type: Optional[EntryType] = None
     amount: Optional[float] = Field(default=None, gt=0)
     description: Optional[str] = None
-    folio: Optional[str] = None  # Can update folio, but not set to null
+    from_account_id: Optional[str] = None
+    to_account_id: Optional[str] = None
     order_number: Optional[str] = None
 
 class LedgerBalance(BaseModel):
@@ -214,10 +226,10 @@ class CashbookEntryAuditLog(BaseModel):
     id: str
     entry_id: str
     entry_date: date
-    entry_type: EntryType
     amount: float
     description: Optional[str] = None
-    folio: str
+    from_account_id: Optional[str] = None
+    to_account_id: Optional[str] = None
     order_number: Optional[str] = None
     deleted_at: datetime
 
@@ -225,7 +237,7 @@ class CashbookEntryAuditLog(BaseModel):
 
 # ==================== LEDGER MODELS ====================
 # Note: Ledger entries are no longer stored separately.
-# Ledgers now show summaries derived from cashbook_entries where folio = ledger.id
+# Ledgers show a statement built from their journal lines (get_ledger_statement).
 
 # Which Month Summary expense line a ledger's spending rolls up into. Replaces
 # the ledger-name substring matching get_month_summary_totals used to do (see
@@ -237,8 +249,7 @@ class LedgerBase(BaseModel):
     type: LedgerType
     include_in_cash_in_hand: bool = False
     report_category: Optional[ReportCategory] = None
-    # At most one per org (DB-enforced): the ledger order advances post to.
-    is_orders_ledger: bool = False
+
     # Party fields (Phase 2). A supplier is a ledger rather than a separate
     # contact, so these live here; they stay empty on non-party accounts like
     # Rent or Sales. is_party is what the bill supplier picker filters on.
@@ -263,7 +274,6 @@ class LedgerUpdate(BaseModel):
     include_in_cash_in_hand: Optional[bool] = None
     opening_balance: Optional[float] = None
     report_category: Optional[ReportCategory] = None
-    is_orders_ledger: Optional[bool] = None
     is_party: Optional[bool] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -279,9 +289,10 @@ class Ledger(LedgerBase):
     # Revenue) reads negative here; the UI flips the sign and appends Dr/Cr.
     # From ledger_balances. 0 for an account with no postings.
     balance: float = 0.0
-    # Chart-of-accounts fields (Phase 1). system_key is set only on accounts
-    # created by migration and looked up by posting code (e.g. 'cash'); a null
-    # means an ordinary user-created account.
+    # Chart-of-accounts fields (Phase 1). system_key is read-only: system
+    # ledgers are created with the organization and never assigned by a client
+    # (see app/ledger_roles.py), so it is absent from LedgerBase/LedgerUpdate.
+    # Null means an ordinary account.
     code: Optional[str] = None
     system_key: Optional[str] = None
     is_cash_equivalent: bool = False
@@ -476,7 +487,7 @@ def _normalize_email(v):
 
 def _validate_email(v: str) -> str:
     # Deliberately simple (no email-validator dependency), matching this file's
-    # existing hand-rolled-validator convention (NonBlankStr, EntryType) over
+    # existing hand-rolled-validator convention (NonBlankStr, NewPassword) over
     # reaching for pydantic[email] for one field.
     local, _, domain = v.partition("@")
     if not local or "." not in domain or domain.startswith(".") or domain.endswith("."):

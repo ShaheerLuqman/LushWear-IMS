@@ -88,18 +88,22 @@ class _FakeSupabase:
 
 def _orders_ledger_table():
     """The org's Orders ledger, which advance lookups resolve before reading
-    cashbook entries (ledgers.is_orders_ledger replaced a hardcoded UUID)."""
+    cashbook entries (system_key = 'orders' replaced a hardcoded UUID)."""
     return _FakeTable([{"id": "orders-ledger-id"}])
 
 
 class TestRecomputeAdvanceStatuses:
     def test_persists_changed_orders_as_a_single_batched_upsert(self):
         orders_table = _FakeTable([
-            {"id": "o1", "order_number": 100, "advance_amount": 500.0, "advance_status": ADV_NONE},
-            {"id": "o2", "order_number": 101, "advance_amount": 0.0, "advance_status": ADV_NONE},
+            {"id": "o1", "order_number": 100, "advance_amount": 500.0, "advance_status": ADV_NONE,
+             "courier": "PostEx", "order_status": "delivered", "total_amount": 2598.0,
+             "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+            {"id": "o2", "order_number": 101, "advance_amount": 0.0, "advance_status": ADV_NONE,
+             "courier": "PostEx", "order_status": "delivered", "total_amount": 500.0,
+             "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ])
         cashbook_table = _FakeTable([
-            {"order_number": "100", "amount": 500.0, "entry_type": "credit"},
+            {"order_number": "100", "amount": 500.0},
         ])
         supabase = _FakeSupabase({
             "orders": orders_table,
@@ -112,7 +116,14 @@ class TestRecomputeAdvanceStatuses:
         # Order 100 now matches (Shopify 500 vs cashbook 500) - status changes from
         # ADV_NONE to ADV_MATCH. Order 101 has no advance either side - unchanged.
         assert updated == 1
-        assert orders_table.upsert_calls == [[{"id": "o1", "advance_status": ADV_MATCH, "org_id": "test-org"}]]
+        assert orders_table.upsert_calls == [[{
+            "id": "o1", "order_number": 100, "advance_amount": 500.0, "advance_status": ADV_MATCH,
+            # NOT NULL columns without a default, carried unchanged: an upsert is
+            # INSERT ... ON CONFLICT, so Postgres rejects a payload missing them.
+            "courier": "PostEx", "order_status": "delivered", "total_amount": 2598.0,
+            "order_receiving_date": "2026-07-18T13:23:08+00:00",
+            "org_id": "test-org",
+        }]]
 
     def test_no_changed_orders_means_no_write(self):
         orders_table = _FakeTable([

@@ -1,0 +1,38 @@
+"""System ledgers — `ledgers.system_key`.
+
+These accounts are created with the organization (a trigger on `organizations`,
+see supabase_schema.sql) and are entirely server-managed: the API never accepts
+`system_key` from a client, so there is nothing to assign, mis-assign, or leave
+unset. A ledger holding one cannot be deleted.
+
+They were previously seeded piecemeal by whichever migration first needed one -
+so a newly created org had none of them - and the Orders account had to be
+picked by hand from a role dropdown.
+
+Names and Natures live in the SQL trigger, which is what actually creates them.
+The labels here are only for API error messages.
+"""
+from app.org_scope import org_table
+
+SYSTEM_LEDGER_LABELS = {
+    "cash": "Cash in Hand",
+    "opening_balance_equity": "Opening Balance Equity",
+    "orders": "Orders",
+    "inventory": "Inventory",
+    "tax_on_purchases": "Tax on Purchases",
+}
+
+
+def get_system_ledger_id(supabase, org_id: str, role: str):
+    """The ledger holding `role` for this org, or None if it is somehow missing.
+
+    One lookup for every role, replacing the function each dedicated boolean
+    column used to need."""
+    resp = (
+        org_table(supabase, org_id, "ledgers")
+        .select("id")
+        .eq("system_key", role)
+        .limit(1)
+        .execute()
+    )
+    return resp.data[0]["id"] if resp.data else None

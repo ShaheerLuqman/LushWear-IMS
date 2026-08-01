@@ -21,6 +21,7 @@ from supabase import create_client
 from app.config import settings
 from app.db_utils import fetch_all
 from app.money import money
+from app.ledger_roles import get_system_ledger_id
 from app.org_scope import org_table
 
 # Cap on order numbers per `.in_()` query - keeps the request URL well under server/proxy
@@ -36,15 +37,8 @@ def get_orders_ledger_id(supabase, org_id: str):
 
     Was a module-level hardcoded UUID, which predated multi-tenancy: every query
     using it is org-scoped, so for any other org it matched nothing and the
-    advance flow silently no-op'd. See the ledgers.is_orders_ledger migration."""
-    resp = (
-        org_table(supabase, org_id, "ledgers")
-        .select("id")
-        .eq("is_orders_ledger", True)
-        .limit(1)
-        .execute()
-    )
-    return resp.data[0]["id"] if resp.data else None
+    advance flow silently no-op'd."""
+    return get_system_ledger_id(supabase, org_id, "orders")
 
 # Status codes
 ADV_NONE = 1
@@ -77,7 +71,7 @@ def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
     """
     Sum order-advance cashbook entries per order number.
 
-    Order-advance entries are credits on the Orders ledger that carry an order_number.
+    Order-advance entries have the Orders ledger on their From side and carry an order_number.
     Returns a map of order_number (str) -> total advance amount from the cashbook.
     """
     totals: Dict[str, float] = {}
@@ -87,9 +81,9 @@ def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
 
     rows = fetch_all(
         lambda: org_table(supabase, org_id, "cashbook_entries")
-        .select("order_number, amount, entry_type")
-        .eq("folio", orders_ledger_id)
-        .eq("entry_type", "credit")
+        .select("order_number, amount")
+        # An advance is money received FROM the Orders account into cash.
+        .eq("from_account_id", orders_ledger_id)
         .not_.is_("order_number", "null")
     )
     for row in rows:
@@ -121,7 +115,14 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
     if order_numbers is not None:
         scoped = list({str(n).strip() for n in order_numbers if str(n).strip()})
 
-    orders_select = "id, order_number, advance_amount, advance_status"
+    # courier/order_status/total_amount/order_receiving_date are never read - they only ride
+    # along in the upsert payload below. An upsert is INSERT ... ON CONFLICT, and Postgres
+    # checks NOT NULL on the proposed row before it resolves the conflict, so every NOT NULL
+    # column without a default has to be present even though this only ever updates.
+    orders_select = (
+        "id, order_number, advance_amount, advance_status, "
+        "courier, order_status, total_amount, order_receiving_date"
+    )
     if scoped is not None:
         chunks = [scoped[i:i + IN_QUERY_CHUNK_SIZE] for i in range(0, len(scoped), IN_QUERY_CHUNK_SIZE)]
         if len(chunks) > 1:
@@ -146,14 +147,13 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
         cashbook_advance = cashbook_totals.get(order_num, 0.0)
         new_status = compute_advance_status(shopify_advance, cashbook_advance)
         if o.get("advance_status") != new_status:
-            to_update.append((o["id"], new_status))
+            to_update.append({**o, "advance_status": new_status})
 
     if to_update:
         # Same batch_size as the orders upserts in shopify_sync.py - chunks a full
         # (unscoped) recompute, which can cover every order in the table.
         batch_size = 1000
-        payload = [{"id": order_id, "advance_status": status} for order_id, status in to_update]
-        for i in range(0, len(payload), batch_size):
-            org_table(supabase, org_id, "orders").upsert(payload[i:i + batch_size], on_conflict="id").execute()
+        for i in range(0, len(to_update), batch_size):
+            org_table(supabase, org_id, "orders").upsert(to_update[i:i + batch_size], on_conflict="id").execute()
 
     return len(to_update)

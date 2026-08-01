@@ -3,6 +3,7 @@ from typing import List, Literal
 from pydantic import BaseModel
 from app.auth import get_org_id
 from app.database import get_supabase
+from app.ledger_roles import SYSTEM_LEDGER_LABELS
 from app.models import (
     Ledger,
     LedgerCreate,
@@ -26,22 +27,8 @@ def _flatten_ledger_balance(row: dict) -> dict:
     return row
 
 
-def _orders_ledger_taken(supabase, org_id: str, exclude_id: str = None) -> bool:
-    """Whether this org already has an Orders ledger. Backstopped by
-    idx_ledgers_one_orders_ledger_per_org for races/non-API writers; this just
-    turns the common case into a message instead of a constraint violation.
-    The role is deliberately not moved automatically - silently unsetting the
-    previous Orders ledger would retarget every future advance with no trace."""
-    resp = (
-        org_table(supabase, org_id, "ledgers")
-        .select("id")
-        .eq("is_orders_ledger", True)
-        .execute()
-    )
-    return any(row["id"] != exclude_id for row in resp.data or [])
-
-
-def _is_system_cash(supabase, org_id: str, ledger_id: str) -> bool:
+def _system_key(supabase, org_id: str, ledger_id: str):
+    """This ledger's system role, or None for an ordinary account."""
     resp = (
         org_table(supabase, org_id, "ledgers")
         .select("system_key")
@@ -49,7 +36,7 @@ def _is_system_cash(supabase, org_id: str, ledger_id: str) -> bool:
         .limit(1)
         .execute()
     )
-    return bool(resp.data) and resp.data[0].get("system_key") == "cash"
+    return resp.data[0].get("system_key") if resp.data else None
 
 
 def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> bool:
@@ -86,11 +73,6 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
     supabase = get_supabase()
     if _name_taken(supabase, org_id, name):
         raise HTTPException(status_code=400, detail="A ledger with this name already exists")
-    if ledger.is_orders_ledger and _orders_ledger_taken(supabase, org_id):
-        raise HTTPException(
-            status_code=400,
-            detail="Another ledger is already the Orders ledger. Unset it first.",
-        )
 
     response = org_table(supabase, org_id, "ledgers").insert({
         "name": name,
@@ -98,7 +80,6 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
         "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
         "opening_balance": ledger.opening_balance,
         "report_category": ledger.report_category,
-        "is_orders_ledger": ledger.is_orders_ledger,
     }).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create ledger")
@@ -117,15 +98,17 @@ async def get_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     if not response.data:
         raise HTTPException(status_code=404, detail="Ledger not found")
 
-    entries_resp = (
-        org_table(supabase, org_id, "cashbook_entries")
+    # Journal lines, matching what delete_ledger actually refuses on: an account
+    # can be posted to by a bill or a manual entry as well as by the cashbook.
+    lines_resp = (
+        org_table(supabase, org_id, "journal_lines")
         .select("id")
-        .eq("folio", ledger_id)
+        .eq("account_id", ledger_id)
         .limit(1)
         .execute()
     )
     ledger = response.data[0]
-    ledger["has_entries"] = bool(entries_resp.data)
+    ledger["has_entries"] = bool(lines_resp.data)
     return ledger
 
 
@@ -141,12 +124,7 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
             raise HTTPException(status_code=400, detail="A ledger with this name already exists")
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
-    if payload.get("is_orders_ledger") and _orders_ledger_taken(supabase, org_id, exclude_id=ledger_id):
-        raise HTTPException(
-            status_code=400,
-            detail="Another ledger is already the Orders ledger. Unset it first.",
-        )
-    if payload.get("include_in_cash_in_hand") and _is_system_cash(supabase, org_id, ledger_id):
+    if payload.get("include_in_cash_in_hand") and _system_key(supabase, org_id, ledger_id) == "cash":
         # Cash In Hand already counts this account once, via the cashbook's
         # closing balance (getPhysicalCashInHand in ledgers.js) — including it
         # again here would silently double the headline figure. Tempting to tick
@@ -173,17 +151,28 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
 @router.delete("/{ledger_id}", response_model=DeleteLedgerResult)
 async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
-    entries_resp = (
-        org_table(supabase, org_id, "cashbook_entries")
+
+    role = _system_key(supabase, org_id, ledger_id)
+    if role:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{SYSTEM_LEDGER_LABELS.get(role, role)} is a system account and cannot be deleted.",
+        )
+
+    # Journal lines, not cashbook entries: since Phase 1 an account can also be
+    # posted to by a bill or a manual entry, and those would otherwise only be
+    # caught by the ON DELETE RESTRICT foreign key, as a raw database error.
+    lines_resp = (
+        org_table(supabase, org_id, "journal_lines")
         .select("id")
-        .eq("folio", ledger_id)
+        .eq("account_id", ledger_id)
         .limit(1)
         .execute()
     )
-    if entries_resp.data:
+    if lines_resp.data:
         raise HTTPException(
             status_code=400,
-            detail="Cannot delete ledger: it has cashbook entries linked to it",
+            detail="Cannot delete ledger: it has entries posted against it",
         )
 
     response = org_table(supabase, org_id, "ledgers").delete().eq("id", ledger_id).execute()

@@ -363,8 +363,10 @@ class TestPostexCsvUpload:
 
     def test_matches_updates_and_skips_cancelled_and_unmatched_orders(self, make_client):
         client = make_client({"orders": [
-            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0, "order_status": "unfulfilled"},
-            {"id": "o2", "order_number": 101, "total_amount": 500.0, "advance_amount": 0.0, "order_status": "cancelled"},
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+            {"id": "o2", "order_number": 101, "total_amount": 500.0, "advance_amount": 0.0,
+             "order_status": "cancelled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ]})
         csv_bytes = self._csv((100, 200), (101, 150), (999, 50))
         r = client.post(
@@ -379,6 +381,29 @@ class TestPostexCsvUpload:
         assert body["cancelled_order_numbers"] == ["101"]
         assert body["unmatched_count"] == 1
         assert "999" in body["message"]
+
+    def test_upsert_carries_the_columns_postgres_null_checks(self, make_client):
+        """The write is an upsert (INSERT ... ON CONFLICT), and Postgres checks NOT NULL
+        on the proposed row before resolving the conflict - so a payload of just the
+        changed columns is rejected outright, even though the row always exists."""
+        import app.routes.orders as orders_module
+
+        client = make_client({"orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", self._csv((100, 200)), "text/csv")},
+        )
+
+        written = orders_module.get_supabase().upserted["orders"]
+        assert len(written) == 1
+        assert written[0]["order_number"] == 100
+        assert written[0]["order_status"] == "unfulfilled"
+        assert written[0]["total_amount"] == 1000.0
+        assert written[0]["order_receiving_date"] == "2026-07-18T13:23:08+00:00"
+        assert written[0]["courier"] == "PostEx"
 
     def test_non_csv_file_is_rejected(self, make_client):
         client = make_client({"orders": []})
@@ -403,17 +428,21 @@ class TestLedgers:
         r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Asset"})
         assert r.status_code == 422
 
-    def test_delete_blocked_while_cashbook_entries_reference_it(self, make_client, ledger_row):
+    def test_delete_blocked_while_entries_are_posted_against_it(self, make_client, ledger_row):
+        """Checked against journal_lines rather than cashbook_entries: since
+        Phase 1 an account can also be posted to by a bill or a manual journal
+        entry, and those would otherwise only be caught by the ON DELETE RESTRICT
+        foreign key, surfacing as a raw database error."""
         client = make_client({
             "ledgers": [ledger_row],
-            "cashbook_entries": [{"id": "entry-1"}],
+            "journal_lines": [{"id": "jl-1", "account_id": ledger_row["id"]}],
         })
         r = client.delete(f"/api/ledgers/{ledger_row['id']}")
         assert r.status_code == 400
-        assert "cashbook entries" in r.json()["detail"]
+        assert "entries posted against it" in r.json()["detail"]
 
     def test_delete_returns_the_typed_result(self, make_client, ledger_row):
-        client = make_client({"ledgers": [ledger_row], "cashbook_entries": []})
+        client = make_client({"ledgers": [ledger_row], "journal_lines": []})
         r = client.delete(f"/api/ledgers/{ledger_row['id']}")
         assert r.status_code == 200
         assert r.json() == {"status": "deleted", "id": ledger_row["id"]}
@@ -452,9 +481,11 @@ class TestProducts:
         assert body[1]["total_quantity"] == 3
 
     def test_batch_update_cost_prices_is_a_single_batched_upsert(self, make_client):
+        import app.routes.products as products_module
+
         client = make_client({"products": [
-            {"id": "p1", "cost_price": 100.0},
-            {"id": "p2", "cost_price": 200.0},
+            {"id": "p1", "name": "Apple", "cost_price": 100.0},
+            {"id": "p2", "name": "banana", "cost_price": 200.0},
         ]})
         r = client.put("/api/products/batch-update-cost-prices", json={
             "updates": [
@@ -464,6 +495,12 @@ class TestProducts:
         })
         assert r.status_code == 200
         assert r.json()["updated_count"] == 2
+        # name is NOT NULL without a default, and an upsert is INSERT ... ON CONFLICT -
+        # Postgres null-checks the proposed row before it resolves the conflict.
+        written = products_module.get_supabase().upserted["products"]
+        assert [(p["id"], p["name"], p["cost_price"]) for p in written] == [
+            ("p1", "Apple", 150.0), ("p2", "banana", 250.0),
+        ]
 
     def test_batch_update_with_no_updates_is_a_no_op(self, make_client):
         r = make_client({"products": []}).put(
@@ -474,30 +511,108 @@ class TestProducts:
 
 
 class TestCashbook:
+    """An entry names both of its sides; a None side means cash. Only entries
+    with a cash side move the cash balance, which is what keeps a bank-pays-
+    supplier transfer out of Cash in Hand."""
+
     def test_create_rejects_non_positive_amount(self, make_client):
         client = make_client({"cashbook_entries": []})
-        payload = {"entry_date": "2026-07-18", "entry_type": "credit", "amount": 0, "folio": "abc"}
+        payload = {"entry_date": "2026-07-18", "amount": 0, "from_account_id": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code == 422
 
-    def test_create_rejects_unknown_entry_type(self, make_client):
+    def test_create_rejects_an_entry_with_neither_side(self, make_client):
+        """Both sides cash moves nothing."""
         client = make_client({"cashbook_entries": []})
-        payload = {"entry_date": "2026-07-18", "entry_type": "transfer", "amount": 10, "folio": "abc"}
-        assert client.post("/api/cashbook/entries", json=payload).status_code == 422
+        payload = {"entry_date": "2026-07-18", "amount": 10}
+        r = client.post("/api/cashbook/entries", json=payload)
+        assert r.status_code == 422
+        assert "From or a To account" in r.text
 
-    def test_entry_type_casing_is_normalised(self, make_client):
-        # Clients that historically sent "CREDIT" must keep working.
+    def test_create_rejects_the_same_account_on_both_sides(self, make_client):
         client = make_client({"cashbook_entries": []})
-        payload = {"entry_date": "2026-07-18", "entry_type": "CREDIT", "amount": 10, "folio": "abc"}
+        payload = {
+            "entry_date": "2026-07-18", "amount": 10,
+            "from_account_id": "abc", "to_account_id": "abc",
+        }
+        r = client.post("/api/cashbook/entries", json=payload)
+        assert r.status_code == 422
+        assert "cannot be the same account" in r.text
+
+    def test_one_sided_entry_is_accepted(self, make_client):
+        """The omitted side is cash — this is the ordinary cashbook line."""
+        client = make_client({"cashbook_entries": []})
+        payload = {"entry_date": "2026-07-18", "amount": 10, "from_account_id": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code != 422
+
+    def test_two_sided_entry_is_accepted(self, make_client):
+        """Bank pays supplier: both sides named, so cash is untouched."""
+        client = make_client({"cashbook_entries": []})
+        payload = {
+            "entry_date": "2026-07-18", "amount": 10,
+            "from_account_id": "bank", "to_account_id": "supplier",
+        }
+        assert client.post("/api/cashbook/entries", json=payload).status_code != 422
+
+    def test_update_setting_a_side_to_match_the_other_is_a_400(self, make_client):
+        """A partial update only carries the side being changed, so the rule has
+        to be checked against the merged result — otherwise it reaches the
+        database and comes back as a constraint violation, i.e. a 500."""
+        client = make_client({
+            "cashbook_entries": [{
+                "order_number": None,
+                "from_account_id": None,
+                "to_account_id": "ledger-1",
+            }],
+        })
+        r = client.put("/api/cashbook/entries/entry-1", json={"from_account_id": "ledger-1"})
+
+        assert r.status_code == 400
+        assert "cannot be the same account" in r.json()["detail"]
+
+    def test_update_clearing_the_only_side_is_a_400(self, make_client):
+        client = make_client({
+            "cashbook_entries": [{
+                "order_number": None,
+                "from_account_id": None,
+                "to_account_id": "ledger-1",
+            }],
+        })
+        r = client.put("/api/cashbook/entries/entry-1", json={"to_account_id": None})
+
+        assert r.status_code == 400
+        assert "From or a To account" in r.json()["detail"]
+
+    def test_update_moving_a_side_to_another_account_is_allowed(self, make_client):
+        # A full row: the update echoes it back through the CashbookEntry model.
+        client = make_client({
+            "cashbook_entries": [{
+                "id": "entry-1",
+                "entry_date": "2026-08-01",
+                "amount": 20000.0,
+                "description": "Transfer",
+                "order_number": None,
+                "from_account_id": None,
+                "to_account_id": "ledger-1",
+            }],
+        })
+        r = client.put("/api/cashbook/entries/entry-1", json={"to_account_id": "ledger-2"})
+
+        assert r.status_code == 200, r.text
 
     def test_update_of_missing_entry_is_404(self, make_client):
         client = make_client({"cashbook_entries": []})
         r = client.put("/api/cashbook/entries/nope", json={"description": "x"})
         assert r.status_code == 404
 
-    def test_delete_returns_the_typed_result(self, make_client):
+    def test_delete_refreshes_both_sides_balances(self, make_client):
+        """Both named accounts need refreshing, not just one — deleting an entry
+        moves whichever ledgers it touched."""
         client = make_client({
-            "cashbook_entries": [{"order_number": None, "folio": "ledger-1"}],
+            "cashbook_entries": [{
+                "order_number": None,
+                "from_account_id": "ledger-1",
+                "to_account_id": None,
+            }],
             "ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
         })
         r = client.delete("/api/cashbook/entries/entry-1")

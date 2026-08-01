@@ -18,22 +18,19 @@ from app.org_scope import org_table
 
 router = APIRouter(prefix="/cashbook", tags=["cashbook"])
 
-ENTRY_TYPES = {"credit", "debit"}
+# The two sides of an entry. NULL on a side means cash, so an entry only moves
+# Cash in Hand when one of these is None.
+SIDE_FIELDS = ("from_account_id", "to_account_id")
 
 
 def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
     if "entry_date" in payload and payload["entry_date"] is not None:
         if isinstance(payload["entry_date"], date):
             payload["entry_date"] = payload["entry_date"].isoformat()
-    if "entry_type" in payload and payload["entry_type"] is not None:
-        payload["entry_type"] = str(payload["entry_type"]).strip().lower()
-    # Folio is required - normalize to string UUID
-    if "folio" in payload:
-        if payload["folio"] is not None:
-            payload["folio"] = str(payload["folio"]).strip() or None
-        # On create, folio cannot be null/empty
-        if is_create and not payload.get("folio"):
-            raise ValueError("folio is required")
+    # Blank strings from a form field mean "cash on this side", not "".
+    for field in SIDE_FIELDS:
+        if field in payload and payload[field] is not None:
+            payload[field] = str(payload[field]).strip() or None
     # order_number: only set for order-advance entries; normalize empty to null
     if "order_number" in payload:
         if payload["order_number"] is not None:
@@ -44,10 +41,22 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
 
 
 def _get_entry_meta_or_404(supabase, org_id: str, entry_id: str) -> dict:
-    resp = org_table(supabase, org_id, "cashbook_entries").select("order_number, folio").eq("id", entry_id).limit(1).execute()
+    resp = (
+        org_table(supabase, org_id, "cashbook_entries")
+        .select("order_number, from_account_id, to_account_id")
+        .eq("id", entry_id)
+        .limit(1)
+        .execute()
+    )
     if not resp.data:
         raise HTTPException(status_code=404, detail="Cashbook entry not found")
     return resp.data[0]
+
+
+def _sides(row: dict):
+    """Both named accounts of an entry; a None side is cash and has no ledger
+    balance of its own to refresh."""
+    return [row.get(field) for field in SIDE_FIELDS]
 
 
 def _ledger_balances(supabase, org_id: str, ledger_ids) -> List[dict]:
@@ -115,7 +124,7 @@ async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depend
         existing_by_key, _ = _split_existing_by_idempotency_key(supabase, org_id, [payload])
         if existing_by_key:
             entry = next(iter(existing_by_key.values()))
-            entry["ledger_balances"] = _ledger_balances(supabase, org_id, [entry["folio"]])
+            entry["ledger_balances"] = _ledger_balances(supabase, org_id, _sides(entry))
             return entry
 
     response = org_table(supabase, org_id, "cashbook_entries").insert(payload).execute()
@@ -126,7 +135,7 @@ async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depend
         _safe_recompute_advance_statuses(supabase, org_id, [payload["order_number"]])
 
     entry = response.data[0]
-    entry["ledger_balances"] = _ledger_balances(supabase, org_id, [payload["folio"]])
+    entry["ledger_balances"] = _ledger_balances(supabase, org_id, _sides(payload))
     return entry
 
 
@@ -135,17 +144,16 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
     """One INSERT for the rows that are actually new (used by the bulk-text-
     entry modal and the two-sided/order-advance modals, so a paired entry is
     atomic instead of two racing POSTs). All-or-nothing for that insert:
-    relies on the caller having already validated each entry (folio resolved
-    against a real ledger, amount > 0) before submitting. Rows whose
+    relies on the caller having already validated each entry (each named
+    side resolved against a real ledger, amount > 0) before submitting. Rows whose
     idempotency_key already exists are treated as a replay and returned as-is
     instead of being inserted again."""
     if not entries:
         raise HTTPException(status_code=400, detail="No entries provided")
 
     try:
-        # entry_type/amount/folio are already enforced by CashbookEntryCreate
-        # itself (Literal, Field(gt=0), NonBlankStr), so only normalization is
-        # needed here, not the manual re-checks create_cashbook_entry has.
+        # amount and the two-distinct-sides rule are already enforced by
+        # CashbookEntryCreate itself, so only normalization is needed here.
         payloads = [_normalize_entry_payload(e.model_dump(), is_create=True) for e in entries]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -165,7 +173,7 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
         _safe_recompute_advance_statuses(supabase, org_id, order_numbers)
 
     result_rows = list(existing_by_key.values()) + inserted
-    balances = _ledger_balances(supabase, org_id, {row["folio"] for row in payloads})
+    balances = _ledger_balances(supabase, org_id, [a for row in payloads for a in _sides(row)])
     for entry in result_rows:
         entry["ledger_balances"] = balances
     return result_rows
@@ -176,18 +184,35 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
     supabase = get_supabase()
     old_meta = _get_entry_meta_or_404(supabase, org_id, entry_id)
     old_order_number = old_meta.get("order_number")
-    old_folio = old_meta.get("folio")
+    old_sides = _sides(old_meta)
 
     try:
         payload = _normalize_entry_payload(entry.model_dump(exclude_unset=True))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    if "entry_type" in payload and payload["entry_type"] not in ENTRY_TYPES:
-        raise HTTPException(status_code=400, detail="entry_type must be credit or debit")
     if "amount" in payload and (payload["amount"] is None or float(payload["amount"]) <= 0):
         raise HTTPException(status_code=400, detail="amount must be greater than 0")
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
+
+    # A partial update only carries the side being changed, so the two-sides rule
+    # has to be checked against the MERGED result - CashbookEntryUpdate cannot
+    # see the side it isn't touching. Without this, setting one side to whatever
+    # the other already holds reaches the database and comes back as a raw
+    # constraint violation, i.e. a 500.
+    merged_from, merged_to = (
+        payload.get(field, old_meta.get(field)) for field in SIDE_FIELDS
+    )
+    if merged_from is None and merged_to is None:
+        raise HTTPException(
+            status_code=400,
+            detail="An entry needs a From or a To account (the empty side is cash).",
+        )
+    if merged_from is not None and merged_from == merged_to:
+        raise HTTPException(
+            status_code=400,
+            detail="From and To cannot be the same account.",
+        )
 
     response = org_table(supabase, org_id, "cashbook_entries").update(payload).eq("id", entry_id).execute()
     if not response.data:
@@ -199,10 +224,13 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
     if affected_orders:
         _safe_recompute_advance_statuses(supabase, org_id, affected_orders)
 
-    # Cover both old and new folio in case the entry was moved to another ledger.
-    new_folio = payload.get("folio", old_folio)
+    # Cover the old and new sides both, in case the entry was moved between
+    # accounts - the account it left needs refreshing as much as the one it
+    # joined.
     entry_out = response.data[0]
-    entry_out["ledger_balances"] = _ledger_balances(supabase, org_id, {old_folio, new_folio})
+    entry_out["ledger_balances"] = _ledger_balances(
+        supabase, org_id, old_sides + _sides(entry_out)
+    )
     return entry_out
 
 
@@ -217,7 +245,7 @@ async def delete_cashbook_entry(entry_id: str, org_id: str = Depends(get_org_id)
     supabase = get_supabase()
     old_meta = _get_entry_meta_or_404(supabase, org_id, entry_id)
     order_number = old_meta.get("order_number")
-    folio = old_meta.get("folio")
+    sides = _sides(old_meta)
 
     response = org_table(supabase, org_id, "cashbook_entries").delete().eq("id", entry_id).execute()
     if not response.data:
@@ -226,7 +254,7 @@ async def delete_cashbook_entry(entry_id: str, org_id: str = Depends(get_org_id)
     if order_number:
         _safe_recompute_advance_statuses(supabase, org_id, [order_number])
 
-    return {"status": "deleted", "id": entry_id, "ledger_balances": _ledger_balances(supabase, org_id, [folio])}
+    return {"status": "deleted", "id": entry_id, "ledger_balances": _ledger_balances(supabase, org_id, sides)}
 
 
 @router.get("/entries/audit-log", response_model=List[CashbookEntryAuditLog])

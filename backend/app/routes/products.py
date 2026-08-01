@@ -322,14 +322,26 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
 
-        payload = [
-            {"id": update.id, "cost_price": update.cost_price, "updated_at": current_time}
-            for update in batch_update.updates
-        ]
+        cost_price_by_id = {update.id: update.cost_price for update in batch_update.updates}
         updated_count = 0
-        if payload:
-            response = org_table(supabase, org_id, "products").upsert(payload, on_conflict="id").execute()
-            updated_count = len(response.data or [])
+        if cost_price_by_id:
+            # An upsert is INSERT ... ON CONFLICT, and Postgres checks NOT NULL on the
+            # proposed row before it resolves the conflict, so name has to be carried even
+            # though this only ever updates. Reading it back org-scoped also drops any id
+            # belonging to another org - upsert, unlike update, has no WHERE to filter on.
+            existing = (
+                org_table(supabase, org_id, "products")
+                .select("id, name")
+                .in_("id", list(cost_price_by_id))
+                .execute().data or []
+            )
+            payload = [
+                {"id": p["id"], "name": p["name"], "cost_price": cost_price_by_id[p["id"]], "updated_at": current_time}
+                for p in existing
+            ]
+            if payload:
+                response = org_table(supabase, org_id, "products").upsert(payload, on_conflict="id").execute()
+                updated_count = len(response.data or [])
 
         return {
             "message": f"Successfully updated {updated_count} product(s)",

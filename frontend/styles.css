@@ -3255,6 +3255,15 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     padding-top: 6px;
 }
 
+.ledger-system-notice {
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    background: var(--bg-tertiary);
+    margin-bottom: 4px;
+}
+
 .bill-action-btn + .bill-action-btn {
     margin-left: 6px;
 }

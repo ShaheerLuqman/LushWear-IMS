@@ -507,10 +507,6 @@
                                     <span>Include in Cash In Hand</span>
                                 </label>
                                 <label class="ledger-form-toggle">
-                                    <input type="checkbox" id="createLedgerIsOrdersLedger">
-                                    <span>Orders ledger (order advances post here)</span>
-                                </label>
-                                <label class="ledger-form-toggle">
                                     <input type="checkbox" id="createLedgerIsParty">
                                     <span>Party (supplier or customer)</span>
                                 </label>
@@ -626,18 +622,20 @@
                                             <button type="button" id="bulkEntryInfoBtn" class="bulk-entry-info-btn" aria-expanded="false" aria-controls="bulkEntryInfoCard">ⓘ Format help</button>
                                             <div id="bulkEntryInfoCard" class="bulk-entry-help bulk-entry-info-card">
                                                 <p>One entry per line. Format:
-                                                <b><code>&lt;KIND&gt;: &lt;AMOUNT&gt; &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
+                                                <b><code>&lt;AMOUNT&gt; from &lt;LEDGER&gt; to &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
+                                                <p><strong>Leave a side out and that side is cash.</strong></p>
                                                 <ul>
-                                                    <li><strong>From</strong> / <strong>Cr</strong> — credits the LEDGER, so cash is received. e.g. <b><code>From: 2064 TCS (Received order payment)</code></b></li>
-                                                    <li><strong>To</strong> / <strong>Dr</strong> — debits the LEDGER, so cash is paid. e.g. <b><code>To: 2064 Meezan Bank (Received order payment)</code></b></li>
+                                                    <li><b><code>2064 from TCS (Received order payment)</code></b> — cash received from TCS</li>
+                                                    <li><b><code>2064 to Meezan Bank</code></b> — cash paid to Meezan Bank</li>
+                                                    <li><b><code>2064 from Meezan Bank to Fabric Supplier</code></b> — bank pays the supplier; <strong>cash is not touched</strong></li>
                                                 </ul>
                                                 <p>Particulars are optional — omit them and a default description is generated.</p>
                                                 <p>Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger:</p>
-                                                <code>From: 3500 Order# 11473<br>To: 3500 Meezan Bank</code>
+                                                <code>3500 from Order# 11473<br>3500 from Order# 11473 to Meezan Bank</code>
                                             </div>
                                         </div>
                                     </div>
-                                    <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="6" spellcheck="false" placeholder='From: 2064 TCS (Received order payment)'></textarea>
+                                    <textarea id="bulkEntryInput" class="form-input bulk-entry-textarea" rows="6" spellcheck="false" placeholder='2064 from TCS (Received order payment)'></textarea>
                                     <div id="bulkEntryValidation" class="bulk-entry-validation" style="display: none;"></div>
                                 </div>
                                 <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
@@ -660,6 +658,7 @@
                         </div>
                         <div class="modal-body">
                             <form id="editLedgerForm" class="ledger-form">
+                                <p id="editLedgerSystemNotice" class="ledger-system-notice" style="display: none;"></p>
                                 <div class="form-group">
                                     <label for="editLedgerName">Ledger name *</label>
                                     <input type="text" id="editLedgerName" class="form-input" placeholder="e.g. Main Bank Account" required>
@@ -693,10 +692,6 @@
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="editLedgerCashInHand">
                                     <span>Include in Cash In Hand</span>
-                                </label>
-                                <label class="ledger-form-toggle">
-                                    <input type="checkbox" id="editLedgerIsOrdersLedger">
-                                    <span>Orders ledger (order advances post here)</span>
                                 </label>
                                 <label class="ledger-form-toggle">
                                     <input type="checkbox" id="editLedgerIsParty">

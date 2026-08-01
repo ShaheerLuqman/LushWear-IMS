@@ -705,7 +705,8 @@ function initOrdersGrid() {
             order_number: null,
             courier: null,
             tracking_number: null,
-            folio: null,
+            from_account_id: null,
+            to_account_id: null,
             order_status: null,
             delivery_status: null,
             total_amount: sums.total_amount,
@@ -935,7 +936,7 @@ function isCashbookNewRow(data) {
  * Folio cell renderer using custom searchable dropdown.
  * Creates a clean, native-feeling dropdown with search functionality.
  */
-function createFolioCellRenderer(params, entryType) {
+function createFolioCellRenderer(params, side) {
     if (!params || !params.data) return document.createElement('span');
     if (params.node && params.node.rowPinned === 'bottom') return document.createElement('span');
     if (isCashbookSystemOrFooterRow(params.data)) return document.createElement('span');
@@ -943,12 +944,19 @@ function createFolioCellRenderer(params, entryType) {
     const wrapper = document.createElement('div');
     wrapper.className = 'folio-dropdown';
 
-    const currentFolio = params.data.folio || '';
+    // Which side of the entry this grid shows: left grid = TO (debit),
+    // right grid = FROM (credit). A null account on the shown side is cash.
+    const accountField = CASHBOOK_SIDES[side];
+    const currentFolio = params.data[accountField] || '';
     const currentLedger = ledgers.find(l => l.id === currentFolio);
-    const displayText = currentLedger ? currentLedger.name : 'Select ledger... *';
 
-    // Check if this is a new row with other fields filled but no folio - highlight as required
+    // An empty side on a SAVED entry is cash, not a missing value — that is how
+    // an ordinary cash entry is stored, so it must read "Cash" rather than look
+    // unfilled. Only a new row is genuinely still asking for an account.
     const isNewRow = isCashbookNewRow(params.data);
+    const emptyLabel = isNewRow ? 'Select ledger... *' : 'Cash';
+    const displayText = currentLedger ? currentLedger.name : emptyLabel;
+
     const hasFolio = !!currentFolio;
     const hasOtherData = (params.data.description && String(params.data.description).trim() !== '') || 
                          (params.data.amount != null && params.data.amount > 0);
@@ -957,10 +965,8 @@ function createFolioCellRenderer(params, entryType) {
     // Display text showing selected ledger (like piece_received shows status)
     const displaySpan = document.createElement('span');
     displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '');
-    if (currentLedger) {
-        displaySpan.textContent = currentLedger.name;
-    } else {
-        displaySpan.textContent = 'Select ledger... *';
+    displaySpan.textContent = displayText;
+    if (!currentLedger) {
         displaySpan.style.color = 'var(--text-muted)';
     }
     displaySpan.style.cursor = isEditingAllowed() ? 'pointer' : 'default';
@@ -1049,15 +1055,15 @@ function createFolioCellRenderer(params, entryType) {
         }
 
         function selectOption(id, name) {
-            params.data.folio = id || null;
-            button.querySelector('.folio-dropdown-text').textContent = id ? name : 'Select ledger... *';
+            params.data[accountField] = id || null;
+            button.querySelector('.folio-dropdown-text').textContent = id ? name : emptyLabel;
             
             // Update display text (like piece_received shows selected status)
             if (id && name) {
                 displaySpan.textContent = name;
                 displaySpan.style.color = '';
             } else {
-                displaySpan.textContent = 'Select ledger... *';
+                displaySpan.textContent = emptyLabel;
                 displaySpan.style.color = 'var(--text-muted)';
             }
             
@@ -1077,13 +1083,13 @@ function createFolioCellRenderer(params, entryType) {
             
             if (params.data.id && !isCashbookNewRow(params.data)) {
                 // Update existing entry
-                updateCashbookEntry(params.data.id, { folio: id || null });
+                updateCashbookEntry(params.data.id, { [accountField]: id || null });
             } else if (isCashbookNewRow(params.data) && id) {
                 // For new entries, check if all required fields are filled and trigger auto-save
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                if (hasDescription && hasAmount && entryType) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, entryType);
+                if (hasDescription && hasAmount) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, side);
                 }
             }
             closeDropdown();
@@ -1146,9 +1152,9 @@ function createFolioCellRenderer(params, entryType) {
     }
     goToLedgerBtn.addEventListener('click', (e) => {
         e.stopPropagation();
-        const folioId = params.data.folio;
-        if (folioId) {
-            openLedgerDetail(folioId);
+        const accountId = params.data[CASHBOOK_SIDES[side]];
+        if (accountId) {
+            openLedgerDetail(accountId);
         }
     });
     
@@ -1193,8 +1199,10 @@ function buildCashbookGridColumns(side) {
             }
         },
         {
-            headerName: 'Folio',
-            field: 'folio',
+            // The two grids are the two sides of the same entries, so the left
+            // shows where money went and the right where it came from.
+            headerName: side === 'debit' ? 'To (Account)' : 'From (Account)',
+            field: side === 'debit' ? 'to_account_id' : 'from_account_id',
             width: 200,
             minWidth: 150,
             filter: false,
@@ -1203,10 +1211,7 @@ function buildCashbookGridColumns(side) {
             pinnedRowCellRenderer: () => ''
         },
         {
-            // `side` is the folio ledger's side; the cash book column shows cash's,
-            // which is the opposite one — see "THE TWO PERSPECTIVES" in
-            // supabase_schema.sql. A folio credit is cash received, i.e. a Debit here.
-            headerName: side === 'credit' ? 'Debit (Rs)' : 'Credit (Rs)',
+            headerName: side === 'debit' ? 'Debit (Rs)' : 'Credit (Rs)',
             field: 'amount',
             width: 100,
             filter: 'agNumberColumnFilter',
@@ -1241,7 +1246,10 @@ function buildCashbookGridColumns(side) {
                 const next = parseCashbookAmount(params.newValue);
                 if (next === null || next <= 0) return false;
                 params.data.amount = next;
-                updateCashbookEntry(params.data.id, { entry_type: side, amount: next });
+                // Only the amount changed — the entry's two sides are edited
+                // through their own cells, so resending them here would just
+                // risk overwriting one with a stale value.
+                updateCashbookEntry(params.data.id, { amount: next });
                 return true;
             }
         },
@@ -1275,7 +1283,9 @@ function initCashbookDebitGrid() {
     if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: buildCashbookGridColumns('credit'),
+        // `side` is this grid's own column, not the old entry_type: the Debit
+        // grid shows where money went (to_account_id).
+        columnDefs: buildCashbookGridColumns('debit'),
         rowData: [],
         pinnedBottomRowData: [],
         defaultColDef: {
@@ -1308,9 +1318,9 @@ function initCashbookDebitGrid() {
                 // Auto-save when all required fields are filled (description, amount, and folio)
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
-                if (hasDescription && hasAmount && hasFolio) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'credit');
+                const hasAccount = !!params.data.to_account_id;
+                if (hasDescription && hasAmount && hasAccount) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'debit');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
@@ -1327,7 +1337,8 @@ function initCashbookCreditGrid() {
     if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: buildCashbookGridColumns('debit'),
+        // The Credit grid shows where money came from (from_account_id).
+        columnDefs: buildCashbookGridColumns('credit'),
         rowData: [],
         pinnedBottomRowData: [],
         defaultColDef: {
@@ -1360,9 +1371,9 @@ function initCashbookCreditGrid() {
                 // Auto-save when all required fields are filled (description, amount, and folio)
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
-                const hasFolio = params.data.folio && String(params.data.folio).trim() !== '';
-                if (hasDescription && hasAmount && hasFolio) {
-                    tryCreateCashbookEntryFromPinnedRow(params.data, 'debit');
+                const hasAccount = !!params.data.from_account_id;
+                if (hasDescription && hasAmount && hasAccount) {
+                    tryCreateCashbookEntryFromPinnedRow(params.data, 'credit');
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });

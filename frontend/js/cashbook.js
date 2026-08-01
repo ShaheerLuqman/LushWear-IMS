@@ -11,66 +11,75 @@ function normalizeCashbookEntries(entries) {
     }));
 }
 
+// The two grids are the two sides of each entry, not two sets of entries: the
+// left shows where money went (TO / debit), the right where it came from
+// (FROM / credit). Every entry therefore appears in both, on the same row.
+// A null side is cash.
+const CASHBOOK_SIDES = { debit: 'to_account_id', credit: 'from_account_id' };
+
 function getEmptyCashbookRow(entryDate = '', side = '') {
     // Use a unique ID each time to ensure AG Grid creates a fresh row
     return {
         id: '__new_' + side + '_' + Date.now() + '__',
         entry_date: entryDate,
         description: '',
-        folio: null,
+        from_account_id: null,
+        to_account_id: null,
         amount: null,
-        running_total: null
+        _side: side
     };
 }
 
-function buildCashbookSideRows(entries, side) {
-    const filtered = (entries || []).filter((entry) => entry.entry_type === side);
-    const sorted = [...filtered].sort((a, b) => {
+function sortedCashbookEntries(entries) {
+    return [...(entries || [])].sort((a, b) => {
         const dateA = a.entry_date || '';
         const dateB = b.entry_date || '';
         if (dateA !== dateB) return dateA.localeCompare(dateB);
         return String(a.created_at || '').localeCompare(String(b.created_at || ''));
-    });
-    return sorted.map((entry) => ({
-        ...entry,
-        amount: parseFloat(entry.amount) || 0
-    }));
+    }).map((entry) => ({ ...entry, amount: parseFloat(entry.amount) || 0 }));
 }
 
-// The cash book's Debit (receipts) side. Reads entry_type='credit' because
-// entry_type is the folio ledger's side and cash always takes the opposite one —
-// see "THE TWO PERSPECTIVES" in supabase_schema.sql. The crossed filter here and
-// in buildCashbookCreditWithClosing below is deliberate, not a bug.
+// Only entries with a cash side move the cash balance — an entry naming both
+// accounts (a bank paying a supplier) never touches it.
+function cashMovement(entries) {
+    let received = 0;
+    let paid = 0;
+    (entries || []).forEach((e) => {
+        const amount = parseFloat(e.amount) || 0;
+        if (!e.to_account_id) received += amount;      // cash is the destination
+        if (!e.from_account_id) paid += amount;        // cash is the source
+    });
+    return { received, paid };
+}
+
+// Left grid: TO (Debit). Opening cash balance heads it, as on a cash book.
 function buildCashbookDebitWithOpening(entries, carryForward, selectedDate) {
     const opening = parseFloat(carryForward) || 0;
-    const rows = buildCashbookSideRows(entries, 'credit');
-    const totalCredit = rows.reduce((sum, r) => sum + (parseFloat(r.amount) || 0), 0);
+    const rows = sortedCashbookEntries(entries).map((e) => ({ ...e, _side: 'debit' }));
+    const { received } = cashMovement(entries);
     const openingRow = {
         id: '__opening__',
         description: "Opening Balance",
         amount: opening,
         _isSystemRow: true
     };
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'credit');
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'debit');
     const totalRow = {
         id: '__total_in__',
         description: 'Total',
-        amount: opening + totalCredit,
+        amount: opening + received,
         _isFooter: true
     };
-    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow], totalCredit };
+    return { rowData: [openingRow, ...rows, newEntryRow], pinnedBottomRowData: [totalRow] };
 }
 
-// The cash book's Credit (payments) side, closing balance included.
+// Right grid: FROM (Credit), closed off by the cash closing balance.
 function buildCashbookCreditWithClosing(entries, carryForward, selectedDate) {
-    const creditEntries = (entries || []).filter((e) => e.entry_type === 'credit');
-    const debitEntries = (entries || []).filter((e) => e.entry_type === 'debit');
-    const totalCredit = creditEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
-    const totalDebit = debitEntries.reduce((sum, e) => sum + (parseFloat(e.amount) || 0), 0);
     const opening = parseFloat(carryForward) || 0;
-    const closingBalance = opening + totalCredit - totalDebit;
-    const rows = buildCashbookSideRows(entries, 'debit');
-    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'debit');
+    const { received, paid } = cashMovement(entries);
+    const closingBalance = opening + received - paid;
+    const rows = sortedCashbookEntries(entries).map((e) => ({ ...e, _side: 'credit' }));
+    const newEntryRow = getEmptyCashbookRow(selectedDate || '', 'credit');
     const closingRow = {
         id: '__closing__',
         description: 'Closing Balance',
@@ -80,10 +89,10 @@ function buildCashbookCreditWithClosing(entries, carryForward, selectedDate) {
     const totalRow = {
         id: '__total_out__',
         description: 'Total',
-        amount: totalDebit + closingBalance,
+        amount: paid + closingBalance,
         _isFooter: true
     };
-    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow], totalDebit };
+    return { rowData: [...rows, newEntryRow, closingRow], pinnedBottomRowData: [totalRow] };
 }
 
 // Bundles daily-balance + that date's entries — always needed together — into
@@ -171,12 +180,13 @@ function scheduleCashbookReload() {
 // it mirrors whatever is typed in the Debit amount.
 let cashbookEntryOutAmountTouched = false;
 
-// The ledger this org posts order advances to, flagged per org (at most one,
-// DB-enforced) rather than the hardcoded UUID this used to be — that constant
-// predated multi-tenancy and left the advance flow inert for every other org.
-// Null until an org marks one, which every caller below already handles.
+// The ledger this org posts order advances to: system_key = 'orders', the same
+// mechanism every fixed role uses (see backend/app/ledger_roles.py). It began as
+// a hardcoded UUID, which predated multi-tenancy and left the advance flow inert
+// for every other org. Null until an org assigns the role, which every caller
+// below already handles.
 function getOrdersLedgerId() {
-    return ledgers.find(l => l.is_orders_ledger)?.id || null;
+    return ledgers.find(l => l.system_key === 'orders')?.id || null;
 }
 
 // Default particulars text for an order advance.
@@ -412,7 +422,7 @@ async function submitCashbookEntryModal() {
     // A select silently drops a value with no matching option, so a missing Orders
     // ledger would otherwise surface as a confusing "select a ledger" error.
     if (isAdvance && !getOrdersLedgerId()) {
-        showToast('No Orders ledger is set. Mark one in Edit Ledger to record advances.', 'error');
+        showToast('No Orders ledger is set. Assign the Orders role in Edit Ledger.', 'error');
         return;
     }
 
@@ -434,14 +444,14 @@ async function submitCashbookEntryModal() {
     if (!skipIn) {
         // If the particulars field is left empty, fall back to the default placeholder text.
         const inDescription = (inPartEl.value.trim()) || defaultDescription('credit', inLedger);
-        const inPayload = { entry_date: entryDate, entry_type: 'credit', amount: inAmount, description: inDescription, folio: inLedger };
+        const inPayload = { entry_date: entryDate, amount: inAmount, description: inDescription, from_account_id: inLedger, to_account_id: null };
         // Tag the advance so it can be reconciled against the order's Shopify advance amount.
         if (isAdvance) inPayload.order_number = orderNumber;
         payloads.push(inPayload);
     }
     if (!skipOut) {
         const outDescription = (outPartEl.value.trim()) || defaultDescription('debit', outLedger);
-        payloads.push({ entry_date: entryDate, entry_type: 'debit', amount: outAmount, description: outDescription, folio: outLedger });
+        payloads.push({ entry_date: entryDate, amount: outAmount, description: outDescription, from_account_id: null, to_account_id: outLedger });
     }
 
     closeCashbookEntryModal();
@@ -669,39 +679,37 @@ function extractOrderNumberFromText(text) {
     return null;
 }
 
-// Bulk-entry KIND tokens: FROM/CR mean money received (credit), TO/DR mean
-// money paid out (debit) — Cr/Dr follow the cash account's own perspective
-// (cash is debited on receipt, credited on payment).
-const BULK_ENTRY_KIND_TO_ENTRY_TYPE = { FROM: 'credit', CR: 'credit', TO: 'debit', DR: 'debit' };
-
 /**
  * Parse one line of bulk-entry text.
- * Format: <KIND>: <AMOUNT> <LEDGER> [(<PARTICULARS>)]
- * KIND is From/Cr (credit to LEDGER) or To/Dr (debit from LEDGER). Particulars
- * are optional; when omitted, the same default text as the manual entry form is used.
- * Returns { ok, errors: [str], lineNo, raw, kind, amount, particulars, entries: [{entry_type, amount, description, folio}] }
+ *
+ * Format: <AMOUNT> from <LEDGER> to <LEDGER> (<PARTICULARS>)
+ *
+ * Either side may be omitted, and the omitted one is cash:
+ *   "5000 from Sales"                       cash received from Sales
+ *   "3000 to Rent"                          rent paid in cash
+ *   "5000 from Meezan Bank to Fabric Supp"  bank pays supplier, cash untouched
+ *
+ * Anything before the amount is ignored, so a pasted WhatsApp line keeps its
+ * timestamp prefix.
+ *
+ * Returns { ok, errors: [str], lineNo, raw, cleaned, amount, particulars,
+ *           entries: [{amount, description, from_account_id, to_account_id}] }
  */
 function parseBulkEntryLine(raw, lineNo) {
     const result = { ok: false, errors: [], lineNo, raw };
     const line = String(raw || '').trim();
     if (!line) { result.blank = true; return result; }
 
-    // Find the KIND token (From/To/Cr/Dr followed by ':') anywhere in the line
-    // and ignore anything before it. This lets pasted lines keep prefixes like
-    // a WhatsApp timestamp, e.g. "[3:32 am, 10/06/2026] Arham Ghory: From: 16400 ...".
-    const kindMatch = line.match(/\b(FROM|TO|CR|DR)\s*:\s*(.*)$/i);
-    if (!kindMatch) {
-        result.errors.push('Missing "<KIND>:" prefix (use From:, To:, Cr: or Dr:).');
+    // Start at the first "<amount> from|to", ignoring any pasted prefix.
+    const startMatch = line.match(/([0-9][0-9,]*(?:\.[0-9]+)?)\s+(from|to)\b/i);
+    if (!startMatch) {
+        result.errors.push('Expected "<amount> from <ledger> to <ledger>".');
         return result;
     }
-    const kind = kindMatch[1].toUpperCase();
-    const rest = kindMatch[2].trim();
-    result.kind = kind;
-    // The cleaned line (from KIND: onward) without any pasted prefix such as a
-    // WhatsApp timestamp. Shown in the validation list instead of the raw line.
-    result.cleaned = `${kind}: ${rest}`;
+    const rest = line.slice(startMatch.index).trim();
+    result.cleaned = rest;
 
-    // Optional trailing "(particulars)" - everything before it is "<AMOUNT> <LEDGER>".
+    // Optional trailing "(particulars)".
     let particulars = null;
     let head = rest;
     const parenMatch = rest.match(/\(([^)]*)\)\s*$/);
@@ -710,48 +718,129 @@ function parseBulkEntryLine(raw, lineNo) {
         head = rest.slice(0, parenMatch.index).trim();
     }
 
-    const headMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s+(.+)$/);
-    if (!headMatch) {
-        result.errors.push('Missing amount or ledger name (format: "<AMOUNT> <LEDGER>").');
+    const amountMatch = head.match(/^([0-9][0-9,]*(?:\.[0-9]+)?)\s+(.*)$/);
+    const amount = parseFloat(amountMatch[1].replace(/,/g, ''));
+    if (Number.isNaN(amount) || amount <= 0) {
+        result.errors.push('Amount must be a number greater than 0.');
+        return result;
+    }
+    result.amount = amount;
+
+    const sides = splitFromTo(amountMatch[2].trim());
+    if (sides.error) {
+        result.errors.push(sides.error);
         return result;
     }
 
-    const amount = parseFloat(headMatch[1].replace(/,/g, ''));
-    if (Number.isNaN(amount) || amount <= 0) {
-        result.errors.push('Amount must be a number greater than 0.');
-    } else {
-        result.amount = amount;
-    }
-
-    // Shorthand for an order advance: "Order# 11473" (or "Orders# 11473") in
-    // place of a ledger name resolves straight to the Orders ledger, tagged
-    // with that order number.
-    const ledgerName = headMatch[2].trim();
-    const orderShorthand = ledgerName.match(/^orders?\s*#?\s*(\d{4,})$/i);
-    const ledger = orderShorthand
-        ? ledgers.find(l => l.is_orders_ledger) || null
-        : findLedgerByName(ledgerName);
-    if (!ledger) result.errors.push(orderShorthand ? 'Orders ledger not found.' : `Ledger "${ledgerName}" not found.`);
-
+    const from = sides.fromName ? resolveBulkLedger(sides.fromName) : null;
+    const to = sides.toName ? resolveBulkLedger(sides.toName) : null;
+    if (sides.fromName && !from) result.errors.push(`Ledger "${sides.fromName}" not found.`);
+    if (sides.toName && !to) result.errors.push(`Ledger "${sides.toName}" not found.`);
     if (result.errors.length > 0) return result;
 
-    const entryType = BULK_ENTRY_KIND_TO_ENTRY_TYPE[kind];
-    // A credit to the "Orders" ledger is an order-advance entry; tag it with the
-    // order number parsed from the particulars (or the "Order# ..." shorthand)
-    // so advance reconciliation works.
-    const orderNumber = orderShorthand ? orderShorthand[1] : (entryType === 'credit' ? extractOrderNumberFromText(particulars) : null);
-    const description = particulars || (orderNumber && ledger.is_orders_ledger
-        ? orderAdvanceParticularPlaceholder(orderNumber)
-        : cashbookEntryParticularPlaceholder(entryType, ledger.id));
+    // An order advance is money received FROM the Orders account; the order
+    // number comes from the "Order# NNNN" shorthand or out of the particulars.
+    const ordersId = getOrdersLedgerId();
+    const fromIsOrders = from && from.ledger.id === ordersId;
+    const orderNumber = (from && from.orderNumber)
+        || (fromIsOrders ? extractOrderNumberFromText(particulars) : null);
+
+    const description = particulars
+        || (fromIsOrders && orderNumber ? orderAdvanceParticularPlaceholder(orderNumber) : bulkEntryDefaultParticulars(from, to));
     result.particulars = particulars || '';
 
-    const entry = { entry_type: entryType, amount: result.amount, description, folio: ledger.id };
-    if (ledger.is_orders_ledger && orderNumber) entry.order_number = orderNumber;
+    const entry = {
+        amount: result.amount,
+        description,
+        from_account_id: from ? from.ledger.id : null,
+        to_account_id: to ? to.ledger.id : null,
+    };
+    if (fromIsOrders && orderNumber) entry.order_number = orderNumber;
 
     result.entries = [entry];
     result.orderNumber = orderNumber || null;
     result.ok = true;
     return result;
+}
+
+/**
+ * Split "from A to B" / "from A" / "to B" into its two names.
+ *
+ * A ledger name can itself contain " to " ("Cash to Bank Transfers"), so when
+ * both sides are present every possible split point is tried and the first one
+ * where BOTH names resolve to a real ledger wins. Falling back to the last
+ * split keeps the error message pointing at the most likely intent.
+ */
+function splitFromTo(text) {
+    const lower = text.toLowerCase();
+
+    if (lower.startsWith('to ')) {
+        const name = text.slice(3).trim();
+        return name ? { fromName: null, toName: name } : { error: 'Missing ledger name after "to".' };
+    }
+    if (!lower.startsWith('from ')) {
+        return { error: 'Expected "from <ledger>" or "to <ledger>" after the amount.' };
+    }
+
+    const afterFrom = text.slice(5);
+    const splits = [];
+    const re = /\s+to\s+/gi;
+    let m;
+    while ((m = re.exec(afterFrom)) !== null) {
+        splits.push({ index: m.index, length: m[0].length });
+    }
+
+    if (!splits.length) {
+        const name = afterFrom.trim();
+        return name ? { fromName: name, toName: null } : { error: 'Missing ledger name after "from".' };
+    }
+
+    for (const split of splits) {
+        const fromName = afterFrom.slice(0, split.index).trim();
+        const toName = afterFrom.slice(split.index + split.length).trim();
+        if (fromName && toName && resolveBulkLedger(fromName) && resolveBulkLedger(toName)) {
+            return { fromName, toName };
+        }
+    }
+
+    // No split resolved, so the " to " is part of the name itself
+    // ("900 from Cash to Bank Transfers" is one account, not two).
+    const whole = afterFrom.trim();
+    if (resolveBulkLedger(whole)) {
+        return { fromName: whole, toName: null };
+    }
+
+    const last = splits[splits.length - 1];
+    return {
+        fromName: afterFrom.slice(0, last.index).trim(),
+        toName: afterFrom.slice(last.index + last.length).trim(),
+    };
+}
+
+/**
+ * Resolve one side's name to a ledger. "Order# 11473" (or "Orders 11473")
+ * resolves to the Orders account and carries the order number with it.
+ */
+function resolveBulkLedger(name) {
+    const trimmed = String(name || '').trim();
+    if (!trimmed) return null;
+
+    const orderShorthand = trimmed.match(/^orders?\s*#?\s*(\d{4,})$/i);
+    if (orderShorthand) {
+        const ordersId = getOrdersLedgerId();
+        const ledger = ledgers.find(l => l.id === ordersId);
+        return ledger ? { ledger, orderNumber: orderShorthand[1] } : null;
+    }
+
+    const ledger = findLedgerByName(trimmed);
+    return ledger ? { ledger, orderNumber: null } : null;
+}
+
+function bulkEntryDefaultParticulars(from, to) {
+    if (from && to) return `${from.ledger.name} to ${to.ledger.name}`;
+    if (from) return `Amount received from ${from.ledger.name}`;
+    if (to) return `Amount transferred to ${to.ledger.name}`;
+    return '';
 }
 
 /** Parse the whole textarea. Returns { lines: [parsed], hasError, hasAny }. */
@@ -786,15 +875,18 @@ function validateBulkEntry() {
     }
 
     const rows = parsed.lines.map(p => {
-        // Show the cleaned line (KIND: onward) so pasted prefixes like WhatsApp
-        // timestamps don't appear; fall back to raw when there's no KIND token.
+        // Show the cleaned line (amount onward) so pasted prefixes like WhatsApp
+        // timestamps don't appear; fall back to raw when the amount wasn't found.
         const displayText = p.cleaned || p.raw;
         if (p.ok) {
             const summary = p.entries
                 .map(e => {
-                    const dir = e.entry_type === 'credit' ? '▲ in' : '▼ out';
+                    // An empty side is cash — spelling it out is the only way to
+                    // see, before saving, whether a line will move the cash balance.
+                    const from = e.from_account_id ? ledgerNameById(e.from_account_id) : 'Cash';
+                    const to = e.to_account_id ? ledgerNameById(e.to_account_id) : 'Cash';
                     const tag = e.order_number ? ` [Order #${escapeHtml(e.order_number)}]` : '';
-                    return `${dir} ${formatBulkAmount(e.amount)} → ${escapeHtml(ledgerNameById(e.folio))}${tag}`;
+                    return `${formatBulkAmount(e.amount)} ${escapeHtml(from)} → ${escapeHtml(to)}${tag}`;
                 })
                 .join(' , ');
             return `<div class="bulk-entry-line bulk-entry-line-ok">`
@@ -974,7 +1066,10 @@ async function createCashbookEntriesBulk(payloads) {
     }
 }
 
-function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
+// `side` is which grid the row was typed into: 'debit' (left, TO) or 'credit'
+// (right, FROM). The account picked there fills that side and the other stays
+// cash — typing a row into the cash book is by definition a cash movement.
+function tryCreateCashbookEntryFromPinnedRow(row, side) {
     const entryDate = String(row.entry_date || '').trim();
     const amount = parseCashbookAmount(row.amount);
     if (amount === null || amount <= 0) return;
@@ -982,21 +1077,20 @@ function tryCreateCashbookEntryFromPinnedRow(row, entryType) {
         showToast('Select an entry date for this row.', 'error');
         return;
     }
-    const description = String(row.description || '').trim();
-    const folio = row.folio || null;
-    
-    // Folio is now required
-    if (!folio) {
-        showToast('Please select a ledger (folio) for this entry.', 'error');
+
+    const accountField = CASHBOOK_SIDES[side];
+    const accountId = row[accountField] || null;
+    if (!accountId) {
+        showToast('Please select a ledger for this entry.', 'error');
         return;
     }
 
     createCashbookEntry({
         entry_date: entryDate,
-        entry_type: entryType,
         amount,
-        description,
-        folio
+        description: String(row.description || '').trim(),
+        from_account_id: side === 'credit' ? accountId : null,
+        to_account_id: side === 'debit' ? accountId : null,
     });
 }
 

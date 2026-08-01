@@ -218,7 +218,7 @@ async def upload_postex_csv(
         supabase = get_supabase()
         all_orders = fetch_all(
             lambda: org_table(supabase, org_id, "orders")
-            .select("id, order_number, total_amount, advance_amount, order_status")
+            .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date")
             .order("order_number")
         )
         order_number_to_order = {}
@@ -252,6 +252,13 @@ async def upload_postex_csv(
             matched_order_numbers.append(order_num)
             update_data = {
                 "id": order["id"],
+                # An upsert is INSERT ... ON CONFLICT, and Postgres checks NOT NULL on the
+                # proposed row before it resolves the conflict - so every NOT NULL column
+                # without a default has to be carried even though this only ever updates.
+                "order_number": order["order_number"],
+                "order_status": order["order_status"],
+                "total_amount": order["total_amount"],
+                "order_receiving_date": order["order_receiving_date"],
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
                 "courier": "PostEx",

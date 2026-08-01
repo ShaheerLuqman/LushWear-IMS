@@ -450,9 +450,23 @@ Closed A2, A3, B1, B3, B4 and C6. What later phases need to know:
   reproduces the old rules exactly so no reported month moved) and
   `is_orders_ledger` (replaces the hardcoded UUID; one per org, enforced by a
   partial unique index). Migrations `20260801040000` and `20260801050000`.
+  *`is_orders_ledger` was later folded into `system_key` — see below.*
 - **Only the original org's Orders ledger was backfilled.** Other orgs — for
   whom the advance flow was silently inert — now get an explicit "no Orders
   ledger set" message and can pick one.
+
+**Fixed ledger roles were later unified onto `system_key`** (migration
+`20260801140000`). There had been two mechanisms for "this account fills role X":
+`system_key` for the app-created accounts, and a dedicated `is_orders_ledger`
+boolean — an accident of sequencing, since the boolean shipped before
+`system_key` existed. Each future role would have cost a column, an index, two
+model fields, a guard helper and a checkbox; as a `system_key` value it costs one
+line in `backend/app/ledger_roles.py`. It also closed a hole: the boolean's guard
+only checked that no *other* ledger held the role, so the Cash account could be
+flagged as the Orders ledger too. Roles are split into assignable (`orders`,
+`inventory`, `tax_on_purchases`) and protected (`cash`,
+`opening_balance_equity`) — re-pointing `cash` would orphan every entry the
+journal projection has already posted.
 
 ### Phase 1 — Chart of accounts + double-entry core — **shipped**
 

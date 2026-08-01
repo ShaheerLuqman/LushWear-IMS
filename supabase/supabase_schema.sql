@@ -291,34 +291,18 @@ CREATE TABLE IF NOT EXISTS sync_status (
 -- (there is no separate ledger_entries table).
 --
 -- ---------------------------------------------------------------------------
--- THE TWO PERSPECTIVES - read this before changing any sign in this section.
+-- BOTH SIDES ARE NAMED
 -- ---------------------------------------------------------------------------
--- Every cashbook entry moves money between two accounts: the folio ledger and
--- cash. Only one of those sides is stored, so each side is read with the
--- opposite sign, and the two readers below are BOTH correct.
+-- A cashbook entry records where money came from and where it went:
+--   from_account_id  credited (money came FROM here)
+--   to_account_id    debited  (money went TO here)
+-- NULL on a side means cash. So an entry only moves Cash in Hand when one of
+-- its sides is NULL - paying a supplier from a bank account names both sides
+-- and never touches cash.
 --
---   cashbook_entries.entry_type is the FOLIO LEDGER's side:
---     'credit' = credit the folio ledger, so cash came IN   (a receipt)
---     'debit'  = debit the folio ledger,  so cash went OUT  (a payment)
---   recalc_ledger_balance applies it directly:
---     ledger balance = opening_balance + SUM(debit) - SUM(credit)
---
---   cashbook_daily_balances totals are the CASH account's side - always the
---   opposite one. Standard bookkeeping: cash received is a DEBIT to cash (the
---   receipts side of a two-column cash book is its debit side).
---     total_debit  = receipts = SUM(amount) WHERE entry_type = 'credit'
---     total_credit = payments = SUM(amount) WHERE entry_type = 'debit'
---     closing_balance = opening_balance + total_debit - total_credit
---
--- Consequence, and the thing that looks like a bug but is not: one entry with
--- entry_type='credit' appears under **Debit** on the Cashbook screen and under
--- **Credit** on the ledger statement. Two different accounts, both correct.
--- Do NOT "fix" one to match the other.
---
--- This collapses when the double-entry journal lands (see
--- FINANCE_ACCOUNTING_PLAN.md Phase 1): each side becomes its own journal line
--- carrying its own account and its own debit-or-credit, so no single column
--- ever has to describe two accounts again.
+-- This replaced a single `folio` plus an `entry_type` saying which side the
+-- folio sat on, which forced every entry through cash and made the two columns
+-- of cashbook_daily_balances read the folio's side inverted.
 -- ============================================================================
 
 -- Ledgers: individual accounts (suppliers, customers, expense heads, …).
@@ -392,14 +376,6 @@ BEGIN
     END IF;
 END $$;
 
--- Marks the one ledger per org that order advances post to. Replaces a hardcoded
--- UUID constant that predated multi-tenancy and left the advance flow inert for
--- every other org. The partial unique index below enforces "at most one per org".
--- See supabase/migrations/20260801050000_ledgers_is_orders_ledger.sql.
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_orders_ledger BOOLEAN NOT NULL DEFAULT FALSE;
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_one_orders_ledger_per_org
-    ON ledgers (org_id) WHERE is_orders_ledger;
-
 -- Chart-of-accounts columns (Phase 1). `ledgers` IS the chart of accounts -
 -- deliberately not renamed to `accounts`, which would cascade through every
 -- route, the frontend, the RLS list and the org-scope lint for no functional
@@ -415,6 +391,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_system_key
     ON ledgers (org_id, system_key) WHERE system_key IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_code
     ON ledgers (org_id, code) WHERE code IS NOT NULL;
+
+-- Which ledger order advances post to is system_key = 'orders', like every other
+-- fixed role. It began as a dedicated is_orders_ledger boolean (Phase 0, before
+-- system_key existed); this carries an older database over and drops it. Must
+-- stay AFTER system_key is added above - the carry-over writes into it.
+-- See supabase/migrations/20260801140000_ledger_roles_via_system_key.sql.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'ledgers'
+           AND column_name = 'is_orders_ledger'
+    ) THEN
+        -- Only where system_key is free: an account already holding another role
+        -- keeps it rather than being silently repurposed.
+        EXECUTE $q$
+            UPDATE ledgers SET system_key = 'orders'
+             WHERE is_orders_ledger IS TRUE AND system_key IS NULL
+        $q$;
+    END IF;
+END $$;
+
+DROP INDEX IF EXISTS idx_ledgers_one_orders_ledger_per_org;
+ALTER TABLE ledgers DROP COLUMN IF EXISTS is_orders_ledger;
 
 -- Which Month Summary expense line this ledger's spending rolls into (NULL =
 -- excluded). Replaces get_month_summary_totals' old ledger-*name* substring
@@ -445,10 +445,11 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     org_id        UUID NOT NULL REFERENCES organizations(id),
     entry_date    DATE NOT NULL,
-    entry_type    VARCHAR(10) NOT NULL CHECK (entry_type IN ('credit', 'debit')),
     amount        DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     description   TEXT,
-    folio         UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    -- NULL on a side means cash; see "BOTH SIDES ARE NAMED" above.
+    from_account_id UUID REFERENCES ledgers(id) ON DELETE RESTRICT,
+    to_account_id   UUID REFERENCES ledgers(id) ON DELETE RESTRICT,
     -- Set only for order-advance entries (created via the order advance modal);
     -- links the entry to an order so advance amounts can be reconciled.
     order_number  VARCHAR(20),
@@ -464,6 +465,44 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
 -- Safe to re-run against an existing table: adds the column if this schema
 -- was applied before idempotency_key existed.
 ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
+
+-- Carries a database created before the two-sided change over, then retires the
+-- old columns. entry_type was the FOLIO's side: 'credit' = money came from it
+-- into cash, 'debit' = cash paid out to it.
+-- See supabase/migrations/20260801160000_cashbook_from_to_accounts.sql.
+ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES ledgers(id) ON DELETE RESTRICT;
+ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES ledgers(id) ON DELETE RESTRICT;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = 'cashbook_entries'
+           AND column_name = 'entry_type'
+    ) THEN
+        EXECUTE $q$
+            UPDATE cashbook_entries
+               SET from_account_id = CASE WHEN entry_type = 'credit' THEN folio ELSE NULL END,
+                   to_account_id   = CASE WHEN entry_type = 'debit'  THEN folio ELSE NULL END
+             WHERE from_account_id IS NULL AND to_account_id IS NULL
+        $q$;
+    END IF;
+END $$;
+
+DROP INDEX IF EXISTS idx_cashbook_entries_folio_order_number;
+DROP INDEX IF EXISTS idx_cashbook_entries_type;
+ALTER TABLE cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_entry_type_check;
+ALTER TABLE cashbook_entries DROP COLUMN IF EXISTS folio;
+ALTER TABLE cashbook_entries DROP COLUMN IF EXISTS entry_type;
+
+-- Both NULL would be cash-to-cash, which moves nothing; both equal would be an
+-- account paying itself.
+ALTER TABLE cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_two_sides_check;
+ALTER TABLE cashbook_entries ADD CONSTRAINT cashbook_entries_two_sides_check
+    CHECK (
+        (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
+        AND from_account_id IS DISTINCT FROM to_account_id
+    );
 
 -- Daily balances: opening/closing balance per day (auto-maintained by a DB
 -- trigger on cashbook_entries — see "Triggers" section below).
@@ -515,13 +554,19 @@ CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
     org_id        UUID NOT NULL REFERENCES organizations(id),
     entry_id      UUID NOT NULL,
     entry_date    DATE NOT NULL,
-    entry_type    VARCHAR(10) NOT NULL,
     amount        DECIMAL(12, 2) NOT NULL,
     description   TEXT,
-    folio         UUID NOT NULL,
+    from_account_id UUID,
+    to_account_id   UUID,
     order_number  VARCHAR(20),
     deleted_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Carry-over for a log created before the two-sided change.
+ALTER TABLE cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS from_account_id UUID;
+ALTER TABLE cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS to_account_id   UUID;
+ALTER TABLE cashbook_entry_audit_log ALTER COLUMN entry_type DROP NOT NULL;
+ALTER TABLE cashbook_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
 
 
 -- ============================================================================
@@ -568,14 +613,14 @@ CREATE INDEX IF NOT EXISTS idx_ledgers_org_id ON ledgers(org_id);
 
 -- Cashbook
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON cashbook_entries(entry_date);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_type         ON cashbook_entries(entry_type);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_account ON cashbook_entries(from_account_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_to_account   ON cashbook_entries(to_account_id);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries(order_number);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_org_id       ON cashbook_entries(org_id);
--- Advance reconciliation (advance_status.py) filters on (folio, order_number) together.
--- This composite also serves queries that filter on folio alone (leading-column prefix),
--- so a standalone idx_cashbook_entries_folio is redundant and intentionally omitted.
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_folio_order_number
-    ON cashbook_entries(folio, order_number);
+-- Advance reconciliation (advance_status.py) filters on the From side plus the
+-- order number: an advance is money received from the Orders account.
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_order_number
+    ON cashbook_entries(from_account_id, order_number);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
     ON cashbook_entries(idempotency_key);
 CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
@@ -840,9 +885,6 @@ BEGIN
 END;
 $$;
 
--- One cashbook entry becomes one two-line journal entry between its folio
--- ledger and the system cash account. entry_type is the folio's side and cash
--- always takes the opposite one - see "THE TWO PERSPECTIVES" above.
 CREATE OR REPLACE FUNCTION project_cashbook_entry_to_journal(p_entry_id UUID)
 RETURNS void
 LANGUAGE plpgsql
@@ -850,6 +892,8 @@ AS $$
 DECLARE
     e            RECORD;
     v_cash_id    UUID;
+    v_from       UUID;
+    v_to         UUID;
     v_journal_id UUID;
 BEGIN
     SELECT * INTO e FROM cashbook_entries WHERE id = p_entry_id;
@@ -860,13 +904,20 @@ BEGIN
         RETURN;
     END IF;
 
-    SELECT id INTO v_cash_id FROM ledgers WHERE org_id = e.org_id AND system_key = 'cash';
-    IF v_cash_id IS NULL THEN
-        RAISE EXCEPTION 'Organization % has no system cash account', e.org_id;
+    -- Only looked up when a side is actually cash, so an org with no cash
+    -- account can still record transfers between two named ledgers.
+    IF e.from_account_id IS NULL OR e.to_account_id IS NULL THEN
+        SELECT id INTO v_cash_id FROM ledgers WHERE org_id = e.org_id AND system_key = 'cash';
+        IF v_cash_id IS NULL THEN
+            RAISE EXCEPTION 'Organization % has no system cash account', e.org_id;
+        END IF;
     END IF;
 
-    -- Rebuild rather than patch: an edited entry can change date, amount,
-    -- direction or folio, and re-posting from scratch cannot drift.
+    v_from := COALESCE(e.from_account_id, v_cash_id);
+    v_to   := COALESCE(e.to_account_id, v_cash_id);
+
+    -- Rebuild rather than patch: an edited entry can change date, amount or
+    -- either side, and re-posting from scratch cannot drift.
     DELETE FROM journal_entries
      WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
 
@@ -876,19 +927,13 @@ BEGIN
         (e.org_id, e.entry_date, 'cashbook', e.description, 'cashbook_entry', e.id)
     RETURNING id INTO v_journal_id;
 
-    IF e.entry_type = 'credit' THEN
-        -- Cash received: debit cash, credit the folio ledger.
-        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
-        VALUES (e.org_id, v_journal_id, v_cash_id, e.amount, 0, e.description),
-               (e.org_id, v_journal_id, e.folio,   0, e.amount, e.description);
-    ELSE
-        -- Cash paid: debit the folio ledger, credit cash.
-        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
-        VALUES (e.org_id, v_journal_id, e.folio,   e.amount, 0, e.description),
-               (e.org_id, v_journal_id, v_cash_id, 0, e.amount, e.description);
-    END IF;
+    -- Money goes TO the debit side and comes FROM the credit side.
+    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    VALUES (e.org_id, v_journal_id, v_to,   e.amount, 0, e.description),
+           (e.org_id, v_journal_id, v_from, 0, e.amount, e.description);
 END;
 $$;
+
 
 CREATE OR REPLACE FUNCTION trg_cashbook_entries_project_journal()
 RETURNS trigger
@@ -908,15 +953,43 @@ $$;
 
 DROP TRIGGER IF EXISTS cashbook_entries_journal_trigger ON cashbook_entries;
 CREATE TRIGGER cashbook_entries_journal_trigger
-AFTER INSERT OR UPDATE OF entry_date, entry_type, amount, folio, description OR DELETE
+AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount, description OR DELETE
 ON cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_project_journal();
 
--- Seeds the two system accounts Phase 1 needs, for every org. Accounts Payable/
--- Receivable, Sales, COGS and Inventory are seeded by the phase that first
--- posts to them rather than cluttering the Ledgers screen with zero-balance
--- accounts nothing writes to yet.
+-- System ledgers are created WITH the organization and are not user-selectable:
+-- system_key is server-managed, and a ledger holding one cannot be deleted.
+--
+-- The trigger sits on the table rather than in the org-creation route so it
+-- fires for every writer - the API, the superadmin portal, a row inserted from
+-- the SQL editor - matching how the balance and journal triggers are handled.
+-- See supabase/migrations/20260801150000_system_ledgers_on_org_creation.sql.
+CREATE OR REPLACE FUNCTION trg_organizations_seed_system_ledgers()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    -- ensure_system_ledger is create-or-return, so this never disturbs an
+    -- account an org already has for the role.
+    PERFORM ensure_system_ledger(NEW.id, 'cash', 'Cash in Hand', 'Asset', '1000', TRUE);
+    PERFORM ensure_system_ledger(NEW.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
+    -- Advances received before delivery are money held against goods still
+    -- owed, so Orders is a liability rather than revenue.
+    PERFORM ensure_system_ledger(NEW.id, 'orders', 'Orders', 'Liability', '2200');
+    PERFORM ensure_system_ledger(NEW.id, 'inventory', 'Inventory', 'Asset', '1400');
+    PERFORM ensure_system_ledger(NEW.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS organizations_seed_system_ledgers ON organizations;
+CREATE TRIGGER organizations_seed_system_ledgers
+AFTER INSERT ON organizations
+FOR EACH ROW
+EXECUTE FUNCTION trg_organizations_seed_system_ledgers();
+
+-- Covers orgs that predate the trigger.
 DO $$
 DECLARE
     org RECORD;
@@ -924,6 +997,9 @@ BEGIN
     FOR org IN SELECT id FROM organizations LOOP
         PERFORM ensure_system_ledger(org.id, 'cash', 'Cash in Hand', 'Asset', '1000', TRUE);
         PERFORM ensure_system_ledger(org.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
+        PERFORM ensure_system_ledger(org.id, 'orders', 'Orders', 'Liability', '2200');
+        PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
+        PERFORM ensure_system_ledger(org.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
     END LOOP;
 END $$;
 
@@ -1095,6 +1171,9 @@ $$;
 -- version would otherwise leave that old overload in place alongside this one.
 DROP FUNCTION IF EXISTS recalc_cashbook_daily_balances(DATE);
 
+-- A NULL side IS cash, so an entry only moves the cash balance when one of its
+-- sides is NULL. An entry with both sides named is invisible here, which is the
+-- whole point of the change.
 CREATE OR REPLACE FUNCTION recalc_cashbook_daily_balances(p_from_date DATE, p_org_id UUID)
 RETURNS void
 LANGUAGE plpgsql
@@ -1110,8 +1189,6 @@ BEGIN
 
     v_opening := COALESCE(v_opening, 0);
 
-    -- Drop balance rows on/after from_date that no longer have any entries
-    -- (covers deletes, including "the last entry on that date was removed").
     DELETE FROM cashbook_daily_balances
     WHERE org_id = p_org_id
       AND balance_date >= p_from_date
@@ -1120,13 +1197,12 @@ BEGIN
           WHERE org_id = p_org_id AND entry_date >= p_from_date
       );
 
-    -- Folio-side entry_type read from the cash account's side - see "THE TWO
-    -- PERSPECTIVES" at the top of this section. The filters are deliberately
-    -- crossed: a folio 'credit' is a cash receipt, i.e. a debit to cash.
     WITH day_totals AS (
         SELECT entry_date AS balance_date,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0) AS total_debit,
-               COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)  AS total_credit
+               -- Cash is the destination: cash received, a debit to cash.
+               COALESCE(SUM(amount) FILTER (WHERE to_account_id IS NULL), 0)   AS total_debit,
+               -- Cash is the source: cash paid out, a credit to cash.
+               COALESCE(SUM(amount) FILTER (WHERE from_account_id IS NULL), 0) AS total_credit
         FROM cashbook_entries
         WHERE org_id = p_org_id AND entry_date >= p_from_date
         GROUP BY entry_date
@@ -1158,6 +1234,7 @@ BEGIN
 END;
 $$;
 
+
 CREATE OR REPLACE FUNCTION trg_cashbook_entries_recalc_balances()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -1188,7 +1265,7 @@ $$;
 
 DROP TRIGGER IF EXISTS cashbook_entries_balance_trigger ON cashbook_entries;
 CREATE TRIGGER cashbook_entries_balance_trigger
-AFTER INSERT OR UPDATE OF entry_date, entry_type, amount OR DELETE ON cashbook_entries
+AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount OR DELETE ON cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
@@ -1274,20 +1351,21 @@ AFTER TRUNCATE ON cashbook_entries
 FOR EACH STATEMENT
 EXECUTE FUNCTION trg_cashbook_entries_truncate_balances();
 
--- Logs every deleted row to cashbook_entry_audit_log — fires for any DELETE,
--- not just the API, closing the "hard delete with no record" gap.
 CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_delete()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     INSERT INTO cashbook_entry_audit_log
-        (org_id, entry_id, entry_date, entry_type, amount, description, folio, order_number)
+        (org_id, entry_id, entry_date, amount, description,
+         from_account_id, to_account_id, order_number, deleted_at)
     VALUES
-        (OLD.org_id, OLD.id, OLD.entry_date, OLD.entry_type, OLD.amount, OLD.description, OLD.folio, OLD.order_number);
+        (OLD.org_id, OLD.id, OLD.entry_date, OLD.amount, OLD.description,
+         OLD.from_account_id, OLD.to_account_id, OLD.order_number, NOW());
     RETURN OLD;
 END;
 $$;
+
 
 DROP TRIGGER IF EXISTS cashbook_entries_audit_delete_trigger ON cashbook_entries;
 CREATE TRIGGER cashbook_entries_audit_delete_trigger
@@ -1295,22 +1373,21 @@ AFTER DELETE ON cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_audit_delete();
 
--- TRUNCATE is effectively a bulk delete but row-level triggers don't fire for
--- it and by the time an AFTER TRUNCATE trigger runs the rows are already
--- gone, so this has to run BEFORE TRUNCATE and snapshot the whole table
--- while it's still there.
 CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_before_truncate()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     INSERT INTO cashbook_entry_audit_log
-        (org_id, entry_id, entry_date, entry_type, amount, description, folio, order_number)
-    SELECT org_id, id, entry_date, entry_type, amount, description, folio, order_number
+        (org_id, entry_id, entry_date, amount, description,
+         from_account_id, to_account_id, order_number)
+    SELECT org_id, id, entry_date, amount, description,
+           from_account_id, to_account_id, order_number
     FROM cashbook_entries;
     RETURN NULL;
 END;
 $$;
+
 
 DROP TRIGGER IF EXISTS cashbook_entries_audit_before_truncate_trigger ON cashbook_entries;
 CREATE TRIGGER cashbook_entries_audit_before_truncate_trigger
@@ -1361,16 +1438,6 @@ AS $$
     ORDER BY year DESC, month DESC;
 $$;
 
--- Pushes get_month_summary_detail's order/ledger aggregation (backend/app/routes/orders.py)
--- into Postgres: instead of fetching every order (select "*") and every matching
--- cashbook entry for the period and summing/counting in Python, this returns the
--- computed totals directly. Mirrors the Python logic term-for-term, including the
--- (now effectively always-true, since delivery_charge/total_amount/cost_price are
--- NOT NULL) "delivery_charge IS NOT NULL" filter on the net-profit terms - kept for
--- literal parity rather than silently changing behavior if that constraint is ever
--- relaxed. products_sold_by_collection is NOT covered here: its fuzzy name-matching
--- fallback (exact -> variant-suffix-stripped -> substring, first match in product
--- list order wins) is not safely reproducible in SQL and stays in Python.
 CREATE OR REPLACE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
     p_period_end TIMESTAMPTZ,
@@ -1422,30 +1489,15 @@ AS $$
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
     ),
-    -- A ledger falls into at most one bucket, in this priority order - mirrors the
-    -- if/elif chain in orders.py (name containing "shopify" wins over "ad", which
-    -- wins over a plain Expense-type ledger; anything else is uncounted).
-    ledger_buckets AS (
-        SELECT
-            CASE
-                WHEN position('shopify' in lower(l.name)) > 0 THEN 'shopify'
-                WHEN position('ad' in lower(l.name)) > 0 THEN 'ad'
-                WHEN position('expense' in lower(l.type)) > 0 THEN 'other'
-                ELSE NULL
-            END AS bucket,
-            ce.entry_type,
-            ce.amount
-        FROM ledgers l
-        JOIN cashbook_entries ce ON ce.folio = l.id
-        WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
-          AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
-    ),
     ledger_totals AS (
         SELECT
-            COALESCE(SUM(amount) FILTER (WHERE bucket = 'shopify' AND entry_type = 'debit'), 0) AS shopify_expense,
-            COALESCE(SUM(amount) FILTER (WHERE bucket = 'ad' AND entry_type = 'debit'), 0) AS ad_expense,
-            COALESCE(SUM(amount) FILTER (WHERE bucket = 'other' AND entry_type = 'debit'), 0) AS other_expense
-        FROM ledger_buckets
+            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'shopify'), 0) AS shopify_expense,
+            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'ad'), 0)      AS ad_expense,
+            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'other'), 0)   AS other_expense
+        FROM ledgers l
+        JOIN cashbook_entries ce ON ce.to_account_id = l.id
+        WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
+          AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
     )
     SELECT
         ot.total_orders,
@@ -1465,6 +1517,7 @@ AS $$
         lt.other_expense
     FROM order_totals ot, ledger_totals lt;
 $$;
+
 
 
 -- Per-carrier delivered/total parcel counts for the Month Summary "Carrier health"
@@ -1612,18 +1665,10 @@ CREATE INDEX IF NOT EXISTS idx_bill_items_variant ON bill_items (variant_id) WHE
 
 -- Phase 2, part 2: bill numbering, totals, posting, stock, and AP ageing.
 
--- Seeds the two system accounts bills post to. Deliberately NOT accounts_payable
--- (superseding the Phase 1 handoff note): the supplier's own ledger is credited,
--- so the party ledgers collectively are accounts payable.
-DO $$
-DECLARE
-    org RECORD;
-BEGIN
-    FOR org IN SELECT id FROM organizations LOOP
-        PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
-        PERFORM ensure_system_ledger(org.id, 'tax_on_purchases', 'Tax on Purchases', 'Expense', '5900');
-    END LOOP;
-END $$;
+-- Inventory and Tax on Purchases (what bills post to) are seeded with every org
+-- alongside the other system ledgers, above. Deliberately NOT accounts_payable:
+-- the supplier's own ledger is credited, so the party ledgers collectively are
+-- accounts payable.
 
 -- Next BILL-nnnn for an org. Races are possible under concurrent creates; the
 -- UNIQUE (org_id, bill_number) constraint is what actually guarantees
@@ -1914,9 +1959,14 @@ $$;
 -- recalc_ledger_balance was still installed, and the recomputed balances would
 -- then never be refreshed. It has to run after the redefinition, i.e. here.
 --
--- All three blocks are idempotent: the projection skips entries that already
--- have a journal entry, and sync_opening_balance_journal rebuilds one entry per
--- org wholesale.
+-- All three blocks are idempotent, and the projection is deliberately
+-- UNCONDITIONAL rather than skipping entries that already have a journal entry.
+-- That guard was safe when the journal was introduced (there was nothing to
+-- rebuild) but became wrong the moment *how* an entry projects changed: after
+-- the two-sided rewrite, existing journal entries still held the old
+-- everything-through-cash posting, and skipping them left the journal, the cash
+-- balance and every ledger balance stale. Re-posting from scratch is the only
+-- version that cannot drift.
 -- ============================================================================
 
 DO $$
@@ -1924,13 +1974,7 @@ DECLARE
     entry RECORD;
 BEGIN
     FOR entry IN
-        SELECT ce.id
-          FROM cashbook_entries ce
-         WHERE NOT EXISTS (
-             SELECT 1 FROM journal_entries je
-              WHERE je.source_type = 'cashbook_entry' AND je.source_id = ce.id
-         )
-         ORDER BY ce.entry_date, ce.created_at
+        SELECT ce.id FROM cashbook_entries ce ORDER BY ce.entry_date, ce.created_at
     LOOP
         PERFORM project_cashbook_entry_to_journal(entry.id);
     END LOOP;
@@ -1942,6 +1986,9 @@ DECLARE
 BEGIN
     FOR org IN SELECT id FROM organizations LOOP
         PERFORM sync_opening_balance_journal(org.id);
+        -- Cash totals are derived too: only entries with a cash side count
+        -- towards them, so they have to be rebuilt alongside the journal.
+        PERFORM recalc_cashbook_daily_balances('1900-01-01'::DATE, org.id);
     END LOOP;
 END $$;
 

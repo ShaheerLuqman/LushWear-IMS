@@ -20,14 +20,20 @@ class FakeQuery:
     hands back whatever rows the test registered for the table.
     """
 
-    def __init__(self, rows):
+    def __init__(self, rows, upserted=None):
         self._rows = rows
+        self._upserted = upserted
 
     def __getattr__(self, _name):
         # select/eq/gte/lt/order/limit/range/is_/in_/not_ … all just continue the chain.
         def _chain(*_args, **_kwargs):
             return self
         return _chain
+
+    def upsert(self, json, **_kwargs):
+        if self._upserted is not None:
+            self._upserted.extend(json if isinstance(json, list) else [json])
+        return self
 
     def execute(self):
         return type("Response", (), {"data": list(self._rows), "count": len(self._rows)})()
@@ -54,9 +60,11 @@ class FakeSupabase:
         self.rpc_results = rpc_results or {}
         # (name, params) for each rpc() call, so tests can assert what was sent.
         self.rpc_calls = []
+        # Rows passed to upsert(), per table, so tests can assert the written payload.
+        self.upserted = {}
 
     def table(self, name):
-        return FakeQuery(self.tables.get(name, []))
+        return FakeQuery(self.tables.get(name, []), self.upserted.setdefault(name, []))
 
     def rpc(self, name, params=None):
         self.rpc_calls.append((name, params))
