@@ -248,6 +248,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'cashbook': 'Cashbook',
         'ledgers': 'Ledgers',
         'ledgerDetail': 'Ledger',
+        'trialBalance': 'Trial Balance',
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
@@ -307,6 +308,11 @@ function switchView(viewName, { skipReload = false } = {}) {
         loadLoadSheetLogs();
     } else if (viewName === 'ledgers') {
         loadLedgers();
+    } else if (viewName === 'trialBalance') {
+        loadTrialBalance();
+        setTimeout(() => {
+            sizeGridColumns(trialBalanceGridApi);
+        }, 100);
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail
         setTimeout(() => {

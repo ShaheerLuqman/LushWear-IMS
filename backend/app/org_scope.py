@@ -19,6 +19,8 @@ BUSINESS_TABLES = {
     "ledger_balances",
     "cashbook_entry_audit_log",
     "sync_status",
+    "journal_entries",
+    "journal_lines",
 }
 
 

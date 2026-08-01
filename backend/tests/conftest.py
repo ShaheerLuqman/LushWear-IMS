@@ -33,16 +33,34 @@ class FakeQuery:
         return type("Response", (), {"data": list(self._rows), "count": len(self._rows)})()
 
 
+class FakeRpc(FakeQuery):
+    """Like FakeQuery, but passes a non-list result through untouched.
+
+    Set-returning functions (get_month_summary_totals, get_trial_balance) hand
+    back rows; scalar ones (post_journal_entry returns the new UUID) hand back
+    the value itself. FakeQuery always wrapped in `list()`, which turned a UUID
+    string into a list of characters."""
+
+    def execute(self):
+        rows = self._rows
+        if isinstance(rows, list):
+            return type("Response", (), {"data": list(rows), "count": len(rows)})()
+        return type("Response", (), {"data": rows, "count": 1})()
+
+
 class FakeSupabase:
     def __init__(self, tables, rpc_results=None):
         self.tables = tables
         self.rpc_results = rpc_results or {}
+        # (name, params) for each rpc() call, so tests can assert what was sent.
+        self.rpc_calls = []
 
     def table(self, name):
         return FakeQuery(self.tables.get(name, []))
 
     def rpc(self, name, params=None):
-        return FakeQuery(self.rpc_results.get(name, []))
+        self.rpc_calls.append((name, params))
+        return FakeRpc(self.rpc_results.get(name, []))
 
 
 @pytest.fixture
@@ -72,6 +90,7 @@ def make_client():
         import app.routes.products as products
         import app.routes.cashbook as cashbook
         import app.routes.ledger as ledger
+        import app.routes.journal as journal
         import app.routes.auth as auth_routes
         import app.routes.users as users
         import app.routes.admin_portal as admin_portal
@@ -81,7 +100,7 @@ def make_client():
         import app.features as features
 
         patched = [
-            orders, products, cashbook, ledger, auth_routes, users, admin_portal,
+            orders, products, cashbook, ledger, journal, auth_routes, users, admin_portal,
             shopify_sync, org_settings, memberships, features, main,
         ]
         originals = [m.get_supabase for m in patched]

@@ -3038,6 +3038,53 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
+/* Trial Balance */
+.trial-balance-container {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    height: 100%;
+    min-height: 0;
+    padding: 4px;
+}
+
+.trial-balance-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    flex-shrink: 0;
+}
+
+.trial-balance-date {
+    width: auto;
+    min-width: 160px;
+}
+
+.trial-balance-status {
+    font-weight: 600;
+    font-size: 0.9rem;
+    padding: 4px 10px;
+    border-radius: 6px;
+}
+
+.trial-balance-status-ok {
+    color: var(--success);
+    background: color-mix(in srgb, var(--success) 12%, transparent);
+}
+
+/* Out of balance means something wrote around the deferred debits=credits
+   constraint — it should be impossible to miss, not a subtle mismatch. */
+.trial-balance-status-bad {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+}
+
+#trialBalanceGrid {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+}
+
 .ledger-cards {
     display: flex;
     flex-direction: column;

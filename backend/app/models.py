@@ -1,4 +1,4 @@
-from pydantic import BaseModel, AfterValidator, BeforeValidator, ConfigDict, Field
+from pydantic import BaseModel, AfterValidator, BeforeValidator, ConfigDict, Field, model_validator
 from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, date
 
@@ -257,11 +257,18 @@ class LedgerUpdate(BaseModel):
 
 class Ledger(LedgerBase):
     id: str
-    # Current running balance: opening_balance + Debit - Credit — see
-    # recalc_ledger_balance in supabase_schema.sql. Same formula for every
-    # ledger regardless of Nature. From ledger_balances. 0 for a ledger with
-    # no opening balance and no entries.
+    # Current running balance: Debit - Credit over this account's journal lines
+    # — see recalc_ledger_balance in supabase_schema.sql. Same formula for every
+    # ledger regardless of Nature, so a Credit-normal account (Liability/Equity/
+    # Revenue) reads negative here; the UI flips the sign and appends Dr/Cr.
+    # From ledger_balances. 0 for an account with no postings.
     balance: float = 0.0
+    # Chart-of-accounts fields (Phase 1). system_key is set only on accounts
+    # created by migration and looked up by posting code (e.g. 'cash'); a null
+    # means an ordinary user-created account.
+    code: Optional[str] = None
+    system_key: Optional[str] = None
+    is_cash_equivalent: bool = False
     # Only populated by GET /ledgers/{id} (folded in alongside the row fetch
     # for the edit-ledger delete-button guard); omitted (None) from list_ledgers,
     # which would otherwise pay for an extra existence query per row.
@@ -270,6 +277,88 @@ class Ledger(LedgerBase):
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+# ==================== JOURNAL MODELS ====================
+# The double-entry general ledger (FINANCE_ACCOUNTING_PLAN.md Phase 1). Amounts
+# are unsigned and split across debit/credit rather than one signed column —
+# the form every statement and trial balance expects.
+
+class JournalLineInput(BaseModel):
+    account_id: NonBlankStr
+    debit: float = 0.0
+    credit: float = 0.0
+    description: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _exactly_one_side(self):
+        # Mirrors the journal_lines_one_side_only CHECK, so a bad line is a 422
+        # from the API rather than a raw Postgres error surfaced from the RPC.
+        if self.debit < 0 or self.credit < 0:
+            raise ValueError("debit and credit cannot be negative")
+        if (self.debit > 0) == (self.credit > 0):
+            raise ValueError("each line must have exactly one of debit or credit greater than 0")
+        return self
+
+class JournalEntryCreate(BaseModel):
+    entry_date: date
+    lines: List[JournalLineInput]
+    narration: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _must_balance(self):
+        # The database enforces this too (deferred constraint trigger); checking
+        # here turns it into a readable 422 instead of a 500 from the RPC.
+        if len(self.lines) < 2:
+            raise ValueError("a journal entry needs at least two lines")
+        total_debit = round(sum(line.debit for line in self.lines), 2)
+        total_credit = round(sum(line.credit for line in self.lines), 2)
+        if total_debit != total_credit:
+            raise ValueError(f"entry does not balance: debits {total_debit}, credits {total_credit}")
+        if total_debit == 0:
+            raise ValueError("a journal entry must move a non-zero amount")
+        return self
+
+class JournalLine(BaseModel):
+    id: str
+    account_id: str
+    debit: float = 0.0
+    credit: float = 0.0
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+class JournalEntry(BaseModel):
+    id: str
+    entry_date: date
+    voucher_type: str
+    narration: Optional[str] = None
+    # What produced this entry: 'cashbook_entry', 'opening_balance', 'manual',
+    # and the document types later phases add.
+    source_type: Optional[str] = None
+    source_id: Optional[str] = None
+    created_by: Optional[str] = None
+    created_at: Optional[datetime] = None
+    lines: List[JournalLine] = []
+
+    model_config = ConfigDict(from_attributes=True)
+
+class TrialBalanceRow(BaseModel):
+    account_id: str
+    code: Optional[str] = None
+    name: str
+    type: str
+    debit: float = 0.0
+    credit: float = 0.0
+
+class TrialBalance(BaseModel):
+    """Accounts with a non-zero balance as of a date, plus the two totals whose
+    equality is the whole point of the report. `balanced` is precomputed so the
+    UI doesn't re-derive the comparison (and disagree about rounding)."""
+    as_of: date
+    rows: List[TrialBalanceRow]
+    total_debit: float
+    total_credit: float
+    balanced: bool
 
 # ==================== ORGANIZATION / USER / AUTH MODELS ====================
 

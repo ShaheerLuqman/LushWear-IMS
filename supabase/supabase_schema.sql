@@ -400,6 +400,22 @@ ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_orders_ledger BOOLEAN NOT NULL D
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_one_orders_ledger_per_org
     ON ledgers (org_id) WHERE is_orders_ledger;
 
+-- Chart-of-accounts columns (Phase 1). `ledgers` IS the chart of accounts -
+-- deliberately not renamed to `accounts`, which would cascade through every
+-- route, the frontend, the RLS list and the org-scope lint for no functional
+-- gain. system_key names the accounts posting code looks up by role.
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS code               VARCHAR(20);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS parent_id          UUID REFERENCES ledgers(id);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS subtype            VARCHAR(50);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS system_key         VARCHAR(40);
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_cash_equivalent BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS enabled            BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_system_key
+    ON ledgers (org_id, system_key) WHERE system_key IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_code
+    ON ledgers (org_id, code) WHERE code IS NOT NULL;
+
 -- Which Month Summary expense line this ledger's spending rolls into (NULL =
 -- excluded). Replaces get_month_summary_totals' old ledger-*name* substring
 -- matching, where 'ad' also caught "Load Sheet"/"Trade"/"Adnan" and renaming a
@@ -477,9 +493,15 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
 CREATE TABLE IF NOT EXISTS ledger_balances (
     ledger_id   UUID PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
     org_id      UUID NOT NULL REFERENCES organizations(id),
-    balance     DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
+    -- DECIMAL(14, 2) to match journal_lines: a balance sums many lines, so it
+    -- can legitimately exceed the width of any single amount.
+    balance     DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
     updated_at  TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Widens an existing table created before the Phase 1 journal (CREATE TABLE
+-- above only runs on a fresh install). Idempotent: a no-op once already 14,2.
+ALTER TABLE ledger_balances ALTER COLUMN balance TYPE DECIMAL(14, 2);
 
 -- Immutable log of cashbook_entries deletions (DELETE /cashbook/entries/{id}
 -- is a hard delete with no other record). Auto-populated by a DB trigger —
@@ -562,6 +584,456 @@ CREATE INDEX IF NOT EXISTS idx_ledger_balances_org_id        ON ledger_balances(
 CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON cashbook_entry_audit_log(entry_id);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON cashbook_entry_audit_log(deleted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON cashbook_entry_audit_log(org_id);
+
+
+-- ============================================================================
+-- Journal (double-entry general ledger) — FINANCE_ACCOUNTING_PLAN.md Phase 1
+-- ----------------------------------------------------------------------------
+-- Before Phase 1 a transaction was one cashbook_entries row with a single folio
+-- ledger and an implicit, invisible cash account opposite it. Non-cash
+-- transactions (credit purchase, accrual, stock write-off, opening AP) were
+-- literally unrepresentable, and nothing could prove the books balanced.
+--
+-- journal_entries/journal_lines are now the complete record of every posting,
+-- and ledger_balances derives from them. cashbook_entries is still the *write*
+-- path for cash transactions and is projected in by trigger, so the Cashbook UI
+-- is unchanged; documents added in later phases post here directly.
+-- ============================================================================
+
+-- Voucher header. source_type/source_id link an entry back to whatever produced
+-- it, so a document can find and re-post its own accounting:
+--   'cashbook_entry'  -> cashbook_entries.id (written by the projection below)
+--   'opening_balance' -> NULL (one per org)
+--   'manual'          -> NULL
+CREATE TABLE IF NOT EXISTS journal_entries (
+    id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id         UUID NOT NULL REFERENCES organizations(id),
+    entry_date     DATE NOT NULL,
+    voucher_type   VARCHAR(30) NOT NULL DEFAULT 'manual',
+    narration      TEXT,
+    source_type    VARCHAR(30),
+    source_id      UUID,
+    -- Posted entries are corrected by a reversing entry, never edited in place
+    -- (FINANCE_ACCOUNTING_PLAN.md C1); Phase 5 adds the immutability trigger.
+    reversal_of_id UUID REFERENCES journal_entries(id),
+    created_by     UUID REFERENCES users(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- At most one entry per source row, so re-projecting updates instead of
+-- silently posting the same amount twice.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_source
+    ON journal_entries (org_id, source_type, source_id)
+    WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_journal_entries_org_date ON journal_entries (org_id, entry_date);
+
+-- Amounts are unsigned in two columns rather than one signed column: that is
+-- the form every statement, trial balance and audit expects, and it makes
+-- "exactly one side per line" a CHECK rather than a convention.
+CREATE TABLE IF NOT EXISTS journal_lines (
+    id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id      UUID NOT NULL REFERENCES organizations(id),
+    journal_id  UUID NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
+    account_id  UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    debit       DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (debit  >= 0),
+    credit      DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (credit >= 0),
+    description TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT journal_lines_one_side_only CHECK (
+        (debit > 0 AND credit = 0) OR (credit > 0 AND debit = 0)
+    )
+);
+
+CREATE INDEX IF NOT EXISTS idx_journal_lines_journal_id ON journal_lines (journal_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON journal_lines (account_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_org_id     ON journal_lines (org_id);
+
+-- Debits = credits, enforced by the database. DEFERRABLE INITIALLY DEFERRED so
+-- it runs once at COMMIT, after all of an entry's lines are in - which is why
+-- posting goes through post_journal_entry() rather than two PostgREST calls
+-- (two calls are two transactions, and the first would fail on its own).
+CREATE OR REPLACE FUNCTION trg_journal_entry_must_balance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_journal_id UUID;
+    v_debit  NUMERIC(14, 2);
+    v_credit NUMERIC(14, 2);
+BEGIN
+    v_journal_id := COALESCE(NEW.journal_id, OLD.journal_id);
+
+    IF NOT EXISTS (SELECT 1 FROM journal_entries WHERE id = v_journal_id) THEN
+        RETURN NULL;
+    END IF;
+
+    SELECT COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0)
+      INTO v_debit, v_credit
+      FROM journal_lines WHERE journal_id = v_journal_id;
+
+    IF v_debit <> v_credit THEN
+        RAISE EXCEPTION 'Journal entry % does not balance: debits %, credits %',
+            v_journal_id, v_debit, v_credit;
+    END IF;
+
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS journal_lines_must_balance ON journal_lines;
+CREATE CONSTRAINT TRIGGER journal_lines_must_balance
+AFTER INSERT OR UPDATE OR DELETE ON journal_lines
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION trg_journal_entry_must_balance();
+
+-- A header with no lines would otherwise slip past the line trigger entirely.
+CREATE OR REPLACE FUNCTION trg_journal_entry_must_have_lines()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM journal_entries WHERE id = NEW.id) THEN
+        RETURN NULL;
+    END IF;
+    IF (SELECT COUNT(*) FROM journal_lines WHERE journal_id = NEW.id) < 2 THEN
+        RAISE EXCEPTION 'Journal entry % must have at least two lines', NEW.id;
+    END IF;
+    RETURN NULL;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS journal_entries_must_have_lines ON journal_entries;
+CREATE CONSTRAINT TRIGGER journal_entries_must_have_lines
+AFTER INSERT ON journal_entries
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION trg_journal_entry_must_have_lines();
+
+-- Every journal line write moves an account balance.
+CREATE OR REPLACE FUNCTION trg_journal_lines_recalc_balance()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        PERFORM recalc_ledger_balance(OLD.account_id);
+        RETURN OLD;
+    END IF;
+
+    PERFORM recalc_ledger_balance(NEW.account_id);
+    IF TG_OP = 'UPDATE' AND NEW.account_id IS DISTINCT FROM OLD.account_id THEN
+        PERFORM recalc_ledger_balance(OLD.account_id);
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS journal_lines_balance_trigger ON journal_lines;
+CREATE TRIGGER journal_lines_balance_trigger
+AFTER INSERT OR UPDATE OF account_id, debit, credit OR DELETE ON journal_lines
+FOR EACH ROW
+EXECUTE FUNCTION trg_journal_lines_recalc_balance();
+
+-- Creates a system account for an org, or returns the existing one. `cash` is
+-- always CREATED, never adopted from a same-named existing ledger: the
+-- cashbook's implicit cash pot is a different account from any user-made ledger
+-- called "Cash" (that one has entries posted against it as a folio), and
+-- merging the two would double-count every one of them. Name clashes fall back
+-- to a suffix rather than failing on idx_ledgers_org_id_name_lower.
+CREATE OR REPLACE FUNCTION ensure_system_ledger(
+    p_org_id UUID,
+    p_system_key VARCHAR,
+    p_name VARCHAR,
+    p_type VARCHAR,
+    p_code VARCHAR,
+    p_is_cash_equivalent BOOLEAN DEFAULT FALSE
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_id     UUID;
+    v_name   VARCHAR := p_name;
+    v_suffix INT := 1;
+BEGIN
+    SELECT id INTO v_id FROM ledgers WHERE org_id = p_org_id AND system_key = p_system_key;
+    IF v_id IS NOT NULL THEN
+        RETURN v_id;
+    END IF;
+
+    WHILE EXISTS (
+        SELECT 1 FROM ledgers WHERE org_id = p_org_id AND lower(name) = lower(v_name)
+    ) LOOP
+        v_suffix := v_suffix + 1;
+        v_name := p_name || ' (' || v_suffix || ')';
+    END LOOP;
+
+    INSERT INTO ledgers (org_id, name, type, code, system_key, is_cash_equivalent, opening_balance)
+    VALUES (p_org_id, v_name, p_type, p_code, p_system_key, p_is_cash_equivalent, 0)
+    RETURNING id INTO v_id;
+
+    RETURN v_id;
+END;
+$$;
+
+-- ledgers.opening_balance used to be a free-floating number with no contra
+-- entry: the moment one was set, total debits stopped equalling total credits
+-- (FINANCE_ACCOUNTING_PLAN.md A4). It now posts against Opening Balance Equity.
+-- Rebuilt wholesale rather than patched line by line, so it is idempotent.
+CREATE OR REPLACE FUNCTION sync_opening_balance_journal(p_org_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_obe_id     UUID;
+    v_journal_id UUID;
+    v_net        NUMERIC(14, 2);
+    v_date       DATE;
+BEGIN
+    SELECT id INTO v_obe_id
+      FROM ledgers WHERE org_id = p_org_id AND system_key = 'opening_balance_equity';
+    IF v_obe_id IS NULL THEN
+        RETURN;
+    END IF;
+
+    DELETE FROM journal_entries WHERE org_id = p_org_id AND source_type = 'opening_balance';
+
+    SELECT COALESCE(SUM(opening_balance), 0) INTO v_net
+      FROM ledgers WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id;
+
+    -- Tests for rows, not for v_net: a net of zero is not the same as having no
+    -- opening balances at all.
+    IF NOT EXISTS (
+        SELECT 1 FROM ledgers
+         WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id
+    ) THEN
+        RETURN;
+    END IF;
+
+    -- One day before the earliest transaction, so opening balances always sort
+    -- ahead of activity on a statement.
+    SELECT COALESCE(MIN(entry_date), CURRENT_DATE) - 1 INTO v_date
+      FROM cashbook_entries WHERE org_id = p_org_id;
+
+    INSERT INTO journal_entries (org_id, entry_date, voucher_type, narration, source_type)
+    VALUES (p_org_id, v_date, 'opening', 'Opening balances', 'opening_balance')
+    RETURNING id INTO v_journal_id;
+
+    -- opening_balance is stored Debit-positive, matching journal convention.
+    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    SELECT p_org_id, v_journal_id, id,
+           CASE WHEN opening_balance > 0 THEN  opening_balance ELSE 0 END,
+           CASE WHEN opening_balance < 0 THEN -opening_balance ELSE 0 END,
+           'Opening balance'
+      FROM ledgers
+     WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id;
+
+    IF v_net <> 0 THEN
+        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+        VALUES (p_org_id, v_journal_id, v_obe_id,
+                CASE WHEN v_net < 0 THEN -v_net ELSE 0 END,
+                CASE WHEN v_net > 0 THEN  v_net ELSE 0 END,
+                'Opening balance offset');
+    END IF;
+END;
+$$;
+
+-- One cashbook entry becomes one two-line journal entry between its folio
+-- ledger and the system cash account. entry_type is the folio's side and cash
+-- always takes the opposite one - see "THE TWO PERSPECTIVES" above.
+CREATE OR REPLACE FUNCTION project_cashbook_entry_to_journal(p_entry_id UUID)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    e            RECORD;
+    v_cash_id    UUID;
+    v_journal_id UUID;
+BEGIN
+    SELECT * INTO e FROM cashbook_entries WHERE id = p_entry_id;
+
+    IF NOT FOUND THEN
+        DELETE FROM journal_entries
+         WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
+        RETURN;
+    END IF;
+
+    SELECT id INTO v_cash_id FROM ledgers WHERE org_id = e.org_id AND system_key = 'cash';
+    IF v_cash_id IS NULL THEN
+        RAISE EXCEPTION 'Organization % has no system cash account', e.org_id;
+    END IF;
+
+    -- Rebuild rather than patch: an edited entry can change date, amount,
+    -- direction or folio, and re-posting from scratch cannot drift.
+    DELETE FROM journal_entries
+     WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
+
+    INSERT INTO journal_entries
+        (org_id, entry_date, voucher_type, narration, source_type, source_id)
+    VALUES
+        (e.org_id, e.entry_date, 'cashbook', e.description, 'cashbook_entry', e.id)
+    RETURNING id INTO v_journal_id;
+
+    IF e.entry_type = 'credit' THEN
+        -- Cash received: debit cash, credit the folio ledger.
+        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+        VALUES (e.org_id, v_journal_id, v_cash_id, e.amount, 0, e.description),
+               (e.org_id, v_journal_id, e.folio,   0, e.amount, e.description);
+    ELSE
+        -- Cash paid: debit the folio ledger, credit cash.
+        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+        VALUES (e.org_id, v_journal_id, e.folio,   e.amount, 0, e.description),
+               (e.org_id, v_journal_id, v_cash_id, 0, e.amount, e.description);
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_cashbook_entries_project_journal()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'DELETE' THEN
+        DELETE FROM journal_entries
+         WHERE source_type = 'cashbook_entry' AND source_id = OLD.id;
+        RETURN OLD;
+    END IF;
+
+    PERFORM project_cashbook_entry_to_journal(NEW.id);
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS cashbook_entries_journal_trigger ON cashbook_entries;
+CREATE TRIGGER cashbook_entries_journal_trigger
+AFTER INSERT OR UPDATE OF entry_date, entry_type, amount, folio, description OR DELETE
+ON cashbook_entries
+FOR EACH ROW
+EXECUTE FUNCTION trg_cashbook_entries_project_journal();
+
+-- Seeds the two system accounts Phase 1 needs, for every org. Accounts Payable/
+-- Receivable, Sales, COGS and Inventory are seeded by the phase that first
+-- posts to them rather than cluttering the Ledgers screen with zero-balance
+-- accounts nothing writes to yet.
+DO $$
+DECLARE
+    org RECORD;
+BEGIN
+    FOR org IN SELECT id FROM organizations LOOP
+        PERFORM ensure_system_ledger(org.id, 'cash', 'Cash in Hand', 'Asset', '1000', TRUE);
+        PERFORM ensure_system_ledger(org.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
+    END LOOP;
+END $$;
+
+-- The only supported way for the application to create a journal entry: header
+-- and lines must land in one transaction for the deferred balance constraint to
+-- be checkable at all.
+CREATE OR REPLACE FUNCTION post_journal_entry(
+    p_org_id       UUID,
+    p_entry_date   DATE,
+    p_lines        JSONB,
+    p_narration    TEXT DEFAULT NULL,
+    p_voucher_type VARCHAR DEFAULT 'manual',
+    p_created_by   UUID DEFAULT NULL,
+    p_source_type  VARCHAR DEFAULT NULL,
+    p_source_id    UUID DEFAULT NULL
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_journal_id UUID;
+    v_debit      NUMERIC(14, 2);
+    v_credit     NUMERIC(14, 2);
+    v_count      INT;
+    v_foreign    INT;
+BEGIN
+    IF p_lines IS NULL OR jsonb_typeof(p_lines) <> 'array' THEN
+        RAISE EXCEPTION 'lines must be a JSON array';
+    END IF;
+
+    SELECT COUNT(*),
+           COALESCE(SUM((l->>'debit')::NUMERIC), 0),
+           COALESCE(SUM((l->>'credit')::NUMERIC), 0)
+      INTO v_count, v_debit, v_credit
+      FROM jsonb_array_elements(p_lines) AS l;
+
+    IF v_count < 2 THEN
+        RAISE EXCEPTION 'A journal entry needs at least two lines, got %', v_count;
+    END IF;
+
+    IF v_debit <> v_credit THEN
+        RAISE EXCEPTION 'Journal entry does not balance: debits %, credits %', v_debit, v_credit;
+    END IF;
+
+    IF v_debit = 0 THEN
+        RAISE EXCEPTION 'A journal entry must move a non-zero amount';
+    END IF;
+
+    -- Every account must belong to the posting org - account_id is
+    -- client-supplied, unlike p_org_id.
+    SELECT COUNT(*) INTO v_foreign
+      FROM jsonb_array_elements(p_lines) AS l
+     WHERE NOT EXISTS (
+         SELECT 1 FROM ledgers WHERE id = (l->>'account_id')::UUID AND org_id = p_org_id
+     );
+    IF v_foreign > 0 THEN
+        RAISE EXCEPTION 'Journal lines reference % account(s) outside this organization', v_foreign;
+    END IF;
+
+    INSERT INTO journal_entries
+        (org_id, entry_date, voucher_type, narration, source_type, source_id, created_by)
+    VALUES
+        (p_org_id, p_entry_date, p_voucher_type, p_narration, p_source_type, p_source_id, p_created_by)
+    RETURNING id INTO v_journal_id;
+
+    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    SELECT p_org_id, v_journal_id, (l->>'account_id')::UUID,
+           COALESCE((l->>'debit')::NUMERIC, 0),
+           COALESCE((l->>'credit')::NUMERIC, 0),
+           l->>'description'
+      FROM jsonb_array_elements(p_lines) AS l;
+
+    RETURN v_journal_id;
+END;
+$$;
+
+-- Trial balance as of a date. The two column totals being equal is the proof
+-- that the books balance - the control that did not exist before Phase 1
+-- (FINANCE_ACCOUNTING_PLAN.md A5). Accounts netting to exactly zero are
+-- omitted, as on a conventional trial balance.
+CREATE OR REPLACE FUNCTION get_trial_balance(p_org_id UUID, p_as_of DATE)
+RETURNS TABLE(
+    account_id UUID,
+    code       VARCHAR,
+    name       VARCHAR,
+    type       VARCHAR,
+    debit      NUMERIC,
+    credit     NUMERIC
+)
+LANGUAGE sql
+STABLE
+AS $$
+    WITH balances AS (
+        SELECT l.id, l.code, l.name, l.type,
+               COALESCE(SUM(jl.debit) - SUM(jl.credit), 0) AS net
+          FROM ledgers l
+          JOIN journal_lines jl   ON jl.account_id = l.id
+          JOIN journal_entries je ON je.id = jl.journal_id
+         WHERE l.org_id = p_org_id
+           AND je.org_id = p_org_id
+           AND je.entry_date <= p_as_of
+         GROUP BY l.id, l.code, l.name, l.type
+    )
+    SELECT id, code, name, type,
+           CASE WHEN net > 0 THEN  net ELSE 0 END,
+           CASE WHEN net < 0 THEN -net ELSE 0 END
+      FROM balances
+     WHERE net <> 0
+     ORDER BY code NULLS LAST, name;
+$$;
 
 
 -- ============================================================================
@@ -684,30 +1156,29 @@ AFTER INSERT OR UPDATE OF entry_date, entry_type, amount OR DELETE ON cashbook_e
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
--- Recomputes ledger_balances for a single ledger from scratch, seeded from
--- ledgers.opening_balance. Consistent for every ledger regardless of Nature:
--- New Balance = Previous Balance + Debit - Credit. Deletes the row on a zero
--- balance (missing row already means 0, so there's nothing to gain by
--- keeping a zero row around). org_id is derived from ledgers - p_ledger_id is
--- already unique to one org's ledger. See
--- supabase/migrations/20260801010000_fix_recalc_ledger_balance_org_id.sql.
+-- Recomputes ledger_balances for a single account from the journal. Same
+-- Debit-positive convention as before (New Balance = Debit - Credit), so every
+-- existing consumer keeps working - but opening_balance is NOT added here any
+-- more: it is a journal line of its own since Phase 1, and adding it again
+-- would double-count it. Deletes the row on a zero balance (a missing row
+-- already means 0). See
+-- supabase/migrations/20260801070000_journal_seed_and_backfill.sql.
 CREATE OR REPLACE FUNCTION recalc_ledger_balance(p_ledger_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_balance NUMERIC(12, 2);
-    v_org_id UUID;
+    v_balance NUMERIC(14, 2);
+    v_org_id  UUID;
 BEGIN
     SELECT org_id INTO v_org_id FROM ledgers WHERE id = p_ledger_id;
+    IF v_org_id IS NULL THEN
+        DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
+        RETURN;
+    END IF;
 
-    SELECT
-        (SELECT opening_balance FROM ledgers WHERE id = p_ledger_id)
-      + COALESCE(SUM(amount) FILTER (WHERE entry_type = 'debit'), 0)
-      - COALESCE(SUM(amount) FILTER (WHERE entry_type = 'credit'), 0)
-    INTO v_balance
-    FROM cashbook_entries
-    WHERE folio = p_ledger_id;
+    SELECT COALESCE(SUM(debit) - SUM(credit), 0) INTO v_balance
+      FROM journal_lines WHERE account_id = p_ledger_id;
 
     IF v_balance = 0 THEN
         DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
@@ -718,45 +1189,26 @@ BEGIN
     VALUES (p_ledger_id, v_org_id, v_balance, NOW())
     ON CONFLICT (ledger_id) DO UPDATE SET
         balance    = EXCLUDED.balance,
+        org_id     = EXCLUDED.org_id,
         updated_at = NOW();
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_recalc_ledger_balance()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF TG_OP = 'DELETE' THEN
-        PERFORM recalc_ledger_balance(OLD.folio);
-        RETURN OLD;
-    ELSIF TG_OP = 'UPDATE' THEN
-        PERFORM recalc_ledger_balance(OLD.folio);
-        IF NEW.folio IS DISTINCT FROM OLD.folio THEN
-            PERFORM recalc_ledger_balance(NEW.folio);
-        END IF;
-        RETURN NEW;
-    ELSE
-        PERFORM recalc_ledger_balance(NEW.folio);
-        RETURN NEW;
-    END IF;
-END;
-$$;
-
+-- Cashbook writes reach ledger_balances through the journal projection (see the
+-- Journal section above), so the old direct cashbook -> ledger_balances trigger
+-- is gone: keeping it would recompute the same number from the retired source
+-- and race the journal-driven one.
 DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON cashbook_entries;
-CREATE TRIGGER cashbook_entries_ledger_balance_trigger
-AFTER INSERT OR UPDATE OF folio, entry_type, amount OR DELETE ON cashbook_entries
-FOR EACH ROW
-EXECUTE FUNCTION trg_cashbook_entries_recalc_ledger_balance();
+DROP FUNCTION IF EXISTS trg_cashbook_entries_recalc_ledger_balance();
 
--- Keeps ledger_balances in sync when a ledger is created with a non-zero
--- opening_balance, or when opening_balance is edited later.
+-- Creating a ledger with an opening balance, or editing one later, rewrites the
+-- org's opening journal entry - which in turn moves the balances.
 CREATE OR REPLACE FUNCTION trg_ledgers_recalc_balance()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    PERFORM recalc_ledger_balance(NEW.id);
+    PERFORM sync_opening_balance_journal(NEW.org_id);
     RETURN NEW;
 END;
 $$;
@@ -1013,6 +1465,61 @@ $$;
 
 
 -- ============================================================================
+-- Journal backfill — MUST stay after recalc_ledger_balance is redefined above
+-- ----------------------------------------------------------------------------
+-- This file is documented as safe to re-run against an existing database, and
+-- without these blocks that promise would be broken by the Phase 1 journal:
+-- re-running would install the journal-reading recalc_ledger_balance against an
+-- empty journal, and every balance would silently zero itself the next time
+-- anything touched its ledger.
+--
+-- Position matters. plpgsql resolves calls at run time, so a backfill placed up
+-- in the Journal section would execute while the OLD cashbook-based
+-- recalc_ledger_balance was still installed, and the recomputed balances would
+-- then never be refreshed. It has to run after the redefinition, i.e. here.
+--
+-- All three blocks are idempotent: the projection skips entries that already
+-- have a journal entry, and sync_opening_balance_journal rebuilds one entry per
+-- org wholesale.
+-- ============================================================================
+
+DO $$
+DECLARE
+    entry RECORD;
+BEGIN
+    FOR entry IN
+        SELECT ce.id
+          FROM cashbook_entries ce
+         WHERE NOT EXISTS (
+             SELECT 1 FROM journal_entries je
+              WHERE je.source_type = 'cashbook_entry' AND je.source_id = ce.id
+         )
+         ORDER BY ce.entry_date, ce.created_at
+    LOOP
+        PERFORM project_cashbook_entry_to_journal(entry.id);
+    END LOOP;
+END $$;
+
+DO $$
+DECLARE
+    org RECORD;
+BEGIN
+    FOR org IN SELECT id FROM organizations LOOP
+        PERFORM sync_opening_balance_journal(org.id);
+    END LOOP;
+END $$;
+
+DO $$
+DECLARE
+    l RECORD;
+BEGIN
+    FOR l IN SELECT id FROM ledgers LOOP
+        PERFORM recalc_ledger_balance(l.id);
+    END LOOP;
+END $$;
+
+
+-- ============================================================================
 -- Row Level Security (defense-in-depth only - see app/org_scope.py)
 -- ----------------------------------------------------------------------------
 -- Enabled with NO policies (default-deny for anon/authenticated). This is NOT
@@ -1037,3 +1544,5 @@ ALTER TABLE organizations            ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users                    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_memberships          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE org_integration_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_entries          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE journal_lines            ENABLE ROW LEVEL SECURITY;

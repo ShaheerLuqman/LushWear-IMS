@@ -454,30 +454,55 @@ Closed A2, A3, B1, B3, B4 and C6. What later phases need to know:
   whom the advance flow was silently inert — now get an explicit "no Orders
   ledger set" message and can pick one.
 
-### Phase 1 — Chart of accounts + double-entry core
+### Phase 1 — Chart of accounts + double-entry core — **shipped**
 
-- [ ] Extend `ledgers` → **`accounts`**: `code`, `parent_id`, `subtype`,
-      `is_system`, `is_cash_equivalent`, `enabled`, `archived_at`.
-      Keep `type` (nature) as-is — it's already the right closed set.
-- [ ] **`journal_entries`** — `entry_date`, `voucher_no`, `voucher_type`,
-      `narration`, `source_type` / `source_id` (bill, invoice, order, manual),
-      `posted_at`, `created_by`, `reversal_of_id`.
-- [ ] **`journal_lines`** — `journal_id`, `account_id`, `debit`, `credit`,
-      `contact_id`, `description`. Constraint: exactly one of debit/credit > 0.
-- [ ] **DB constraint/trigger: `Σdebit = Σcredit` per entry**, and posted
-      entries are immutable.
-- [ ] **`account_balances`** maintained from `journal_lines`, replacing
-      `ledger_balances` and both `recalc_*` functions.
-- [ ] **Seed system accounts**: Cash, Bank, Accounts Receivable, Accounts
-      Payable, Sales, Sales Returns, COGS, Inventory, Opening Balance Equity.
-- [ ] **Migrate existing data**: each `cashbook_entries` row becomes a journal
-      entry with two lines (folio + Cash); all `ledgers.opening_balance` values
-      become a **single balanced opening journal** against Opening Balance
-      Equity (fixes A4).
-- [ ] **Cashbook view becomes a read of journal lines on cash accounts** — the
-      screen the user sees does not change.
-- [ ] **Ship the Trial Balance** here, as the proof the migration was correct
-      (A5).
+Closes A1, A4 and A5. The journal is now the complete record of every posting,
+and `ledger_balances` derives from it. What later phases need to know:
+
+- **Post through `post_journal_entry()`, never by inserting rows.** The
+  debits=credits check is a DEFERRABLE INITIALLY DEFERRED constraint trigger, so
+  header and lines must land in one transaction — two PostgREST calls are two
+  transactions and the first would fail on its own. Phase 2's bill posting calls
+  the same function with `p_source_type='bill'`.
+- **`source_type` / `source_id` own the link back to a document**, and a partial
+  unique index enforces one entry per source row. Re-posting a document replaces
+  its entry instead of double-counting it — that is how the cashbook projection
+  stays idempotent, and Phase 2 should use it the same way.
+- **Non-cash transactions are now possible** — the A1 unlock. `POST
+  /api/journal/entries` takes any balanced set of lines. There is deliberately
+  no manual-journal UI yet; the plan did not call for one and a multi-line entry
+  form is the most complex screen in the app.
+- **Trial Balance** at `GET /api/journal/trial-balance` and in the sidebar. It
+  reports `balanced` explicitly rather than leaving the reader to compare two
+  totals, and says "out of balance by X" loudly if they ever disagree.
+
+Three deviations from the plan as written, all deliberate:
+
+- **`ledgers` was not renamed to `accounts`.** The columns were added (`code`,
+  `parent_id`, `subtype`, `system_key`, `is_cash_equivalent`, `enabled`,
+  `archived_at`), but the rename would cascade through every route, the
+  frontend, the RLS list and the org-scope lint for no functional gain, and
+  "Ledgers" is what the UI and the user already call these. `ledgers` **is** the
+  chart of accounts. Likewise `account_balances` stayed `ledger_balances` and was
+  simply repointed at `journal_lines` — a second table holding the same numbers
+  would only be something to drift.
+- **Only two system accounts are seeded** (`cash`, `opening_balance_equity`)
+  rather than all nine. Each later phase seeds what it first posts to via
+  `ensure_system_ledger()`, instead of every org's Ledgers screen filling with
+  zero-balance accounts nothing writes to. **Phase 2 must seed
+  `accounts_payable` and `inventory` itself.**
+- **The Cashbook still writes `cashbook_entries`,** projected into the journal by
+  trigger, rather than being rewritten onto journal lines. That rewrite is the
+  whole cashbook write path (create/bulk/update/delete, daily-balance triggers,
+  advance reconciliation) and would have landed unverifiable alongside the schema
+  and the data migration. Projection gets the same single source of truth for
+  balances and reporting with none of that risk. To finish the cutover later:
+  drop `cashbook_entries_journal_trigger` and post from the API directly.
+
+**`cash` is created, never adopted from a same-named ledger.** The cashbook's
+implicit cash pot is a different account from any user-made ledger called
+"Cash" — that one has entries posted against it as a folio, and merging the two
+would double-count every one of them.
 
 ### Phase 2 — Contacts + Purchase Bills (AP)
 

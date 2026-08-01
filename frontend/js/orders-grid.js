@@ -11,6 +11,7 @@ function initGrids() {
     initCashbookDebitGrid();
     initCashbookCreditGrid();
     initLedgerDetailGrid();
+    initTrialBalance();
 }
 
 // Size order mapping for variant sorting

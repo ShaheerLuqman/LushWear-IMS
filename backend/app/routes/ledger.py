@@ -41,6 +41,17 @@ def _orders_ledger_taken(supabase, org_id: str, exclude_id: str = None) -> bool:
     return any(row["id"] != exclude_id for row in resp.data or [])
 
 
+def _is_system_cash(supabase, org_id: str, ledger_id: str) -> bool:
+    resp = (
+        org_table(supabase, org_id, "ledgers")
+        .select("system_key")
+        .eq("id", ledger_id)
+        .limit(1)
+        .execute()
+    )
+    return bool(resp.data) and resp.data[0].get("system_key") == "cash"
+
+
 def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> bool:
     """Case-insensitive name clash check within this org (mirrors findLedgerByName
     in renderer.js). Backstopped by idx_ledgers_org_id_name_lower for races/non-API
@@ -134,6 +145,16 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
         raise HTTPException(
             status_code=400,
             detail="Another ledger is already the Orders ledger. Unset it first.",
+        )
+    if payload.get("include_in_cash_in_hand") and _is_system_cash(supabase, org_id, ledger_id):
+        # Cash In Hand already counts this account once, via the cashbook's
+        # closing balance (getPhysicalCashInHand in ledgers.js) — including it
+        # again here would silently double the headline figure. Tempting to tick
+        # precisely because of the account's name, so it is blocked rather than
+        # documented.
+        raise HTTPException(
+            status_code=400,
+            detail="The Cash account is already counted in Cash In Hand.",
         )
     if not payload:
         raise HTTPException(status_code=400, detail="No fields to update")
