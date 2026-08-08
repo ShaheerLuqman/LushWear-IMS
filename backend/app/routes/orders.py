@@ -1444,7 +1444,7 @@ def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
     return False
 
 
-def _classify_status(status_text: str, courier_normalized: str As a payable aging page purpose payment.) -> Optional[str]:
+def _classify_status(status_text: str, courier_normalized: str) -> Optional[str]:
     """Classify a status text into one of the relevant order statuses.
 
     Return detection is courier-specific: PostEx flags a return as soon as the parcel
