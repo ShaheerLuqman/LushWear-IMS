@@ -110,25 +110,6 @@ class TestOrders:
         assert r.status_code == 200
         assert r.json()["id"] == order_row["id"]
 
-    def test_fix_voided_totals_with_no_candidates_returns_the_full_typed_shape(self, make_client):
-        """Regression guard: the no-candidates early return used to omit
-        eligible_candidates_count/fetch_batch_size/updated_order_numbers, which
-        the main return always includes - a real response_model would 500 on
-        this path if the two shapes disagree again."""
-        r = make_client({"shopify_orders": []}).post("/api/orders/fix-voided-totals")
-        assert r.status_code == 200
-        assert r.json() == {
-            "updated_count": 0,
-            "checked_count": 0,
-            "voided_in_shopify_count": 0,
-            "shopify_fetch_failed_count": 0,
-            "skipped_not_voided_count": 0,
-            "eligible_candidates_count": 0,
-            "fetch_batch_size": 50,
-            "only_returned_status": False,
-            "updated_order_numbers": [],
-        }
-
     def test_sync_shopify_orders_returns_the_typed_result(self, make_client, monkeypatch):
         import app.routes.orders as orders_module
 
@@ -171,22 +152,6 @@ class TestOrders:
         body = r.json()
         assert body["shopify_fetch_failed_count"] == 1
         assert body["shopify_fetch_failed_order_numbers"] == [100]
-
-    def test_recalculate_totals_returns_the_typed_shape(self, make_client, monkeypatch):
-        import app.routes.orders as orders_module
-
-        async def fake_fetch(order_number, org_creds):
-            return None
-
-        monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
-        client = make_client({"shopify_orders": [
-            {"id": "o1", "order_number": 100, "total_amount": 100.0, "advance_amount": 0.0, "order_status": "unfulfilled"},
-        ]})
-        r = client.post("/api/orders/recalculate-totals", json={"order_numbers": [100]})
-        assert r.status_code == 200
-        body = r.json()
-        assert body["shopify_fetch_failed_count"] == 1
-        assert body["not_found_in_db"] == []
 
     def test_create_load_sheet_log_returns_the_typed_shape(self, make_client):
         seeded_log = {

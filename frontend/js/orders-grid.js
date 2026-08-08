@@ -616,9 +616,11 @@ function initOrdersGrid() {
         const rowsForSum = selectedRows.filter(
             (row) => (row.order_status || '').toLowerCase() !== 'cancelled'
         );
+        const cancelledCount = selectedRows.length - rowsForSum.length;
         if (rowsForSum.length === 0) {
             return {
                 count: 0,
+                cancelledCount,
                 total_amount: 0,
                 advance_amount: 0,
                 cod: 0,
@@ -678,6 +680,7 @@ function initOrdersGrid() {
         
         return {
             count: rowsForSum.length,
+            cancelledCount,
             total_amount,
             advance_amount,
             cod,
@@ -696,12 +699,15 @@ function initOrdersGrid() {
         
         const sums = calculateSelectedSums();
         const selectedCount = sums.count;
-        
+        const cancelledCount = sums.cancelledCount || 0;
+
         // Update selected count text at bottom right
         const selectedCountEl = document.getElementById('ordersSelectedCount');
         if (selectedCountEl) {
-            selectedCountEl.textContent = `${selectedCount} row(s) selected`;
-            selectedCountEl.style.display = selectedCount > 0 ? 'block' : 'none';
+            selectedCountEl.textContent = cancelledCount > 0
+                ? `${selectedCount} rows selected + ${cancelledCount} cancelled rows`
+                : `${selectedCount} row(s) selected`;
+            selectedCountEl.style.display = (selectedCount > 0 || cancelledCount > 0) ? 'block' : 'none';
         }
         
         const footerData = {

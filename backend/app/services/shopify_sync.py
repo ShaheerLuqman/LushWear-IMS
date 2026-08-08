@@ -769,16 +769,11 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 else:
                     advance_amount = total_discounts
 
-            # For voided orders, keep existing total charges so we don't reset to Shopify's zeroed values
-            if financial_status == "voided" and order_number in existing_orders_map:
-                existing_order = existing_orders_map[order_number]
-                existing_total = float(existing_order.get("total_amount") or 0)
-                existing_advance = float(existing_order.get("advance_amount") or 0)
-                # Preserve existing if it is already set; otherwise use Shopify-derived total_price based amount
-                if existing_total > 0.01:
-                    total_amount = existing_total
-                if existing_advance > 0.01:
-                    advance_amount = existing_advance
+            # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
+            # cancelled order - mirror that instead of carrying forward a stale amount.
+            if order_status == "cancelled":
+                total_amount = 0.0
+                advance_amount = 0.0
 
             # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
             delivery_charge = 0.0
@@ -951,6 +946,12 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                         order_data["cost_price"] = existing_order.get("cost_price")
                     # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
                     skip_fields = courier_is_assigned
+
+                # Cancellation overrides the freeze above: a cancelled order's total is 0
+                # even if it was already fulfilled (and therefore otherwise frozen).
+                if order_data["order_status"] == "cancelled":
+                    order_data["total_amount"] = 0.0
+                    order_data["advance_amount"] = 0.0
 
                 # Always update if courier or tracking_number changed, otherwise check other fields
                 if courier_changed or tracking_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):

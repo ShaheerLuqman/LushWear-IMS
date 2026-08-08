@@ -101,15 +101,6 @@ function _getExportCellValue(gridApi, column, node) {
         }
     }
     
-    // Force text format in Excel for values containing special characters or parentheses
-    // by prefixing with apostrophe - this ensures Excel treats it as text, not a formula
-    const stringValue = String(value);
-    if (stringValue.includes('(') || stringValue.includes('-') || stringValue.includes('=')) {
-        // Prepend space and apostrophe to force text format in Excel
-        // The apostrophe is invisible in Excel but forces text interpretation
-        return `'${stringValue}`;
-    }
-    
     return value;
 }
 
