@@ -113,6 +113,7 @@ function initOrdersActions() {
     document.getElementById('packagingListPdfInput')?.addEventListener('change', handlePackagingListPdfUpload);
     document.getElementById('packagingListGenerateBtn')?.addEventListener('click', generatePackagingListFromNumbers);
 
+    document.getElementById('ordersMoreActionFetchDeliveryStatus')?.addEventListener('click', () => fetchDeliveryStatusSelected());
     document.getElementById('refreshDeliveryStatusSelectedBtn')?.addEventListener('click', () => refreshDeliveryStatusSelected());
     document.getElementById('exportGridExcelBtn')?.addEventListener('click', () => exportCurrentGridToExcel());
     initOrdersMoreActionsMenu();

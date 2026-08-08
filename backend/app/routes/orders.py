@@ -1831,6 +1831,11 @@ POSTEX_BULK_BATCH_SIZE = 100
 # from opening hundreds of simultaneous connections to either service at once.
 _BULK_CONCURRENCY = 20
 
+# Cap on ids per `.in_()` query - keeps the request URL well under server/proxy length
+# limits. Order ids are UUIDs (36 chars each), so this is kept lower than the 200-value
+# chunk size used elsewhere for short order numbers.
+IN_QUERY_ID_CHUNK_SIZE = 100
+
 
 async def _fetch_couriersnext_bulk(tracking_numbers: List[Tuple[str, str]]) -> Dict[str, dict]:
     """Fetch delivery status for many Couriers Next tracking numbers concurrently (no bulk
@@ -2024,8 +2029,11 @@ async def get_delivery_status_bulk(
     try:
         supabase = get_supabase()
         org_creds = get_org_integration_settings(org_id)
-        orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
-        orders_by_id = {o["id"]: o for o in orders_response.data or []}
+        orders_by_id = {}
+        for i in range(0, len(order_ids), IN_QUERY_ID_CHUNK_SIZE):
+            chunk = order_ids[i:i + IN_QUERY_ID_CHUNK_SIZE]
+            chunk_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", chunk).execute()
+            orders_by_id.update({o["id"]: o for o in chunk_response.data or []})
 
         postex_orders: List[Tuple[str, str]] = []
         couriersnext_orders: List[Tuple[str, str]] = []

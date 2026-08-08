@@ -171,6 +171,56 @@ async function fetchDeliveryStatusBulk(orderIds) {
     });
 }
 
+/** Live-fetch delivery status from the courier for selected orders and update the grid.
+ * Skips cancelled orders and anything not on PostEx/Couriers Next with a tracking number,
+ * since those are the only couriers the bulk-fetch endpoint supports. */
+async function fetchDeliveryStatusSelected() {
+    if (!ordersGridApi) return;
+    const selected = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && (row.order_status || '').toLowerCase() !== 'cancelled');
+    if (selected.length === 0) {
+        showToast('Select orders to fetch delivery status for', 'warning');
+        return;
+    }
+    const fetchable = selected.filter(row => {
+        const courierNormalized = (row.courier || '').trim().toUpperCase();
+        const track = (row.tracking_number || '').trim();
+        return (courierNormalized === 'POSTEX' || courierNormalized === 'COURIERS NEXT') && track && track !== '-';
+    });
+    if (fetchable.length === 0) {
+        showToast('Selected orders have no PostEx/Couriers Next tracking to fetch', 'warning');
+        return;
+    }
+
+    const btn = document.getElementById('ordersMoreActionFetchDeliveryStatus');
+    if (btn) btn.disabled = true;
+    try {
+        const results = await fetchDeliveryStatusBulk(fetchable.map(o => o.id));
+        const resultsById = new Map(results.map(r => [r.order_id, r]));
+        let updated = 0, failed = 0;
+        ordersGridApi.forEachNode(node => {
+            const result = node.data && resultsById.get(node.data.id);
+            if (!result) return;
+            if (result.error) { failed++; return; }
+            const data = result.delivery_status;
+            const updatedRow = { ...node.data, delivery_status: data };
+            const derivedStatus = deriveOrderStatusFromLatest(data);
+            if (derivedStatus) {
+                updatedRow.order_status = derivedStatus;
+                if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
+                    updatedRow.piece_received = 'Done';
+                }
+            }
+            node.setData(updatedRow);
+            updated++;
+        });
+        showToast(`Delivery status fetched for ${updated} order${updated === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`, failed && !updated ? 'error' : 'success');
+    } catch (err) {
+        showToast(err.message || 'Failed to fetch delivery status', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 /** Build the delivery status report for selected orders from data already on each row -
  * no courier API call. (Live refreshing is what the auto-fetch-on-load and per-row actions
  * are for; this report is just a snapshot of current data.) */
