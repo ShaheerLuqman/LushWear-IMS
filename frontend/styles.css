@@ -1285,11 +1285,20 @@ input[type="number"] {
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
     z-index: 10000;
     align-items: center;
     justify-content: center;
+}
+
+/* Blur lives on a pseudo-element, not `.modal` itself: Safari has a WebKit bug where
+   backdrop-filter on an ancestor of <input type="file"> silently blocks the native
+   file picker from opening on click (drag-drop still works). */
+.modal::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    backdrop-filter: blur(4px);
 }
 
 .modal.active {
