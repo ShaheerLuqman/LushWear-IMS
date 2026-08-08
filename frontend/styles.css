@@ -3522,6 +3522,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .folio-display-text.folio-cash {
+    color: var(--text-primary);
+}
+
+/* Unsaved bottom row of the transactions grid - greyed regardless of side,
+   including Cash, to read as not-yet-posted rather than a saved entry. */
+.folio-display-text.folio-pending {
     color: var(--text-muted);
 }
 
@@ -3675,6 +3681,23 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell {
+    color: var(--accent-primary);
+    font-weight: 600;
+    justify-content: flex-end;
+    text-align: right;
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-row-num-header .ag-header-cell-label {
+    justify-content: center;
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-row-num-cell {
+    color: var(--text-primary);
+    text-align: center;
+    justify-content: center;
+}
+
 .transaction-placeholder {
     color: var(--text-muted);
     font-style: italic;
@@ -3690,27 +3713,46 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-color: rgba(245, 158, 11, 0.9) !important;
 }
 
-/* Transaction delete button */
-.transaction-delete-btn {
+/* Transaction row actions menu (triple dot) */
+.transaction-menu-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     background: transparent;
     border: none;
     border-radius: var(--radius-sm);
     cursor: pointer;
     font-size: 14px;
-    color: #dc2626;
-    opacity: 0.7;
+    color: var(--text-primary);
+    opacity: 0.85;
     transition: var(--transition);
 }
 
-.transaction-delete-btn:hover {
+.transaction-menu-btn:hover,
+.transaction-menu-btn.open {
     opacity: 1;
-    background: rgba(220, 38, 38, 0.1);
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.transaction-menu-panel {
+    min-width: 140px;
+    padding: 4px;
+}
+
+.transaction-menu-option-danger {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: #dc2626;
+    border-radius: var(--radius-sm);
+}
+
+.transaction-menu-option-danger:hover {
+    background: rgba(220, 38, 38, 0.1) !important;
 }
 
 /* Delete Confirmation Modal */

@@ -962,7 +962,9 @@ function createFolioCellRenderer(params, accountField) {
     // Display text showing selected ledger (like piece_received shows status)
     const isCashSide = !!(shownLedger && shownLedger.system_key === 'cash');
     const displaySpan = document.createElement('span');
-    displaySpan.className = 'folio-display-text' + (needsHighlight ? ' folio-required' : '') + (isCashSide ? ' folio-cash' : '');
+    displaySpan.className = 'folio-display-text'
+        + (needsHighlight ? ' folio-required' : (isNewRow ? ' folio-pending' : ''))
+        + (isCashSide ? ' folio-cash' : '');
     displaySpan.textContent = displayText;
     displaySpan.style.cursor = isEditingAllowed() ? 'pointer' : 'default';
 
@@ -1175,13 +1177,149 @@ function transactionCellWithPlaceholder(params, placeholder) {
     }
     return span;
 }
+// Row actions menu (triple dot) for the transactions grid - just Delete for
+// now, but a menu rather than a bare button so more actions can land here
+// without another column reshuffle.
+function createTransactionRowMenu(params) {
+    const wrapper = document.createElement('div');
+    if (isTransactionNewRow(params.data)) return wrapper;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'transaction-menu-btn';
+    btn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+    btn.title = 'More actions';
+
+    let menu = null;
+
+    function closeMenu() {
+        if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
+        menu = null;
+        btn.classList.remove('open');
+    }
+
+    function openMenu() {
+        if (menu) return;
+        btn.classList.add('open');
+
+        menu = document.createElement('div');
+        menu.className = 'folio-dropdown-panel transaction-menu-panel';
+
+        const deleteOption = document.createElement('div');
+        deleteOption.className = 'folio-dropdown-option transaction-menu-option-danger';
+        deleteOption.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+        deleteOption.addEventListener('click', () => {
+            closeMenu();
+            deleteTransactionEntry(params.data.id);
+        });
+        menu.appendChild(deleteOption);
+
+        document.body.appendChild(menu);
+        const rect = btn.getBoundingClientRect();
+        menu.style.top = (rect.bottom + 2) + 'px';
+        menu.style.left = Math.max(rect.right - menu.offsetWidth, 8) + 'px';
+
+        const closeHandler = (e) => {
+            if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                closeMenu();
+                document.removeEventListener('mousedown', closeHandler);
+            }
+        };
+        document.addEventListener('mousedown', closeHandler);
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu) closeMenu();
+        else openMenu();
+    });
+
+    wrapper.appendChild(btn);
+    return wrapper;
+}
 
 function buildTransactionGridColumns() {
     return [
         {
+            headerName: '#',
+            colId: 'rowNum',
+            flex: 5,
+            minWidth: 40,
+            filter: false,
+            sortable: false,
+            headerClass: 'transaction-row-num-header',
+            cellClass: 'transaction-row-num-cell',
+            // Position in the day's list, not a stored id - the blank row at the
+            // bottom isn't numbered since it isn't an entry yet.
+            valueGetter: (params) => (isTransactionNewRow(params.data) ? '' : params.node.rowIndex + 1)
+        },
+        {
+            // Both sides of the entry, named. An empty side is the cash account.
+            // From is the account money came from, i.e. the credited side.
+            headerName: 'From Account (Credit)',
+            field: 'from_account_id',
+            flex: 20,
+            minWidth: 130,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => createFolioCellRenderer(params, 'from_account_id'),
+            // Only the Excel export reads this - the renderer draws the cell itself.
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
+        },
+        {
+            // To is the account money went to, i.e. the debited side.
+            headerName: 'To Account (Debit)',
+            field: 'to_account_id',
+            flex: 20,
+            minWidth: 130,
+            filter: false,
+            sortable: false,
+            cellRenderer: (params) => createFolioCellRenderer(params, 'to_account_id'),
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
+        },
+        {
+            headerName: 'Amount (PKR)',
+            field: 'amount',
+            flex: 15,
+            minWidth: 100,
+            filter: 'agNumberColumnFilter',
+            editable: () => isEditingAllowed(),
+            cellClass: (params) => {
+                if (isTransactionNewRow(params.data)) {
+                    // Highlight if description is filled but amount is empty
+                    const hasAmount = params.data.amount != null && params.data.amount > 0;
+                    const hasDescription = params.data.description && String(params.data.description).trim() !== '';
+                    if (hasDescription && !hasAmount) return ['transaction-required-field', 'transaction-amount-cell'];
+                }
+                return 'transaction-amount-cell';
+            },
+            cellStyle: { cursor: 'pointer' },
+            valueFormatter: (params) => formatTransactionCell(params.value),
+            cellRenderer: (params) => transactionCellWithPlaceholder(params, '0.00'),
+            valueSetter: (params) => {
+                if (isTransactionNewRow(params.data)) {
+                    params.data.amount = parseTransactionAmount(params.newValue);
+                    // Refresh cells to update highlighting
+                    if (params.api) {
+                        params.api.refreshCells({ rowNodes: [params.node], force: true });
+                    }
+                    return true;
+                }
+                const next = parseTransactionAmount(params.newValue);
+                if (next === null || next <= 0) return false;
+                params.data.amount = next;
+                // Only the amount changed — the entry's two sides are edited
+                // through their own cells, so resending them here would just
+                // risk overwriting one with a stale value.
+                updateTransactionEntry(params.data.id, { amount: next });
+                return true;
+            }
+        },
+        {
             headerName: 'Description',
             field: 'description',
-            flex: 1,
+            flex: 35,
+            minWidth: 160,
             editable: () => isEditingAllowed(),
             cellClass: (params) => {
                 if (isTransactionNewRow(params.data)) {
@@ -1209,84 +1347,13 @@ function buildTransactionGridColumns() {
             }
         },
         {
-            // Both sides of the entry, named. An empty side is the cash account.
-            // From is the account money came from, i.e. the credited side.
-            headerName: 'From (Credit)',
-            field: 'from_account_id',
-            width: 200,
-            minWidth: 150,
-            filter: false,
-            sortable: false,
-            cellRenderer: (params) => createFolioCellRenderer(params, 'from_account_id'),
-            // Only the Excel export reads this - the renderer draws the cell itself.
-            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
-        },
-        {
-            // To is the account money went to, i.e. the debited side.
-            headerName: 'To (Debit)',
-            field: 'to_account_id',
-            width: 200,
-            minWidth: 150,
-            filter: false,
-            sortable: false,
-            cellRenderer: (params) => createFolioCellRenderer(params, 'to_account_id'),
-            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
-        },
-        {
-            headerName: 'Amount (Rs)',
-            field: 'amount',
-            width: 120,
-            filter: 'agNumberColumnFilter',
-            editable: () => isEditingAllowed(),
-            cellClass: (params) => {
-                if (isTransactionNewRow(params.data)) {
-                    // Highlight if description is filled but amount is empty
-                    const hasAmount = params.data.amount != null && params.data.amount > 0;
-                    const hasDescription = params.data.description && String(params.data.description).trim() !== '';
-                    if (hasDescription && !hasAmount) return 'transaction-required-field';
-                }
-                return '';
-            },
-            cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => formatTransactionCell(params.value),
-            cellRenderer: (params) => transactionCellWithPlaceholder(params, '0.00'),
-            valueSetter: (params) => {
-                if (isTransactionNewRow(params.data)) {
-                    params.data.amount = parseTransactionAmount(params.newValue);
-                    // Refresh cells to update highlighting
-                    if (params.api) {
-                        params.api.refreshCells({ rowNodes: [params.node], force: true });
-                    }
-                    return true;
-                }
-                const next = parseTransactionAmount(params.newValue);
-                if (next === null || next <= 0) return false;
-                params.data.amount = next;
-                // Only the amount changed — the entry's two sides are edited
-                // through their own cells, so resending them here would just
-                // risk overwriting one with a stale value.
-                updateTransactionEntry(params.data.id, { amount: next });
-                return true;
-            }
-        },
-        {
             headerName: '',
             field: 'actions',
-            width: 20,
+            flex: 5,
+            minWidth: 40,
             filter: false,
             sortable: false,
-            cellRenderer: (params) => {
-                if (isTransactionNewRow(params.data)) return '';
-                const btn = document.createElement('button');
-                btn.className = 'transaction-delete-btn';
-                btn.innerHTML = '<i class="fa-solid fa-trash"></i>';
-                btn.title = 'Delete entry';
-                btn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    deleteTransactionEntry(params.data.id);
-                });
-                return btn;
-            }
+            cellRenderer: (params) => createTransactionRowMenu(params)
         }
     ];
 }
@@ -1302,7 +1369,7 @@ function initTransactionsGrid() {
             sortable: true,
             resizable: true,
             filter: true,
-            floatingFilter: true,
+            floatingFilter: false,
             minWidth: 80
         },
         animateRows: true,
