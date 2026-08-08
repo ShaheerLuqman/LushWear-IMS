@@ -1414,6 +1414,9 @@ EXECUTE FUNCTION trg_transaction_entries_audit_before_truncate();
 DROP FUNCTION IF EXISTS get_month_summary_periods();
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE);
 DROP FUNCTION IF EXISTS get_month_summary_carrier_health(TIMESTAMPTZ, TIMESTAMPTZ);
+-- Same-signature return-type change (cancelled_orders_count column added) -
+-- CREATE OR REPLACE can't alter OUT-parameter row types, so drop first.
+DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 
 CREATE OR REPLACE FUNCTION get_month_summary_periods(p_org_id UUID)
 RETURNS TABLE(month INT, year INT)
@@ -1444,7 +1447,7 @@ CREATE OR REPLACE FUNCTION get_month_summary_totals(
     p_entry_start DATE,
     p_entry_end DATE,
     p_org_id UUID
-) As a payable aging page, purpose payment. Transaction accoun As a payable aging page, purpose payment transaction accounting professional, nine fourteen ninety-seven, nine fourteen Shopify settings, Shopify black and white. and white purpose or parking purple
+)
 RETURNS TABLE(
     total_orders INT,
     total_gross_sale NUMERIC,
@@ -1453,6 +1456,7 @@ RETURNS TABLE(
     delivered_orders_count INT,
     enroute_orders_count INT,
     unfulfilled_orders_count INT,
+    cancelled_orders_count INT,
     net_sales NUMERIC,
     net_profit NUMERIC,
     dc_charges_delivered NUMERIC,
@@ -1471,20 +1475,20 @@ AS $$
         WHERE org_id = p_org_id
           AND order_receiving_date >= p_period_start
           AND order_receiving_date <  p_period_end
-          AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'
     ),
     order_totals AS (
         SELECT
-            COUNT(*)::INT AS total_orders,
-            COALESCE(SUM(total_amount), 0) AS total_gross_sale,
+            COUNT(*) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled')::INT AS total_orders,
+            COALESCE(SUM(total_amount) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS total_gross_sale,
             COALESCE(SUM(total_amount) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS total_return_amount,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'returned')::INT AS return_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'delivered')::INT AS delivered_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('fulfilled', 'cna', 'rfd', 'ica'))::INT AS enroute_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'unfulfilled')::INT AS unfulfilled_orders_count,
-            COALESCE(SUM(total_amount) FILTER (WHERE delivery_charge IS NOT NULL), 0) AS gross_with_delivery,
+            COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'cancelled')::INT AS cancelled_orders_count,
+            COALESCE(SUM(total_amount) FILTER (WHERE delivery_charge IS NOT NULL AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS gross_with_delivery,
             COALESCE(SUM(total_amount) FILTER (WHERE delivery_charge IS NOT NULL AND lower(trim(order_status)) = 'returned'), 0) AS return_amount_with_delivery,
-            COALESCE(SUM(cost_price) FILTER (WHERE delivery_charge IS NOT NULL), 0) AS cost_with_delivery,
+            COALESCE(SUM(cost_price) FILTER (WHERE delivery_charge IS NOT NULL AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS cost_with_delivery,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
@@ -1507,6 +1511,7 @@ AS $$
         ot.delivered_orders_count,
         ot.enroute_orders_count,
         ot.unfulfilled_orders_count,
+        ot.cancelled_orders_count,
         (ot.total_gross_sale - ot.total_return_amount) AS net_sales,
         ((ot.gross_with_delivery - ot.return_amount_with_delivery) - ot.cost_with_delivery) AS net_profit,
         ot.dc_charges_delivered,

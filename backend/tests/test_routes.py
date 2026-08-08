@@ -206,6 +206,7 @@ class TestMonthSummaryDetail:
             "delivered_orders_count": 1,
             "enroute_orders_count": 1,
             "unfulfilled_orders_count": 0,
+            "cancelled_orders_count": 1,
             "net_sales": 1400.5,
             "net_profit": 900.25,
             "dc_charges_delivered": 180.0,
@@ -233,6 +234,7 @@ class TestMonthSummaryDetail:
         assert body["total_orders"] == 3
         assert body["net_profit"] == 900.25
         assert body["shopify_expense"] == 50.0
+        assert body["cancelled_orders_count"] == 1
 
         # Collection breakdown is still computed in Python from the fetched
         # line_items - the cancelled order's 5 qty must not count.

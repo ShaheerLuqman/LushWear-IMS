@@ -2047,6 +2047,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
             "delivered_orders_count": int(totals.get("delivered_orders_count") or 0),
             "enroute_orders_count": int(totals.get("enroute_orders_count") or 0),
             "unfulfilled_orders_count": int(totals.get("unfulfilled_orders_count") or 0),
+            "cancelled_orders_count": int(totals.get("cancelled_orders_count") or 0),
             "net_sales": round(float(totals.get("net_sales") or 0), 2),
             "net_profit": round(float(totals.get("net_profit") or 0), 2),
             "dc_charges_delivered": round(float(totals.get("dc_charges_delivered") or 0), 2),
