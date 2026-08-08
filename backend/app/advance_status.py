@@ -3,13 +3,13 @@ Advance reconciliation status helpers.
 
 An order's advance can come from two places:
   - Shopify: stored on orders.advance_amount
-  - Cashbook: order-advance credit entries posted to the Orders ledger, tagged with
-    the order_number column on cashbook_entries
+  - Transactions: order-advance credit entries posted to the Orders ledger, tagged with
+    the order_number column on transaction_entries
 
 advance_status (stored on orders.advance_status) reconciles the two:
   1 = no advance amount for the order (both zero)
-  2 = Shopify advance present, but no cashbook entry
-  3 = cashbook entry present, but no Shopify advance
+  2 = Shopify advance present, but no transaction entry
+  3 = transaction entry present, but no Shopify advance
   4 = advance present in both and they match (within Rs. 5 tolerance)
   5 = advance present in both but they do not match (differ by Rs. 5 or more)
 """
@@ -43,7 +43,7 @@ def get_orders_ledger_id(supabase, org_id: str):
 # Status codes
 ADV_NONE = 1
 ADV_SHOPIFY_ONLY = 2
-ADV_CASHBOOK_ONLY = 3
+ADV_TRANSACTION_ONLY = 3
 ADV_MATCH = 4
 ADV_MISMATCH = 5
 
@@ -51,28 +51,28 @@ ADV_MISMATCH = 5
 # manual entry) shouldn't flag every near-equal advance as a mismatch.
 MATCH_TOLERANCE = 5
 
-def compute_advance_status(shopify_advance: float, cashbook_advance: float) -> int:
+def compute_advance_status(shopify_advance: float, transaction_advance: float) -> int:
     """Return the advance_status code for one order given the two advance amounts."""
     # Rounding to cents first makes these exact comparisons; sub-cent float noise
     # (e.g. 1522.1999999999998) is normalised away rather than absorbed by a tolerance.
     shopify = money(shopify_advance)
-    cashbook = money(cashbook_advance)
+    transaction = money(transaction_advance)
 
-    if not shopify and not cashbook:
+    if not shopify and not transaction:
         return ADV_NONE
-    if shopify and not cashbook:
+    if shopify and not transaction:
         return ADV_SHOPIFY_ONLY
-    if not shopify and cashbook:
-        return ADV_CASHBOOK_ONLY
-    return ADV_MATCH if abs(shopify - cashbook) < MATCH_TOLERANCE else ADV_MISMATCH
+    if not shopify and transaction:
+        return ADV_TRANSACTION_ONLY
+    return ADV_MATCH if abs(shopify - transaction) < MATCH_TOLERANCE else ADV_MISMATCH
 
 
-def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
+def fetch_transaction_advance_totals(supabase, org_id: str) -> Dict[str, float]:
     """
-    Sum order-advance cashbook entries per order number.
+    Sum order-advance transaction entries per order number.
 
     Order-advance entries have the Orders ledger on their From side and carry an order_number.
-    Returns a map of order_number (str) -> total advance amount from the cashbook.
+    Returns a map of order_number (str) -> total advance amount from transaction entries.
     """
     totals: Dict[str, float] = {}
     orders_ledger_id = get_orders_ledger_id(supabase, org_id)
@@ -80,7 +80,7 @@ def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
         return totals
 
     rows = fetch_all(
-        lambda: org_table(supabase, org_id, "finances_cashbook_entries")
+        lambda: org_table(supabase, org_id, "finances_transaction_entries")
         .select("order_number, amount")
         # An advance is money received FROM the Orders account into cash.
         .eq("from_account_id", orders_ledger_id)
@@ -107,10 +107,10 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
     If order_numbers is provided (iterable of str), only those orders are recomputed;
     otherwise all orders are recomputed. Returns the number of orders updated.
     """
-    cashbook_totals = fetch_cashbook_advance_totals(supabase, org_id)
+    transaction_totals = fetch_transaction_advance_totals(supabase, org_id)
 
     # Build the set of order numbers we need to evaluate. When scoped, we still need
-    # any order referenced by a cashbook entry even if its number wasn't passed in.
+    # any order referenced by a transaction entry even if its number wasn't passed in.
     scoped = None
     if order_numbers is not None:
         scoped = list({str(n).strip() for n in order_numbers if str(n).strip()})
@@ -144,8 +144,8 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
     for o in orders:
         order_num = str(o.get("order_number") or "").strip()
         shopify_advance = float(o.get("advance_amount") or 0)
-        cashbook_advance = cashbook_totals.get(order_num, 0.0)
-        new_status = compute_advance_status(shopify_advance, cashbook_advance)
+        transaction_advance = transaction_totals.get(order_num, 0.0)
+        new_status = compute_advance_status(shopify_advance, transaction_advance)
         if o.get("advance_status") != new_status:
             to_update.append({**o, "advance_status": new_status})
 

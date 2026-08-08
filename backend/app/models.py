@@ -114,7 +114,7 @@ class OrderBase(BaseModel):
     order_receiving_date: datetime
     line_items: Optional[List[OrderLineItem]] = None
     # Advance reconciliation status (computed): 1=no advance, 2=shopify only,
-    # 3=cashbook only, 4=both match, 5=both mismatch
+    # 3=transaction only, 4=both match, 5=both mismatch
     advance_status: int = 1
 
 class OrderCreate(OrderBase):
@@ -147,9 +147,9 @@ class Order(OrderBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# ==================== CASHBOOK MODELS ====================
+# ==================== TRANSACTION MODELS ====================
 
-class CashbookEntryBase(BaseModel):
+class TransactionEntryBase(BaseModel):
     """An entry names both of its sides; NULL on a side means cash.
 
     from_account_id is credited (money came from there), to_account_id is
@@ -165,7 +165,7 @@ class CashbookEntryBase(BaseModel):
 
     @model_validator(mode="after")
     def _two_distinct_sides(self):
-        # Mirrors cashbook_entries_two_sides_check: both None is cash-to-cash,
+        # Mirrors transaction_entries_two_sides_check: both None is cash-to-cash,
         # which moves nothing; equal sides is an account paying itself.
         if self.from_account_id is None and self.to_account_id is None:
             raise ValueError("an entry needs a From or a To account (the empty side is cash)")
@@ -173,13 +173,13 @@ class CashbookEntryBase(BaseModel):
             raise ValueError("From and To cannot be the same account")
         return self
 
-class CashbookEntryCreate(CashbookEntryBase):
+class TransactionEntryCreate(TransactionEntryBase):
     # Client-generated per submission. Replaying a create with the same key
     # (double-click, retry after a dropped response) returns the original row
     # instead of inserting a duplicate.
     idempotency_key: Optional[str] = None
 
-class CashbookEntryUpdate(BaseModel):
+class TransactionEntryUpdate(BaseModel):
     entry_date: Optional[date] = None
     amount: Optional[float] = Field(default=None, gt=0)
     description: Optional[str] = None
@@ -191,7 +191,7 @@ class LedgerBalance(BaseModel):
     ledger_id: str
     balance: float = 0.0
 
-class CashbookEntry(CashbookEntryBase):
+class TransactionEntry(TransactionEntryBase):
     id: str
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -202,7 +202,7 @@ class CashbookEntry(CashbookEntryBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-class CashbookDailyBalance(BaseModel):
+class TransactionDailyBalance(BaseModel):
     id: Optional[str] = None
     balance_date: date
     opening_balance: float = 0.0
@@ -214,14 +214,14 @@ class CashbookDailyBalance(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-class CashbookDay(BaseModel):
-    """Bundles the two reads the Cashbook view always needs together for one
+class TransactionDay(BaseModel):
+    """Bundles the two reads the Transactions view always needs together for one
     date, so the frontend fires one request instead of two in parallel."""
-    daily_balance: CashbookDailyBalance
-    entries: List[CashbookEntry]
+    daily_balance: TransactionDailyBalance
+    entries: List[TransactionEntry]
 
-class CashbookEntryAuditLog(BaseModel):
-    """A deleted cashbook_entries row, snapshotted by a DB trigger (see
+class TransactionEntryAuditLog(BaseModel):
+    """A deleted transaction_entries row, snapshotted by a DB trigger (see
     supabase_schema.sql). No "who" field — no per-user identity exists yet."""
     id: str
     entry_id: str
@@ -359,7 +359,7 @@ class JournalEntry(BaseModel):
     entry_date: date
     voucher_type: str
     narration: Optional[str] = None
-    # What produced this entry: 'cashbook_entry', 'opening_balance', 'manual',
+    # What produced this entry: 'transaction_entry', 'opening_balance', 'manual',
     # and the document types later phases add.
     source_type: Optional[str] = None
     source_id: Optional[str] = None
@@ -399,8 +399,8 @@ BillStatus = Literal["draft", "received", "cancelled"]
 
 class BillItemInput(BaseModel):
     # No per-line account: every line is stock and posts to the org's Inventory
-    # account. Anything paid on the spot (ads, rent, packaging) belongs in the
-    # cashbook against its expense ledger, not on a bill.
+    # account. Anything paid on the spot (ads, rent, packaging) belongs in a
+    # transaction against its expense ledger, not on a bill.
     quantity: float = Field(gt=0)
     unit_cost: float = Field(ge=0)
     description: Optional[str] = None
@@ -457,7 +457,7 @@ class Bill(BillBase):
     subtotal: float = 0.0
     total: float = 0.0
     # From bills_with_paid, which derives settlement from the supplier's ledger
-    # balance applied oldest-bill-first — payments are plain cashbook entries and
+    # balance applied oldest-bill-first — payments are plain transaction entries and
     # are never allocated to a bill. payment_status is the stored status while a
     # bill is draft/cancelled, and unpaid/partially_paid/paid once received.
     paid_amount: float = 0.0

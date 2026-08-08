@@ -1,7 +1,7 @@
 import pytest
 
 from app.advance_status import (
-    ADV_CASHBOOK_ONLY,
+    ADV_TRANSACTION_ONLY,
     ADV_MATCH,
     ADV_MISMATCH,
     ADV_NONE,
@@ -11,16 +11,16 @@ from app.advance_status import (
 )
 
 
-@pytest.mark.parametrize("shopify,cashbook,expected", [
+@pytest.mark.parametrize("shopify,transaction,expected", [
     (0, 0, ADV_NONE),
     (None, None, ADV_NONE),
     (500, 0, ADV_SHOPIFY_ONLY),
-    (0, 500, ADV_CASHBOOK_ONLY),
+    (0, 500, ADV_TRANSACTION_ONLY),
     (500, 500, ADV_MATCH),
     (500, 250, ADV_MISMATCH),
 ])
-def test_status_codes(shopify, cashbook, expected):
-    assert compute_advance_status(shopify, cashbook) == expected
+def test_status_codes(shopify, transaction, expected):
+    assert compute_advance_status(shopify, transaction) == expected
 
 
 def test_sub_cent_float_noise_still_matches():
@@ -88,7 +88,7 @@ class _FakeSupabase:
 
 def _orders_ledger_table():
     """The org's Orders ledger, which advance lookups resolve before reading
-    cashbook entries (system_key = 'orders' replaced a hardcoded UUID)."""
+    transaction entries (system_key = 'orders' replaced a hardcoded UUID)."""
     return _FakeTable([{"id": "orders-ledger-id"}])
 
 
@@ -102,18 +102,18 @@ class TestRecomputeAdvanceStatuses:
              "courier": "PostEx", "order_status": "delivered", "total_amount": 500.0,
              "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ])
-        cashbook_table = _FakeTable([
+        transaction_table = _FakeTable([
             {"order_number": "100", "amount": 500.0},
         ])
         supabase = _FakeSupabase({
             "shopify_orders": orders_table,
-            "finances_cashbook_entries": cashbook_table,
+            "finances_transaction_entries": transaction_table,
             "finances_ledgers": _orders_ledger_table(),
         })
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100", "101"])
 
-        # Order 100 now matches (Shopify 500 vs cashbook 500) - status changes from
+        # Order 100 now matches (Shopify 500 vs transaction 500) - status changes from
         # ADV_NONE to ADV_MATCH. Order 101 has no advance either side - unchanged.
         assert updated == 1
         assert orders_table.upsert_calls == [[{
@@ -129,10 +129,10 @@ class TestRecomputeAdvanceStatuses:
         orders_table = _FakeTable([
             {"id": "o1", "order_number": 100, "advance_amount": 0.0, "advance_status": ADV_NONE},
         ])
-        cashbook_table = _FakeTable([])
+        transaction_table = _FakeTable([])
         supabase = _FakeSupabase({
             "shopify_orders": orders_table,
-            "finances_cashbook_entries": cashbook_table,
+            "finances_transaction_entries": transaction_table,
             "finances_ledgers": _orders_ledger_table(),
         })
 

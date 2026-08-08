@@ -1,17 +1,17 @@
-// Cashbook: entries grid, day navigation, and the entry/advance/bulk modals.
+// Transactions: entries grid, day navigation, and the entry/advance/bulk modals.
 
 // ============================================
-// Cashbook
+// Transactions
 // ============================================
 
-function normalizeCashbookEntries(entries) {
+function normalizeTransactionEntries(entries) {
     return (entries || []).map((entry) => ({
         ...entry,
         entry_date: entry.entry_date ? String(entry.entry_date).slice(0, 10) : ''
     }));
 }
 
-function getEmptyCashbookRow(entryDate = '') {
+function getEmptyTransactionRow(entryDate = '') {
     // Use a unique ID each time to ensure AG Grid creates a fresh row
     return {
         id: '__new_' + Date.now() + '__',
@@ -23,7 +23,7 @@ function getEmptyCashbookRow(entryDate = '') {
     };
 }
 
-function sortedCashbookEntries(entries) {
+function sortedTransactionEntries(entries) {
     return [...(entries || [])].sort((a, b) => {
         const dateA = a.entry_date || '';
         const dateB = b.entry_date || '';
@@ -35,67 +35,67 @@ function sortedCashbookEntries(entries) {
 // The response also carries that day's cash balance, which nothing reads any
 // more: the grid shows entries only, and Available Cash comes off the Cash in
 // Hand ledger (getPhysicalCashInHand in ledgers.js).
-async function loadCashbookDay(targetDate) {
+async function loadTransactionDay(targetDate) {
     try {
-        const data = await apiJson(`/cashbook/day/${targetDate}`, { fallback: 'Failed to load cashbook day' });
-        cashbookEntries = normalizeCashbookEntries(data.entries);
+        const data = await apiJson(`/transactions/day/${targetDate}`, { fallback: 'Failed to load transactions day' });
+        transactionEntries = normalizeTransactionEntries(data.entries);
     } catch (error) {
-        console.error('Error loading cashbook day:', error);
-        showToast('Failed to load cashbook entries', 'error');
-        cashbookEntries = [];
+        console.error('Error loading transactions day:', error);
+        showToast('Failed to load transaction entries', 'error');
+        transactionEntries = [];
     }
 }
 
 // One row per entry, both of its sides named, closed off by the blank row a new
 // entry is typed into. The day's cash balance lives in the header's Available
 // Cash, not in rows of the table.
-function renderCashbook() {
-    if (!cashbookGridApi) return;
-    const selectedDate = cashbookSelectedDate || getTodayDateString();
-    const entries = cashbookEntries.filter((entry) => entry.entry_date === selectedDate);
-    cashbookGridApi.setGridOption('rowData', [
-        ...sortedCashbookEntries(entries),
-        getEmptyCashbookRow(selectedDate)
+function renderTransactions() {
+    if (!transactionsGridApi) return;
+    const selectedDate = transactionSelectedDate || getTodayDateString();
+    const entries = transactionEntries.filter((entry) => entry.entry_date === selectedDate);
+    transactionsGridApi.setGridOption('rowData', [
+        ...sortedTransactionEntries(entries),
+        getEmptyTransactionRow(selectedDate)
     ]);
 }
 
-async function loadCashbook() {
-    const dateFilter = document.getElementById('cashbookDateFilter');
-    if (!cashbookSelectedDate) {
-        cashbookSelectedDate = getTodayDateString();
+async function loadTransactions() {
+    const dateFilter = document.getElementById('transactionDateFilter');
+    if (!transactionSelectedDate) {
+        transactionSelectedDate = getTodayDateString();
     }
-    if (dateFilter) dateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate);
-    
+    if (dateFilter) dateFilter.value = formatDateDDMMYYYY(transactionSelectedDate);
+
     await Promise.all([
-        loadCashbookDay(cashbookSelectedDate),
+        loadTransactionDay(transactionSelectedDate),
         loadLedgersList()
     ]);
-    renderCashbook();
+    renderTransactions();
     updateCashInHand();
 }
 
-async function reloadCashbookForCurrentDate() {
-    const selectedDate = cashbookSelectedDate || getTodayDateString();
-    await loadCashbookDay(selectedDate);
-    renderCashbook();
+async function reloadTransactionsForCurrentDate() {
+    const selectedDate = transactionSelectedDate || getTodayDateString();
+    await loadTransactionDay(selectedDate);
+    renderTransactions();
     updateCashInHand();
 }
 
-let cashbookReloadTimer = null;
+let transactionsReloadTimer = null;
 
-// Debounces the full-day reload (GET /cashbook/day/{date} + re-render): each
+// Debounces the full-day reload (GET /transactions/day/{date} + re-render): each
 // call resets a 500ms timer, so a burst of entry writes (e.g. the two-sided
 // entry / order-advance modals, each firing two creates) collapses into one
 // refetch after the last one settles, instead of one per write.
-function scheduleCashbookReload() {
-    if (cashbookReloadTimer) clearTimeout(cashbookReloadTimer);
-    cashbookReloadTimer = setTimeout(() => {
-        cashbookReloadTimer = null;
-        reloadCashbookForCurrentDate();
+function scheduleTransactionsReload() {
+    if (transactionsReloadTimer) clearTimeout(transactionsReloadTimer);
+    transactionsReloadTimer = setTimeout(() => {
+        transactionsReloadTimer = null;
+        reloadTransactionsForCurrentDate();
     }, 500);
 }
 
-// --- Create Cashbook Entry modal ---------------------------------------------
+// --- Create Transaction Entry modal ------------------------------------------
 
 // The ledger this org posts order advances to: system_key = 'orders', the same
 // mechanism every fixed role uses (see backend/app/ledger_roles.py). It began as
@@ -112,37 +112,37 @@ function orderAdvanceParticularPlaceholder(orderNumber) {
     return num ? `Amount received for Order #${num}` : 'Amount received for Order #...';
 }
 
-function cashbookEntryLedgerName(ledgerId) {
+function transactionEntryLedgerName(ledgerId) {
     const ledger = ledgers.find(l => l.id === ledgerId);
     return ledger ? ledger.name : '';
 }
 
 // Describes an entry by the sides it names; an unnamed side is cash and goes
 // unmentioned, which is how a plain cash entry has always read.
-function defaultCashbookParticulars(fromName, toName) {
+function defaultTransactionParticulars(fromName, toName) {
     if (fromName && toName) return `${fromName} to ${toName}`;
     if (fromName) return `Amount received from ${fromName}`;
     if (toName) return `Amount transferred to ${toName}`;
     return '';
 }
 
-function cashbookEntryDefaultDescription() {
-    if (isCashbookEntryOrderAdvance()) {
-        const orderNumber = document.getElementById('cashbookEntryOrderNumber');
+function transactionEntryDefaultDescription() {
+    if (isTransactionEntryOrderAdvance()) {
+        const orderNumber = document.getElementById('transactionEntryOrderNumber');
         return orderAdvanceParticularPlaceholder(orderNumber ? orderNumber.value : '');
     }
-    const fromName = cashbookEntryLedgerName(document.getElementById('cashbookEntryFrom').value);
-    const toName = cashbookEntryLedgerName(document.getElementById('cashbookEntryTo').value);
-    return defaultCashbookParticulars(fromName, toName);
+    const fromName = transactionEntryLedgerName(document.getElementById('transactionEntryFrom').value);
+    const toName = transactionEntryLedgerName(document.getElementById('transactionEntryTo').value);
+    return defaultTransactionParticulars(fromName, toName);
 }
 
-function refreshCashbookEntryParticularPlaceholder() {
-    const part = document.getElementById('cashbookEntryParticular');
-    if (part) part.placeholder = cashbookEntryDefaultDescription() || 'Amount received from...';
+function refreshTransactionEntryParticularPlaceholder() {
+    const part = document.getElementById('transactionEntryParticular');
+    if (part) part.placeholder = transactionEntryDefaultDescription() || 'Amount received from...';
 }
 
-function isCashbookEntryOrderAdvance() {
-    const cb = document.getElementById('cashbookEntryOrderAdvance');
+function isTransactionEntryOrderAdvance() {
+    const cb = document.getElementById('transactionEntryOrderAdvance');
     return !!(cb && cb.checked);
 }
 
@@ -151,9 +151,9 @@ function isCashbookEntryOrderAdvance() {
  * order number becomes required. To stays free, so an advance paid straight into
  * a bank account is one entry that never touches cash.
  */
-function setCashbookEntryOrderAdvance(enabled) {
-    const group = document.getElementById('cashbookEntryOrderNumberGroup');
-    const orderNumber = document.getElementById('cashbookEntryOrderNumber');
+function setTransactionEntryOrderAdvance(enabled) {
+    const group = document.getElementById('transactionEntryOrderNumberGroup');
+    const orderNumber = document.getElementById('transactionEntryOrderNumber');
 
     if (group) group.style.display = enabled ? '' : 'none';
     if (orderNumber) {
@@ -162,21 +162,21 @@ function setCashbookEntryOrderAdvance(enabled) {
     }
     // From is always Orders for an advance, so hide the field rather than
     // showing a locked select.
-    const fromGroup = document.getElementById('cashbookEntryFromGroup');
-    const from = document.getElementById('cashbookEntryFrom');
+    const fromGroup = document.getElementById('transactionEntryFromGroup');
+    const from = document.getElementById('transactionEntryFrom');
     if (fromGroup) fromGroup.style.display = enabled ? 'none' : '';
     if (from) {
         from.disabled = enabled;
         if (enabled) from.value = getOrdersLedgerId() || '';
     }
 
-    refreshCashbookEntryParticularPlaceholder();
+    refreshTransactionEntryParticularPlaceholder();
     if (enabled && orderNumber) orderNumber.focus();
 }
 
 const CREATE_LEDGER_OPTION_VALUE = '__create_ledger__';
 
-function populateCashbookEntryLedgerSelect(select) {
+function populateTransactionEntryLedgerSelect(select) {
     if (!select) return;
     const current = select.value;
     // The empty option is not a blank: an unnamed side IS the cash account, which
@@ -193,8 +193,8 @@ function handleLedgerSelectChange(e) {
         const selectId = e.target.id;
         e.target.value = '';
         openCreateLedgerModal((created) => {
-            ['cashbookEntryFrom', 'cashbookEntryTo'].forEach((id) => {
-                populateCashbookEntryLedgerSelect(document.getElementById(id));
+            ['transactionEntryFrom', 'transactionEntryTo'].forEach((id) => {
+                populateTransactionEntryLedgerSelect(document.getElementById(id));
             });
             const select = document.getElementById(selectId);
             if (select) {
@@ -205,54 +205,54 @@ function handleLedgerSelectChange(e) {
     }
 }
 
-function openCashbookEntryModal() {
+function openTransactionEntryModal() {
     if (!isEditingAllowed()) {
         showToast('Editing is locked', 'error');
         return;
     }
-    const from = document.getElementById('cashbookEntryFrom');
-    const to = document.getElementById('cashbookEntryTo');
-    const amount = document.getElementById('cashbookEntryAmount');
-    const part = document.getElementById('cashbookEntryParticular');
+    const from = document.getElementById('transactionEntryFrom');
+    const to = document.getElementById('transactionEntryTo');
+    const amount = document.getElementById('transactionEntryAmount');
+    const part = document.getElementById('transactionEntryParticular');
 
-    populateCashbookEntryLedgerSelect(from);
-    populateCashbookEntryLedgerSelect(to);
+    populateTransactionEntryLedgerSelect(from);
+    populateTransactionEntryLedgerSelect(to);
     if (from) from.value = '';
     if (to) to.value = '';
     if (amount) amount.value = '';
     if (part) part.value = '';
 
-    const orderAdvance = document.getElementById('cashbookEntryOrderAdvance');
+    const orderAdvance = document.getElementById('transactionEntryOrderAdvance');
     if (orderAdvance) orderAdvance.checked = false;
-    setCashbookEntryOrderAdvance(false);
+    setTransactionEntryOrderAdvance(false);
 
     if (ledgers.length === 0) {
         showToast('No ledgers available. Create a ledger first.', 'error');
     }
 
-    refreshCashbookEntryParticularPlaceholder();
-    setCashbookEntryMode('single');
-    document.getElementById('cashbookEntryModal').classList.add('active');
+    refreshTransactionEntryParticularPlaceholder();
+    setTransactionEntryMode('single');
+    document.getElementById('transactionEntryModal').classList.add('active');
     if (amount) amount.focus();
 }
 
-function closeCashbookEntryModal() {
+function closeTransactionEntryModal() {
     if (bulkEntryCreating) return;
-    document.getElementById('cashbookEntryModal').classList.remove('active');
+    document.getElementById('transactionEntryModal').classList.remove('active');
 }
 
 /** Switch the shared Create Entry modal between 'single' and 'bulk' input modes. */
-function setCashbookEntryMode(mode) {
+function setTransactionEntryMode(mode) {
     if (bulkEntryCreating) return;
     const bulk = mode === 'bulk';
-    const form = document.getElementById('cashbookEntryForm');
-    const panel = document.getElementById('cashbookEntryBulkPanel');
-    const singleBtn = document.getElementById('cashbookEntryModeSingle');
-    const bulkBtn = document.getElementById('cashbookEntryModeBulk');
+    const form = document.getElementById('transactionEntryForm');
+    const panel = document.getElementById('transactionEntryBulkPanel');
+    const singleBtn = document.getElementById('transactionEntryModeSingle');
+    const bulkBtn = document.getElementById('transactionEntryModeBulk');
 
     if (form) form.style.display = bulk ? 'none' : '';
     if (panel) panel.style.display = bulk ? '' : 'none';
-    const singleSubmit = document.getElementById('cashbookEntrySubmitBtn');
+    const singleSubmit = document.getElementById('transactionEntrySubmitBtn');
     if (singleSubmit) singleSubmit.style.display = bulk ? 'none' : '';
     const bulkSubmit = document.getElementById('bulkEntrySubmitBtn');
     if (bulkSubmit) bulkSubmit.style.display = bulk ? '' : 'none';
@@ -269,17 +269,17 @@ function setCashbookEntryMode(mode) {
         const input = document.getElementById('bulkEntryInput');
         if (input) input.focus();
     } else {
-        const amount = document.getElementById('cashbookEntryAmount');
+        const amount = document.getElementById('transactionEntryAmount');
         if (amount) amount.focus();
     }
 }
 
-async function submitCashbookEntryModal() {
+async function submitTransactionEntryModal() {
     if (!isEditingAllowed()) {
         showToast('Editing is locked', 'error');
         return;
     }
-    const isAdvance = isCashbookEntryOrderAdvance();
+    const isAdvance = isTransactionEntryOrderAdvance();
     // A select silently drops a value with no matching option, so a missing Orders
     // ledger would otherwise surface as a confusing "select an account" error.
     if (isAdvance && !getOrdersLedgerId()) {
@@ -287,31 +287,31 @@ async function submitCashbookEntryModal() {
         return;
     }
     const orderNumber = isAdvance
-        ? document.getElementById('cashbookEntryOrderNumber').value.trim().replace(/^#/, '')
+        ? document.getElementById('transactionEntryOrderNumber').value.trim().replace(/^#/, '')
         : '';
     if (isAdvance && !orderNumber) { showToast('Enter an order number', 'error'); return; }
 
-    const fromId = (isAdvance ? getOrdersLedgerId() : document.getElementById('cashbookEntryFrom').value) || null;
-    const toId = document.getElementById('cashbookEntryTo').value || null;
-    const amount = parseFloat(document.getElementById('cashbookEntryAmount').value);
+    const fromId = (isAdvance ? getOrdersLedgerId() : document.getElementById('transactionEntryFrom').value) || null;
+    const toId = document.getElementById('transactionEntryTo').value || null;
+    const amount = parseFloat(document.getElementById('transactionEntryAmount').value);
 
     if (Number.isNaN(amount) || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
     if (!fromId && !toId) { showToast(`Both sides are ${cashSideLabel()} — name an account on one side`, 'error'); return; }
     if (fromId && fromId === toId) { showToast('From and To must be different accounts', 'error'); return; }
 
     const payload = {
-        entry_date: cashbookSelectedDate || getTodayDateString(),
+        entry_date: transactionSelectedDate || getTodayDateString(),
         amount,
         // If the particulars field is left empty, fall back to the placeholder text.
-        description: document.getElementById('cashbookEntryParticular').value.trim() || cashbookEntryDefaultDescription(),
+        description: document.getElementById('transactionEntryParticular').value.trim() || transactionEntryDefaultDescription(),
         from_account_id: fromId,
         to_account_id: toId
     };
     // Tag the advance so it can be reconciled against the order's Shopify advance amount.
     if (isAdvance) payload.order_number = orderNumber;
 
-    closeCashbookEntryModal();
-    await createCashbookEntry(payload);
+    closeTransactionEntryModal();
+    await createTransactionEntry(payload);
     // Refresh orders so the advance status indicator updates for this order.
     if (isAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
 }
@@ -321,80 +321,80 @@ function closeBulkEntryInfoCard() {
     document.getElementById('bulkEntryInfoBtn')?.setAttribute('aria-expanded', 'false');
 }
 
-function initCashbookActions() {
-    const cashbookDateFilter = document.getElementById('cashbookDateFilter');
-    if (cashbookDateFilter) {
+function initTransactionsActions() {
+    const transactionDateFilter = document.getElementById('transactionDateFilter');
+    if (transactionDateFilter) {
         const applyDateFromInput = () => {
-            const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+            const parsed = parseDDMMYYYYToYYYYMMDD(transactionDateFilter.value);
             if (parsed) {
-                cashbookSelectedDate = parsed;
-                cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
-                reloadCashbookForCurrentDate();
-            } else if (cashbookDateFilter.value.trim() !== '') {
+                transactionSelectedDate = parsed;
+                transactionDateFilter.value = formatDateDDMMYYYY(parsed);
+                reloadTransactionsForCurrentDate();
+            } else if (transactionDateFilter.value.trim() !== '') {
                 showToast('Enter date as DD/MM/YYYY', 'error');
-                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+                transactionDateFilter.value = formatDateDDMMYYYY(transactionSelectedDate || getTodayDateString());
             }
         };
-        cashbookDateFilter.addEventListener('change', applyDateFromInput);
-        cashbookDateFilter.addEventListener('keydown', (e) => {
+        transactionDateFilter.addEventListener('change', applyDateFromInput);
+        transactionDateFilter.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 e.preventDefault();
                 applyDateFromInput();
             }
         });
-        cashbookDateFilter.addEventListener('blur', () => {
-            if (cashbookDateFilter.value.trim() !== '') {
-                const parsed = parseDDMMYYYYToYYYYMMDD(cashbookDateFilter.value);
+        transactionDateFilter.addEventListener('blur', () => {
+            if (transactionDateFilter.value.trim() !== '') {
+                const parsed = parseDDMMYYYYToYYYYMMDD(transactionDateFilter.value);
                 if (parsed) {
-                    cashbookSelectedDate = parsed;
-                    cashbookDateFilter.value = formatDateDDMMYYYY(parsed);
+                    transactionSelectedDate = parsed;
+                    transactionDateFilter.value = formatDateDDMMYYYY(parsed);
                 } else {
-                    cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+                    transactionDateFilter.value = formatDateDDMMYYYY(transactionSelectedDate || getTodayDateString());
                 }
             } else {
-                cashbookDateFilter.value = formatDateDDMMYYYY(cashbookSelectedDate || getTodayDateString());
+                transactionDateFilter.value = formatDateDDMMYYYY(transactionSelectedDate || getTodayDateString());
             }
         });
     }
-    document.getElementById('cashbookTodayBtn')?.addEventListener('click', () => {
+    document.getElementById('transactionTodayBtn')?.addEventListener('click', () => {
         const today = getTodayDateString();
-        cashbookSelectedDate = today;
-        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(today);
-        reloadCashbookForCurrentDate();
+        transactionSelectedDate = today;
+        if (transactionDateFilter) transactionDateFilter.value = formatDateDDMMYYYY(today);
+        reloadTransactionsForCurrentDate();
     });
-    document.getElementById('cashbookPrevDayBtn')?.addEventListener('click', () => {
-        const current = cashbookSelectedDate || getTodayDateString();
+    document.getElementById('transactionPrevDayBtn')?.addEventListener('click', () => {
+        const current = transactionSelectedDate || getTodayDateString();
         const [year, month, day] = current.split('-').map(Number);
         const date = new Date(year, month - 1, day);
         date.setDate(date.getDate() - 1);
         const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        cashbookSelectedDate = newDate;
-        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
-        reloadCashbookForCurrentDate();
+        transactionSelectedDate = newDate;
+        if (transactionDateFilter) transactionDateFilter.value = formatDateDDMMYYYY(newDate);
+        reloadTransactionsForCurrentDate();
     });
-    document.getElementById('cashbookNextDayBtn')?.addEventListener('click', () => {
-        const current = cashbookSelectedDate || getTodayDateString();
+    document.getElementById('transactionNextDayBtn')?.addEventListener('click', () => {
+        const current = transactionSelectedDate || getTodayDateString();
         const [year, month, day] = current.split('-').map(Number);
         const date = new Date(year, month - 1, day);
         date.setDate(date.getDate() + 1);
         const newDate = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-        cashbookSelectedDate = newDate;
-        if (cashbookDateFilter) cashbookDateFilter.value = formatDateDDMMYYYY(newDate);
-        reloadCashbookForCurrentDate();
+        transactionSelectedDate = newDate;
+        if (transactionDateFilter) transactionDateFilter.value = formatDateDDMMYYYY(newDate);
+        reloadTransactionsForCurrentDate();
     });
 
-    // Cashbook entry account selects: picking "+ Create new ledger..." opens the create ledger modal
-    ['cashbookEntryFrom', 'cashbookEntryTo'].forEach((id) => {
+    // Transaction entry account selects: picking "+ Create new ledger..." opens the create ledger modal
+    ['transactionEntryFrom', 'transactionEntryTo'].forEach((id) => {
         document.getElementById(id)?.addEventListener('change', handleLedgerSelectChange);
     });
 
-    document.getElementById('cashbookCreateEntryBtn')?.addEventListener('click', openCashbookEntryModal);
-    document.getElementById('cashbookEntryOrderAdvance')?.addEventListener('change', (e) => {
-        setCashbookEntryOrderAdvance(e.target.checked);
+    document.getElementById('transactionCreateEntryBtn')?.addEventListener('click', openTransactionEntryModal);
+    document.getElementById('transactionEntryOrderAdvance')?.addEventListener('change', (e) => {
+        setTransactionEntryOrderAdvance(e.target.checked);
     });
-    document.getElementById('cashbookEntryOrderNumber')?.addEventListener('input', refreshCashbookEntryParticularPlaceholder);
-    document.getElementById('cashbookEntryModeSingle')?.addEventListener('click', () => setCashbookEntryMode('single'));
-    document.getElementById('cashbookEntryModeBulk')?.addEventListener('click', () => setCashbookEntryMode('bulk'));
+    document.getElementById('transactionEntryOrderNumber')?.addEventListener('input', refreshTransactionEntryParticularPlaceholder);
+    document.getElementById('transactionEntryModeSingle')?.addEventListener('click', () => setTransactionEntryMode('single'));
+    document.getElementById('transactionEntryModeBulk')?.addEventListener('click', () => setTransactionEntryMode('bulk'));
     document.getElementById('bulkEntrySubmitBtn')?.addEventListener('click', submitBulkEntry);
     initBulkEntryInfoCard();
     // Re-validate as the user types (debounced lightly) and reset submit state.
@@ -404,18 +404,18 @@ function initCashbookActions() {
         clearTimeout(window.__bulkEntryDebounce);
         window.__bulkEntryDebounce = setTimeout(validateBulkEntry, 300);
     });
-    document.getElementById('closeCashbookEntryModal')?.addEventListener('click', closeCashbookEntryModal);
-    document.getElementById('cashbookEntryCancelBtn')?.addEventListener('click', closeCashbookEntryModal);
-    document.getElementById('cashbookEntryModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'cashbookEntryModal') closeCashbookEntryModal();
+    document.getElementById('closeTransactionEntryModal')?.addEventListener('click', closeTransactionEntryModal);
+    document.getElementById('transactionEntryCancelBtn')?.addEventListener('click', closeTransactionEntryModal);
+    document.getElementById('transactionEntryModal')?.addEventListener('click', (e) => {
+        if (e.target.id === 'transactionEntryModal') closeTransactionEntryModal();
     });
-    document.getElementById('cashbookEntryForm')?.addEventListener('submit', (e) => {
+    document.getElementById('transactionEntryForm')?.addEventListener('submit', (e) => {
         e.preventDefault();
-        submitCashbookEntryModal();
+        submitTransactionEntryModal();
     });
     // Update the particulars placeholder dynamically as accounts are chosen.
-    document.getElementById('cashbookEntryFrom')?.addEventListener('change', refreshCashbookEntryParticularPlaceholder);
-    document.getElementById('cashbookEntryTo')?.addEventListener('change', refreshCashbookEntryParticularPlaceholder);
+    document.getElementById('transactionEntryFrom')?.addEventListener('change', refreshTransactionEntryParticularPlaceholder);
+    document.getElementById('transactionEntryTo')?.addEventListener('change', refreshTransactionEntryParticularPlaceholder);
 }
 
 function initBulkEntryInfoCard() {
@@ -457,7 +457,7 @@ function resetBulkEntryFields() {
     if (input) { input.value = ''; input.disabled = false; input.style.height = ''; }
     const validation = document.getElementById('bulkEntryValidation');
     if (validation) { validation.style.display = 'none'; validation.innerHTML = ''; }
-    const cancelBtn = document.getElementById('cashbookEntryCancelBtn');
+    const cancelBtn = document.getElementById('transactionEntryCancelBtn');
     if (cancelBtn) cancelBtn.disabled = false;
     setBulkEntryProgress('');
     bulkEntryParsed = null;
@@ -666,7 +666,7 @@ function resolveBulkLedger(name) {
 }
 
 function bulkEntryDefaultParticulars(from, to) {
-    return defaultCashbookParticulars(from ? from.ledger.name : '', to ? to.ledger.name : '');
+    return defaultTransactionParticulars(from ? from.ledger.name : '', to ? to.ledger.name : '');
 }
 
 /** Parse the whole textarea. Returns { lines: [parsed], hasError, hasAny }. */
@@ -751,14 +751,14 @@ async function submitBulkEntry() {
     if (!parsed.hasAny) { showToast('No entries to create', 'error'); return; }
     if (parsed.hasError) { showToast('Fix the highlighted entries first', 'error'); return; }
 
-    const entryDate = cashbookSelectedDate || getTodayDateString();
+    const entryDate = transactionSelectedDate || getTodayDateString();
     const payloads = [];
     parsed.lines.forEach(p => {
         p.entries.forEach(e => payloads.push({ ...e, entry_date: entryDate }));
     });
 
     const total = payloads.length;
-    const cancelBtn = document.getElementById('cashbookEntryCancelBtn');
+    const cancelBtn = document.getElementById('transactionEntryCancelBtn');
     const input = document.getElementById('bulkEntryInput');
 
     // Lock the modal while creating so the user can't edit or close mid-run.
@@ -774,16 +774,16 @@ async function submitBulkEntry() {
     setBulkEntryProgress(`Creating ${total} entr${total === 1 ? 'y' : 'ies'}…`);
     const createdOrderAdvance = payloads.some(p => p.order_number);
     try {
-        await postCashbookEntriesBulk(payloads);
+        await postTransactionEntriesBulk(payloads);
 
         setBulkEntryProgress(`Created ${total} entr${total === 1 ? 'y' : 'ies'}.`, 'ok');
         showToast(`Created ${total} entr${total === 1 ? 'y' : 'ies'}`, 'success');
-        await reloadCashbookForCurrentDate();
+        await reloadTransactionsForCurrentDate();
         if (createdOrderAdvance && typeof loadOrders === 'function') { try { await loadOrders(); } catch (e) {} }
         bulkEntryCreating = false;
         if (input) input.disabled = false;
         if (cancelBtn) cancelBtn.disabled = false;
-        closeCashbookEntryModal();
+        closeTransactionEntryModal();
     } catch (error) {
         console.error('Error creating bulk entries:', error);
         setBulkEntryProgress('Failed to create entries — nothing was saved. Review and retry.', 'error');
@@ -812,7 +812,7 @@ function generateIdempotencyKey() {
     return crypto.randomUUID();
 }
 
-async function createCashbookEntry(payload) {
+async function createTransactionEntry(payload) {
     // Optimistic update: add entry to local array immediately
     const tempId = '__temp_' + Date.now();
     const tempEntry = {
@@ -822,41 +822,41 @@ async function createCashbookEntry(payload) {
         created_at: getPKTISOString(),
         updated_at: getPKTISOString()
     };
-    cashbookEntries.push(tempEntry);
-    renderCashbook();
+    transactionEntries.push(tempEntry);
+    renderTransactions();
 
     try {
-        const created = await apiJson('/cashbook/entries', {
+        const created = await apiJson('/transactions/entries', {
             method: 'POST',
             body: { idempotency_key: generateIdempotencyKey(), ...payload },
-            fallback: 'Failed to add cashbook entry'
+            fallback: 'Failed to add transaction entry'
         });
         applyLedgerBalancePatches(created.ledger_balances);
         updateCashInHand();
 
         // Debounced: waits to see if another write is on the way (e.g. the
         // other side of a two-sided entry) before refetching real IDs/grid.
-        scheduleCashbookReload();
+        scheduleTransactionsReload();
         showToast('Entry added', 'success');
     } catch (error) {
-        console.error('Error adding cashbook entry:', error);
+        console.error('Error adding transaction entry:', error);
         // Remove the temp entry on failure
-        cashbookEntries = cashbookEntries.filter(e => e.id !== tempId);
-        renderCashbook();
+        transactionEntries = transactionEntries.filter(e => e.id !== tempId);
+        renderTransactions();
         showToast('Failed to add entry', 'error');
     }
 }
 
-// POSTs a batch of cashbook entries as one atomic request (bulk text entry, so a
+// POSTs a batch of transaction entries as one atomic request (bulk text entry, so a
 // pasted block can't half-succeed), applies the returned ledger balance patches,
 // and updates Cash In Hand immediately.
 // Returns the created/replayed entries (each carries ledger_balances).
-async function postCashbookEntriesBulk(payloads) {
+async function postTransactionEntriesBulk(payloads) {
     const withKeys = payloads.map(p => ({ idempotency_key: generateIdempotencyKey(), ...p }));
-    const created = await apiJson('/cashbook/entries/bulk', {
+    const created = await apiJson('/transactions/entries/bulk', {
         method: 'POST',
         body: withKeys,
-        fallback: 'Failed to create cashbook entries'
+        fallback: 'Failed to create transaction entries'
     });
     applyLedgerBalancePatches(created[0]?.ledger_balances);
     updateCashInHand();
@@ -865,9 +865,9 @@ async function postCashbookEntriesBulk(payloads) {
 
 // The new-entry row at the bottom of the grid. An empty side is cash, so only
 // one of them has to name an account.
-function tryCreateCashbookEntryFromNewRow(row) {
+function tryCreateTransactionEntryFromNewRow(row) {
     const entryDate = String(row.entry_date || '').trim();
-    const amount = parseCashbookAmount(row.amount);
+    const amount = parseTransactionAmount(row.amount);
     if (amount === null || amount <= 0) return;
     if (!entryDate) {
         showToast('Select an entry date for this row.', 'error');
@@ -885,7 +885,7 @@ function tryCreateCashbookEntryFromNewRow(row) {
         return;
     }
 
-    createCashbookEntry({
+    createTransactionEntry({
         entry_date: entryDate,
         amount,
         description: String(row.description || '').trim(),
@@ -894,70 +894,69 @@ function tryCreateCashbookEntryFromNewRow(row) {
     });
 }
 
-async function updateCashbookEntry(entryId, updates) {
+async function updateTransactionEntry(entryId, updates) {
     if (!entryId || !updates || Object.keys(updates).length === 0) return;
-    
+
     // Optimistic update: apply changes immediately
-    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
-    const originalEntry = entryIndex >= 0 ? { ...cashbookEntries[entryIndex] } : null;
+    const entryIndex = transactionEntries.findIndex(e => e.id === entryId);
+    const originalEntry = entryIndex >= 0 ? { ...transactionEntries[entryIndex] } : null;
     if (entryIndex >= 0) {
-        cashbookEntries[entryIndex] = { ...cashbookEntries[entryIndex], ...updates };
-        renderCashbook();
+        transactionEntries[entryIndex] = { ...transactionEntries[entryIndex], ...updates };
+        renderTransactions();
     }
 
     try {
-        const updated = await apiJson(`/cashbook/entries/${entryId}`, {
+        const updated = await apiJson(`/transactions/entries/${entryId}`, {
             method: 'PUT',
             body: updates,
-            fallback: 'Failed to update cashbook entry'
+            fallback: 'Failed to update transaction entry'
         });
         applyLedgerBalancePatches(updated.ledger_balances);
         updateCashInHand();
 
         // Debounced: collapses a burst of edits into a single day refetch.
-        scheduleCashbookReload();
+        scheduleTransactionsReload();
         showToast('Entry updated', 'success');
     } catch (error) {
-        console.error('Error updating cashbook entry:', error);
+        console.error('Error updating transaction entry:', error);
         // Revert on failure
         if (originalEntry && entryIndex >= 0) {
-            cashbookEntries[entryIndex] = originalEntry;
-            renderCashbook();
+            transactionEntries[entryIndex] = originalEntry;
+            renderTransactions();
         }
         showToast('Failed to update entry', 'error');
     }
 }
 
-async function deleteCashbookEntry(entryId) {
+async function deleteTransactionEntry(entryId) {
     if (!entryId) return;
-    
+
     // Optimistic update: remove immediately
-    const entryIndex = cashbookEntries.findIndex(e => e.id === entryId);
-    const removedEntry = entryIndex >= 0 ? cashbookEntries[entryIndex] : null;
+    const entryIndex = transactionEntries.findIndex(e => e.id === entryId);
+    const removedEntry = entryIndex >= 0 ? transactionEntries[entryIndex] : null;
     if (entryIndex >= 0) {
-        cashbookEntries.splice(entryIndex, 1);
-        renderCashbook();
+        transactionEntries.splice(entryIndex, 1);
+        renderTransactions();
     }
 
     try {
-        const deleted = await apiJson(`/cashbook/entries/${entryId}`, {
+        const deleted = await apiJson(`/transactions/entries/${entryId}`, {
             method: 'DELETE',
-            fallback: 'Failed to delete cashbook entry'
+            fallback: 'Failed to delete transaction entry'
         });
         applyLedgerBalancePatches(deleted.ledger_balances);
         updateCashInHand();
 
         // Debounced: collapses a burst of deletes into a single day refetch.
-        scheduleCashbookReload();
+        scheduleTransactionsReload();
         showToast('Entry deleted', 'success');
     } catch (error) {
-        console.error('Error deleting cashbook entry:', error);
+        console.error('Error deleting transaction entry:', error);
         // Restore on failure
         if (removedEntry) {
-            cashbookEntries.push(removedEntry);
-            renderCashbook();
+            transactionEntries.push(removedEntry);
+            renderTransactions();
         }
         showToast('Failed to delete entry', 'error');
     }
 }
-

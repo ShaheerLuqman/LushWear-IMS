@@ -21,8 +21,8 @@ async function loadLedgers() {
 
 let bankLedgerBalances = []; // Store individual ledger balances for tooltip
 
-// Applies balance(s) returned by a cashbook entry write (see ledger_balances
-// in supabase_schema.sql / CashbookEntry.ledger_balances) to the in-memory
+// Applies balance(s) returned by a transaction entry write (see ledger_balances
+// in supabase_schema.sql / TransactionEntry.ledger_balances) to the in-memory
 // `ledgers` array, so updateCashInHand() reflects the write with no extra fetch.
 function applyLedgerBalancePatches(patches) {
     if (!patches) return;
@@ -41,7 +41,7 @@ const CREDIT_NORMAL_TYPES = ['Liability', 'Equity', 'Revenue'];
 
 // journal_entries.voucher_type, as shown on a ledger statement.
 const LEDGER_VOUCHER_LABELS = {
-    cashbook: 'Cashbook',
+    transaction: 'Transaction',
     bill: 'Bill',
     opening: 'Opening',
     manual: 'Journal',
@@ -65,10 +65,10 @@ function formatMoney(value) {
 }
 
 // Physical cash in hand = the balance of the Cash system ledger, which
-// every cashbook entry's unnamed side posts to (project_cashbook_entry_to_journal).
+// every transaction entry's unnamed side posts to (project_transaction_entry_to_journal).
 //
-// It was the cashbook's daily closing_balance, which only ever knew about
-// cashbook entries: a bill paid in cash, a manual journal line, or an opening
+// It was the daily closing_balance of transaction_daily_balances, which only ever knew about
+// transaction entries: a bill paid in cash, a manual journal line, or an opening
 // balance moved the ledger without moving that figure, so the headline drifted
 // from the account it claims to report.
 //
@@ -79,7 +79,7 @@ function getPhysicalCashInHand() {
     return parseFloat(getCashLedger()?.balance) || 0;
 }
 
-// The org's cash account, which every cashbook entry's unnamed side posts to.
+// The org's cash account, which every transaction entry's unnamed side posts to.
 // Created with the organization, so it is only ever missing mid-migration.
 function getCashLedger() {
     return ledgers.find(l => l.system_key === 'cash') || null;
@@ -100,7 +100,7 @@ function selectableLedgers() {
 
 // Both parts now come from the in-memory `ledgers` array, kept in sync by
 // loadLedgersList() on cold loads and applyLedgerBalancePatches() on every
-// cashbook write — no extra network call here.
+// transaction write — no extra network call here.
 function updateCashInHand() {
     const cashInHandLedgers = ledgers.filter(l => l.include_in_cash_in_hand);
 
@@ -610,7 +610,7 @@ function initLedgerDetailGrid() {
     const gridDiv = document.getElementById('ledgerDetailGrid');
     if (!gridDiv) return;
 
-    // Ledger detail grid is now read-only - entries come from cashbook
+    // Ledger detail grid is now read-only - entries come from transactions
     const columnDefs = [
         {
             headerName: 'Date',
@@ -630,7 +630,7 @@ function initLedgerDetailGrid() {
             field: 'voucher_type',
             width: 110,
             editable: false,
-            // What put this line on the account: a cashbook entry, a purchase
+            // What put this line on the account: a transaction entry, a purchase
             // bill, the opening balance, or a hand-written journal entry.
             valueFormatter: (params) => LEDGER_VOUCHER_LABELS[params.value] || params.value || '',
         },
@@ -639,14 +639,14 @@ function initLedgerDetailGrid() {
             field: 'debit',
             width: 140,
             editable: false,
-            valueFormatter: (params) => formatCashbookCell(params.value),
+            valueFormatter: (params) => formatTransactionCell(params.value),
         },
         {
             headerName: 'Credit (Rs)',
             field: 'credit',
             width: 140,
             editable: false,
-            valueFormatter: (params) => formatCashbookCell(params.value),
+            valueFormatter: (params) => formatTransactionCell(params.value),
         },
         {
             headerName: 'Balance (Rs)',
@@ -694,9 +694,9 @@ function initLedgerDetailGrid() {
     agGrid.createGrid(gridDiv, gridOptions);
 }
 
-// NOTE: Ledger entries are now read-only and derived from cashbook entries.
+// NOTE: Ledger entries are now read-only and derived from transaction entries.
 // The CRUD operations for ledger entries have been removed.
-// To add/edit/delete ledger entries, use the Cashbook with the appropriate folio.
+// To add/edit/delete ledger entries, use Transactions with the appropriate folio.
 
 const SHOPIFY_PRODUCT_SYNC_STORAGE_KEY = 'lushwear_last_shopify_product_sync';
 

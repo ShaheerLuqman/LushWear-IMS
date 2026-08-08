@@ -14,7 +14,7 @@ Confirmed with the user:
 - **Auth model**: a new `superadmin` role on a real user account (not a shared secret/token, not piggybacking on the existing LushWear admin).
 - **Scope**: create an org + its first admin user in one step, list orgs, and configure any org's Shopify/PostEx integration credentials during onboarding.
 - **UI location**: a separate standalone page, not part of the main business-facing frontend.
-- **Also confirmed**: the superadmin needs to be able to open an individual org's actual business app (orders/products/cashbook, etc.) for support/debugging — a "View as org" action.
+- **Also confirmed**: the superadmin needs to be able to open an individual org's actual business app (orders/products/transactions, etc.) for support/debugging — a "View as org" action.
 - **Also confirmed**: while impersonating, the superadmin can switch directly to a different org from within the main app, without returning to the portal tab each time.
 - **Explicitly deferred (separate decision)**: real business users belonging to more than one organization is out of scope for this pass — see `TODO.md`'s "Real multi-org user membership" item.
 

@@ -8,7 +8,7 @@
 function initGrids() {
     initProductsGrid();
     initOrdersGrid();
-    initCashbookGrid();
+    initTransactionsGrid();
     initLedgerDetailGrid();
     initTrialBalance();
     initBills();
@@ -45,7 +45,7 @@ function formatAmount(value) {
     return safeVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function parseCashbookAmount(value) {
+function parseTransactionAmount(value) {
     if (value === null || value === undefined) return null;
     const raw = String(value).replace(/,/g, '').trim();
     if (raw === '') return null;
@@ -54,7 +54,7 @@ function parseCashbookAmount(value) {
     return parsed;
 }
 
-function formatCashbookCell(value) {
+function formatTransactionCell(value) {
     if (value === null || value === undefined || value === '') return '';
     return formatAmount(value);
 }
@@ -571,13 +571,13 @@ PieceReceivedFloatingFilter.prototype.onParentModelChanged = function (parentMod
 
 // Maps an order's advance_status code to a colored indicator + tooltip.
 // Codes (kept in sync with backend app/advance_status.py):
-//   1 = no advance, 2 = Shopify only, 3 = cashbook only, 4 = match, 5 = mismatch
+//   1 = no advance, 2 = Shopify only, 3 = transaction only, 4 = match, 5 = mismatch
 function advanceStatusMeta(status) {
     switch (Number(status)) {
-        case 2: return { color: '#f59e0b', title: 'Shopify advance, no cashbook entry' };      // amber
-        case 3: return { color: '#3b82f6', title: 'Cashbook entry, no Shopify advance' };        // blue
-        case 4: return { color: '#22c55e', title: 'Advance matches (Shopify & cashbook, within Rs. 5)' };  // green
-        case 5: return { color: '#ef4444', title: 'Advance mismatch (Shopify vs cashbook differ by Rs. 5+)' }; // red
+        case 2: return { color: '#f59e0b', title: 'Shopify advance, no transaction entry' };      // amber
+        case 3: return { color: '#3b82f6', title: 'Transaction entry, no Shopify advance' };        // blue
+        case 4: return { color: '#22c55e', title: 'Advance matches (Shopify & transaction, within Rs. 5)' };  // green
+        case 5: return { color: '#ef4444', title: 'Advance mismatch (Shopify vs transaction differ by Rs. 5+)' }; // red
         case 1:
         default: return { color: '#d1d5db', title: 'No advance amount' };                        // grey
     }
@@ -921,7 +921,7 @@ function initOrdersGrid() {
     });
 }
 
-function isCashbookNewRow(data) {
+function isTransactionNewRow(data) {
     return data && data.id && String(data.id).startsWith('__new_');
 }
 
@@ -947,7 +947,7 @@ function createFolioCellRenderer(params, accountField) {
     const displayText = shownLedger ? shownLedger.name : emptyLabel;
 
     // Cash on both sides moves nothing, so a new row still needs one account.
-    const isNewRow = isCashbookNewRow(params.data);
+    const isNewRow = isTransactionNewRow(params.data);
     const hasOtherData = (params.data.description && String(params.data.description).trim() !== '') ||
                          (params.data.amount != null && params.data.amount > 0);
     const needsHighlight = isNewRow && hasOtherData
@@ -1067,15 +1067,15 @@ function createFolioCellRenderer(params, accountField) {
             }
 
 
-            if (params.data.id && !isCashbookNewRow(params.data)) {
+            if (params.data.id && !isTransactionNewRow(params.data)) {
                 // Update existing entry
-                updateCashbookEntry(params.data.id, { [accountField]: id || null });
-            } else if (isCashbookNewRow(params.data) && id) {
+                updateTransactionEntry(params.data.id, { [accountField]: id || null });
+            } else if (isTransactionNewRow(params.data) && id) {
                 // For new entries, check if all required fields are filled and trigger auto-save
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
                 if (hasDescription && hasAmount) {
-                    tryCreateCashbookEntryFromNewRow(params.data);
+                    tryCreateTransactionEntryFromNewRow(params.data);
                 }
             }
             closeDropdown();
@@ -1158,11 +1158,11 @@ function createFolioCellRenderer(params, accountField) {
 //
 // Always an element, never a string - AG Grid puts a returned string through
 // innerHTML, which would render a description someone typed as markup.
-function cashbookCellWithPlaceholder(params, placeholder) {
+function transactionCellWithPlaceholder(params, placeholder) {
     const shown = params.valueFormatted != null ? params.valueFormatted : '';
     const span = document.createElement('span');
-    if (shown === '' && isCashbookNewRow(params.data)) {
-        span.className = 'cashbook-placeholder';
+    if (shown === '' && isTransactionNewRow(params.data)) {
+        span.className = 'transaction-placeholder';
         span.textContent = placeholder;
     } else {
         span.textContent = shown;
@@ -1170,7 +1170,7 @@ function cashbookCellWithPlaceholder(params, placeholder) {
     return span;
 }
 
-function buildCashbookGridColumns() {
+function buildTransactionGridColumns() {
     return [
         {
             headerName: 'Description',
@@ -1178,23 +1178,23 @@ function buildCashbookGridColumns() {
             flex: 1,
             editable: () => isEditingAllowed(),
             cellClass: (params) => {
-                if (isCashbookNewRow(params.data)) {
+                if (isTransactionNewRow(params.data)) {
                     // Highlight if amount is filled but description is empty
                     const hasAmount = params.data.amount != null && params.data.amount > 0;
                     const hasDescription = params.data.description && String(params.data.description).trim() !== '';
-                    if (hasAmount && !hasDescription) return 'cashbook-required-field';
+                    if (hasAmount && !hasDescription) return 'transaction-required-field';
                 }
                 return '';
             },
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
-            cellRenderer: (params) => cashbookCellWithPlaceholder(params, 'What was this for?'),
+            cellRenderer: (params) => transactionCellWithPlaceholder(params, 'What was this for?'),
             valueSetter: (params) => {
                 const val = String(params.newValue ?? '').trim();
                 if ((params.data.description || '') === val) return false;
                 params.data.description = val;
-                if (!isCashbookNewRow(params.data)) {
-                    updateCashbookEntry(params.data.id, { description: val });
+                if (!isTransactionNewRow(params.data)) {
+                    updateTransactionEntry(params.data.id, { description: val });
                 } else if (params.api) {
                     // Refresh cells to update highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
@@ -1233,33 +1233,33 @@ function buildCashbookGridColumns() {
             filter: 'agNumberColumnFilter',
             editable: () => isEditingAllowed(),
             cellClass: (params) => {
-                if (isCashbookNewRow(params.data)) {
+                if (isTransactionNewRow(params.data)) {
                     // Highlight if description is filled but amount is empty
                     const hasAmount = params.data.amount != null && params.data.amount > 0;
                     const hasDescription = params.data.description && String(params.data.description).trim() !== '';
-                    if (hasDescription && !hasAmount) return 'cashbook-required-field';
+                    if (hasDescription && !hasAmount) return 'transaction-required-field';
                 }
                 return '';
             },
             cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => formatCashbookCell(params.value),
-            cellRenderer: (params) => cashbookCellWithPlaceholder(params, '0.00'),
+            valueFormatter: (params) => formatTransactionCell(params.value),
+            cellRenderer: (params) => transactionCellWithPlaceholder(params, '0.00'),
             valueSetter: (params) => {
-                if (isCashbookNewRow(params.data)) {
-                    params.data.amount = parseCashbookAmount(params.newValue);
+                if (isTransactionNewRow(params.data)) {
+                    params.data.amount = parseTransactionAmount(params.newValue);
                     // Refresh cells to update highlighting
                     if (params.api) {
                         params.api.refreshCells({ rowNodes: [params.node], force: true });
                     }
                     return true;
                 }
-                const next = parseCashbookAmount(params.newValue);
+                const next = parseTransactionAmount(params.newValue);
                 if (next === null || next <= 0) return false;
                 params.data.amount = next;
                 // Only the amount changed — the entry's two sides are edited
                 // through their own cells, so resending them here would just
                 // risk overwriting one with a stale value.
-                updateCashbookEntry(params.data.id, { amount: next });
+                updateTransactionEntry(params.data.id, { amount: next });
                 return true;
             }
         },
@@ -1270,14 +1270,14 @@ function buildCashbookGridColumns() {
             filter: false,
             sortable: false,
             cellRenderer: (params) => {
-                if (isCashbookNewRow(params.data)) return '';
+                if (isTransactionNewRow(params.data)) return '';
                 const btn = document.createElement('button');
-                btn.className = 'cashbook-delete-btn';
+                btn.className = 'transaction-delete-btn';
                 btn.innerHTML = '<i class="fa-solid fa-trash"></i>';
                 btn.title = 'Delete entry';
                 btn.addEventListener('click', (e) => {
                     e.stopPropagation();
-                    deleteCashbookEntry(params.data.id);
+                    deleteTransactionEntry(params.data.id);
                 });
                 return btn;
             }
@@ -1285,12 +1285,12 @@ function buildCashbookGridColumns() {
     ];
 }
 
-function initCashbookGrid() {
-    const gridDiv = document.getElementById('cashbookGrid');
+function initTransactionsGrid() {
+    const gridDiv = document.getElementById('transactionsGrid');
     if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: buildCashbookGridColumns(),
+        columnDefs: buildTransactionGridColumns(),
         rowData: [],
         defaultColDef: {
             sortable: true,
@@ -1305,19 +1305,19 @@ function initCashbookGrid() {
         singleClickEdit: true,
         stopEditingWhenCellsLoseFocus: true,
         getRowId: (params) => params.data.id,
-        getRowClass: (params) => (isCashbookNewRow(params.data) ? 'cashbook-new-row' : ''),
+        getRowClass: (params) => (isTransactionNewRow(params.data) ? 'transaction-new-row' : ''),
         onGridReady: (params) => {
-            cashbookGridApi = params.api;
+            transactionsGridApi = params.api;
         },
         onCellValueChanged: (params) => {
-            if (isCashbookNewRow(params.data)) {
+            if (isTransactionNewRow(params.data)) {
                 // Auto-save once the row is complete: an account on at least one
                 // side (the other one being cash), plus a description and amount.
                 const hasDescription = params.data.description && String(params.data.description).trim() !== '';
                 const hasAmount = params.data.amount != null && params.data.amount > 0;
                 const hasAccount = !!(params.data.from_account_id || params.data.to_account_id);
                 if (hasDescription && hasAmount && hasAccount) {
-                    tryCreateCashbookEntryFromNewRow(params.data);
+                    tryCreateTransactionEntryFromNewRow(params.data);
                 } else if (params.api) {
                     // Refresh the row to update required field highlighting
                     params.api.refreshCells({ rowNodes: [params.node], force: true });

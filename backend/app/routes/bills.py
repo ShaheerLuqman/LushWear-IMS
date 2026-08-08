@@ -4,7 +4,7 @@ A supplier is a ledger, not a separate contact, so a bill credits the supplier's
 own account and there is no Accounts Payable control account.
 
 Payments are NOT recorded here. A bill records what is owed; the money leaving
-is an ordinary cashbook entry against the supplier's ledger, made when it
+is an ordinary transaction entry against the supplier's ledger, made when it
 actually moves. Settlement is derived from that ledger balance, applied to the
 supplier's bills oldest-first (the bills_with_paid view).
 

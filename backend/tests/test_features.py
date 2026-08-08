@@ -89,7 +89,7 @@ class TestRouterGateIntegration:
     just correct in isolation - a disabled feature 403s before the route's
     own logic (and its own Supabase fixtures) ever runs."""
 
-    def test_disabled_finance_blocks_cashbook_router(self, make_client):
+    def test_disabled_finance_blocks_transactions_router(self, make_client):
         client = make_client({
             "system_organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders"]}],
         })

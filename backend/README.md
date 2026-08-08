@@ -21,7 +21,7 @@ server-side; integrates with Shopify and PostEx.
 - `POST /api/auth/login` — exchange email+password for a session token (the
   old shared-PIN `/api/app-pin/verify`/`/setup` are retired — see
   ORGANIZATIONS_USERS_PLAN.md)
-- `/api/*` — inventory, orders, cashbook, ledger (require `Authorization: Bearer <token>`)
+- `/api/*` — inventory, orders, transactions, ledger (require `Authorization: Bearer <token>`)
 
 This folder is the `backend/` subtree of the app monorepo
 (`ShaheerLuqman/LushWear-IMS`).

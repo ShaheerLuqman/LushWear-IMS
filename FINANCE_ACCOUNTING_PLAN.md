@@ -1,6 +1,6 @@
 # Finance & Bookkeeping — Review and Plan
 
-Review of the existing Cashbook and Ledgers modules against standard bookkeeping
+Review of the existing Transactions and Ledgers modules against standard bookkeeping
 practice, plus a phased plan to grow them into a complete small-business finance
 module.
 
@@ -22,8 +22,8 @@ books that are *correct* without asking the user to think in debits and credits.
 | 0 — Fix the current module | **shipped** |
 | 1 — Chart of accounts + double-entry core | **shipped** |
 | 2 — Purchase bills (AP) | **shipped** |
-| 2.5 — Cashbook names both of its sides | **shipped** |
-| 3 — Finish the cashbook cutover | next |
+| 2.5 — Transactions name both of its sides | **shipped** |
+| 3 — Finish the transactions cutover | next |
 | 4 — Statements from the journal | after 3 |
 | 5 — Orders → journal (revenue + COGS) | the last structural gap |
 | 6 — Controls | last |
@@ -36,13 +36,13 @@ created with each organization (Cash, Opening Balance Equity, Orders,
 Inventory); Tax on Purchases appears the first time a bill carries tax.
 
 Two documents post into the journal. A **bill** posts `Dr Inventory` /
-`Dr Tax on Purchases` / `Cr supplier` on receive, and moves stock. A **cashbook
+`Dr Tax on Purchases` / `Cr supplier` on receive, and moves stock. A **transaction
 entry** names both of its accounts and is projected to a journal entry by
-trigger. Payments are ordinary cashbook entries against the supplier's ledger;
+trigger. Payments are ordinary transaction entries against the supplier's ledger;
 what a bill still owes is derived FIFO from that ledger rather than stored.
 
 Reports reading the journal: **Trial Balance**, **ledger statement**, **AP
-Ageing**. Month Summary still blends order data with cashbook data and is an
+Ageing**. Month Summary still blends order data with transaction data and is an
 operations report, not a financial statement.
 
 **The one incoherence in the current books:** Inventory is only ever debited.
@@ -61,19 +61,19 @@ None of this is still true: the implicit cash side went in Phase 1, and
 `folio` / `entry_type` in Phase 2.5. It is kept because it is why the design is
 shaped the way it is, and Part 3 argues from it.
 
-`cashbook_entries` is a single table where each row has **one** `folio` (a
+`transaction_entries` is a single table where each row has **one** `folio` (a
 ledger) and **one** `entry_type` (`credit` / `debit`). Two different DB functions
 read that same row with **opposite signs**:
 
 | Function | Formula | Effect |
 |---|---|---|
-| `recalc_cashbook_daily_balances` | `closing = opening + Σcredit − Σdebit` | `credit` **increases** the cash pot |
+| `recalc_transaction_daily_balances` | `closing = opening + Σcredit − Σdebit` | `credit` **increases** the cash pot |
 | `recalc_ledger_balance` | `balance = opening + Σdebit − Σcredit` | `credit` **decreases** the folio ledger |
 
 So the system *is* doing double entry — but with an **implicit, invisible cash
 account** as the permanent other side of every transaction. Arithmetically it
 holds together (the cash closing balance is always exactly the negative of the
-sum of all ledger movements). Conceptually it is a **single-entry cashbook**,
+sum of all ledger movements). Conceptually it is a **single-entry system**,
 and that limitation is the root cause of most of what follows.
 
 ---
@@ -93,25 +93,25 @@ not**, and neither does a date-ranged account statement with opening and closing
 figures — the ledger statement always runs from the beginning.
 
 "Month Summary" is an *order* report, not a financial statement: it blends
-order-level data with cashbook spending, so it cannot be reconciled against the
+order-level data with transaction spending, so it cannot be reconciled against the
 ledgers. Phase 4, with the Balance Sheet gated behind Phase 5 — see the note on
 Inventory at the top of this document.
 
 #### 🟠 C1. Posted entries are freely editable and hard-deletable
 
-`PUT /cashbook/entries/{id}` and `DELETE /cashbook/entries/{id}` still mutate and
+`PUT /transactions/entries/{id}` and `DELETE /transactions/entries/{id}` still mutate and
 remove history in place. Bookkeeping convention is that a posted transaction is
 corrected by a **reversing entry**, never by editing or erasing, so the audit
 trail survives.
 
-`cashbook_entry_audit_log` captures deletions only, with no "who" — a gap
+`transaction_entry_audit_log` captures deletions only, with no "who" — a gap
 recorded in [TODO.md](TODO.md). **Edits leave no trace at all**, which is the
 more dangerous half: an amount can be changed after a month has been reported on
 and nothing anywhere records it.
 
 Narrowed since the review: a document's journal entry is now *replaced*
 idempotently when it is re-posted, and a bill has `unreceive` rather than an
-edit-in-place path. The exposure is the cashbook's own write path.
+edit-in-place path. The exposure is the transaction's own write path.
 
 #### 🟠 C2. No period locking, no financial year
 
@@ -164,7 +164,7 @@ Worth saying explicitly so they don't get "fixed" during the rework:
 - **No signed amounts.** `amount > 0`, with the direction carried by the two
   named sides (it was a direction flag at review time) — standard either way.
 - Balances maintained by DB triggers rather than application code — right call;
-  it survives writes that bypass the API. Same argument keeps the cashbook's
+  it survives writes that bypass the API. Same argument keeps the transaction's
   journal projection in a trigger (Phase 3).
 - Idempotency keys on entry creation — genuinely good, keep it.
 - A delete-audit trigger at the DB level rather than in the route — right layer.
@@ -190,7 +190,7 @@ Grouped by whether it's foundational, the modules you asked about, or optional.
 | # | Gap | Status | Notes |
 |---|---|---|---|
 | 5 | **Purchase Bills (AP)** — *the one you named* | **done** | Header + lines + tax + totals + `draft`/`received`/`cancelled` + due date + number series + stock on receive. Attachments and bill PDFs deferred. |
-| 6 | **Payments / receipts against a document** | **superseded** | No allocation table: a payment is a cashbook entry against the supplier, and settlement is derived FIFO from that ledger. Partial payments and AP ageing both work. |
+| 6 | **Payments / receipts against a document** | **superseded** | No allocation table: a payment is a transaction entry against the supplier, and settlement is derived FIFO from that ledger. Partial payments and AP ageing both work. |
 | 7 | **Sales Invoices (AR)** | **open** | Shopify covers D2C; no way to invoice a wholesale/B2B customer, no AR balance. Gated on open question 3. |
 | 8 | **Expenses with real categories** | **done** | `report_category` replaced the name-substring buckets. |
 | 9 | **Inventory ↔ accounting link (COGS + stock valuation)** | **half** | Bills now debit Inventory and move stock. Nothing credits it — delivered orders post no COGS — so the asset only grows. The largest remaining gap; Phase 5. |
@@ -203,7 +203,7 @@ Grouped by whether it's foundational, the modules you asked about, or optional.
 |---|---|---|
 | 12 | **Fiscal year + period locking** (C2) | open |
 | 13 | **Reversing entries instead of edit/delete** (C1) | open |
-| 14 | **`created_by` attribution on every financial write** | partly — bills carry it; cashbook entries and journal entries do not |
+| 14 | **`created_by` attribution on every financial write** | partly — bills carry it; transaction entries and journal entries do not |
 | 15 | **Bank reconciliation** — mark entries reconciled against a statement, then lock | open |
 | 16 | **Number series** — per org, gap-free | partly — bills have one; journal vouchers do not |
 | 17 | **Opening-balance entry + year-end closing entry** | half — the opening entry posts (A4); no year-end close |
@@ -249,7 +249,7 @@ Why this and not the pure-Akaunting route, given "keep it simple":
 - Correct-by-construction. A `Σdebit = Σcredit` DB constraint makes A1–A5
   structurally impossible rather than a discipline the code has to remember.
 - **Retrofitting a general ledger after AP, AR, and inventory exist is far more
-  expensive than doing it now**, while the only financial data is cashbook
+  expensive than doing it now**, while the only financial data is transaction
   entries and a handful of ledgers. This is the cheapest moment this change will
   ever be.
 - It is *less* code than it sounds: two tables plus a posting helper replaces the
@@ -259,7 +259,7 @@ Why this and not the pure-Akaunting route, given "keep it simple":
   simplifying the data model into something that can't represent a credit
   purchase.
 
-The cost is one migration of existing cashbook data (Phase 1), which is small
+The cost is one migration of existing transaction data (Phase 1), which is small
 and mechanical.
 
 ### 3.1 Balance presentation — Dr/Cr for now
@@ -315,12 +315,12 @@ changes go through versioned Supabase migrations**, never hand-edits to
 Closed A2, A3, B1, B3, B4 and C6. What later phases need to know:
 
 - **The sign convention now lives in one place** — the "THE TWO PERSPECTIVES"
-  block heading the Cashbook & ledgers section of `supabase_schema.sql`. Every
+  block heading the Transactions & ledgers section of `supabase_schema.sql`. Every
   deliberately-crossed filter in the codebase points back to it by name.
 - **`incoming` / `outgoing` are gone** from `frontend/` and `backend/app/`.
-  Cashbook grids and the entry modal are now Debit (receipts) / Credit
+  Transaction grids and the entry modal are now Debit (receipts) / Credit
   (payments); the ledger statement was already correct. Migration
-  `20260801030000` moved `cashbook_daily_balances.total_credit`/`total_debit`
+  `20260801030000` moved `transaction_daily_balances.total_credit`/`total_debit`
   onto the cash side to match.
 - **Bulk-parser tokens were left as they were** — folio-side and already Dr/Cr,
   and changing input syntax would break users' saved paste formats.
@@ -369,7 +369,7 @@ and `ledger_balances` derives from it. What later phases need to know:
   the same function with `p_source_type='bill'`.
 - **`source_type` / `source_id` own the link back to a document**, and a partial
   unique index enforces one entry per source row. Re-posting a document replaces
-  its entry instead of double-counting it — that is how the cashbook projection
+  its entry instead of double-counting it — that is how the transaction projection
   stays idempotent, and Phase 2 should use it the same way.
 - **Non-cash transactions are now possible** — the A1 unlock. `POST
   /api/journal/entries` takes any balanced set of lines. There is deliberately
@@ -398,15 +398,15 @@ Three deviations from the plan as written, all deliberate:
   with none. `tax_on_purchases` stayed on-demand — `receive_bill` creates it the
   first time a bill carries tax. `accounts_payable` was never seeded: Phase 2
   decided against a control account entirely.
-- **The Cashbook still writes `cashbook_entries`,** projected into the journal by
+- **Transactions still write `transaction_entries`,** projected into the journal by
   trigger, rather than being rewritten onto journal lines. That rewrite is the
-  whole cashbook write path (create/bulk/update/delete, daily-balance triggers,
+  whole transaction write path (create/bulk/update/delete, daily-balance triggers,
   advance reconciliation) and would have landed unverifiable alongside the schema
   and the data migration. Projection gets the same single source of truth for
   balances and reporting with none of that risk. To finish the cutover later:
-  drop `cashbook_entries_journal_trigger` and post from the API directly.
+  drop `transaction_entries_journal_trigger` and post from the API directly.
 
-**`cash` is created, never adopted from a same-named ledger.** The cashbook's
+**`cash` is created, never adopted from a same-named ledger.** The transaction's
 implicit cash pot is a different account from any user-made ledger called
 "Cash" — that one has entries posted against it as a folio, and merging the two
 would double-count every one of them.
@@ -454,15 +454,15 @@ Two further decisions taken while building it:
 
 - **No per-line account on a bill.** Every line is stock and posts to Inventory.
   A bill records what is *owed*, not how spending is categorised; anything paid
-  on the spot (ads, rent, packaging) stays a cashbook entry against its expense
+  on the spot (ads, rent, packaging) stays a transaction entry against its expense
   ledger, which is fewer steps and already worked. Migration
   `20260801110000` removed the per-line account after it was first built.
 - **No `bill_payments` table** (migration `20260801120000` removed the one built
   first, along with `pay_bill()` and the Pay button). A payment is an ordinary
-  cashbook entry against the supplier's ledger, and settlement is **derived FIFO**
+  transaction entry against the supplier's ledger, and settlement is **derived FIFO**
   from that account: its debits are what has been settled, applied to its
   received bills oldest-first. Self-correcting — whatever is entered in the
-  cashbook, the ledger is the truth and the report follows it — and a payment
+  transaction, the ledger is the truth and the report follows it — and a payment
   does not have to name a bill, which is how paying a supplier a round sum
   actually behaves. `bills_with_paid` is the view; only `draft` / `received` /
   `cancelled` are stored.
@@ -471,10 +471,10 @@ Deferred, and why: **attachments** (needs a Supabase storage bucket, which is
 not configured) and **bill PDFs** (the PDF service exists but a bill template is
 its own piece of work, and nothing downstream needs it yet).
 
-### Phase 2.5 — The cashbook names both of its sides — **shipped**
+### Phase 2.5 — Transactions name both of its sides — **shipped**
 
 Not in the original plan; it fell out of Phase 2. Paying a supplier from a bank
-account is not a cash transaction, but the cashbook could only express *one*
+account is not a cash transaction, but the transaction could only express *one*
 account plus an implicit cash side, so Cash in Hand absorbed every transfer that
 never touched cash.
 
@@ -491,11 +491,11 @@ What this closed beyond its own goal:
   with the concept.
 - **The A2 sharp edge dissolves.** A side is an account, not a direction, so no
   label has to describe two accounts at once.
-- **Cash in Hand became the Cash account's own balance.** It was the cashbook's
-  daily `closing_balance`, which knows only about cashbook entries — a bill paid
+- **Cash in Hand became the Cash account's own balance.** It was the transaction's
+  daily `closing_balance`, which knows only about transaction entries — a bill paid
   in cash or a manual journal line moved the ledger without moving that figure.
   The headline now reads `ledger_balances` for `system_key = 'cash'`, so the two
-  can no longer disagree, and a cashbook write refreshes it by including the cash
+  can no longer disagree, and a transaction write refreshes it by including the cash
   account in the balances it returns.
 
 The UI followed: the two mirrored Debit/Credit grids showed the *same* entries
@@ -508,7 +508,7 @@ account pickers, because leaving a side empty already means it.
 
 ---
 
-### Phase 3 — Finish the cashbook cutover — **next**
+### Phase 3 — Finish the transactions cutover — **next**
 
 Small, mechanical, and it removes a class of bug rather than adding a feature.
 Everything here is paying off debt Phase 1 and 2.5 knowingly took on.
@@ -520,22 +520,22 @@ Everything here is paying off debt Phase 1 and 2.5 knowingly took on.
       "Cash" back to `NULL`, `cashSideLabel()` / `selectableLedgers()`, and a
       grid cell that rendered the cash side as "no account chosen". Backfill both
       columns per org, make them `NOT NULL`, and the CHECK collapses to *the two
-      sides differ*. `project_cashbook_entry_to_journal` becomes a straight copy
+      sides differ*. `project_transaction_entry_to_journal` becomes a straight copy
       with no `COALESCE` and no "org has no cash account" exception. The audit-log
       columns need the same backfill; bulk text entry defaults the unwritten side
       to cash instead of `NULL`.
-- [ ] **Retire `cashbook_daily_balances`.** Nothing reads it any more — the grid
+- [ ] **Retire `transaction_daily_balances`.** Nothing reads it any more — the grid
       shows entries only and Cash in Hand comes from the ledger. It is a second
       cache of a number `ledger_balances` already holds, kept current by its own
       trigger, and free to drift from it. Drop the table, its triggers,
-      `recalc_cashbook_daily_balances()`, and `daily_balance` from
-      `GET /cashbook/day/{date}`. If a per-day cash figure is wanted later it is a
+      `recalc_transaction_daily_balances()`, and `daily_balance` from
+      `GET /transactions/day/{date}`. If a per-day cash figure is wanted later it is a
       query over the cash account's journal lines, not a stored total.
 - [ ] **Keep the projection trigger — this supersedes the Phase 1 note** that
       said to finish the cutover by posting from the API directly. The trigger
       survives writes that bypass the API, which is the same argument that put
       balances in triggers in the first place; moving posting into the route
-      would trade that for nothing. `cashbook_entries` stays the document, the
+      would trade that for nothing. `transaction_entries` stays the document, the
       journal stays the record.
 
 ### Phase 4 — Statements from the journal
@@ -560,7 +560,7 @@ reports do not. All as Postgres RPCs, consistent with `get_month_summary_*` and
       `recalc_ledger_balance` and by `get_trial_balance`'s `net <> 0` filter, and
       neither was a decision anyone made.
 - [ ] **Decide what happens to Month Summary.** It blends order counts with
-      cashbook spending and cannot be reconciled against the ledgers. Once a real
+      transaction spending and cannot be reconciled against the ledgers. Once a real
       P&L exists, either it keeps its order-operations half and drops the money
       half, or it is retired. Not a code change until the P&L is trusted.
 
@@ -593,9 +593,9 @@ Last deliberately: controls constrain a model, and the model is still changing.
 - [ ] **Fiscal years + period locking** — block posting into a closed period (C2).
 - [ ] **Reversing entries** replace edit/delete on posted transactions (C1). Note
       that `post_journal_entry` already replaces a document's entry idempotently,
-      so this is about the *cashbook's* edit/delete path, not the journal's.
-- [ ] **`created_by` everywhere** — bills carry it; cashbook and journal entries
-      do not, and the cashbook audit log still records deletions without a who.
+      so this is about the *transaction's* edit/delete path, not the journal's.
+- [ ] **`created_by` everywhere** — bills carry it; transaction and journal entries
+      do not, and the transaction audit log still records deletions without a who.
 - [ ] **Bank reconciliation** — reconcile against a statement, then lock.
 - [ ] **Soft delete** on financial records (C5).
 - [ ] **Recurring transactions** — rent, salaries, subscriptions.
@@ -621,14 +621,14 @@ Last deliberately: controls constrain a model, and the model is still changing.
    whether the deferred plain-language wording in 3.1 ever replaces Dr/Cr, and
    how much Phase 4's statements can assume of their reader.
 5. **Historical data** — ~~cut-over or full migration?~~ **Answered by shipping:**
-   all existing cashbook history was migrated into the journal, and the
+   all existing transaction history was migrated into the journal, and the
    from/to backfill carried it again in Phase 2.5. The journal is complete from
    the beginning of the data.
 
 New, arising from the current state:
 
 6. **Does Month Summary survive the P&L?** See Phase 4. It is the only report
-   that blends order data with cashbook data, and once a real P&L exists it
+   that blends order data with transaction data, and once a real P&L exists it
    either sheds its money half or is retired.
 7. **What should `include_in_cash_in_hand` mean now?** It is a free checkbox
    deciding which accounts join Cash in the header figure. With
@@ -636,3 +636,4 @@ New, arising from the current state:
    two overlapping notions of "this is liquid" — worth collapsing to one before
    the Balance Sheet has to pick a definition of cash.
 6. **Fixed assets** — confirming these are out of scope, per Part 2.
+ As a payable aging page purpose payment. Transaction As a payable aging page purpose payment. Transaction accounting As a payable aging page purpose payment. Transaction accounting professional As a payable aging page, purpose payment transaction accounting professional. As a payable aging page, purpose payment transaction accounting professional. nine As a payable aging page, purpose payment transaction accounting professional. nine fourteen ninety As a payable aging page, purpose payment transaction accounting professional. nine fourteen ninety seven As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen Shop As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen Shopify As a payable aging page purpose payment. Transaction accounting professional nine fourteen ninety seven nine fourteen Shopify settings Shopify black and white and white purpose or parking purple

@@ -2,7 +2,7 @@
 // picker lists party ledgers. Lines carry no account: a bill is always for
 // stock and posts to Inventory.
 //
-// Payments are not recorded here — they are ordinary cashbook entries against
+// Payments are not recorded here — they are ordinary transaction entries against
 // the supplier's ledger, made when the money actually moves. What each bill
 // still owes is derived from that ledger balance, applied oldest-bill-first.
 

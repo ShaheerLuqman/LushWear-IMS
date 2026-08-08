@@ -102,12 +102,12 @@ function applyFeatureVisibility() {
 // State
 let products = [];
 let orders = [];
-let cashbookEntries = [];
-let cashbookSelectedDate = null;
+let transactionEntries = [];
+let transactionSelectedDate = null;
 let currentView = 'orders';
 let productsGridApi = null;
 let ordersGridApi = null;
-let cashbookGridApi = null;
+let transactionsGridApi = null;
 let ledgers = [];
 let ledgerEntries = [];
 let currentLedger = null;
@@ -652,7 +652,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initOrdersPeriodFilter();
     initOrdersDateRangeButton();
     initOrdersActions();
-    initCashbookActions();
+    initTransactionsActions();
     initLedgerModals();
     initMonthSummaryNav();
     initGrids();
@@ -693,14 +693,14 @@ document.addEventListener('DOMContentLoaded', async () => {
     // a hidden/blocked view.
     const ordersEnabled = hasFeature('orders');
     const financeEnabled = hasFeature('finance');
-    const defaultView = ordersEnabled ? 'orders' : financeEnabled ? 'cashbook' : 'settings';
+    const defaultView = ordersEnabled ? 'orders' : financeEnabled ? 'transactions' : 'settings';
 
     let dataLoaded = false;
 
     // If prefetch was started during login, await that promise; otherwise fetch now.
     // Products aren't fetched here - nothing on the landing (Orders) view needs them, and
     // Products/Dashboard fetch their own fresh copy when visited (see switchView).
-    const loadDataPromise = (ordersEnabled ? (_prefetchOrdersPromise || loadOrders()) : financeEnabled ? loadCashbook() : Promise.resolve())
+    const loadDataPromise = (ordersEnabled ? (_prefetchOrdersPromise || loadOrders()) : financeEnabled ? loadTransactions() : Promise.resolve())
         .then(() => {
             dataLoaded = true;
         })
@@ -758,11 +758,11 @@ async function applyStartupDeepLink() {
     }
     // The entry modal needs the ledger list, so load before opening rather than
     // letting switchView kick off an un-awaited fetch.
-    switchView('cashbook', { skipReload: true });
-    await loadCashbook();
-    openCashbookEntryModal();
+    switchView('transactions', { skipReload: true });
+    await loadTransactions();
+    openTransactionEntryModal();
     if (action === 'bulk-entry') {
-        setCashbookEntryMode('bulk');
+        setTransactionEntryMode('bulk');
     }
     // Drop the query/hash so a refresh or back-navigation doesn't re-open the modal.
     history.replaceState(null, '', window.location.pathname);

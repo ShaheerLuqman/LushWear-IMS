@@ -99,7 +99,7 @@ async def get_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
         raise HTTPException(status_code=404, detail="Ledger not found")
 
     # Journal lines, matching what delete_ledger actually refuses on: an account
-    # can be posted to by a bill or a manual entry as well as by the cashbook.
+    # can be posted to by a bill or a manual entry as well as by a transaction.
     lines_resp = (
         org_table(supabase, org_id, "finances_journal_lines")
         .select("id")
@@ -159,7 +159,7 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
             detail=f"{SYSTEM_LEDGER_LABELS.get(role, role)} is a system account and cannot be deleted.",
         )
 
-    # Journal lines, not cashbook entries: since Phase 1 an account can also be
+    # Journal lines, not transaction entries: since Phase 1 an account can also be
     # posted to by a bill or a manual entry, and those would otherwise only be
     # caught by the ON DELETE RESTRICT foreign key, as a raw database error.
     lines_resp = (
@@ -185,10 +185,10 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
 async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id)):
     """This account's journal lines, as a statement.
 
-    Reads the journal rather than cashbook_entries, so everything that moves the
-    balance also explains itself: cashbook entries, purchase bills, manual
+    Reads the journal rather than transaction_entries, so everything that moves the
+    balance also explains itself: transaction entries, purchase bills, manual
     journal entries and the opening balance are all lines on the same account.
-    Reading cashbook_entries left a received bill changing the supplier's balance
+    Reading transaction_entries left a received bill changing the supplier's balance
     with no row to account for it.
 
     The opening balance arrives as a real line here (Phase 1 posts it against

@@ -135,9 +135,9 @@ function exportCurrentGridToExcel() {
     let sheetCount = 0;
     const dateStamp = new Date().toISOString().slice(0, 10);
 
-    if (currentView === 'cashbook') {
-        const rows = _buildExportSheetRows(cashbookGridApi);
-        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Cashbook');
+    if (currentView === 'transactions') {
+        const rows = _buildExportSheetRows(transactionsGridApi);
+        XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Transactions');
         sheetCount = 1;
     } else if (currentView === 'orders') {
         const rows = _buildExportSheetRows(ordersGridApi);

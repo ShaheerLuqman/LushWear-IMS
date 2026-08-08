@@ -61,7 +61,7 @@ backend/
     ├── config.py           # Settings from env (Supabase + Shopify)
     ├── database.py         # lazy singleton Supabase client
     ├── auth.py             # JWT issue/verify (require_auth dependency)
-    ├── models.py           # Pydantic schemas (products/orders/cashbook/ledger)
+    ├── models.py           # Pydantic schemas (products/orders/transactions/ledger)
     ├── logging_config.py   # console logging; quiets httpx per-request URLs
     ├── advance_status.py   # advance reconciliation logic
     ├── money.py            # round-half-up money helper
@@ -86,14 +86,14 @@ backend/
         ├── org_settings.py # per-org Shopify/PostEx credentials (admin-only)
         ├── products.py     # products + variants + Shopify product sync   (671)
         ├── orders.py       # orders, Shopify sync, summaries             (2451)
-        ├── cashbook.py     # cashbook entries + daily balances            (298)
-        └── ledger.py       # ledgers (entries derived from cashbook)      (129)
+        ├── transactions.py # transaction entries + daily balances         (348)
+        └── ledger.py       # ledgers (entries derived from transactions)  (129)
 ```
 
 ### Request lifecycle
 
 1. `main.py` builds the app, adds **CORS**, and mounts routers under `/api`.
-2. Every business router (`products`, `orders`, `cashbook`, `ledger`) is mounted
+2. Every business router (`products`, `orders`, `transactions`, `ledger`) is mounted
    with a global `Depends(require_auth)`; `users`/`org_settings` additionally
    require `Depends(require_role("admin"))` — so all of `/api/*` requires a
    valid Bearer token **except** the `/api/auth/*` router, which is open (it's
@@ -137,7 +137,7 @@ backend/
 
 `organizations` ↔ `users` (M-N via `org_memberships`), every business table scoped by `org_id`:
 `products` → `variants` (1-N), `orders` (with JSONB `line_items` + legacy `items`
-string array), `cashbook_entries` → `cashbook_daily_balances`, `ledgers`,
+string array), `transaction_entries` → `transaction_daily_balances`, `ledgers`,
 `load_sheet_logs`, `org_integration_settings`. There is no ORM; tables/columns
 are referenced by string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql)
 and is documented (with the deliberate soft-link/`order_status` design choices) in
@@ -152,7 +152,7 @@ and is documented (with the deliberate soft-link/`order_status` design choices) 
   (courier, tracking, totals, advance, cost, items, line_items). This is the most
   complex and business-critical code in the repo.
 - **Advance reconciliation** (`advance_status.py`): cross-checks Shopify advance
-  vs. cashbook order-advance credits and stamps a 1–5 status on each order.
+  vs. transaction order-advance credits and stamps a 1–5 status on each order.
 - **PDF generation** (`services/pdf/`): invoices, packaging lists, and load sheets.
   The invoice enriches each order with a live Shopify lookup, falling back to the
   DB row when Shopify is unavailable.
@@ -186,5 +186,5 @@ The de-risking pass is complete: DB constraints/indexes/RLS ([`DATABASE.md`](DAT
 prod-gated config in `main.py`, structured logging with generic error responses,
 Stages A–C, the PDF/CSV extractions, and a 123-test suite that gates both CI and
 the Docker build. Current sizes: `orders.py` 2451 (was 4280), `products.py` 671,
-`cashbook.py` 298, `ledger.py` 129, plus `services/` at ~2,100 lines across six
+`transactions.py` 348, `ledger.py` 129, plus `services/` at ~2,100 lines across six
 modules.

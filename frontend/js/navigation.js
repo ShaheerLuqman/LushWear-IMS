@@ -245,7 +245,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     const titles = {
         'dashboard': 'Dashboard',
         'orders': 'Orders',
-        'cashbook': 'Cashbook',
+        'transactions': 'Transactions',
         'ledgers': 'Ledgers',
         'ledgerDetail': 'Ledger',
         'trialBalance': 'Trial Balance',
@@ -280,7 +280,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('ordersMoreActionsWrap', isOrders);
     show('headerOrdersAppActions', isOrders);
     show('deliveryRefreshProgress', false);
-    show('cashbookDateFilterWrap', viewName === 'cashbook');
+    show('transactionDateFilterWrap', viewName === 'transactions');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
@@ -300,10 +300,10 @@ function switchView(viewName, { skipReload = false } = {}) {
         setTimeout(() => {
             sizeGridColumns(ordersGridApi);
         }, 100);
-    } else if (viewName === 'cashbook') {
-        if (!skipReload) loadCashbook();
+    } else if (viewName === 'transactions') {
+        if (!skipReload) loadTransactions();
         setTimeout(() => {
-            sizeGridColumns(cashbookGridApi);
+            sizeGridColumns(transactionsGridApi);
         }, 100);
     } else if (viewName === 'loadSheetLogs') {
         loadLoadSheetLogs();

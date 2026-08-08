@@ -85,8 +85,8 @@ async def create_journal_entry(
     org_id: str = Depends(get_org_id),
     auth: dict = Depends(require_auth),
 ):
-    """Post a manual journal entry — the one thing the cashbook could never do,
-    since every cashbook entry is forced to touch cash. Balance and one-side-per-
+    """Post a manual journal entry — the one thing transactions could never do,
+    since every transaction entry is forced to touch cash. Balance and one-side-per-
     line are validated by JournalEntryCreate before we get here; the RPC
     re-checks them (plus that every account belongs to this org) because it is
     also reachable from other posting code."""

@@ -1,6 +1,6 @@
 """GET /ledgers/{id}/entries — the account statement.
 
-It reads the journal, not cashbook_entries. That distinction is the whole point:
+It reads the journal, not transaction_entries. That distinction is the whole point:
 a received bill credits its supplier, so before this the supplier's balance moved
 with no row on the statement to account for it, and the running total stopped
 agreeing with the balance shown everywhere else.
@@ -18,8 +18,8 @@ def _statement_rows():
         {"id": "l2", "entry_date": "2026-08-01", "particulars": "Bill BILL-0001",
          "debit": 0, "credit": 12000.0, "voucher_type": "bill", "source_type": "bill"},
         {"id": "l3", "entry_date": "2026-08-05", "particulars": "Payment for bill BILL-0001",
-         "debit": 5000.0, "credit": 0, "voucher_type": "cashbook",
-         "source_type": "cashbook_entry"},
+         "debit": 5000.0, "credit": 0, "voucher_type": "transaction",
+         "source_type": "transaction_entry"},
     ]
 
 
@@ -34,12 +34,12 @@ class TestLedgerStatement:
         assert bill_rows[0]["credit"] == 12000.0
 
     def test_statement_carries_every_voucher_type(self, make_client):
-        """Cashbook entries alone would miss bills, opening balances and manual
+        """Transaction entries alone would miss bills, opening balances and manual
         journals — all of which move the balance."""
         client = make_client(rpc_results={"get_ledger_statement": _statement_rows()})
         rows = client.get(f"/api/ledgers/{SUPPLIER}/entries").json()
 
-        assert [r["voucher_type"] for r in rows] == ["opening", "bill", "cashbook"]
+        assert [r["voucher_type"] for r in rows] == ["opening", "bill", "transaction"]
 
     def test_running_total_matches_the_account_balance(self, make_client):
         """Debit - Credit over the statement must equal what recalc_ledger_balance

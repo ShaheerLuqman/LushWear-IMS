@@ -166,7 +166,7 @@ class TestReceive:
 
 class TestDerivedPaymentStatus:
     """Settlement is derived by the bills_with_paid view from the supplier's
-    ledger balance applied oldest-bill-first — payments are plain cashbook
+    ledger balance applied oldest-bill-first — payments are plain transaction
     entries and are never allocated to a bill. The API just surfaces it."""
 
     def test_partially_paid_is_surfaced(self, make_client):

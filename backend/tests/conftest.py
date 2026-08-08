@@ -83,7 +83,7 @@ def make_client():
         tables = dict(tables or {})
         # Default: both features enabled for "test-org", so the require_feature
         # router gate (main.py) doesn't 403 every pre-existing orders/products/
-        # cashbook/ledger test - tests exercising a disabled feature pass their
+        # transactions/ledger test - tests exercising a disabled feature pass their
         # own "system_organizations" rows to override this.
         tables.setdefault("system_organizations", [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}])
         fake = FakeSupabase(tables, rpc_results)
@@ -96,7 +96,7 @@ def make_client():
 
         import app.routes.orders as orders
         import app.routes.products as products
-        import app.routes.cashbook as cashbook
+        import app.routes.transactions as transactions
         import app.routes.ledger as ledger
         import app.routes.journal as journal
         import app.routes.bills as bills
@@ -109,7 +109,7 @@ def make_client():
         import app.features as features
 
         patched = [
-            orders, products, cashbook, ledger, journal, bills, auth_routes, users, admin_portal,
+            orders, products, transactions, ledger, journal, bills, auth_routes, users, admin_portal,
             shopify_sync, org_settings, memberships, features, main,
         ]
         originals = [m.get_supabase for m in patched]

@@ -429,7 +429,7 @@ class TestLedgers:
         assert r.status_code == 422
 
     def test_delete_blocked_while_entries_are_posted_against_it(self, make_client, ledger_row):
-        """Checked against journal_lines rather than cashbook_entries: since
+        """Checked against journal_lines rather than transaction_entries: since
         Phase 1 an account can also be posted to by a bill or a manual journal
         entry, and those would otherwise only be caught by the ON DELETE RESTRICT
         foreign key, surfacing as a raw database error."""
@@ -511,82 +511,82 @@ class TestProducts:
         assert r.json()["updated_count"] == 0
 
 
-class TestCashbook:
+class TestTransactions:
     """An entry names both of its sides; a None side means cash. Only entries
     with a cash side move the cash balance, which is what keeps a bank-pays-
     supplier transfer out of Cash in Hand."""
 
     def test_create_rejects_non_positive_amount(self, make_client):
-        client = make_client({"finances_cashbook_entries": []})
+        client = make_client({"finances_transaction_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 0, "from_account_id": "abc"}
-        assert client.post("/api/cashbook/entries", json=payload).status_code == 422
+        assert client.post("/api/transactions/entries", json=payload).status_code == 422
 
     def test_create_rejects_an_entry_with_neither_side(self, make_client):
         """Both sides cash moves nothing."""
-        client = make_client({"finances_cashbook_entries": []})
+        client = make_client({"finances_transaction_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 10}
-        r = client.post("/api/cashbook/entries", json=payload)
+        r = client.post("/api/transactions/entries", json=payload)
         assert r.status_code == 422
         assert "From or a To account" in r.text
 
     def test_create_rejects_the_same_account_on_both_sides(self, make_client):
-        client = make_client({"finances_cashbook_entries": []})
+        client = make_client({"finances_transaction_entries": []})
         payload = {
             "entry_date": "2026-07-18", "amount": 10,
             "from_account_id": "abc", "to_account_id": "abc",
         }
-        r = client.post("/api/cashbook/entries", json=payload)
+        r = client.post("/api/transactions/entries", json=payload)
         assert r.status_code == 422
         assert "cannot be the same account" in r.text
 
     def test_one_sided_entry_is_accepted(self, make_client):
-        """The omitted side is cash — this is the ordinary cashbook line."""
-        client = make_client({"finances_cashbook_entries": []})
+        """The omitted side is cash — this is the ordinary transaction line."""
+        client = make_client({"finances_transaction_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 10, "from_account_id": "abc"}
-        assert client.post("/api/cashbook/entries", json=payload).status_code != 422
+        assert client.post("/api/transactions/entries", json=payload).status_code != 422
 
     def test_two_sided_entry_is_accepted(self, make_client):
         """Bank pays supplier: both sides named, so cash is untouched."""
-        client = make_client({"finances_cashbook_entries": []})
+        client = make_client({"finances_transaction_entries": []})
         payload = {
             "entry_date": "2026-07-18", "amount": 10,
             "from_account_id": "bank", "to_account_id": "supplier",
         }
-        assert client.post("/api/cashbook/entries", json=payload).status_code != 422
+        assert client.post("/api/transactions/entries", json=payload).status_code != 422
 
     def test_update_setting_a_side_to_match_the_other_is_a_400(self, make_client):
         """A partial update only carries the side being changed, so the rule has
         to be checked against the merged result — otherwise it reaches the
         database and comes back as a constraint violation, i.e. a 500."""
         client = make_client({
-            "finances_cashbook_entries": [{
+            "finances_transaction_entries": [{
                 "order_number": None,
                 "from_account_id": None,
                 "to_account_id": "ledger-1",
             }],
         })
-        r = client.put("/api/cashbook/entries/entry-1", json={"from_account_id": "ledger-1"})
+        r = client.put("/api/transactions/entries/entry-1", json={"from_account_id": "ledger-1"})
 
         assert r.status_code == 400
         assert "cannot be the same account" in r.json()["detail"]
 
     def test_update_clearing_the_only_side_is_a_400(self, make_client):
         client = make_client({
-            "finances_cashbook_entries": [{
+            "finances_transaction_entries": [{
                 "order_number": None,
                 "from_account_id": None,
                 "to_account_id": "ledger-1",
             }],
         })
-        r = client.put("/api/cashbook/entries/entry-1", json={"to_account_id": None})
+        r = client.put("/api/transactions/entries/entry-1", json={"to_account_id": None})
 
         assert r.status_code == 400
         assert "From or a To account" in r.json()["detail"]
 
     def test_update_moving_a_side_to_another_account_is_allowed(self, make_client):
-        # A full row: the update echoes it back through the CashbookEntry model.
+        # A full row: the update echoes it back through the TransactionEntry model.
         client = make_client({
-            "finances_cashbook_entries": [{
+            "finances_transaction_entries": [{
                 "id": "entry-1",
                 "entry_date": "2026-08-01",
                 "amount": 20000.0,
@@ -596,27 +596,27 @@ class TestCashbook:
                 "to_account_id": "ledger-1",
             }],
         })
-        r = client.put("/api/cashbook/entries/entry-1", json={"to_account_id": "ledger-2"})
+        r = client.put("/api/transactions/entries/entry-1", json={"to_account_id": "ledger-2"})
 
         assert r.status_code == 200, r.text
 
     def test_update_of_missing_entry_is_404(self, make_client):
-        client = make_client({"finances_cashbook_entries": []})
-        r = client.put("/api/cashbook/entries/nope", json={"description": "x"})
+        client = make_client({"finances_transaction_entries": []})
+        r = client.put("/api/transactions/entries/nope", json={"description": "x"})
         assert r.status_code == 404
 
     def test_delete_refreshes_both_sides_balances(self, make_client):
         """Both named accounts need refreshing, not just one — deleting an entry
         moves whichever ledgers it touched."""
         client = make_client({
-            "finances_cashbook_entries": [{
+            "finances_transaction_entries": [{
                 "order_number": None,
                 "from_account_id": "ledger-1",
                 "to_account_id": None,
             }],
             "finances_ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
         })
-        r = client.delete("/api/cashbook/entries/entry-1")
+        r = client.delete("/api/transactions/entries/entry-1")
         assert r.status_code == 200
         assert r.json() == {
             "status": "deleted",
@@ -629,7 +629,7 @@ class TestCashbook:
         ledger's balance — so it needs refreshing too, even though the entry
         stores the side as NULL and names no ledger."""
         client = make_client({
-            "finances_cashbook_entries": [{
+            "finances_transaction_entries": [{
                 "order_number": None,
                 "from_account_id": "ledger-1",
                 "to_account_id": None,
@@ -640,7 +640,7 @@ class TestCashbook:
                 {"ledger_id": "cash-ledger", "balance": 900.0},
             ],
         })
-        r = client.delete("/api/cashbook/entries/entry-1")
+        r = client.delete("/api/transactions/entries/entry-1")
         assert r.status_code == 200
         assert sorted(r.json()["ledger_balances"], key=lambda b: b["ledger_id"]) == [
             {"ledger_id": "cash-ledger", "balance": 900.0},

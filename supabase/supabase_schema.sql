@@ -219,8 +219,8 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     delivery_status          JSONB,
     total_amount             DECIMAL(10, 2) NOT NULL,
     advance_amount           DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
-    -- Advance reconciliation (Shopify advance_amount vs cashbook order-advance entries):
-    -- 1 = no advance, 2 = shopify only, 3 = cashbook only, 4 = both match, 5 = both mismatch
+    -- Advance reconciliation (Shopify advance_amount vs transaction order-advance entries):
+    -- 1 = no advance, 2 = shopify only, 3 = transaction only, 4 = both match, 5 = both mismatch
     advance_status           SMALLINT NOT NULL DEFAULT 1,
     delivery_charge          DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
@@ -284,16 +284,16 @@ CREATE TABLE IF NOT EXISTS shopify_sync_status (
 
 
 -- ============================================================================
--- Cashbook & ledgers
+-- Transactions & ledgers
 -- ----------------------------------------------------------------------------
 -- Records daily debit/credit entries with carried-forward balances.
--- Ledger summaries are derived from cashbook_entries where folio = ledger.id
+-- Ledger summaries are derived from transaction_entries where folio = ledger.id
 -- (there is no separate ledger_entries table).
 --
 -- ---------------------------------------------------------------------------
 -- BOTH SIDES ARE NAMED
 -- ---------------------------------------------------------------------------
--- A cashbook entry records where money came from and where it went:
+-- A transaction entry records where money came from and where it went:
 --   from_account_id  credited (money came FROM here)
 --   to_account_id    debited  (money went TO here)
 -- NULL on a side means cash. So an entry only moves Cash in Hand when one of
@@ -302,7 +302,7 @@ CREATE TABLE IF NOT EXISTS shopify_sync_status (
 --
 -- This replaced a single `folio` plus an `entry_type` saying which side the
 -- folio sat on, which forced every entry through cash and made the two columns
--- of cashbook_daily_balances read the folio's side inverted.
+-- of transaction_daily_balances read the folio's side inverted.
 -- ============================================================================
 
 -- Ledgers: individual accounts (suppliers, customers, expense heads, …).
@@ -440,8 +440,8 @@ BEGIN
     END IF;
 END $$;
 
--- Cashbook entries: all transactions. folio is required and links to a ledger.
-CREATE TABLE IF NOT EXISTS finances_cashbook_entries (
+-- Transaction entries: all transactions. folio is required and links to a ledger.
+CREATE TABLE IF NOT EXISTS finances_transaction_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     org_id        UUID NOT NULL REFERENCES system_organizations(id),
     entry_date    DATE NOT NULL,
@@ -464,24 +464,24 @@ CREATE TABLE IF NOT EXISTS finances_cashbook_entries (
 
 -- Safe to re-run against an existing table: adds the column if this schema
 -- was applied before idempotency_key existed.
-ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
+ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
 
 -- Carries a database created before the two-sided change over, then retires the
 -- old columns. entry_type was the FOLIO's side: 'credit' = money came from it
 -- into cash, 'debit' = cash paid out to it.
 -- See supabase/migrations/20260801160000_cashbook_from_to_accounts.sql.
-ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
-ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
+ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
+ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
 
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'finances_cashbook_entries'
+         WHERE table_schema = 'public' AND table_name = 'finances_transaction_entries'
            AND column_name = 'entry_type'
     ) THEN
         EXECUTE $q$
-            UPDATE finances_cashbook_entries
+            UPDATE finances_transaction_entries
                SET from_account_id = CASE WHEN entry_type = 'credit' THEN folio ELSE NULL END,
                    to_account_id   = CASE WHEN entry_type = 'debit'  THEN folio ELSE NULL END
              WHERE from_account_id IS NULL AND to_account_id IS NULL
@@ -491,24 +491,24 @@ END $$;
 
 DROP INDEX IF EXISTS idx_cashbook_entries_folio_order_number;
 DROP INDEX IF EXISTS idx_cashbook_entries_type;
-ALTER TABLE finances_cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_entry_type_check;
-ALTER TABLE finances_cashbook_entries DROP COLUMN IF EXISTS folio;
-ALTER TABLE finances_cashbook_entries DROP COLUMN IF EXISTS entry_type;
+ALTER TABLE finances_transaction_entries DROP CONSTRAINT IF EXISTS cashbook_entries_entry_type_check;
+ALTER TABLE finances_transaction_entries DROP COLUMN IF EXISTS folio;
+ALTER TABLE finances_transaction_entries DROP COLUMN IF EXISTS entry_type;
 
 -- Both NULL would be cash-to-cash, which moves nothing; both equal would be an
 -- account paying itself.
-ALTER TABLE finances_cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_two_sides_check;
-ALTER TABLE finances_cashbook_entries ADD CONSTRAINT cashbook_entries_two_sides_check
+ALTER TABLE finances_transaction_entries DROP CONSTRAINT IF EXISTS transaction_entries_two_sides_check;
+ALTER TABLE finances_transaction_entries ADD CONSTRAINT transaction_entries_two_sides_check
     CHECK (
         (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
         AND from_account_id IS DISTINCT FROM to_account_id
     );
 
 -- Daily balances: opening/closing balance per day (auto-maintained by a DB
--- trigger on cashbook_entries — see "Triggers" section below).
+-- trigger on transaction_entries — see "Triggers" section below).
 -- balance_date is unique per org (not globally) - two orgs both posting
 -- entries on the same calendar date must each get their own balance row.
-CREATE TABLE IF NOT EXISTS finances_cashbook_daily_balances (
+CREATE TABLE IF NOT EXISTS finances_transaction_daily_balances (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     org_id           UUID NOT NULL REFERENCES system_organizations(id),
     balance_date     DATE NOT NULL,
@@ -520,11 +520,11 @@ CREATE TABLE IF NOT EXISTS finances_cashbook_daily_balances (
     closing_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     created_at       TIMESTAMPTZ DEFAULT NOW(),
     updated_at       TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT cashbook_daily_balances_org_id_balance_date_key UNIQUE (org_id, balance_date)
+    CONSTRAINT transaction_daily_balances_org_id_balance_date_key UNIQUE (org_id, balance_date)
 );
 
 -- Per-ledger running balance (opening_balance + incoming - outgoing),
--- auto-maintained by DB triggers on cashbook_entries and on ledgers.opening_balance
+-- auto-maintained by DB triggers on transaction_entries and on ledgers.opening_balance
 -- — see "Triggers" section below. Only ledgers with a non-zero balance have a
 -- row; treat a missing row as 0. Keyed by ledger_id alone (not org_id, ledger_id)
 -- since ledger_id is already a UUID unique to one org's ledger - org_id is
@@ -542,14 +542,14 @@ CREATE TABLE IF NOT EXISTS finances_ledger_balances (
 -- above only runs on a fresh install). Idempotent: a no-op once already 14,2.
 ALTER TABLE finances_ledger_balances ALTER COLUMN balance TYPE DECIMAL(14, 2);
 
--- Immutable log of cashbook_entries deletions (DELETE /cashbook/entries/{id}
+-- Immutable log of transaction_entries deletions (DELETE /transactions/entries/{id}
 -- is a hard delete with no other record). Auto-populated by a DB trigger —
 -- see "Triggers" section below — so it captures every deletion path, not
 -- just the API, including a bulk TRUNCATE from the SQL editor. Records what
 -- was deleted and when; not who — there's no per-user identity yet (see
 -- Organizations & Users backlog), so this closes the "what/when" half of the
 -- gap only.
-CREATE TABLE IF NOT EXISTS finances_cashbook_entry_audit_log (
+CREATE TABLE IF NOT EXISTS finances_transaction_entry_audit_log (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
     org_id        UUID NOT NULL REFERENCES system_organizations(id),
     entry_id      UUID NOT NULL,
@@ -563,10 +563,10 @@ CREATE TABLE IF NOT EXISTS finances_cashbook_entry_audit_log (
 );
 
 -- Carry-over for a log created before the two-sided change.
-ALTER TABLE finances_cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS from_account_id UUID;
-ALTER TABLE finances_cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS to_account_id   UUID;
-ALTER TABLE finances_cashbook_entry_audit_log ALTER COLUMN entry_type DROP NOT NULL;
-ALTER TABLE finances_cashbook_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
+ALTER TABLE finances_transaction_entry_audit_log ADD COLUMN IF NOT EXISTS from_account_id UUID;
+ALTER TABLE finances_transaction_entry_audit_log ADD COLUMN IF NOT EXISTS to_account_id   UUID;
+ALTER TABLE finances_transaction_entry_audit_log ALTER COLUMN entry_type DROP NOT NULL;
+ALTER TABLE finances_transaction_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
 
 
 -- ============================================================================
@@ -611,43 +611,43 @@ CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_org_id        ON shopify_load_she
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_id_name_lower ON finances_ledgers (org_id, lower(name));
 CREATE INDEX IF NOT EXISTS idx_ledgers_org_id ON finances_ledgers(org_id);
 
--- Cashbook
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON finances_cashbook_entries(entry_date);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_account ON finances_cashbook_entries(from_account_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_to_account   ON finances_cashbook_entries(to_account_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON finances_cashbook_entries(order_number);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_org_id       ON finances_cashbook_entries(org_id);
+-- Transactions
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_date         ON finances_transaction_entries(entry_date);
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_from_account ON finances_transaction_entries(from_account_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_to_account   ON finances_transaction_entries(to_account_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_order_number ON finances_transaction_entries(order_number);
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_org_id       ON finances_transaction_entries(org_id);
 -- Advance reconciliation (advance_status.py) filters on the From side plus the
 -- order number: an advance is money received from the Orders account.
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_order_number
-    ON finances_cashbook_entries(from_account_id, order_number);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
-    ON finances_cashbook_entries(idempotency_key);
-CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON finances_cashbook_daily_balances(balance_date);
-CREATE INDEX IF NOT EXISTS idx_cashbook_daily_balances_org_id ON finances_cashbook_daily_balances(org_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_entries_from_order_number
+    ON finances_transaction_entries(from_account_id, order_number);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transaction_entries_idempotency_key
+    ON finances_transaction_entries(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON finances_transaction_daily_balances(balance_date);
+CREATE INDEX IF NOT EXISTS idx_transaction_daily_balances_org_id ON finances_transaction_daily_balances(org_id);
 CREATE INDEX IF NOT EXISTS idx_ledger_balances_org_id        ON finances_ledger_balances(org_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON finances_cashbook_entry_audit_log(entry_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON finances_cashbook_entry_audit_log(deleted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON finances_cashbook_entry_audit_log(org_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_entry_audit_log_entry_id   ON finances_transaction_entry_audit_log(entry_id);
+CREATE INDEX IF NOT EXISTS idx_transaction_entry_audit_log_deleted_at ON finances_transaction_entry_audit_log(deleted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_transaction_entry_audit_log_org_id     ON finances_transaction_entry_audit_log(org_id);
 
 
 -- ============================================================================
 -- Journal (double-entry general ledger) — FINANCE_ACCOUNTING_PLAN.md Phase 1
 -- ----------------------------------------------------------------------------
--- Before Phase 1 a transaction was one cashbook_entries row with a single folio
+-- Before Phase 1 a transaction was a single row in this table, with one folio
 -- ledger and an implicit, invisible cash account opposite it. Non-cash
 -- transactions (credit purchase, accrual, stock write-off, opening AP) were
 -- literally unrepresentable, and nothing could prove the books balanced.
 --
 -- journal_entries/journal_lines are now the complete record of every posting,
--- and ledger_balances derives from them. cashbook_entries is still the *write*
--- path for cash transactions and is projected in by trigger, so the Cashbook UI
+-- and ledger_balances derives from them. transaction_entries is still the *write*
+-- path for cash transactions and is projected in by trigger, so the Transactions UI
 -- is unchanged; documents added in later phases post here directly.
 -- ============================================================================
 
 -- Voucher header. source_type/source_id link an entry back to whatever produced
 -- it, so a document can find and re-post its own accounting:
---   'cashbook_entry'  -> cashbook_entries.id (written by the projection below)
+--   'transaction_entry'  -> transaction_entries.id (written by the projection below)
 --   'opening_balance' -> NULL (one per org)
 --   'manual'          -> NULL
 CREATE TABLE IF NOT EXISTS finances_journal_entries (
@@ -783,7 +783,8 @@ EXECUTE FUNCTION trg_journal_lines_recalc_balance();
 
 -- Creates a system account for an org, or returns the existing one. `cash` is
 -- always CREATED, never adopted from a same-named existing ledger: the
--- cashbook's implicit cash pot is a different account from any user-made ledger
+-- implicit cash pot every transaction posts against is a different account
+-- from any user-made ledger
 -- called "Cash" (that one has entries posted against it as a folio), and
 -- merging the two would double-count every one of them. Name clashes fall back
 -- to a suffix rather than failing on idx_ledgers_org_id_name_lower.
@@ -860,7 +861,7 @@ BEGIN
     -- One day before the earliest transaction, so opening balances always sort
     -- ahead of activity on a statement.
     SELECT COALESCE(MIN(entry_date), CURRENT_DATE) - 1 INTO v_date
-      FROM finances_cashbook_entries WHERE org_id = p_org_id;
+      FROM finances_transaction_entries WHERE org_id = p_org_id;
 
     INSERT INTO finances_journal_entries (org_id, entry_date, voucher_type, narration, source_type)
     VALUES (p_org_id, v_date, 'opening', 'Opening balances', 'opening_balance')
@@ -885,7 +886,7 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION project_cashbook_entry_to_journal(p_entry_id UUID)
+CREATE OR REPLACE FUNCTION project_transaction_entry_to_journal(p_entry_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -896,11 +897,11 @@ DECLARE
     v_to         UUID;
     v_journal_id UUID;
 BEGIN
-    SELECT * INTO e FROM finances_cashbook_entries WHERE id = p_entry_id;
+    SELECT * INTO e FROM finances_transaction_entries WHERE id = p_entry_id;
 
     IF NOT FOUND THEN
         DELETE FROM finances_journal_entries
-         WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
+         WHERE source_type = 'transaction_entry' AND source_id = p_entry_id;
         RETURN;
     END IF;
 
@@ -919,12 +920,12 @@ BEGIN
     -- Rebuild rather than patch: an edited entry can change date, amount or
     -- either side, and re-posting from scratch cannot drift.
     DELETE FROM finances_journal_entries
-     WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
+     WHERE source_type = 'transaction_entry' AND source_id = p_entry_id;
 
     INSERT INTO finances_journal_entries
         (org_id, entry_date, voucher_type, narration, source_type, source_id)
     VALUES
-        (e.org_id, e.entry_date, 'cashbook', e.description, 'cashbook_entry', e.id)
+        (e.org_id, e.entry_date, 'transaction', e.description, 'transaction_entry', e.id)
     RETURNING id INTO v_journal_id;
 
     -- Money goes TO the debit side and comes FROM the credit side.
@@ -935,28 +936,28 @@ END;
 $$;
 
 
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_project_journal()
+CREATE OR REPLACE FUNCTION trg_transaction_entries_project_journal()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
         DELETE FROM finances_journal_entries
-         WHERE source_type = 'cashbook_entry' AND source_id = OLD.id;
+         WHERE source_type = 'transaction_entry' AND source_id = OLD.id;
         RETURN OLD;
     END IF;
 
-    PERFORM project_cashbook_entry_to_journal(NEW.id);
+    PERFORM project_transaction_entry_to_journal(NEW.id);
     RETURN NEW;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_journal_trigger ON finances_cashbook_entries;
-CREATE TRIGGER cashbook_entries_journal_trigger
+DROP TRIGGER IF EXISTS transaction_entries_journal_trigger ON finances_transaction_entries;
+CREATE TRIGGER transaction_entries_journal_trigger
 AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount, description OR DELETE
-ON finances_cashbook_entries
+ON finances_transaction_entries
 FOR EACH ROW
-EXECUTE FUNCTION trg_cashbook_entries_project_journal();
+EXECUTE FUNCTION trg_transaction_entries_project_journal();
 
 -- System ledgers are created WITH the organization and are not user-selectable:
 -- system_key is server-managed, and a ledger holding one cannot be deleted.
@@ -1075,7 +1076,7 @@ BEGIN
 END;
 $$;
 
--- The ledger statement reads the journal, not cashbook_entries: a received bill
+-- The ledger statement reads the journal, not transaction_entries: a received bill
 -- or a manual journal entry moves an account's balance, so it has to appear as a
 -- row explaining why. See
 -- supabase/migrations/20260801130000_ledger_statement_from_journal.sql.
@@ -1148,21 +1149,21 @@ $$;
 
 
 -- ============================================================================
--- Triggers: cashbook_daily_balances / ledger_balances / cashbook_entry_audit_log
+-- Triggers: transaction_daily_balances / ledger_balances / transaction_entry_audit_log
 -- kept in sync by the database, not the app
 -- ----------------------------------------------------------------------------
--- Previously an app-layer job (backend/app/routes/cashbook.py) recalculated
--- cashbook_daily_balances after every entry write. Any write that didn't go
+-- Previously an app-layer job (backend/app/routes/transactions.py) recalculated
+-- transaction_daily_balances after every entry write. Any write that didn't go
 -- through those FastAPI routes (Supabase table editor, a raw SQL delete, a
 -- restore) left the balances table stale with nothing to self-heal it — the
--- manual repair endpoint even no-op'd once cashbook_entries was empty. Moving
+-- manual repair endpoint even no-op'd once transaction_entries was empty. Moving
 -- this into the database means it fires for every writer, not just the API.
 -- ============================================================================
 
--- Recomputes cashbook_daily_balances for balance_date >= p_from_date within
+-- Recomputes transaction_daily_balances for balance_date >= p_from_date within
 -- one org, chaining the running balance forward from the prior day's closing
 -- balance, and drops any balance row left with no entries for its date.
--- p_org_id is required - without it this would sum every org's cashbook
+-- p_org_id is required - without it this would sum every org's transaction
 -- entries together into one shared balance per date.
 --
 -- Postgres identifies functions by name + argument types, so a re-run of this
@@ -1173,7 +1174,7 @@ DROP FUNCTION IF EXISTS recalc_cashbook_daily_balances(DATE);
 -- A NULL side IS cash, so an entry only moves the cash balance when one of its
 -- sides is NULL. An entry with both sides named is invisible here, which is the
 -- whole point of the change.
-CREATE OR REPLACE FUNCTION recalc_cashbook_daily_balances(p_from_date DATE, p_org_id UUID)
+CREATE OR REPLACE FUNCTION recalc_transaction_daily_balances(p_from_date DATE, p_org_id UUID)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
@@ -1181,18 +1182,18 @@ DECLARE
     v_opening NUMERIC(12, 2);
 BEGIN
     SELECT closing_balance INTO v_opening
-    FROM finances_cashbook_daily_balances
+    FROM finances_transaction_daily_balances
     WHERE org_id = p_org_id AND balance_date < p_from_date
     ORDER BY balance_date DESC
     LIMIT 1;
 
     v_opening := COALESCE(v_opening, 0);
 
-    DELETE FROM finances_cashbook_daily_balances
+    DELETE FROM finances_transaction_daily_balances
     WHERE org_id = p_org_id
       AND balance_date >= p_from_date
       AND balance_date NOT IN (
-          SELECT DISTINCT entry_date FROM finances_cashbook_entries
+          SELECT DISTINCT entry_date FROM finances_transaction_entries
           WHERE org_id = p_org_id AND entry_date >= p_from_date
       );
 
@@ -1202,7 +1203,7 @@ BEGIN
                COALESCE(SUM(amount) FILTER (WHERE to_account_id IS NULL), 0)   AS total_debit,
                -- Cash is the source: cash paid out, a credit to cash.
                COALESCE(SUM(amount) FILTER (WHERE from_account_id IS NULL), 0) AS total_credit
-        FROM finances_cashbook_entries
+        FROM finances_transaction_entries
         WHERE org_id = p_org_id AND entry_date >= p_from_date
         GROUP BY entry_date
     ),
@@ -1214,7 +1215,7 @@ BEGIN
                    OVER (ORDER BY balance_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_balance
         FROM day_totals
     )
-    INSERT INTO finances_cashbook_daily_balances
+    INSERT INTO finances_transaction_daily_balances
         (org_id, balance_date, opening_balance, total_debit, total_credit, closing_balance, updated_at)
     SELECT p_org_id,
            balance_date,
@@ -1234,7 +1235,7 @@ END;
 $$;
 
 
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_recalc_balances()
+CREATE OR REPLACE FUNCTION trg_transaction_entries_recalc_balances()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
@@ -1253,7 +1254,7 @@ BEGIN
         v_org_id := NEW.org_id;
     END IF;
 
-    PERFORM recalc_cashbook_daily_balances(v_from, v_org_id);
+    PERFORM recalc_transaction_daily_balances(v_from, v_org_id);
 
     IF TG_OP = 'DELETE' THEN
         RETURN OLD;
@@ -1262,11 +1263,11 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_balance_trigger ON finances_cashbook_entries;
-CREATE TRIGGER cashbook_entries_balance_trigger
-AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount OR DELETE ON finances_cashbook_entries
+DROP TRIGGER IF EXISTS transaction_entries_balance_trigger ON finances_transaction_entries;
+CREATE TRIGGER transaction_entries_balance_trigger
+AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount OR DELETE ON finances_transaction_entries
 FOR EACH ROW
-EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
+EXECUTE FUNCTION trg_transaction_entries_recalc_balances();
 
 -- Recomputes ledger_balances for a single account from the journal. Same
 -- Debit-positive convention as before (New Balance = Debit - Credit), so every
@@ -1306,11 +1307,11 @@ BEGIN
 END;
 $$;
 
--- Cashbook writes reach ledger_balances through the journal projection (see the
--- Journal section above), so the old direct cashbook -> ledger_balances trigger
+-- Transaction writes reach ledger_balances through the journal projection (see the
+-- Journal section above), so the old direct transaction -> ledger_balances trigger
 -- is gone: keeping it would recompute the same number from the retired source
 -- and race the journal-driven one.
-DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON finances_cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON finances_transaction_entries;
 DROP FUNCTION IF EXISTS trg_cashbook_entries_recalc_ledger_balance();
 
 -- Creating a ledger with an opening balance, or editing one later, rewrites the
@@ -1333,29 +1334,29 @@ EXECUTE FUNCTION trg_ledgers_recalc_balance();
 
 -- Row-level triggers never fire on TRUNCATE; cover that path explicitly so a
 -- "truncate table" from the SQL editor can't leave balances stale either.
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_truncate_balances()
+CREATE OR REPLACE FUNCTION trg_transaction_entries_truncate_balances()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    TRUNCATE finances_cashbook_daily_balances;
+    TRUNCATE finances_transaction_daily_balances;
     TRUNCATE finances_ledger_balances;
     RETURN NULL;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_truncate_trigger ON finances_cashbook_entries;
-CREATE TRIGGER cashbook_entries_truncate_trigger
-AFTER TRUNCATE ON finances_cashbook_entries
+DROP TRIGGER IF EXISTS transaction_entries_truncate_trigger ON finances_transaction_entries;
+CREATE TRIGGER transaction_entries_truncate_trigger
+AFTER TRUNCATE ON finances_transaction_entries
 FOR EACH STATEMENT
-EXECUTE FUNCTION trg_cashbook_entries_truncate_balances();
+EXECUTE FUNCTION trg_transaction_entries_truncate_balances();
 
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_delete()
+CREATE OR REPLACE FUNCTION trg_transaction_entries_audit_delete()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO finances_cashbook_entry_audit_log
+    INSERT INTO finances_transaction_entry_audit_log
         (org_id, entry_id, entry_date, amount, description,
          from_account_id, to_account_id, order_number, deleted_at)
     VALUES
@@ -1366,33 +1367,33 @@ END;
 $$;
 
 
-DROP TRIGGER IF EXISTS cashbook_entries_audit_delete_trigger ON finances_cashbook_entries;
-CREATE TRIGGER cashbook_entries_audit_delete_trigger
-AFTER DELETE ON finances_cashbook_entries
+DROP TRIGGER IF EXISTS transaction_entries_audit_delete_trigger ON finances_transaction_entries;
+CREATE TRIGGER transaction_entries_audit_delete_trigger
+AFTER DELETE ON finances_transaction_entries
 FOR EACH ROW
-EXECUTE FUNCTION trg_cashbook_entries_audit_delete();
+EXECUTE FUNCTION trg_transaction_entries_audit_delete();
 
-CREATE OR REPLACE FUNCTION trg_cashbook_entries_audit_before_truncate()
+CREATE OR REPLACE FUNCTION trg_transaction_entries_audit_before_truncate()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO finances_cashbook_entry_audit_log
+    INSERT INTO finances_transaction_entry_audit_log
         (org_id, entry_id, entry_date, amount, description,
          from_account_id, to_account_id, order_number)
     SELECT org_id, id, entry_date, amount, description,
            from_account_id, to_account_id, order_number
-    FROM finances_cashbook_entries;
+    FROM finances_transaction_entries;
     RETURN NULL;
 END;
 $$;
 
 
-DROP TRIGGER IF EXISTS cashbook_entries_audit_before_truncate_trigger ON finances_cashbook_entries;
-CREATE TRIGGER cashbook_entries_audit_before_truncate_trigger
-BEFORE TRUNCATE ON finances_cashbook_entries
+DROP TRIGGER IF EXISTS transaction_entries_audit_before_truncate_trigger ON finances_transaction_entries;
+CREATE TRIGGER transaction_entries_audit_before_truncate_trigger
+BEFORE TRUNCATE ON finances_transaction_entries
 FOR EACH STATEMENT
-EXECUTE FUNCTION trg_cashbook_entries_audit_before_truncate();
+EXECUTE FUNCTION trg_transaction_entries_audit_before_truncate();
 
 
 -- ============================================================================
@@ -1443,7 +1444,7 @@ CREATE OR REPLACE FUNCTION get_month_summary_totals(
     p_entry_start DATE,
     p_entry_end DATE,
     p_org_id UUID
-)
+) As a payable aging page, purpose payment. Transaction accoun As a payable aging page, purpose payment transaction accounting professional, nine fourteen ninety-seven, nine fourteen Shopify settings, Shopify black and white. and white purpose or parking purple
 RETURNS TABLE(
     total_orders INT,
     total_gross_sale NUMERIC,
@@ -1494,7 +1495,7 @@ AS $$
             COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'ad'), 0)      AS ad_expense,
             COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'other'), 0)   AS other_expense
         FROM finances_ledgers l
-        JOIN finances_cashbook_entries ce ON ce.to_account_id = l.id
+        JOIN finances_transaction_entries ce ON ce.to_account_id = l.id
         WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
           AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
     )
@@ -1598,7 +1599,7 @@ ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
 -- Stored status is only draft/received/cancelled. Paid / partially paid is
 -- DERIVED from the supplier's ledger balance, applied to their bills
 -- oldest-first (see the bills_with_paid view below). Payments are ordinary
--- cashbook entries against the supplier and are never allocated to a bill, so
+-- transaction entries against the supplier and are never allocated to a bill, so
 -- there is no stored payment status to drift out of step with reality.
 CREATE TABLE IF NOT EXISTS finances_bills (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
@@ -1635,7 +1636,7 @@ CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON finances_bills (org_id, due
 -- ---------------------------------------------------------------------------
 -- No per-line account: every line is stock, and receive_bill debits the org's
 -- Inventory account for the whole subtotal. A purchase bill here is always for
--- goods - anything paid for on the spot (ads, rent, packaging) is a cashbook
+-- goods - anything paid for on the spot (ads, rent, packaging) is a transaction
 -- entry against its expense ledger, which is fewer steps and already works.
 -- Bills exist to record what is OWED, not to categorise spending.
 CREATE TABLE IF NOT EXISTS finances_bill_items (
@@ -1954,7 +1955,7 @@ $$;
 -- anything touched its ledger.
 --
 -- Position matters. plpgsql resolves calls at run time, so a backfill placed up
--- in the Journal section would execute while the OLD cashbook-based
+-- in the Journal section would execute while the OLD transaction-based
 -- recalc_ledger_balance was still installed, and the recomputed balances would
 -- then never be refreshed. It has to run after the redefinition, i.e. here.
 --
@@ -1973,9 +1974,9 @@ DECLARE
     entry RECORD;
 BEGIN
     FOR entry IN
-        SELECT ce.id FROM finances_cashbook_entries ce ORDER BY ce.entry_date, ce.created_at
+        SELECT ce.id FROM finances_transaction_entries ce ORDER BY ce.entry_date, ce.created_at
     LOOP
-        PERFORM project_cashbook_entry_to_journal(entry.id);
+        PERFORM project_transaction_entry_to_journal(entry.id);
     END LOOP;
 END $$;
 
@@ -1987,7 +1988,7 @@ BEGIN
         PERFORM sync_opening_balance_journal(org.id);
         -- Cash totals are derived too: only entries with a cash side count
         -- towards them, so they have to be rebuilt alongside the journal.
-        PERFORM recalc_cashbook_daily_balances('1900-01-01'::DATE, org.id);
+        PERFORM recalc_transaction_daily_balances('1900-01-01'::DATE, org.id);
     END LOOP;
 END $$;
 
@@ -2017,10 +2018,10 @@ ALTER TABLE shopify_variants                 ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_orders                   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_load_sheet_logs          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE finances_ledgers                 ENABLE ROW LEVEL SECURITY;
-ALTER TABLE finances_cashbook_entries        ENABLE ROW LEVEL SECURITY;
-ALTER TABLE finances_cashbook_daily_balances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_transaction_entries        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_transaction_daily_balances ENABLE ROW LEVEL SECURITY;
 ALTER TABLE finances_ledger_balances         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE finances_cashbook_entry_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_transaction_entry_audit_log ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_sync_status              ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_organizations             ENABLE ROW LEVEL SECURITY;
 ALTER TABLE system_users                     ENABLE ROW LEVEL SECURITY;

@@ -463,7 +463,7 @@ body {
 }
 
 /* Only the orders toolbar is wide enough to need scrolling; applying this to every
-   view puts a scrollbar under the cashbook row, whose controls can't shrink. */
+   view puts a scrollbar under the transactions row, whose controls can't shrink. */
 body:has(#ordersView.active) .header-actions {
     overflow-x: auto;
     overflow-y: visible;
@@ -762,7 +762,7 @@ body:has(#ordersView.active) .header-actions {
     color: var(--text-muted);
 }
 
-/* Cashbook */
+/* Transactions */
 .cash-in-hand-display {
     display: flex;
     align-items: center;
@@ -893,7 +893,7 @@ body:has(#ordersView.active) .header-actions {
     padding: 8px 0;
 }
 
-.cashbook-date-filter {
+.transaction-date-filter {
     padding: 10px 12px;
     min-width: 100px;
     width: 110px;
@@ -906,26 +906,26 @@ body:has(#ordersView.active) .header-actions {
     transition: var(--transition);
 }
 
-.cashbook-date-filter:focus {
+.transaction-date-filter:focus {
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-#cashbookView {
+#transactionsView {
     overflow: hidden;
     gap: 0;
     min-height: 0;
     padding: 4px;
 }
 
-#cashbookView.active {
+#transactionsView.active {
     height: 100%;
     width: 100%;
 }
 
-#cashbookGrid,
-#cashbookGrid.grid-container {
+#transactionsGrid,
+#transactionsGrid.grid-container {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -935,12 +935,12 @@ body:has(#ordersView.active) .header-actions {
 }
 
 /* Override content-area padding for table views */
-.content-area:has(#cashbookView.active),
+.content-area:has(#transactionsView.active),
 .content-area:has(#ordersView.active),
 .content-area:has(#productsView.active),
 .content-area:has(#ledgerDetailView.active),
 .content-area:has(#ledgersView.active),
-body:has(#cashbookView.active) .content-area,
+body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
 body:has(#productsView.active) .content-area,
 body:has(#ledgerDetailView.active) .content-area,
@@ -1374,9 +1374,9 @@ input[type="number"] {
     font-size: 14px;
 }
 
-/* Create Cashbook Entry modal */
+/* Create Transaction Entry modal */
 /* Fixed box so switching between single and bulk mode doesn't resize the modal. */
-.modal-content.cashbook-entry-modal-content {
+.modal-content.transaction-entry-modal-content {
     width: 900px;
     max-width: 90vw;
     height: 600px;
@@ -1384,7 +1384,7 @@ input[type="number"] {
 }
 
 /* Pinned outside the scrolling body so the buttons hold position across modes. */
-.cashbook-entry-footer {
+.transaction-entry-footer {
     display: flex;
     justify-content: flex-end;
     gap: 12px;
@@ -1393,7 +1393,7 @@ input[type="number"] {
     border-top: 1px solid var(--border-color);
 }
 
-.cashbook-entry-mode {
+.transaction-entry-mode {
     display: flex;
     gap: 4px;
     padding: 4px;
@@ -1402,7 +1402,7 @@ input[type="number"] {
     border-radius: var(--radius-md);
 }
 
-.cashbook-entry-mode-btn {
+.transaction-entry-mode-btn {
     flex: 1;
     padding: 8px 12px;
     border: none;
@@ -1416,23 +1416,23 @@ input[type="number"] {
     transition: background 0.15s, color 0.15s;
 }
 
-.cashbook-entry-mode-btn:hover {
+.transaction-entry-mode-btn:hover {
     color: var(--text-primary);
 }
 
-.cashbook-entry-mode-btn.active {
+.transaction-entry-mode-btn.active {
     background: var(--bg-primary);
     color: var(--text-primary);
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
 }
 
-.cashbook-entry-sides {
+.transaction-entry-sides {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 20px;
 }
 
-.cashbook-entry-toggle {
+.transaction-entry-toggle {
     display: flex;
     align-items: center;
     gap: 8px;
@@ -1443,7 +1443,7 @@ input[type="number"] {
     user-select: none;
 }
 
-.cashbook-entry-toggle input {
+.transaction-entry-toggle input {
     cursor: pointer;
 }
 
@@ -1677,7 +1677,7 @@ input[type="number"] {
         grid-column: 1 / -1;
     }
 
-    .cashbook-toolbar {
+    .transaction-toolbar {
         grid-template-columns: 1fr;
     }
 }
@@ -3474,7 +3474,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     min-height: 0;
 }
 
-/* Folio dropdown in cashbook */
+/* Folio dropdown in transactions */
 .folio-dropdown {
     display: flex;
     align-items: center;
@@ -3652,21 +3652,21 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-weight: 500;
 }
 
-/* Cashbook required field highlighting */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .cashbook-required-field {
+/* Transaction required field highlighting */
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-required-field {
     background-color: rgba(245, 158, 11, 0.15) !important;
     border: 1px solid rgba(245, 158, 11, 0.5) !important;
 }
 
-/* The blank row at the foot of the cashbook is where a new entry is typed.
+/* The blank row at the foot of the transactions grid is where a new entry is typed.
    Tinted and accented so it reads as the place to start, not as a saved entry
    somebody left empty. Translucent so it sits on either theme's row colour. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.cashbook-new-row {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.transaction-new-row {
     background-color: color-mix(in srgb, var(--accent-primary) 8%, transparent) !important;
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
-.cashbook-placeholder {
+.transaction-placeholder {
     color: var(--text-muted);
     font-style: italic;
 }
@@ -3681,8 +3681,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-color: rgba(245, 158, 11, 0.9) !important;
 }
 
-/* Cashbook delete button */
-.cashbook-delete-btn {
+/* Transaction delete button */
+.transaction-delete-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3699,7 +3699,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     transition: var(--transition);
 }
 
-.cashbook-delete-btn:hover {
+.transaction-delete-btn:hover {
     opacity: 1;
     background: rgba(220, 38, 38, 0.1);
 }
@@ -4787,12 +4787,12 @@ body.admin-portal-page {
 
     /* Two-column modal forms are cramped well before the modal itself shrinks. */
     .form-grid,
-    .cashbook-entry-sides,
+    .transaction-entry-sides,
     .repl-form-grid {
         grid-template-columns: 1fr;
     }
 
-    .modal-content.cashbook-entry-modal-content {
+    .modal-content.transaction-entry-modal-content {
         width: 600px;
     }
 }
@@ -4908,7 +4908,7 @@ body.admin-portal-page {
     /* Near-full-bleed modals - a centred 90% box wastes edge space on a phone. */
     .modal-content,
     #deliveryStatusReportModal .modal-content,
-    .modal-content.cashbook-entry-modal-content {
+    .modal-content.transaction-entry-modal-content {
         width: 100%;
         max-width: none;
         height: auto;
@@ -4954,7 +4954,7 @@ body.admin-portal-page {
     .form-group select,
     .form-group textarea,
     .orders-period-filter,
-    .cashbook-date-filter,
+    .transaction-date-filter,
     .search-box input {
         font-size: 16px;
     }

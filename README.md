@@ -77,7 +77,7 @@ inventory-system/
 │   │   ├── config.py        # Configuration
 │   │   ├── database.py      # Supabase connection
 │   │   ├── models.py        # Pydantic models
-│   │   └── routes/          # API routes (products, orders, cashbook, ledger, auth, users, org_settings)
+│   │   └── routes/          # API routes (products, orders, transactions, ledger, auth, users, org_settings)
 │   ├── requirements.txt
 │   └── .env                 # Your credentials (create this)
 │
@@ -91,7 +91,7 @@ inventory-system/
 │   │   ├── orders-actions.js
 │   │   ├── navigation.js
 │   │   ├── data-api.js
-│   │   ├── cashbook.js
+│   │   ├── transactions.js
 │   │   ├── ledgers.js
 │   │   ├── sync-summary.js
 │   │   ├── modals-forms.js

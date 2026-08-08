@@ -10,7 +10,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, cashbook, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal
+from app.routes import products, orders, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.features import require_feature
@@ -95,12 +95,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 _auth = [Depends(require_auth)]
 # Products/Orders sit behind the "orders" feature flag (Shopify order
-# management); Cashbook/Ledgers behind "finance" - see app/features.py.
+# management); Transactions/Ledgers behind "finance" - see app/features.py.
 # Gated at router level so a disabled feature is enforced for every route
 # underneath, not just the ones the sidebar happens to hide.
 app.include_router(products.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
 app.include_router(orders.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
-app.include_router(cashbook.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
+app.include_router(transactions.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(ledger.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(journal.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(bills.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])

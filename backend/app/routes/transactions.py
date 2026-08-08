@@ -5,19 +5,19 @@ from pydantic import BaseModel
 from app.auth import get_org_id
 from app.database import get_supabase
 from app.models import (
-    CashbookDailyBalance,
-    CashbookDay,
-    CashbookEntry,
-    CashbookEntryAuditLog,
-    CashbookEntryCreate,
-    CashbookEntryUpdate,
+    TransactionDailyBalance,
+    TransactionDay,
+    TransactionEntry,
+    TransactionEntryAuditLog,
+    TransactionEntryCreate,
+    TransactionEntryUpdate,
     LedgerBalance,
 )
 from app.advance_status import recompute_advance_statuses
 from app.ledger_roles import get_system_ledger_id
 from app.org_scope import org_table
 
-router = APIRouter(prefix="/cashbook", tags=["cashbook"])
+router = APIRouter(prefix="/transactions", tags=["transactions"])
 
 # The two sides of an entry. NULL on a side means cash, so an entry only moves
 # the cash account when one of these is None.
@@ -43,14 +43,14 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
 
 def _get_entry_meta_or_404(supabase, org_id: str, entry_id: str) -> dict:
     resp = (
-        org_table(supabase, org_id, "finances_cashbook_entries")
+        org_table(supabase, org_id, "finances_transaction_entries")
         .select("order_number, from_account_id, to_account_id")
         .eq("id", entry_id)
         .limit(1)
         .execute()
     )
     if not resp.data:
-        raise HTTPException(status_code=404, detail="Cashbook entry not found")
+        raise HTTPException(status_code=404, detail="Transaction entry not found")
     return resp.data[0]
 
 
@@ -79,7 +79,7 @@ def _ledger_balances(supabase, org_id: str, ledger_ids) -> List[dict]:
 
 
 def _safe_recompute_advance_statuses(supabase, org_id: str, order_numbers) -> None:
-    """Best-effort: a failure here shouldn't fail the cashbook write that triggered it."""
+    """Best-effort: a failure here shouldn't fail the transaction write that triggered it."""
     try:
         recompute_advance_statuses(supabase, org_id, list(order_numbers))
     except Exception:
@@ -92,21 +92,21 @@ def _split_existing_by_idempotency_key(supabase, org_id: str, payloads: List[dic
     keys = [p["idempotency_key"] for p in payloads if p.get("idempotency_key")]
     if not keys:
         return {}, payloads
-    resp = org_table(supabase, org_id, "finances_cashbook_entries").select("*").in_("idempotency_key", keys).execute()
+    resp = org_table(supabase, org_id, "finances_transaction_entries").select("*").in_("idempotency_key", keys).execute()
     existing_by_key = {row["idempotency_key"]: row for row in resp.data or []}
     to_insert = [p for p in payloads if p.get("idempotency_key") not in existing_by_key]
     return existing_by_key, to_insert
 
 
-@router.get("/entries", response_model=List[CashbookEntry])
-async def get_cashbook_entries(
+@router.get("/entries", response_model=List[TransactionEntry])
+async def get_transaction_entries(
     start_date: Optional[date] = Query(None, description="Filter from entry_date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter to entry_date (YYYY-MM-DD)"),
     org_id: str = Depends(get_org_id),
 ):
     supabase = get_supabase()
     query = (
-        org_table(supabase, org_id, "finances_cashbook_entries")
+        org_table(supabase, org_id, "finances_transaction_entries")
         .select("*")
         .order("entry_date", desc=False)
         .order("created_at", desc=False)
@@ -119,8 +119,8 @@ async def get_cashbook_entries(
     return response.data
 
 
-@router.post("/entries", response_model=CashbookEntry)
-async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depends(get_org_id)):
+@router.post("/entries", response_model=TransactionEntry)
+async def create_transaction_entry(entry: TransactionEntryCreate, org_id: str = Depends(get_org_id)):
     try:
         payload = _normalize_entry_payload(entry.model_dump(), is_create=True)
     except ValueError as e:
@@ -135,9 +135,9 @@ async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depend
             entry["ledger_balances"] = _ledger_balances(supabase, org_id, _sides(entry))
             return entry
 
-    response = org_table(supabase, org_id, "finances_cashbook_entries").insert(payload).execute()
+    response = org_table(supabase, org_id, "finances_transaction_entries").insert(payload).execute()
     if not response.data:
-        raise HTTPException(status_code=500, detail="Failed to create cashbook entry")
+        raise HTTPException(status_code=500, detail="Failed to create transaction entry")
 
     if payload.get("order_number"):
         _safe_recompute_advance_statuses(supabase, org_id, [payload["order_number"]])
@@ -147,8 +147,8 @@ async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depend
     return entry
 
 
-@router.post("/entries/bulk", response_model=List[CashbookEntry])
-async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_id: str = Depends(get_org_id)):
+@router.post("/entries/bulk", response_model=List[TransactionEntry])
+async def create_transaction_entries_bulk(entries: List[TransactionEntryCreate], org_id: str = Depends(get_org_id)):
     """One INSERT for the rows that are actually new (used by the bulk-text-
     entry modal and the two-sided/order-advance modals, so a paired entry is
     atomic instead of two racing POSTs). All-or-nothing for that insert:
@@ -161,7 +161,7 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
 
     try:
         # amount and the two-distinct-sides rule are already enforced by
-        # CashbookEntryCreate itself, so only normalization is needed here.
+        # TransactionEntryCreate itself, so only normalization is needed here.
         payloads = [_normalize_entry_payload(e.model_dump(), is_create=True) for e in entries]
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -171,9 +171,9 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
 
     inserted = []
     if to_insert:
-        response = org_table(supabase, org_id, "finances_cashbook_entries").insert(to_insert).execute()
+        response = org_table(supabase, org_id, "finances_transaction_entries").insert(to_insert).execute()
         if not response.data:
-            raise HTTPException(status_code=500, detail="Failed to create cashbook entries")
+            raise HTTPException(status_code=500, detail="Failed to create transaction entries")
         inserted = response.data
 
     order_numbers = {row["order_number"] for row in to_insert if row.get("order_number")}
@@ -187,8 +187,8 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
     return result_rows
 
 
-@router.put("/entries/{entry_id}", response_model=CashbookEntry)
-async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_id: str = Depends(get_org_id)):
+@router.put("/entries/{entry_id}", response_model=TransactionEntry)
+async def update_transaction_entry(entry_id: str, entry: TransactionEntryUpdate, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     old_meta = _get_entry_meta_or_404(supabase, org_id, entry_id)
     old_order_number = old_meta.get("order_number")
@@ -204,7 +204,7 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
         raise HTTPException(status_code=400, detail="No fields to update")
 
     # A partial update only carries the side being changed, so the two-sides rule
-    # has to be checked against the MERGED result - CashbookEntryUpdate cannot
+    # has to be checked against the MERGED result - TransactionEntryUpdate cannot
     # see the side it isn't touching. Without this, setting one side to whatever
     # the other already holds reaches the database and comes back as a raw
     # constraint violation, i.e. a 500.
@@ -222,9 +222,9 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
             detail="From and To cannot be the same account.",
         )
 
-    response = org_table(supabase, org_id, "finances_cashbook_entries").update(payload).eq("id", entry_id).execute()
+    response = org_table(supabase, org_id, "finances_transaction_entries").update(payload).eq("id", entry_id).execute()
     if not response.data:
-        raise HTTPException(status_code=404, detail="Cashbook entry not found")
+        raise HTTPException(status_code=404, detail="Transaction entry not found")
 
     # Cover both old and new order numbers in case the entry was reassigned.
     new_order_number = payload.get("order_number", old_order_number)
@@ -242,22 +242,22 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
     return entry_out
 
 
-class DeleteCashbookEntryResult(BaseModel):
+class DeleteTransactionEntryResult(BaseModel):
     status: Literal["deleted"]
     id: str
     ledger_balances: List[LedgerBalance]
 
 
-@router.delete("/entries/{entry_id}", response_model=DeleteCashbookEntryResult)
-async def delete_cashbook_entry(entry_id: str, org_id: str = Depends(get_org_id)):
+@router.delete("/entries/{entry_id}", response_model=DeleteTransactionEntryResult)
+async def delete_transaction_entry(entry_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     old_meta = _get_entry_meta_or_404(supabase, org_id, entry_id)
     order_number = old_meta.get("order_number")
     sides = _sides(old_meta)
 
-    response = org_table(supabase, org_id, "finances_cashbook_entries").delete().eq("id", entry_id).execute()
+    response = org_table(supabase, org_id, "finances_transaction_entries").delete().eq("id", entry_id).execute()
     if not response.data:
-        raise HTTPException(status_code=404, detail="Cashbook entry not found")
+        raise HTTPException(status_code=404, detail="Transaction entry not found")
 
     if order_number:
         _safe_recompute_advance_statuses(supabase, org_id, [order_number])
@@ -265,18 +265,18 @@ async def delete_cashbook_entry(entry_id: str, org_id: str = Depends(get_org_id)
     return {"status": "deleted", "id": entry_id, "ledger_balances": _ledger_balances(supabase, org_id, sides)}
 
 
-@router.get("/entries/audit-log", response_model=List[CashbookEntryAuditLog])
-async def get_cashbook_entry_audit_log(
+@router.get("/entries/audit-log", response_model=List[TransactionEntryAuditLog])
+async def get_transaction_entry_audit_log(
     entry_id: Optional[str] = Query(None, description="Filter to deletions of one entry"),
     start_date: Optional[date] = Query(None, description="Filter from entry_date (YYYY-MM-DD)"),
     end_date: Optional[date] = Query(None, description="Filter to entry_date (YYYY-MM-DD)"),
     org_id: str = Depends(get_org_id),
 ):
-    """Deleted cashbook entries, snapshotted by a DB trigger — see
-    cashbook_entry_audit_log in supabase_schema.sql. Records what was deleted
+    """Deleted transaction entries, snapshotted by a DB trigger — see
+    transaction_entry_audit_log in supabase_schema.sql. Records what was deleted
     and when, not who (no per-user identity exists yet)."""
     query = (
-        org_table(get_supabase(), org_id, "finances_cashbook_entry_audit_log")
+        org_table(get_supabase(), org_id, "finances_transaction_entry_audit_log")
         .select("*")
         .order("deleted_at", desc=True)
     )
@@ -292,7 +292,7 @@ async def get_cashbook_entry_audit_log(
 
 def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
     response = (
-        org_table(supabase, org_id, "finances_cashbook_daily_balances")
+        org_table(supabase, org_id, "finances_transaction_daily_balances")
         .select("*")
         .eq("balance_date", target_date.isoformat())
         .limit(1)
@@ -304,7 +304,7 @@ def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
     # No record yet: derive opening from the previous day's closing.
     prev_date = (target_date - timedelta(days=1)).isoformat()
     prev_resp = (
-        org_table(supabase, org_id, "finances_cashbook_daily_balances")
+        org_table(supabase, org_id, "finances_transaction_daily_balances")
         .select("closing_balance")
         .eq("balance_date", prev_date)
         .limit(1)
@@ -322,7 +322,7 @@ def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
 
 def _fetch_entries_for_date(supabase, org_id: str, target_date: date) -> list:
     response = (
-        org_table(supabase, org_id, "finances_cashbook_entries")
+        org_table(supabase, org_id, "finances_transaction_entries")
         .select("*")
         .eq("entry_date", target_date.isoformat())
         .order("created_at", desc=False)
@@ -331,15 +331,15 @@ def _fetch_entries_for_date(supabase, org_id: str, target_date: date) -> list:
     return response.data
 
 
-@router.get("/daily-balance/{target_date}", response_model=CashbookDailyBalance)
+@router.get("/daily-balance/{target_date}", response_model=TransactionDailyBalance)
 async def get_daily_balance(target_date: date, org_id: str = Depends(get_org_id)):
     """Get balance for a specific date."""
     return _fetch_daily_balance(get_supabase(), org_id, target_date)
 
 
-@router.get("/day/{target_date}", response_model=CashbookDay)
-async def get_cashbook_day(target_date: date, org_id: str = Depends(get_org_id)):
-    """Bundles daily-balance + that date's entries — the Cashbook view's two
+@router.get("/day/{target_date}", response_model=TransactionDay)
+async def get_transaction_day(target_date: date, org_id: str = Depends(get_org_id)):
+    """Bundles daily-balance + that date's entries — the Transactions view's two
     always-together reads — into a single request."""
     supabase = get_supabase()
     return {

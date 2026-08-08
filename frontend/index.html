@@ -158,9 +158,9 @@
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="finance">
-                        <button class="nav-item" data-view="cashbook" title="Cashbook">
+                        <button class="nav-item" data-view="transactions" title="Transactions">
                             <span class="nav-icon"><i data-lucide="wallet"></i></span>
-                            <span class="nav-tooltip">Cashbook</span>
+                            <span class="nav-tooltip">Transactions</span>
                         </button>
                         <button class="nav-item" data-view="ledgers" title="Ledgers">
                             <span class="nav-icon"><i data-lucide="book-open"></i></span>
@@ -254,17 +254,17 @@
                         </button>
                     </div>
                     <span id="deliveryRefreshProgress" class="delivery-refresh-progress" style="display: none;"></span>
-                    <div id="cashbookDateFilterWrap" class="header-inline" style="display: none;">
+                    <div id="transactionDateFilterWrap" class="header-inline" style="display: none;">
                         <div id="cashInHandDisplay" class="cash-in-hand-display">
                             <span class="cash-in-hand-label">Available Cash:</span>
                             <span id="cashInHandAmount" class="cash-in-hand-amount">Rs 0.00</span>
                             <div id="cashInHandTooltip" class="cash-in-hand-tooltip"></div>
                         </div>
-                        <button id="cashbookPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day"><i data-lucide="chevron-left"></i></button>
-                        <input id="cashbookDateFilter" type="text" class="cashbook-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
-                        <button id="cashbookNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day"><i data-lucide="chevron-right"></i></button>
-                        <button id="cashbookTodayBtn" class="btn btn-secondary btn-sm">Today</button>
-                        <button id="cashbookCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new cashbook entry">Create Entry</button>
+                        <button id="transactionPrevDayBtn" class="btn btn-secondary btn-icon-sm" title="Previous day"><i data-lucide="chevron-left"></i></button>
+                        <input id="transactionDateFilter" type="text" class="transaction-date-filter" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off">
+                        <button id="transactionNextDayBtn" class="btn btn-secondary btn-icon-sm" title="Next day"><i data-lucide="chevron-right"></i></button>
+                        <button id="transactionTodayBtn" class="btn btn-secondary btn-sm">Today</button>
+                        <button id="transactionCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new transaction entry">Create Entry</button>
                     </div>
                 </div>
             </header>
@@ -322,9 +322,9 @@
                     <div id="ordersSelectedCount" class="orders-selected-count" style="display: none;">0 row(s) selected</div>
                 </div>
 
-                <!-- Cashbook View -->
-                <div id="cashbookView" class="view">
-                    <div id="cashbookGrid" class="ag-theme-alpine grid-container"></div>
+                <!-- Transactions View -->
+                <div id="transactionsView" class="view">
+                    <div id="transactionsGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Ledgers List View -->
@@ -531,48 +531,48 @@
                     </div>
                 </div>
 
-                <!-- Create Cashbook Entry Modal -->
-                <div id="cashbookEntryModal" class="modal">
-                    <div class="modal-content cashbook-entry-modal-content">
+                <!-- Create Transaction Entry Modal -->
+                <div id="transactionEntryModal" class="modal">
+                    <div class="modal-content transaction-entry-modal-content">
                         <div class="modal-header">
-                            <h2>Create Cashbook Entry</h2>
-                            <button type="button" class="modal-close" id="closeCashbookEntryModal" aria-label="Close">&times;</button>
+                            <h2>Create Transaction Entry</h2>
+                            <button type="button" class="modal-close" id="closeTransactionEntryModal" aria-label="Close">&times;</button>
                         </div>
                         <div class="modal-body">
-                            <div class="cashbook-entry-mode" role="tablist" aria-label="Entry mode">
-                                <button type="button" id="cashbookEntryModeSingle" class="cashbook-entry-mode-btn active" role="tab" aria-selected="true">Single Entry</button>
-                                <button type="button" id="cashbookEntryModeBulk" class="cashbook-entry-mode-btn" role="tab" aria-selected="false">Bulk Text Entry</button>
+                            <div class="transaction-entry-mode" role="tablist" aria-label="Entry mode">
+                                <button type="button" id="transactionEntryModeSingle" class="transaction-entry-mode-btn active" role="tab" aria-selected="true">Single Entry</button>
+                                <button type="button" id="transactionEntryModeBulk" class="transaction-entry-mode-btn" role="tab" aria-selected="false">Bulk Text Entry</button>
                             </div>
-                            <form id="cashbookEntryForm" class="ledger-form">
-                                <label class="cashbook-entry-toggle">
-                                    <input type="checkbox" id="cashbookEntryOrderAdvance">
+                            <form id="transactionEntryForm" class="ledger-form">
+                                <label class="transaction-entry-toggle">
+                                    <input type="checkbox" id="transactionEntryOrderAdvance">
                                     <span>Order Advance Amount</span>
                                 </label>
-                                <div class="form-group" id="cashbookEntryOrderNumberGroup" style="display: none;">
-                                    <label for="cashbookEntryOrderNumber">Order number *</label>
-                                    <input type="text" id="cashbookEntryOrderNumber" class="form-input" placeholder="e.g. 1234" autocomplete="off">
+                                <div class="form-group" id="transactionEntryOrderNumberGroup" style="display: none;">
+                                    <label for="transactionEntryOrderNumber">Order number *</label>
+                                    <input type="text" id="transactionEntryOrderNumber" class="form-input" placeholder="e.g. 1234" autocomplete="off">
                                 </div>
                                 <div class="form-group">
-                                    <label for="cashbookEntryAmount">Amount *</label>
-                                    <input type="number" id="cashbookEntryAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
+                                    <label for="transactionEntryAmount">Amount *</label>
+                                    <input type="number" id="transactionEntryAmount" class="form-input" min="0.01" step="0.01" placeholder="0.00" required>
                                 </div>
-                                <div class="cashbook-entry-sides">
-                                    <div class="form-group" id="cashbookEntryFromGroup">
-                                        <label for="cashbookEntryFrom">From (Credit)</label>
-                                        <select id="cashbookEntryFrom" class="form-input"></select>
+                                <div class="transaction-entry-sides">
+                                    <div class="form-group" id="transactionEntryFromGroup">
+                                        <label for="transactionEntryFrom">From (Credit)</label>
+                                        <select id="transactionEntryFrom" class="form-input"></select>
                                     </div>
                                     <div class="form-group">
-                                        <label for="cashbookEntryTo">To (Debit)</label>
-                                        <select id="cashbookEntryTo" class="form-input"></select>
+                                        <label for="transactionEntryTo">To (Debit)</label>
+                                        <select id="transactionEntryTo" class="form-input"></select>
                                     </div>
                                 </div>
                                 <p class="form-hint">An empty side is Cash. Name both and the money moves without touching cash.</p>
                                 <div class="form-group">
-                                    <label for="cashbookEntryParticular">Particulars</label>
-                                    <input type="text" id="cashbookEntryParticular" class="form-input" autocomplete="off">
+                                    <label for="transactionEntryParticular">Particulars</label>
+                                    <input type="text" id="transactionEntryParticular" class="form-input" autocomplete="off">
                                 </div>
                             </form>
-                            <div id="cashbookEntryBulkPanel" style="display: none;">
+                            <div id="transactionEntryBulkPanel" style="display: none;">
                                 <div class="form-group">
                                     <div class="bulk-entry-label-row">
                                         <label for="bulkEntryInput">Entries</label>
@@ -599,9 +599,9 @@
                                 <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
                             </div>
                         </div>
-                        <div class="cashbook-entry-footer">
-                            <button type="button" id="cashbookEntryCancelBtn" class="btn btn-secondary">Cancel</button>
-                            <button type="submit" form="cashbookEntryForm" id="cashbookEntrySubmitBtn" class="btn btn-primary">Create</button>
+                        <div class="transaction-entry-footer">
+                            <button type="button" id="transactionEntryCancelBtn" class="btn btn-secondary">Cancel</button>
+                            <button type="submit" form="transactionEntryForm" id="transactionEntrySubmitBtn" class="btn btn-primary">Create</button>
                             <button type="button" id="bulkEntrySubmitBtn" class="btn btn-primary" style="display: none;" disabled>Create entries</button>
                         </div>
                     </div>
@@ -1162,7 +1162,7 @@
     <script src="js/orders-actions.js"></script>
     <script src="js/navigation.js"></script>
     <script src="js/data-api.js"></script>
-    <script src="js/cashbook.js"></script>
+    <script src="js/transactions.js"></script>
     <script src="js/ledgers.js"></script>
     <script src="js/trial-balance.js"></script>
     <script src="js/bills.js"></script>

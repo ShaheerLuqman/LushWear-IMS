@@ -16,7 +16,7 @@
     ],
     "shortcuts": [
         {
-            "name": "Create Cashbook Entry",
+            "name": "Create Transaction Entry",
             "short_name": "New Entry",
             "url": "./?action=create-entry",
             "icons": [

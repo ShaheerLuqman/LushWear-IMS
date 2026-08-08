@@ -89,7 +89,7 @@ class TestSystemLedgersCannotBeDeleted:
         assert response.json() == {"status": "deleted", "id": PLAIN}
 
     def test_a_ledger_with_postings_is_refused(self, make_client):
-        """Checked against journal_lines, not cashbook_entries: since Phase 1 an
+        """Checked against journal_lines, not transaction_entries: since Phase 1 an
         account can also be posted to by a bill or a manual entry, which would
         otherwise only be caught by the foreign key as a raw database error."""
         client = make_client(tables={
