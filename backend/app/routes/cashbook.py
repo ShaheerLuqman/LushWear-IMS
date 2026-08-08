@@ -43,7 +43,7 @@ def _normalize_entry_payload(payload: dict, is_create: bool = False) -> dict:
 
 def _get_entry_meta_or_404(supabase, org_id: str, entry_id: str) -> dict:
     resp = (
-        org_table(supabase, org_id, "cashbook_entries")
+        org_table(supabase, org_id, "finances_cashbook_entries")
         .select("order_number, from_account_id, to_account_id")
         .eq("id", entry_id)
         .limit(1)
@@ -73,7 +73,7 @@ def _ledger_balances(supabase, org_id: str, ledger_ids) -> List[dict]:
             ids.add(cash_id)
     if not ids:
         return []
-    resp = org_table(supabase, org_id, "ledger_balances").select("ledger_id, balance").in_("ledger_id", list(ids)).execute()
+    resp = org_table(supabase, org_id, "finances_ledger_balances").select("ledger_id, balance").in_("ledger_id", list(ids)).execute()
     found = {row["ledger_id"]: float(row["balance"]) for row in resp.data or []}
     return [{"ledger_id": lid, "balance": found.get(lid, 0.0)} for lid in ids]
 
@@ -92,7 +92,7 @@ def _split_existing_by_idempotency_key(supabase, org_id: str, payloads: List[dic
     keys = [p["idempotency_key"] for p in payloads if p.get("idempotency_key")]
     if not keys:
         return {}, payloads
-    resp = org_table(supabase, org_id, "cashbook_entries").select("*").in_("idempotency_key", keys).execute()
+    resp = org_table(supabase, org_id, "finances_cashbook_entries").select("*").in_("idempotency_key", keys).execute()
     existing_by_key = {row["idempotency_key"]: row for row in resp.data or []}
     to_insert = [p for p in payloads if p.get("idempotency_key") not in existing_by_key]
     return existing_by_key, to_insert
@@ -106,7 +106,7 @@ async def get_cashbook_entries(
 ):
     supabase = get_supabase()
     query = (
-        org_table(supabase, org_id, "cashbook_entries")
+        org_table(supabase, org_id, "finances_cashbook_entries")
         .select("*")
         .order("entry_date", desc=False)
         .order("created_at", desc=False)
@@ -135,7 +135,7 @@ async def create_cashbook_entry(entry: CashbookEntryCreate, org_id: str = Depend
             entry["ledger_balances"] = _ledger_balances(supabase, org_id, _sides(entry))
             return entry
 
-    response = org_table(supabase, org_id, "cashbook_entries").insert(payload).execute()
+    response = org_table(supabase, org_id, "finances_cashbook_entries").insert(payload).execute()
     if not response.data:
         raise HTTPException(status_code=500, detail="Failed to create cashbook entry")
 
@@ -171,7 +171,7 @@ async def create_cashbook_entries_bulk(entries: List[CashbookEntryCreate], org_i
 
     inserted = []
     if to_insert:
-        response = org_table(supabase, org_id, "cashbook_entries").insert(to_insert).execute()
+        response = org_table(supabase, org_id, "finances_cashbook_entries").insert(to_insert).execute()
         if not response.data:
             raise HTTPException(status_code=500, detail="Failed to create cashbook entries")
         inserted = response.data
@@ -222,7 +222,7 @@ async def update_cashbook_entry(entry_id: str, entry: CashbookEntryUpdate, org_i
             detail="From and To cannot be the same account.",
         )
 
-    response = org_table(supabase, org_id, "cashbook_entries").update(payload).eq("id", entry_id).execute()
+    response = org_table(supabase, org_id, "finances_cashbook_entries").update(payload).eq("id", entry_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Cashbook entry not found")
 
@@ -255,7 +255,7 @@ async def delete_cashbook_entry(entry_id: str, org_id: str = Depends(get_org_id)
     order_number = old_meta.get("order_number")
     sides = _sides(old_meta)
 
-    response = org_table(supabase, org_id, "cashbook_entries").delete().eq("id", entry_id).execute()
+    response = org_table(supabase, org_id, "finances_cashbook_entries").delete().eq("id", entry_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Cashbook entry not found")
 
@@ -276,7 +276,7 @@ async def get_cashbook_entry_audit_log(
     cashbook_entry_audit_log in supabase_schema.sql. Records what was deleted
     and when, not who (no per-user identity exists yet)."""
     query = (
-        org_table(get_supabase(), org_id, "cashbook_entry_audit_log")
+        org_table(get_supabase(), org_id, "finances_cashbook_entry_audit_log")
         .select("*")
         .order("deleted_at", desc=True)
     )
@@ -292,7 +292,7 @@ async def get_cashbook_entry_audit_log(
 
 def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
     response = (
-        org_table(supabase, org_id, "cashbook_daily_balances")
+        org_table(supabase, org_id, "finances_cashbook_daily_balances")
         .select("*")
         .eq("balance_date", target_date.isoformat())
         .limit(1)
@@ -304,7 +304,7 @@ def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
     # No record yet: derive opening from the previous day's closing.
     prev_date = (target_date - timedelta(days=1)).isoformat()
     prev_resp = (
-        org_table(supabase, org_id, "cashbook_daily_balances")
+        org_table(supabase, org_id, "finances_cashbook_daily_balances")
         .select("closing_balance")
         .eq("balance_date", prev_date)
         .limit(1)
@@ -322,7 +322,7 @@ def _fetch_daily_balance(supabase, org_id: str, target_date: date) -> dict:
 
 def _fetch_entries_for_date(supabase, org_id: str, target_date: date) -> list:
     response = (
-        org_table(supabase, org_id, "cashbook_entries")
+        org_table(supabase, org_id, "finances_cashbook_entries")
         .select("*")
         .eq("entry_date", target_date.isoformat())
         .order("created_at", desc=False)

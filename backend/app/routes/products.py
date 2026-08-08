@@ -30,11 +30,11 @@ async def _fetch_products_and_variants(org_id: str) -> Tuple[List[dict], List[di
     truncated - unlikely today (139 products / 579 variants) but not guarded against."""
     def fetch_products():
         client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        return fetch_all(lambda: org_table(client, org_id, "products").select("*"))
+        return fetch_all(lambda: org_table(client, org_id, "shopify_products").select("*"))
 
     def fetch_variants():
         client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-        return fetch_all(lambda: org_table(client, org_id, "variants").select("*"))
+        return fetch_all(lambda: org_table(client, org_id, "shopify_variants").select("*"))
 
     return await asyncio.gather(asyncio.to_thread(fetch_products), asyncio.to_thread(fetch_variants))
 
@@ -55,14 +55,17 @@ async def get_all_products(org_id: str = Depends(get_org_id)):
     """Get all products with their variants"""
     try:
         supabase = get_supabase()
-        # variants(*) is a PostgREST embed over the variants -> products FK - one
-        # query does the join server-side instead of fetching both full tables
-        # and grouping them into a dict here.
-        products = fetch_all(lambda: org_table(supabase, org_id, "products").select("*, variants(*)"))
+        # shopify_variants(*) is a PostgREST embed over the shopify_variants -> shopify_products
+        # FK - one query does the join server-side instead of fetching both full
+        # tables and grouping them into a dict here. Renamed back to `variants`
+        # on the way out - that's this endpoint's own response shape, not the
+        # embed's table name.
+        products = fetch_all(lambda: org_table(supabase, org_id, "shopify_products").select("*, shopify_variants(*)"))
 
         for product in products:
-            product_variants = product.get("variants") or []
+            product_variants = product.pop("shopify_variants", None) or []
             product_variants.sort(key=lambda v: v.get("title", ""))
+            product["variants"] = product_variants
             product["total_quantity"] = sum(v.get("quantity", 0) for v in product_variants)
 
         # Sort case-insensitively
@@ -194,7 +197,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             batch_size = 1000
             for i in range(0, len(products_to_insert), batch_size):
                 batch = products_to_insert[i:i + batch_size]
-                result = org_table(supabase, org_id, "products").insert(batch).execute()
+                result = org_table(supabase, org_id, "shopify_products").insert(batch).execute()
                 created_products_count += len(batch)
                 # Map shopify_product_id to new product id
                 for product in result.data:
@@ -206,7 +209,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             batch_size = 1000
             for i in range(0, len(products_to_update), batch_size):
                 batch = products_to_update[i:i + batch_size]
-                org_table(supabase, org_id, "products").upsert(batch, on_conflict="id").execute()
+                org_table(supabase, org_id, "shopify_products").upsert(batch, on_conflict="id").execute()
                 updated_products_count += len(batch)
         
         # Now process variants for all active products
@@ -257,7 +260,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             batch_size = 1000
             for i in range(0, len(variants_to_insert), batch_size):
                 batch = variants_to_insert[i:i + batch_size]
-                org_table(supabase, org_id, "variants").insert(batch).execute()
+                org_table(supabase, org_id, "shopify_variants").insert(batch).execute()
                 created_variants_count += len(batch)
 
         # Update existing variants
@@ -266,7 +269,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             batch_size = 1000
             for i in range(0, len(variants_to_update), batch_size):
                 batch = variants_to_update[i:i + batch_size]
-                org_table(supabase, org_id, "variants").upsert(batch, on_conflict="id").execute()
+                org_table(supabase, org_id, "shopify_variants").upsert(batch, on_conflict="id").execute()
                 updated_variants_count += len(batch)
         
         # Calculate totals
@@ -330,7 +333,7 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
             # though this only ever updates. Reading it back org-scoped also drops any id
             # belonging to another org - upsert, unlike update, has no WHERE to filter on.
             existing = (
-                org_table(supabase, org_id, "products")
+                org_table(supabase, org_id, "shopify_products")
                 .select("id, name")
                 .in_("id", list(cost_price_by_id))
                 .execute().data or []
@@ -340,7 +343,7 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
                 for p in existing
             ]
             if payload:
-                response = org_table(supabase, org_id, "products").upsert(payload, on_conflict="id").execute()
+                response = org_table(supabase, org_id, "shopify_products").upsert(payload, on_conflict="id").execute()
                 updated_count = len(response.data or [])
 
         return {
@@ -364,7 +367,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             raise HTTPException(status_code=400, detail="product_id is required")
 
         prod = (
-            org_table(supabase, org_id, "products").select("name").eq("id", product_id).limit(1).execute().data
+            org_table(supabase, org_id, "shopify_products").select("name").eq("id", product_id).limit(1).execute().data
         )
         if not prod:
             raise HTTPException(status_code=404, detail="Product not found")
@@ -375,7 +378,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         # Cost lookup by product id (preferred) and by lowercased product name (fallback), both against line_items.
         costs: Dict[str, float] = {}
         costs_by_id: Dict[str, float] = {}
-        for p in org_table(supabase, org_id, "products").select("id, name, cost_price").execute().data or []:
+        for p in org_table(supabase, org_id, "shopify_products").select("id, name, cost_price").execute().data or []:
             try:
                 cost_val = float(p.get("cost_price") or 0)
             except (TypeError, ValueError):
@@ -407,9 +410,9 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                     order_rows.append(r)
 
         # 1) order_receiving_date on/after cutoff
-        _collect(lambda: org_table(supabase, org_id, "orders").select(select_cols).gte("order_receiving_date", after))
+        _collect(lambda: org_table(supabase, org_id, "shopify_orders").select(select_cols).gte("order_receiving_date", after))
         # 2) order_receiving_date is null, fall back to created_at
-        _collect(lambda: org_table(supabase, org_id, "orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
+        _collect(lambda: org_table(supabase, org_id, "shopify_orders").select(select_cols).is_("order_receiving_date", "null").gte("created_at", after))
 
         scanned = updated = 0
         updated_order_numbers: List[int] = []
@@ -458,7 +461,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             old = money(row.get("cost_price"))
             if old == new_cost:
                 continue
-            org_table(supabase, org_id, "orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
+            org_table(supabase, org_id, "shopify_orders").update({"cost_price": new_cost, "updated_at": now_iso}).eq("id", row["id"]).execute()
             updated += 1
             num = row.get("order_number")
             if num is not None:
@@ -485,14 +488,14 @@ async def get_product(product_id: str, org_id: str = Depends(get_org_id)):
         supabase = get_supabase()
 
         # Get product
-        response = org_table(supabase, org_id, "products").select("*").eq("id", product_id).single().execute()
+        response = org_table(supabase, org_id, "shopify_products").select("*").eq("id", product_id).single().execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Product not found")
 
         product = response.data
 
         # Get variants for this product
-        variants_response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).execute()
+        variants_response = org_table(supabase, org_id, "shopify_variants").select("*").eq("product_id", product_id).execute()
         product["variants"] = variants_response.data or []
         product["total_quantity"] = sum(v.get("quantity", 0) for v in product["variants"])
         
@@ -516,7 +519,7 @@ async def create_product(product: ProductCreate, org_id: str = Depends(get_org_i
         product_data["updated_at"] = current_time
 
         # Insert product
-        response = org_table(supabase, org_id, "products").insert(product_data).execute()
+        response = org_table(supabase, org_id, "shopify_products").insert(product_data).execute()
         created_product = response.data[0]
         product_id = created_product["id"]
 
@@ -532,7 +535,7 @@ async def create_product(product: ProductCreate, org_id: str = Depends(get_org_i
                 variants_data.append(variant_dict)
 
             if variants_data:
-                variants_response = org_table(supabase, org_id, "variants").insert(variants_data).execute()
+                variants_response = org_table(supabase, org_id, "shopify_variants").insert(variants_data).execute()
                 created_variants = variants_response.data
         
         created_product["variants"] = created_variants
@@ -553,13 +556,13 @@ async def update_product(product_id: str, product: ProductUpdate, org_id: str = 
         update_data = {k: v for k, v in product.model_dump().items() if v is not None}
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        response = org_table(supabase, org_id, "products").update(update_data).eq("id", product_id).execute()
+        response = org_table(supabase, org_id, "shopify_products").update(update_data).eq("id", product_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Product not found")
 
         # Return product with variants
         updated_product = response.data[0]
-        variants_response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).execute()
+        variants_response = org_table(supabase, org_id, "shopify_variants").select("*").eq("product_id", product_id).execute()
         updated_product["variants"] = variants_response.data or []
         updated_product["total_quantity"] = sum(v.get("quantity", 0) for v in updated_product["variants"])
         
@@ -575,7 +578,7 @@ async def delete_product(product_id: str, org_id: str = Depends(get_org_id)):
     """Delete a product (variants are deleted automatically via CASCADE)"""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "products").delete().eq("id", product_id).execute()
+        response = org_table(supabase, org_id, "shopify_products").delete().eq("id", product_id).execute()
         return {"message": "Product deleted successfully"}
     except HTTPException:
         raise
@@ -591,8 +594,8 @@ async def search_products(query: str, org_id: str = Depends(get_org_id)):
 
         # Same embed as get_all_products - the join happens in Postgres, not here.
         response = (
-            org_table(supabase, org_id, "products")
-            .select("*, variants(*)")
+            org_table(supabase, org_id, "shopify_products")
+            .select("*, shopify_variants(*)")
             .ilike("name", f"%{query}%")
             .execute()
         )
@@ -602,7 +605,7 @@ async def search_products(query: str, org_id: str = Depends(get_org_id)):
             return []
 
         for product in products:
-            product["variants"] = product.get("variants") or []
+            product["variants"] = product.pop("shopify_variants", None) or []
             product["total_quantity"] = sum(v.get("quantity", 0) for v in product["variants"])
 
         return products
@@ -619,7 +622,7 @@ async def get_product_variants(product_id: str, org_id: str = Depends(get_org_id
     """Get all variants for a product"""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "variants").select("*").eq("product_id", product_id).order("title").execute()
+        response = org_table(supabase, org_id, "shopify_variants").select("*").eq("product_id", product_id).order("title").execute()
         return response.data
     except HTTPException:
         raise
@@ -635,7 +638,7 @@ async def create_variant(product_id: str, variant: VariantCreate, org_id: str = 
         current_time = datetime.now(timezone.utc).isoformat()
 
         # Verify product exists
-        product_response = org_table(supabase, org_id, "products").select("id").eq("id", product_id).single().execute()
+        product_response = org_table(supabase, org_id, "shopify_products").select("id").eq("id", product_id).single().execute()
         if not product_response.data:
             raise HTTPException(status_code=404, detail="Product not found")
 
@@ -644,7 +647,7 @@ async def create_variant(product_id: str, variant: VariantCreate, org_id: str = 
         variant_data["created_at"] = current_time
         variant_data["updated_at"] = current_time
 
-        response = org_table(supabase, org_id, "variants").insert(variant_data).execute()
+        response = org_table(supabase, org_id, "shopify_variants").insert(variant_data).execute()
         return response.data[0]
     except HTTPException:
         raise
@@ -660,7 +663,7 @@ async def update_variant(product_id: str, variant_id: str, variant: VariantUpdat
         update_data = {k: v for k, v in variant.model_dump().items() if v is not None}
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-        response = org_table(supabase, org_id, "variants").update(update_data).eq("id", variant_id).eq("product_id", product_id).execute()
+        response = org_table(supabase, org_id, "shopify_variants").update(update_data).eq("id", variant_id).eq("product_id", product_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Variant not found")
 
@@ -676,7 +679,7 @@ async def delete_variant(product_id: str, variant_id: str, org_id: str = Depends
     """Delete a variant"""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "variants").delete().eq("id", variant_id).eq("product_id", product_id).execute()
+        response = org_table(supabase, org_id, "shopify_variants").delete().eq("id", variant_id).eq("product_id", product_id).execute()
         return {"message": "Variant deleted successfully"}
     except HTTPException:
         raise

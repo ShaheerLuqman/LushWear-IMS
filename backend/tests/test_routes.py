@@ -19,7 +19,7 @@ class TestHealthAndAuth:
         assert client.get("/api/orders/?month=6&year=2026").status_code == 401
 
     def test_ready_checks_supabase_connectivity(self, make_client):
-        r = make_client({"organizations": [{"id": "org1"}]}).get("/ready")
+        r = make_client({"system_organizations": [{"id": "org1"}]}).get("/ready")
         assert r.status_code == 200
         assert r.json() == {"status": "ready"}
 
@@ -69,36 +69,36 @@ class TestRateLimiting:
 
 class TestOrders:
     def test_list_returns_rows(self, make_client, order_row):
-        r = make_client({"orders": [order_row]}).get("/api/orders/?month=6&year=2026")
+        r = make_client({"shopify_orders": [order_row]}).get("/api/orders/?month=6&year=2026")
         assert r.status_code == 200
         assert [o["order_number"] for o in r.json()] == [11308]
 
     def test_empty_table_returns_empty_list(self, make_client):
-        r = make_client({"orders": []}).get("/api/orders/?month=6&year=2026")
+        r = make_client({"shopify_orders": []}).get("/api/orders/?month=6&year=2026")
         assert r.status_code == 200
         assert r.json() == []
 
     def test_response_is_shaped_by_the_order_model(self, make_client, order_row):
         noisy = {**order_row, "internal_debug_column": "should not be exposed"}
-        body = make_client({"orders": [noisy]}).get("/api/orders/?month=6&year=2026").json()[0]
+        body = make_client({"shopify_orders": [noisy]}).get("/api/orders/?month=6&year=2026").json()[0]
         assert "internal_debug_column" not in body
         assert body["total_amount"] == 2598.0
 
     def test_period_is_required(self, make_client, order_row):
-        client = make_client({"orders": [order_row]})
+        client = make_client({"shopify_orders": [order_row]})
         assert client.get("/api/orders/").status_code == 422
         assert client.get("/api/orders/?month=6").status_code == 422
         assert client.get("/api/orders/?year=2026").status_code == 422
 
     def test_month_query_is_validated(self, make_client, order_row):
-        client = make_client({"orders": [order_row]})
+        client = make_client({"shopify_orders": [order_row]})
         assert client.get("/api/orders/?month=13&year=2026").status_code == 422
         assert client.get("/api/orders/?month=6&year=2026").status_code == 200
 
     def test_create_order_returns_the_typed_order(self, make_client, order_row):
         # FakeQuery.insert().execute() just echoes the seeded row for the table,
         # not the request payload - order_row (conftest.py) is a full Order shape.
-        client = make_client({"orders": [order_row]})
+        client = make_client({"shopify_orders": [order_row]})
         payload = {
             "order_number": 123,
             "courier": "PostEx",
@@ -115,7 +115,7 @@ class TestOrders:
         eligible_candidates_count/fetch_batch_size/updated_order_numbers, which
         the main return always includes - a real response_model would 500 on
         this path if the two shapes disagree again."""
-        r = make_client({"orders": []}).post("/api/orders/fix-voided-totals")
+        r = make_client({"shopify_orders": []}).post("/api/orders/fix-voided-totals")
         assert r.status_code == 200
         assert r.json() == {
             "updated_count": 0,
@@ -165,7 +165,7 @@ class TestOrders:
             return None  # simulates "not found in Shopify" - simplest path through the endpoint
 
         monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
-        client = make_client({"products": [], "variants": [], "orders": []})
+        client = make_client({"shopify_products": [], "shopify_variants": [], "shopify_orders": []})
         r = client.post("/api/orders/sync-shopify-force", json={"order_numbers": [100]})
         assert r.status_code == 200
         body = r.json()
@@ -179,7 +179,7 @@ class TestOrders:
             return None
 
         monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
-        client = make_client({"orders": [
+        client = make_client({"shopify_orders": [
             {"id": "o1", "order_number": 100, "total_amount": 100.0, "advance_amount": 0.0, "order_status": "unfulfilled"},
         ]})
         r = client.post("/api/orders/recalculate-totals", json={"order_numbers": [100]})
@@ -198,11 +198,11 @@ class TestOrders:
             "created_at": "2026-07-30T12:00:00+00:00",
         }
         client = make_client({
-            "orders": [
+            "shopify_orders": [
                 {"order_number": "100", "order_status": "unfulfilled"},
                 {"order_number": "101", "order_status": "unfulfilled"},
             ],
-            "load_sheet_logs": [seeded_log],
+            "shopify_load_sheet_logs": [seeded_log],
         })
         payload = {
             "assignment_number": "A100",
@@ -252,11 +252,11 @@ class TestMonthSummaryDetail:
         }
         client = make_client(
             {
-                "orders": [
+                "shopify_orders": [
                     {"order_status": "delivered", "line_items": [{"name": "Silk Robe", "qty": 2, "product_id": None}]},
                     {"order_status": "cancelled", "line_items": [{"name": "Silk Robe", "qty": 5, "product_id": None}]},
                 ],
-                "products": [{"id": "p1", "name": "Silk Robe", "collection": "Silk Collection", "price": 100.0}],
+                "shopify_products": [{"id": "p1", "name": "Silk Robe", "collection": "Silk Collection", "price": 100.0}],
             },
             rpc_results={"get_month_summary_totals": [totals_row]},
         )
@@ -276,7 +276,7 @@ class TestMonthSummaryDetail:
         assert silk["sum"] == 200.0
 
     def test_invalid_month_is_rejected(self, make_client):
-        client = make_client({"orders": [], "products": []})
+        client = make_client({"shopify_orders": [], "shopify_products": []})
         r = client.get("/api/orders/month-summary/13/2026")
         assert r.status_code == 400
 
@@ -308,7 +308,7 @@ class TestGenerateInvoice:
         monkeypatch.setattr(orders_module, "_build_invoice_order_context", fake_build_context)
         monkeypatch.setattr(orders_module, "_generate_pdf_invoice", fake_generate_pdf)
 
-        client = make_client({"orders": [
+        client = make_client({"shopify_orders": [
             {"id": "o1", "order_number": 100},
             {"id": "o2", "order_number": 200},
         ]})
@@ -362,7 +362,7 @@ class TestPostexCsvUpload:
         return header + body
 
     def test_matches_updates_and_skips_cancelled_and_unmatched_orders(self, make_client):
-        client = make_client({"orders": [
+        client = make_client({"shopify_orders": [
             {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
              "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
             {"id": "o2", "order_number": 101, "total_amount": 500.0, "advance_amount": 0.0,
@@ -388,7 +388,7 @@ class TestPostexCsvUpload:
         changed columns is rejected outright, even though the row always exists."""
         import app.routes.orders as orders_module
 
-        client = make_client({"orders": [
+        client = make_client({"shopify_orders": [
             {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
              "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ]})
@@ -397,7 +397,7 @@ class TestPostexCsvUpload:
             files={"file": ("postex.csv", self._csv((100, 200)), "text/csv")},
         )
 
-        written = orders_module.get_supabase().upserted["orders"]
+        written = orders_module.get_supabase().upserted["shopify_orders"]
         assert len(written) == 1
         assert written[0]["order_number"] == 100
         assert written[0]["order_status"] == "unfulfilled"
@@ -406,7 +406,7 @@ class TestPostexCsvUpload:
         assert written[0]["courier"] == "PostEx"
 
     def test_non_csv_file_is_rejected(self, make_client):
-        client = make_client({"orders": []})
+        client = make_client({"shopify_orders": []})
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.txt", b"not a csv", "text/plain")},
@@ -416,16 +416,16 @@ class TestPostexCsvUpload:
 
 class TestLedgers:
     def test_list(self, make_client, ledger_row):
-        r = make_client({"ledgers": [ledger_row]}).get("/api/ledgers/")
+        r = make_client({"finances_ledgers": [ledger_row]}).get("/api/ledgers/")
         assert r.status_code == 200
         assert r.json()[0]["name"] == "Lushwear MZB"
 
     def test_missing_ledger_is_404(self, make_client):
-        r = make_client({"ledgers": []}).get("/api/ledgers/does-not-exist")
+        r = make_client({"finances_ledgers": []}).get("/api/ledgers/does-not-exist")
         assert r.status_code == 404
 
     def test_create_rejects_blank_name(self, make_client):
-        r = make_client({"ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Asset"})
+        r = make_client({"finances_ledgers": []}).post("/api/ledgers/", json={"name": "  ", "type": "Asset"})
         assert r.status_code == 422
 
     def test_delete_blocked_while_entries_are_posted_against_it(self, make_client, ledger_row):
@@ -434,15 +434,15 @@ class TestLedgers:
         entry, and those would otherwise only be caught by the ON DELETE RESTRICT
         foreign key, surfacing as a raw database error."""
         client = make_client({
-            "ledgers": [ledger_row],
-            "journal_lines": [{"id": "jl-1", "account_id": ledger_row["id"]}],
+            "finances_ledgers": [ledger_row],
+            "finances_journal_lines": [{"id": "jl-1", "account_id": ledger_row["id"]}],
         })
         r = client.delete(f"/api/ledgers/{ledger_row['id']}")
         assert r.status_code == 400
         assert "entries posted against it" in r.json()["detail"]
 
     def test_delete_returns_the_typed_result(self, make_client, ledger_row):
-        client = make_client({"ledgers": [ledger_row], "journal_lines": []})
+        client = make_client({"finances_ledgers": [ledger_row], "finances_journal_lines": []})
         r = client.delete(f"/api/ledgers/{ledger_row['id']}")
         assert r.status_code == 200
         assert r.json() == {"status": "deleted", "id": ledger_row["id"]}
@@ -452,7 +452,7 @@ class TestProducts:
     def test_create_returns_the_typed_shape(self, make_client):
         # FakeQuery.insert().execute() just echoes the seeded row for the table,
         # not the request payload.
-        client = make_client({"products": [{"id": "p1", "name": "Test Product", "price": 10.0}]})
+        client = make_client({"shopify_products": [{"id": "p1", "name": "Test Product", "price": 10.0}]})
         r = client.post("/api/products/", json={"name": "Test Product", "price": 10.0})
         assert r.status_code == 200
         body = r.json()
@@ -461,18 +461,19 @@ class TestProducts:
         assert body["total_quantity"] == 0
 
     def test_list_groups_variants_via_the_embed_not_in_python(self, make_client):
-        # Shaped like a real PostgREST `select=*, variants(*)` response: variants
-        # already nested under their product, not two flat tables to zip together.
+        # Shaped like a real PostgREST `select=*, shopify_variants(*)` response:
+        # variants already nested under their product, not two flat tables to
+        # zip together.
         def variant(vid, product_id, title, quantity):
             return {"id": vid, "product_id": product_id, "title": title, "quantity": quantity}
 
         products = [
-            {"id": "p2", "name": "banana", "variants": [variant("v3", "p2", "M", 3)]},
-            {"id": "p1", "name": "Apple", "variants": [
+            {"id": "p2", "name": "banana", "shopify_variants": [variant("v3", "p2", "M", 3)]},
+            {"id": "p1", "name": "Apple", "shopify_variants": [
                 variant("v1", "p1", "L", 2), variant("v2", "p1", "M", 5),
             ]},
         ]
-        r = make_client({"products": products}).get("/api/products/")
+        r = make_client({"shopify_products": products}).get("/api/products/")
         assert r.status_code == 200
         body = r.json()
         assert [p["name"] for p in body] == ["Apple", "banana"]
@@ -483,7 +484,7 @@ class TestProducts:
     def test_batch_update_cost_prices_is_a_single_batched_upsert(self, make_client):
         import app.routes.products as products_module
 
-        client = make_client({"products": [
+        client = make_client({"shopify_products": [
             {"id": "p1", "name": "Apple", "cost_price": 100.0},
             {"id": "p2", "name": "banana", "cost_price": 200.0},
         ]})
@@ -497,13 +498,13 @@ class TestProducts:
         assert r.json()["updated_count"] == 2
         # name is NOT NULL without a default, and an upsert is INSERT ... ON CONFLICT -
         # Postgres null-checks the proposed row before it resolves the conflict.
-        written = products_module.get_supabase().upserted["products"]
+        written = products_module.get_supabase().upserted["shopify_products"]
         assert [(p["id"], p["name"], p["cost_price"]) for p in written] == [
             ("p1", "Apple", 150.0), ("p2", "banana", 250.0),
         ]
 
     def test_batch_update_with_no_updates_is_a_no_op(self, make_client):
-        r = make_client({"products": []}).put(
+        r = make_client({"shopify_products": []}).put(
             "/api/products/batch-update-cost-prices", json={"updates": []}
         )
         assert r.status_code == 200
@@ -516,20 +517,20 @@ class TestCashbook:
     supplier transfer out of Cash in Hand."""
 
     def test_create_rejects_non_positive_amount(self, make_client):
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 0, "from_account_id": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code == 422
 
     def test_create_rejects_an_entry_with_neither_side(self, make_client):
         """Both sides cash moves nothing."""
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 10}
         r = client.post("/api/cashbook/entries", json=payload)
         assert r.status_code == 422
         assert "From or a To account" in r.text
 
     def test_create_rejects_the_same_account_on_both_sides(self, make_client):
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         payload = {
             "entry_date": "2026-07-18", "amount": 10,
             "from_account_id": "abc", "to_account_id": "abc",
@@ -540,13 +541,13 @@ class TestCashbook:
 
     def test_one_sided_entry_is_accepted(self, make_client):
         """The omitted side is cash — this is the ordinary cashbook line."""
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         payload = {"entry_date": "2026-07-18", "amount": 10, "from_account_id": "abc"}
         assert client.post("/api/cashbook/entries", json=payload).status_code != 422
 
     def test_two_sided_entry_is_accepted(self, make_client):
         """Bank pays supplier: both sides named, so cash is untouched."""
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         payload = {
             "entry_date": "2026-07-18", "amount": 10,
             "from_account_id": "bank", "to_account_id": "supplier",
@@ -558,7 +559,7 @@ class TestCashbook:
         to be checked against the merged result — otherwise it reaches the
         database and comes back as a constraint violation, i.e. a 500."""
         client = make_client({
-            "cashbook_entries": [{
+            "finances_cashbook_entries": [{
                 "order_number": None,
                 "from_account_id": None,
                 "to_account_id": "ledger-1",
@@ -571,7 +572,7 @@ class TestCashbook:
 
     def test_update_clearing_the_only_side_is_a_400(self, make_client):
         client = make_client({
-            "cashbook_entries": [{
+            "finances_cashbook_entries": [{
                 "order_number": None,
                 "from_account_id": None,
                 "to_account_id": "ledger-1",
@@ -585,7 +586,7 @@ class TestCashbook:
     def test_update_moving_a_side_to_another_account_is_allowed(self, make_client):
         # A full row: the update echoes it back through the CashbookEntry model.
         client = make_client({
-            "cashbook_entries": [{
+            "finances_cashbook_entries": [{
                 "id": "entry-1",
                 "entry_date": "2026-08-01",
                 "amount": 20000.0,
@@ -600,7 +601,7 @@ class TestCashbook:
         assert r.status_code == 200, r.text
 
     def test_update_of_missing_entry_is_404(self, make_client):
-        client = make_client({"cashbook_entries": []})
+        client = make_client({"finances_cashbook_entries": []})
         r = client.put("/api/cashbook/entries/nope", json={"description": "x"})
         assert r.status_code == 404
 
@@ -608,12 +609,12 @@ class TestCashbook:
         """Both named accounts need refreshing, not just one — deleting an entry
         moves whichever ledgers it touched."""
         client = make_client({
-            "cashbook_entries": [{
+            "finances_cashbook_entries": [{
                 "order_number": None,
                 "from_account_id": "ledger-1",
                 "to_account_id": None,
             }],
-            "ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
+            "finances_ledger_balances": [{"ledger_id": "ledger-1", "balance": 42.5}],
         })
         r = client.delete("/api/cashbook/entries/entry-1")
         assert r.status_code == 200
@@ -628,13 +629,13 @@ class TestCashbook:
         ledger's balance — so it needs refreshing too, even though the entry
         stores the side as NULL and names no ledger."""
         client = make_client({
-            "cashbook_entries": [{
+            "finances_cashbook_entries": [{
                 "order_number": None,
                 "from_account_id": "ledger-1",
                 "to_account_id": None,
             }],
-            "ledgers": [{"id": "cash-ledger", "system_key": "cash"}],
-            "ledger_balances": [
+            "finances_ledgers": [{"id": "cash-ledger", "system_key": "cash"}],
+            "finances_ledger_balances": [
                 {"ledger_id": "ledger-1", "balance": 42.5},
                 {"ledger_id": "cash-ledger", "balance": 900.0},
             ],
@@ -654,7 +655,7 @@ class TestErrorHandling:
         import app.routes.ledger as ledger
         from fastapi.testclient import TestClient
 
-        make_client({"ledgers": []})  # installs the auth override
+        make_client({"finances_ledgers": []})  # installs the auth override
 
         def boom():
             raise RuntimeError("connection string with a secret in it")

@@ -84,8 +84,8 @@ def make_client():
         # Default: both features enabled for "test-org", so the require_feature
         # router gate (main.py) doesn't 403 every pre-existing orders/products/
         # cashbook/ledger test - tests exercising a disabled feature pass their
-        # own "organizations" rows to override this.
-        tables.setdefault("organizations", [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}])
+        # own "system_organizations" rows to override this.
+        tables.setdefault("system_organizations", [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}])
         fake = FakeSupabase(tables, rpc_results)
         # role="admin" so users.router's require_role("admin") gate (which wraps
         # require_auth) passes by default too; tests exercising the 403 case

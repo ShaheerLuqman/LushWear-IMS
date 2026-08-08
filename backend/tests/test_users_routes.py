@@ -59,10 +59,10 @@ class _PassthroughQuery:
 class TestListUsers:
     def test_lists_memberships_joined_with_email(self, make_client):
         client = make_client({
-            "org_memberships": [
+            "system_org_memberships": [
                 {"user_id": "u1", "org_id": "org1", "role": "admin", "is_active": True, "created_at": "2026-01-01T00:00:00+00:00"},
             ],
-            "users": [{"id": "u1", "email": "admin@example.com"}],
+            "system_users": [{"id": "u1", "email": "admin@example.com"}],
         })
         _as(ADMIN_PAYLOAD)
         r = client.get("/api/users/")
@@ -73,7 +73,7 @@ class TestListUsers:
         assert body[0]["role"] == "admin"
 
     def test_no_memberships_returns_empty_list(self, make_client):
-        client = make_client({"org_memberships": []})
+        client = make_client({"system_org_memberships": []})
         _as(ADMIN_PAYLOAD)
         r = client.get("/api/users/")
         assert r.status_code == 200
@@ -87,9 +87,9 @@ class TestCreateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _InsertTrackingQuery(select_rows=[], defaults={"id": "new-user-id"})
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _InsertTrackingQuery(select_rows=[], defaults={
                         "is_active": True, "created_at": "2026-01-01T00:00:00+00:00",
                     })
@@ -116,10 +116,10 @@ class TestCreateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     # Email already exists as an identity elsewhere.
                     return _PassthroughQuery([{"id": "existing-user-id", "email": "existing@example.com"}])
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _InsertTrackingQuery(select_rows=[], defaults={
                         "is_active": True, "created_at": "2026-01-01T00:00:00+00:00",
                     })
@@ -144,9 +144,9 @@ class TestCreateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([{"id": "existing-user-id", "email": "existing@example.com"}])
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     # Already has a membership row for this (user, org) pair.
                     return _PassthroughQuery([{"user_id": "existing-user-id", "org_id": "org1"}])
                 return _PassthroughQuery([])
@@ -166,7 +166,7 @@ class TestCreateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([])  # no existing identity
                 return _PassthroughQuery([])
 
@@ -185,7 +185,7 @@ class TestCreateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([])  # no existing identity
                 return _PassthroughQuery([])
 
@@ -203,7 +203,7 @@ class TestCreateUser:
 
 class TestUpdateUser:
     def test_missing_membership_is_404(self, make_client):
-        client = make_client({"org_memberships": []})
+        client = make_client({"system_org_memberships": []})
         _as(ADMIN_PAYLOAD)
         r = client.put("/api/users/some-user", json={"role": "staff"})
         assert r.status_code == 404
@@ -213,7 +213,7 @@ class TestUpdateUser:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _PassthroughQuery([
                         {"user_id": "u1", "org_id": "org1", "role": "admin", "is_active": True, "created_at": "2026-01-01T00:00:00+00:00"},
                     ])
@@ -265,9 +265,9 @@ class TestUpdateUser:
                 self._memberships = _MembershipsQuery()
 
             def table(self, name):
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return self._memberships
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([{"id": "u1", "email": "u1@example.com"}])
                 return _PassthroughQuery([])
 

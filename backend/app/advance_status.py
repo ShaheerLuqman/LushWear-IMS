@@ -80,7 +80,7 @@ def fetch_cashbook_advance_totals(supabase, org_id: str) -> Dict[str, float]:
         return totals
 
     rows = fetch_all(
-        lambda: org_table(supabase, org_id, "cashbook_entries")
+        lambda: org_table(supabase, org_id, "finances_cashbook_entries")
         .select("order_number, amount")
         # An advance is money received FROM the Orders account into cash.
         .eq("from_account_id", orders_ledger_id)
@@ -130,15 +130,15 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
             # concurrent threads crashes with a stream-read error.
             def fetch_chunk(chunk):
                 client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-                return org_table(client, org_id, "orders").select(orders_select).in_("order_number", chunk).execute().data or []
+                return org_table(client, org_id, "shopify_orders").select(orders_select).in_("order_number", chunk).execute().data or []
             with ThreadPoolExecutor(max_workers=min(_CONCURRENCY, len(chunks))) as pool:
                 orders = [row for rows in pool.map(fetch_chunk, chunks) for row in rows]
         elif chunks:
-            orders = fetch_all(lambda: org_table(supabase, org_id, "orders").select(orders_select).in_("order_number", chunks[0]))
+            orders = fetch_all(lambda: org_table(supabase, org_id, "shopify_orders").select(orders_select).in_("order_number", chunks[0]))
         else:
             orders = []
     else:
-        orders = fetch_all(lambda: org_table(supabase, org_id, "orders").select(orders_select))
+        orders = fetch_all(lambda: org_table(supabase, org_id, "shopify_orders").select(orders_select))
 
     to_update = []
     for o in orders:
@@ -154,6 +154,6 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
         # (unscoped) recompute, which can cover every order in the table.
         batch_size = 1000
         for i in range(0, len(to_update), batch_size):
-            org_table(supabase, org_id, "orders").upsert(to_update[i:i + batch_size], on_conflict="id").execute()
+            org_table(supabase, org_id, "shopify_orders").upsert(to_update[i:i + batch_size], on_conflict="id").execute()
 
     return len(to_update)

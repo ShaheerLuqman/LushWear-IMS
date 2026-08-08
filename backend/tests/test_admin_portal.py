@@ -29,7 +29,7 @@ class TestAuthorizationTiers:
     on list/impersonate but 403 on create-org and integration-settings."""
 
     def test_plain_admin_is_rejected_everywhere(self, make_client):
-        client = make_client({"organizations": [{"id": "org1", "name": "Acme"}]})
+        client = make_client({"system_organizations": [{"id": "org1", "name": "Acme"}]})
         _as(PLAIN_ADMIN_PAYLOAD)
         assert client.get("/api/admin/organizations").status_code == 403
         assert client.post("/api/admin/organizations/org1/impersonate").status_code == 403
@@ -43,7 +43,7 @@ class TestAuthorizationTiers:
 
     def test_impersonating_token_can_list_and_switch_but_not_administer(self, make_client):
         client = make_client({
-            "organizations": [{"id": "org1", "name": "Acme"}, {"id": "org2", "name": "Beta"}],
+            "system_organizations": [{"id": "org1", "name": "Acme"}, {"id": "org2", "name": "Beta"}],
         })
         _as(IMPERSONATING_PAYLOAD)
         assert client.get("/api/admin/organizations").status_code == 200
@@ -62,7 +62,7 @@ class TestAuthorizationTiers:
 
 class TestListOrganizations:
     def test_lists_all_orgs(self, make_client):
-        client = make_client({"organizations": [
+        client = make_client({"system_organizations": [
             {"id": "org1", "name": "Acme", "created_at": "2026-01-01T00:00:00+00:00"},
             {"id": "org2", "name": "Beta", "created_at": "2026-02-01T00:00:00+00:00"},
         ]})
@@ -78,7 +78,7 @@ class TestOrganizationUsers:
     org and what role, without impersonating in."""
 
     def test_missing_org_is_404(self, make_client):
-        client = make_client({"organizations": []})
+        client = make_client({"system_organizations": []})
         _as(SUPERADMIN_PAYLOAD)
         r = client.get("/api/admin/organizations/does-not-exist/users")
         assert r.status_code == 404
@@ -89,14 +89,14 @@ class TestOrganizationUsers:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "organizations":
+                if name == "system_organizations":
                     return _PassthroughQuery([{"id": "org1", "name": "Acme"}])
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _PassthroughQuery([
                         {"user_id": "u1", "org_id": "org1", "role": "admin", "is_active": True, "created_at": "2026-01-01T00:00:00+00:00"},
                         {"user_id": "u2", "org_id": "org1", "role": "staff", "is_active": False, "created_at": "2026-01-02T00:00:00+00:00"},
                     ])
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([
                         {"id": "u1", "email": "admin@acme.com"},
                         {"id": "u2", "email": "staff@acme.com"},
@@ -124,14 +124,14 @@ class TestOrganizationFeatures:
     Strict tier only (require_superadmin) - see TestAuthorizationTiers above."""
 
     def test_missing_org_is_404(self, make_client):
-        client = make_client({"organizations": []})
+        client = make_client({"system_organizations": []})
         _as(SUPERADMIN_PAYLOAD)
         r = client.get("/api/admin/organizations/does-not-exist/features")
         assert r.status_code == 404
 
     def test_read_returns_stored_features(self, make_client):
         client = make_client({
-            "organizations": [{"id": "org1", "name": "Acme", "enabled_features": ["orders"]}],
+            "system_organizations": [{"id": "org1", "name": "Acme", "enabled_features": ["orders"]}],
         })
         _as(SUPERADMIN_PAYLOAD)
         r = client.get("/api/admin/organizations/org1/features")
@@ -162,7 +162,7 @@ class TestOrganizationFeatures:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "organizations":
+                if name == "system_organizations":
                     return _StatefulQuery()
                 return _PassthroughQuery([])
 
@@ -223,9 +223,9 @@ class TestCreateOrganization:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _InsertTrackingQuery(select_rows=[], insert_defaults={"id": "u1"})
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _InsertTrackingQuery(select_rows=[], insert_defaults={
                         "is_active": True, "created_at": "2026-01-01T00:00:00+00:00",
                     })
@@ -255,11 +255,11 @@ class TestCreateOrganization:
 
         class _FakeSupabase:
             def table(self, name):
-                if name == "users":
+                if name == "system_users":
                     return _PassthroughQuery([{
                         "id": "existing-user-id", "email": "owner@acme.com", "password_hash": "hash",
                     }])
-                if name == "org_memberships":
+                if name == "system_org_memberships":
                     return _InsertTrackingQuery(select_rows=[], insert_defaults={
                         "is_active": True, "created_at": "2026-01-01T00:00:00+00:00",
                     })
@@ -282,13 +282,13 @@ class TestCreateOrganization:
 
 class TestImpersonate:
     def test_missing_org_is_404(self, make_client):
-        client = make_client({"organizations": []})
+        client = make_client({"system_organizations": []})
         _as(SUPERADMIN_PAYLOAD)
         r = client.post("/api/admin/organizations/does-not-exist/impersonate")
         assert r.status_code == 404
 
     def test_token_shape_from_real_superadmin(self, make_client):
-        client = make_client({"organizations": [{"id": "org1", "name": "Acme"}]})
+        client = make_client({"system_organizations": [{"id": "org1", "name": "Acme"}]})
         _as(SUPERADMIN_PAYLOAD)
         r = client.post("/api/admin/organizations/org1/impersonate")
         assert r.status_code == 200
@@ -300,7 +300,7 @@ class TestImpersonate:
         assert payload["exp"] - payload["iat"] == pytest.approx(3600, abs=5)
 
     def test_switching_preserves_original_superadmin_sub(self, make_client):
-        client = make_client({"organizations": [{"id": "org2", "name": "Beta"}]})
+        client = make_client({"system_organizations": [{"id": "org2", "name": "Beta"}]})
         _as(IMPERSONATING_PAYLOAD)  # already impersonating org1, as superadmin sa1
         r = client.post("/api/admin/organizations/org2/impersonate")
         assert r.status_code == 200
@@ -312,7 +312,7 @@ class TestImpersonate:
 
 class TestIntegrationSettings:
     def test_missing_org_is_404(self, make_client):
-        client = make_client({"organizations": []})
+        client = make_client({"system_organizations": []})
         _as(SUPERADMIN_PAYLOAD)
         r = client.get("/api/admin/organizations/does-not-exist/integration-settings")
         assert r.status_code == 404
@@ -350,11 +350,11 @@ class TestIntegrationSettings:
                 self.tables = tables
 
             def table(self, name):
-                if name == "org_integration_settings":
+                if name == "system_integration_settings":
                     return _StatefulQuery(self.tables.get(name, []))
                 return _PassthroughQuery(self.tables.get(name, []))
 
-        fake = _FakeSupabase({"organizations": [{"id": "org1", "name": "Acme"}]})
+        fake = _FakeSupabase({"system_organizations": [{"id": "org1", "name": "Acme"}]})
         client = make_client()
         _as(SUPERADMIN_PAYLOAD)
         monkeypatch.setattr(org_settings, "get_supabase", lambda: fake)

@@ -18,7 +18,7 @@ def get_or_create_identity(email: str, password: Optional[str], name: Optional[s
     and name are both ignored, they already have an identity - else creates a
     new one (`password` and `name` are then both required)."""
     supabase = get_supabase()
-    existing = supabase.table("users").select("*").eq("email", email).limit(1).execute().data
+    existing = supabase.table("system_users").select("*").eq("email", email).limit(1).execute().data
     if existing:
         return existing[0]
     if not password:
@@ -31,7 +31,7 @@ def get_or_create_identity(email: str, password: Optional[str], name: Optional[s
             status_code=400,
             detail="Name is required to create a new account for this email",
         )
-    return supabase.table("users").insert({
+    return supabase.table("system_users").insert({
         "email": email,
         "name": name,
         "password_hash": hash_password(password),
@@ -42,7 +42,7 @@ def add_membership(user_id: str, org_id: str, role: str) -> dict:
     """Adds an org_memberships row; 400s if one already exists for this pair."""
     supabase = get_supabase()
     existing = (
-        supabase.table("org_memberships")
+        supabase.table("system_org_memberships")
         .select("user_id")
         .eq("user_id", user_id)
         .eq("org_id", org_id)
@@ -52,7 +52,7 @@ def add_membership(user_id: str, org_id: str, role: str) -> dict:
     )
     if existing:
         raise HTTPException(status_code=400, detail="This user is already a member of this organization")
-    return supabase.table("org_memberships").insert({
+    return supabase.table("system_org_memberships").insert({
         "user_id": user_id,
         "org_id": org_id,
         "role": role,
@@ -65,7 +65,7 @@ def list_org_members(org_id: str) -> list:
     Superadmin Portal's read-only per-org view (routes/admin_portal.py)."""
     supabase = get_supabase()
     memberships = (
-        supabase.table("org_memberships")
+        supabase.table("system_org_memberships")
         .select("*")
         .eq("org_id", org_id)
         .order("created_at")
@@ -77,7 +77,7 @@ def list_org_members(org_id: str) -> list:
         return []
 
     user_ids = [m["user_id"] for m in memberships]
-    users = supabase.table("users").select("id, email, name").in_("id", user_ids).execute().data or []
+    users = supabase.table("system_users").select("id, email, name").in_("id", user_ids).execute().data or []
     by_id = {u["id"]: u for u in users}
     return [
         {

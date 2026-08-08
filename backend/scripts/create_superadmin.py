@@ -19,11 +19,11 @@ def main() -> None:
     name = sys.argv[3] if len(sys.argv) == 4 else ""
 
     supabase = get_supabase()
-    existing = supabase.table("users").select("id").eq("email", email).limit(1).execute().data
+    existing = supabase.table("system_users").select("id").eq("email", email).limit(1).execute().data
     if existing:
         raise SystemExit(f"A user with email {email!r} already exists.")
 
-    user = supabase.table("users").insert({
+    user = supabase.table("system_users").insert({
         "email": email,
         "name": name,
         "password_hash": hash_password(password),

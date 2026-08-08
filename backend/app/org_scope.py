@@ -9,24 +9,24 @@ through `org_table()`/`with_org_id()`/`with_org_id_many()` instead of calling
 """
 
 BUSINESS_TABLES = {
-    "products",
-    "variants",
-    "orders",
-    "load_sheet_logs",
-    "ledgers",
-    "cashbook_entries",
-    "cashbook_daily_balances",
-    "ledger_balances",
-    "cashbook_entry_audit_log",
-    "sync_status",
-    "journal_entries",
-    "journal_lines",
-    "bills",
-    "bill_items",
+    "shopify_products",
+    "shopify_variants",
+    "shopify_orders",
+    "shopify_load_sheet_logs",
+    "finances_ledgers",
+    "finances_cashbook_entries",
+    "finances_cashbook_daily_balances",
+    "finances_ledger_balances",
+    "finances_cashbook_entry_audit_log",
+    "shopify_sync_status",
+    "finances_journal_entries",
+    "finances_journal_lines",
+    "finances_bills",
+    "finances_bill_items",
     # A view, not a table (bills + derived paid/outstanding/payment_status), but
     # it carries org_id and is read exactly like one, so it belongs behind the
     # same chokepoint.
-    "bills_with_paid",
+    "finances_bills_with_paid",
 }
 
 

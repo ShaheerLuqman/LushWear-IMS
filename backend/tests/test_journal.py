@@ -16,7 +16,7 @@ JOURNAL_ID = "bbbbbbbb-0000-0000-0000-000000000001"
 def _posted_entry_tables():
     """Rows the POST route reads back after the RPC returns the new id."""
     return {
-        "journal_entries": [{
+        "finances_journal_entries": [{
             "id": JOURNAL_ID,
             "org_id": "test-org",
             "entry_date": "2026-08-01",
@@ -27,7 +27,7 @@ def _posted_entry_tables():
             "created_by": "test",
             "created_at": "2026-08-01T10:00:00+00:00",
         }],
-        "journal_lines": [
+        "finances_journal_lines": [
             {"id": "l1", "journal_id": JOURNAL_ID, "account_id": SALES,
              "debit": 500.0, "credit": 0.0, "description": None},
             {"id": "l2", "journal_id": JOURNAL_ID, "account_id": CASH,
@@ -182,7 +182,7 @@ class TestSystemCashAccountGuard:
     and the account is named "Cash", so it invites exactly that."""
 
     def test_cannot_include_the_system_cash_account_in_cash_in_hand(self, make_client):
-        client = make_client(tables={"ledgers": [
+        client = make_client(tables={"finances_ledgers": [
             {"id": CASH, "name": "Cash", "type": "Asset", "system_key": "cash"},
         ]})
         response = client.put(f"/api/ledgers/{CASH}", json={"include_in_cash_in_hand": True})
@@ -191,7 +191,7 @@ class TestSystemCashAccountGuard:
         assert "already counted" in response.json()["detail"]
 
     def test_ordinary_account_can_still_be_included(self, make_client):
-        client = make_client(tables={"ledgers": [
+        client = make_client(tables={"finances_ledgers": [
             {"id": SALES, "name": "Meezan Bank", "type": "Asset", "system_key": None,
              "include_in_cash_in_hand": True},
         ]})
@@ -211,7 +211,7 @@ class TestListJournalEntries:
     def test_account_filter_with_no_matching_lines_returns_empty(self, make_client):
         """Short-circuits before querying journal_entries - without it, the
         empty id list would be dropped by the fake and every entry returned."""
-        client = make_client(tables={"journal_entries": [], "journal_lines": []})
+        client = make_client(tables={"finances_journal_entries": [], "finances_journal_lines": []})
         response = client.get(f"/api/journal/entries?account_id={CASH}")
 
         assert response.status_code == 200

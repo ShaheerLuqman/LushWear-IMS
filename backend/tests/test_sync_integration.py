@@ -183,13 +183,13 @@ class _FakeDB:
         self.sync_status = _FakeSyncStatusTable(sync_status or {"org_id": TEST_ORG_ID, "id": "shopify_orders", "in_progress": False})
 
     def table(self, name):
-        if name == "orders":
+        if name == "shopify_orders":
             return self.orders.query()
-        if name == "products":
+        if name == "shopify_products":
             return _StaticTable(self._products)
-        if name == "variants":
+        if name == "shopify_variants":
             return _StaticTable(self._variants)
-        if name == "sync_status":
+        if name == "shopify_sync_status":
             return self.sync_status
         raise AssertionError(f"unexpected table: {name}")
 

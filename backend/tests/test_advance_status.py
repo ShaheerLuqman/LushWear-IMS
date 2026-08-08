@@ -106,9 +106,9 @@ class TestRecomputeAdvanceStatuses:
             {"order_number": "100", "amount": 500.0},
         ])
         supabase = _FakeSupabase({
-            "orders": orders_table,
-            "cashbook_entries": cashbook_table,
-            "ledgers": _orders_ledger_table(),
+            "shopify_orders": orders_table,
+            "finances_cashbook_entries": cashbook_table,
+            "finances_ledgers": _orders_ledger_table(),
         })
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100", "101"])
@@ -131,9 +131,9 @@ class TestRecomputeAdvanceStatuses:
         ])
         cashbook_table = _FakeTable([])
         supabase = _FakeSupabase({
-            "orders": orders_table,
-            "cashbook_entries": cashbook_table,
-            "ledgers": _orders_ledger_table(),
+            "shopify_orders": orders_table,
+            "finances_cashbook_entries": cashbook_table,
+            "finances_ledgers": _orders_ledger_table(),
         })
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100"])

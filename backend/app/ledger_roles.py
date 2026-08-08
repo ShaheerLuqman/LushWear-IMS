@@ -32,7 +32,7 @@ def get_system_ledger_id(supabase, org_id: str, role: str):
     One lookup for every role, replacing the function each dedicated boolean
     column used to need."""
     resp = (
-        org_table(supabase, org_id, "ledgers")
+        org_table(supabase, org_id, "finances_ledgers")
         .select("id")
         .eq("system_key", role)
         .limit(1)

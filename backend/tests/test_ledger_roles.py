@@ -36,7 +36,7 @@ class TestSystemKeyIsServerManaged:
         """System ledgers come from the org-creation trigger. A client-supplied
         system_key is ignored rather than honoured — Pydantic drops the unknown
         field, so the created ledger is ordinary."""
-        client = make_client(tables={"ledgers": [_ledger(PLAIN, "Customer Advances")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(PLAIN, "Customer Advances")]})
         response = client.post("/api/ledgers/", json={
             "name": "Something New", "type": "Asset", "system_key": "orders",
         })
@@ -45,7 +45,7 @@ class TestSystemKeyIsServerManaged:
         assert response.json()["system_key"] is None
 
     def test_it_cannot_be_changed_by_an_update(self, make_client):
-        client = make_client(tables={"ledgers": [_ledger(ORDERS, "Orders", "orders")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(ORDERS, "Orders", "orders")]})
         response = client.put(f"/api/ledgers/{ORDERS}", json={"system_key": None})
 
         # Nothing else in the payload, so the request carries no updatable field.
@@ -55,7 +55,7 @@ class TestSystemKeyIsServerManaged:
     def test_an_ordinary_field_still_updates_on_a_system_ledger(self, make_client):
         """Renaming or recategorising a system account is fine — only its role
         is fixed."""
-        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash", "cash")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(CASH, "Cash", "cash")]})
         response = client.put(f"/api/ledgers/{CASH}", json={"name": "Cash Box"})
 
         assert response.status_code == 200, response.text
@@ -69,20 +69,20 @@ class TestSystemKeyIsServerManaged:
 
 class TestSystemLedgersCannotBeDeleted:
     def test_deleting_a_system_ledger_is_refused(self, make_client):
-        client = make_client(tables={"ledgers": [_ledger(CASH, "Cash", "cash")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(CASH, "Cash", "cash")]})
         response = client.delete(f"/api/ledgers/{CASH}")
 
         assert response.status_code == 400
         assert "system account" in response.json()["detail"]
 
     def test_the_message_names_the_account(self, make_client):
-        client = make_client(tables={"ledgers": [_ledger(ORDERS, "Orders", "orders")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(ORDERS, "Orders", "orders")]})
         detail = client.delete(f"/api/ledgers/{ORDERS}").json()["detail"]
 
         assert "Orders" in detail
 
     def test_an_unused_ordinary_ledger_can_be_deleted(self, make_client):
-        client = make_client(tables={"ledgers": [_ledger(PLAIN, "Advances")], "journal_lines": []})
+        client = make_client(tables={"finances_ledgers": [_ledger(PLAIN, "Advances")], "finances_journal_lines": []})
         response = client.delete(f"/api/ledgers/{PLAIN}")
 
         assert response.status_code == 200, response.text
@@ -93,8 +93,8 @@ class TestSystemLedgersCannotBeDeleted:
         account can also be posted to by a bill or a manual entry, which would
         otherwise only be caught by the foreign key as a raw database error."""
         client = make_client(tables={
-            "ledgers": [_ledger(PLAIN, "Advances")],
-            "journal_lines": [{"id": "jl1", "account_id": PLAIN}],
+            "finances_ledgers": [_ledger(PLAIN, "Advances")],
+            "finances_journal_lines": [{"id": "jl1", "account_id": PLAIN}],
         })
         response = client.delete(f"/api/ledgers/{PLAIN}")
 

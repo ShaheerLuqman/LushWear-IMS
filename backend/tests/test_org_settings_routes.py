@@ -17,7 +17,7 @@ def _settings_encryption_key(monkeypatch):
 
 class TestReadOrgSettings:
     def test_no_row_yet_reports_nothing_configured(self, make_client):
-        client = make_client({"org_integration_settings": []})
+        client = make_client({"system_integration_settings": []})
         r = client.get("/api/org-settings/")
         assert r.status_code == 200
         body = r.json()
@@ -27,7 +27,7 @@ class TestReadOrgSettings:
 
     def test_configured_secrets_are_reported_as_booleans_not_values(self, make_client):
         token = org_settings._encrypt("shpat_supersecret")
-        client = make_client({"org_integration_settings": [{
+        client = make_client({"system_integration_settings": [{
             "org_id": "test-org",
             "shopify_store_url": "acme.myshopify.com",
             "shopify_access_token": token,
@@ -67,7 +67,7 @@ class TestUpdateOrgSettings:
 
         class _FakeSupabase:
             def table(self, name):
-                assert name == "org_integration_settings"
+                assert name == "system_integration_settings"
                 return _StatefulOrgSettingsQuery()
 
         fake = _FakeSupabase()

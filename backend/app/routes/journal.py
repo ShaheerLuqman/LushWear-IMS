@@ -28,7 +28,7 @@ def _attach_lines(supabase, org_id: str, entries: List[dict]) -> List[dict]:
     if not entries:
         return []
     resp = (
-        org_table(supabase, org_id, "journal_lines")
+        org_table(supabase, org_id, "finances_journal_lines")
         .select("id, journal_id, account_id, debit, credit, description")
         .in_("journal_id", [e["id"] for e in entries])
         .execute()
@@ -53,7 +53,7 @@ async def list_journal_entries(
     journal_ids = None
     if account_id:
         lines_resp = (
-            org_table(supabase, org_id, "journal_lines")
+            org_table(supabase, org_id, "finances_journal_lines")
             .select("journal_id")
             .eq("account_id", account_id)
             .execute()
@@ -63,7 +63,7 @@ async def list_journal_entries(
             return []
 
     query = (
-        org_table(supabase, org_id, "journal_entries")
+        org_table(supabase, org_id, "finances_journal_entries")
         .select("*")
         .order("entry_date", desc=True)
         .order("created_at", desc=True)
@@ -111,7 +111,7 @@ async def create_journal_entry(
         raise HTTPException(status_code=500, detail="Failed to post journal entry")
 
     created = (
-        org_table(supabase, org_id, "journal_entries")
+        org_table(supabase, org_id, "finances_journal_entries")
         .select("*")
         .eq("id", journal_id)
         .limit(1)

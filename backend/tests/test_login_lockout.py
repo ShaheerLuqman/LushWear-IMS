@@ -43,7 +43,7 @@ class _FakeSupabase:
         self.rpc_calls = []
 
     def table(self, name):
-        assert name == "login_lockouts"
+        assert name == "system_login_lockouts"
         return self.table_
 
     def rpc(self, name, params):

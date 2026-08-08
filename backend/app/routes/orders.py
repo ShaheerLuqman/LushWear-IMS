@@ -154,7 +154,7 @@ async def get_all_orders(
 
         start_iso, end_iso = _period_start_end(month, year)
         period_orders = fetch_all(
-            lambda: org_table(supabase, org_id, "orders")
+            lambda: org_table(supabase, org_id, "shopify_orders")
             .select(ORDERS_LIST_SELECT)
             .gte("order_receiving_date", start_iso)
             .lt("order_receiving_date", end_iso)
@@ -217,7 +217,7 @@ async def upload_postex_csv(
             return {"updated": 0, "message": "No valid rows with ORDER_REF_NUMBER in CSV."}
         supabase = get_supabase()
         all_orders = fetch_all(
-            lambda: org_table(supabase, org_id, "orders")
+            lambda: org_table(supabase, org_id, "shopify_orders")
             .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date")
             .order("order_number")
         )
@@ -300,7 +300,7 @@ async def upload_postex_csv(
         if orders_to_upsert:
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
-                org_table(supabase, org_id, "orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
+                org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), and tracking for {updated_count} order(s)."
@@ -372,7 +372,7 @@ async def fix_voided_order_totals(
         candidate_select = "id, order_number, total_amount, advance_amount, order_status, order_receiving_date, created_at"
 
         orders: List[Dict[str, Any]] = fetch_all(
-            lambda: org_table(supabase, org_id, "orders")
+            lambda: org_table(supabase, org_id, "shopify_orders")
             .select(candidate_select)
             .gte("order_receiving_date", start_iso)
             .order("order_number")
@@ -506,7 +506,7 @@ async def fix_voided_order_totals(
                     )
                     continue
 
-                org_table(supabase, org_id, "orders").update(
+                org_table(supabase, org_id, "shopify_orders").update(
                     {
                         "total_amount": new_total,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -581,7 +581,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
         products_cost_map: Dict[str, float] = {}
         costs_by_id: Dict[str, float] = {}    # products.id -> cost_price, for line item cost_price snapshots
         product_id_by_shopify: Dict[int, str] = {}   # shopify_product_id -> products.id
-        products_response = org_table(supabase, org_id, "products").select("id, name, cost_price, shopify_product_id").execute()
+        products_response = org_table(supabase, org_id, "shopify_products").select("id, name, cost_price, shopify_product_id").execute()
         for p in products_response.data or []:
             name = (p.get("name") or "").strip().lower()
             if name:
@@ -598,14 +598,14 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                     pass
 
         variant_id_by_shopify: Dict[int, str] = {}   # shopify_variant_id -> variants.id
-        for v in (org_table(supabase, org_id, "variants").select("id, shopify_variant_id").execute().data or []):
+        for v in (org_table(supabase, org_id, "shopify_variants").select("id, shopify_variant_id").execute().data or []):
             if v.get("shopify_variant_id") is not None and v.get("id"):
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
 
         # existing orders map by order_number
         existing_orders_map: Dict[int, Dict[str, Any]] = {}
         existing_rows = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .select(
                 "id, order_number, order_status, piece_received, delivery_status, "
                 "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no, "
@@ -910,10 +910,10 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
         batch_size = 500
         for i in range(0, len(to_insert), batch_size):
             batch = to_insert[i:i + batch_size]
-            org_table(supabase, org_id, "orders").insert(batch).execute()
+            org_table(supabase, org_id, "shopify_orders").insert(batch).execute()
         for i in range(0, len(to_update), batch_size):
             batch = to_update[i:i + batch_size]
-            org_table(supabase, org_id, "orders").upsert(batch, on_conflict="org_id,order_number").execute()
+            org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
 
         return {
             "requested_count": len(order_numbers_input),
@@ -961,7 +961,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody, org_id: str = De
         db_orders_map: Dict[int, Dict[str, Any]] = {}
         for order_num in order_numbers_input:
             resp = (
-                org_table(supabase, org_id, "orders")
+                org_table(supabase, org_id, "shopify_orders")
                 .select("id, order_number, total_amount, advance_amount, order_status")
                 .eq("order_number", order_num)
                 .limit(1)
@@ -1054,7 +1054,7 @@ async def recalculate_order_totals(body: RecalculateTotalsBody, org_id: str = De
                     logger.info(f"[recalculate-totals] skip order={order_number} reason=no_change existing_total={existing_total:.2f} new_total={new_total:.2f}")
                     continue
                 
-                org_table(supabase, org_id, "orders").update(
+                org_table(supabase, org_id, "shopify_orders").update(
                     {
                         "total_amount": new_total,
                         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -1085,7 +1085,7 @@ async def get_order_by_number(order_number: int, org_id: str = Depends(get_org_i
     """Get a single order by order_number. Used when order is not in current grid (e.g. different period)."""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "orders").select("*").eq("order_number", order_number).limit(1).execute()
+        response = org_table(supabase, org_id, "shopify_orders").select("*").eq("order_number", order_number).limit(1).execute()
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=404, detail="Order not found")
         return response.data[0]
@@ -1132,7 +1132,7 @@ async def create_load_sheet_log(body: LoadSheetLogCreate, org_id: str = Depends(
 
         # A cancelled order isn't being shipped, so it can't go on a rider's load sheet.
         status_rows = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .select("order_number, order_status")
             .in_("order_number", body.order_numbers)
             .execute()
@@ -1154,7 +1154,7 @@ async def create_load_sheet_log(body: LoadSheetLogCreate, org_id: str = Depends(
         }
         if dc is not None:
             row["delivery_charge"] = float(dc)
-        response = org_table(supabase, org_id, "load_sheet_logs").insert(row).execute()
+        response = org_table(supabase, org_id, "shopify_load_sheet_logs").insert(row).execute()
         if not response.data or len(response.data) == 0:
             raise HTTPException(status_code=500, detail="Failed to create load sheet log")
         # Update all orders in this load sheet: set folio to assignment number, and optionally delivery_charge
@@ -1164,7 +1164,7 @@ async def create_load_sheet_log(body: LoadSheetLogCreate, org_id: str = Depends(
         }
         if dc is not None:
             update_data["delivery_charge"] = float(dc)
-        org_table(supabase, org_id, "orders").update(update_data).in_("order_number", order_numbers).execute()
+        org_table(supabase, org_id, "shopify_orders").update(update_data).in_("order_number", order_numbers).execute()
         result = dict(response.data[0])
         if cancelled_order_numbers:
             result["cancelled_order_numbers"] = cancelled_order_numbers
@@ -1182,7 +1182,7 @@ async def list_load_sheet_logs(org_id: str = Depends(get_org_id)):
     try:
         supabase = get_supabase()
         response = (
-            org_table(supabase, org_id, "load_sheet_logs")
+            org_table(supabase, org_id, "shopify_load_sheet_logs")
             .select("*")
             .execute()
         )
@@ -1220,10 +1220,10 @@ async def list_load_sheet_logs(org_id: str = Depends(get_org_id)):
         import traceback
         traceback.print_exc()
         err_msg = str(e)
-        if "does not exist" in err_msg.lower() or "load_sheet_logs" in err_msg or "relation" in err_msg.lower():
+        if "does not exist" in err_msg.lower() or "shopify_load_sheet_logs" in err_msg or "relation" in err_msg.lower():
             raise HTTPException(
                 status_code=503,
-                detail="Load sheet logs table is not set up. Add the load_sheet_logs table (see supabase_schema.sql) and run the migration."
+                detail="Load sheet logs table is not set up. Add the shopify_load_sheet_logs table (see supabase_schema.sql) and run the migration."
             )
         raise HTTPException(status_code=500, detail=err_msg)
 
@@ -1235,7 +1235,7 @@ async def get_load_sheet_log_pdf(request: Request, log_id: str, org_id: str = De
     try:
         supabase = get_supabase()
         log_response = (
-            org_table(supabase, org_id, "load_sheet_logs")
+            org_table(supabase, org_id, "shopify_load_sheet_logs")
             .select("*")
             .eq("id", log_id)
             .limit(1)
@@ -1247,9 +1247,9 @@ async def get_load_sheet_log_pdf(request: Request, log_id: str, org_id: str = De
         order_numbers = log_row.get("order_numbers") or []
         order_ids = log_row.get("order_ids") or []
         if order_numbers:
-            orders_response = org_table(supabase, org_id, "orders").select("*").in_("order_number", order_numbers).execute()
+            orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("order_number", order_numbers).execute()
         elif order_ids:
-            orders_response = org_table(supabase, org_id, "orders").select("*").in_("id", order_ids).execute()
+            orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
         else:
             raise HTTPException(status_code=400, detail="No orders in this load sheet log")
         orders = orders_response.data or []
@@ -1278,19 +1278,19 @@ async def delete_load_sheet_log(log_id: str, org_id: str = Depends(get_org_id)):
     try:
         supabase = get_supabase()
         # Fetch the log to get order_numbers before deleting
-        log_response = org_table(supabase, org_id, "load_sheet_logs").select("order_numbers").eq("id", log_id).execute()
+        log_response = org_table(supabase, org_id, "shopify_load_sheet_logs").select("order_numbers").eq("id", log_id).execute()
         if not log_response.data or len(log_response.data) == 0:
             raise HTTPException(status_code=404, detail="Load sheet log not found")
         order_numbers = log_response.data[0].get("order_numbers") or []
         # Clear folio on all orders that were in this load sheet
         if order_numbers:
-            org_table(supabase, org_id, "orders").update({
+            org_table(supabase, org_id, "shopify_orders").update({
                 "folio": None,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).in_("order_number", order_numbers).execute()
         # Delete the load sheet log
         response = (
-            org_table(supabase, org_id, "load_sheet_logs")
+            org_table(supabase, org_id, "shopify_load_sheet_logs")
             .delete()
             .eq("id", log_id)
             .execute()
@@ -1311,7 +1311,7 @@ async def get_returned_delivery_charges_sum(org_id: str = Depends(get_org_id)):
     try:
         supabase = get_supabase()
         response = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .select("delivery_charge")
             .ilike("order_status", "returned")
             .execute()
@@ -1330,7 +1330,7 @@ async def get_order(order_id: str, org_id: str = Depends(get_org_id)):
     """Get a single order by ID"""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "orders").select("*").eq("id", order_id).single().execute()
+        response = org_table(supabase, org_id, "shopify_orders").select("*").eq("id", order_id).single().execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
         return response.data
@@ -1518,7 +1518,7 @@ async def create_order(order: OrderCreate, org_id: str = Depends(get_org_id)):
         order_data["updated_at"] = now
         if not order_data.get("order_receiving_date"):
             order_data["order_receiving_date"] = now
-        response = org_table(supabase, org_id, "orders").insert(order_data).execute()
+        response = org_table(supabase, org_id, "shopify_orders").insert(order_data).execute()
         return response.data[0]
     except HTTPException:
         raise
@@ -1593,7 +1593,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
         supabase = get_supabase()
         # Fetch orders so we can merge delivery_status and optionally set piece_received per order
         response = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .select("id, order_number, delivery_status, piece_received")
             .in_("order_number", body.order_numbers)
             .execute()
@@ -1618,7 +1618,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
                 current_piece = (order.get("piece_received") or "").strip().lower()
                 if current_piece == "pending":
                     update_payload["piece_received"] = "Done"
-            org_table(supabase, org_id, "orders").update(update_payload).eq("id", order_id).execute()
+            org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
             onum = order.get("order_number")
             if onum is not None:
                 updated_order_numbers.append(onum)
@@ -1662,7 +1662,7 @@ async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody, org_i
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .update(update_data)
             .in_("order_number", body.order_numbers)
             .execute()
@@ -1698,7 +1698,7 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody, org_id: 
             "updated_at": datetime.now(timezone.utc).isoformat(),
         }
         response = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .update(update_data)
             .in_("order_number", body.order_numbers)
             .execute()
@@ -1730,7 +1730,7 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
         # Include only fields that were sent (so we can set optional fields like folio to null)
         update_data = {k: v for k, v in order.model_dump(exclude_unset=True).items()}
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
-        response = org_table(supabase, org_id, "orders").update(update_data).eq("id", order_id).execute()
+        response = org_table(supabase, org_id, "shopify_orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
         updated = response.data[0]
@@ -1740,7 +1740,7 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
                 new_status = recompute_advance_statuses(supabase, org_id, [updated["order_number"]])  # noqa: F841
                 # Reflect the recomputed status in the response without a refetch
                 refreshed = (
-                    org_table(supabase, org_id, "orders")
+                    org_table(supabase, org_id, "shopify_orders")
                     .select("advance_status")
                     .eq("id", order_id)
                     .limit(1)
@@ -1854,7 +1854,7 @@ def _update_order_sync(org_id: str, order_id: str, update_payload: dict) -> None
     """Runs on its own Supabase client (not the shared singleton) - sharing one client's
     HTTP/2 connection across concurrent threads crashes with a stream-read error."""
     client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-    org_table(client, org_id, "orders").update(update_payload).eq("id", order_id).execute()
+    org_table(client, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
 
 
 async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], orders_by_id: Dict[str, dict]) -> None:
@@ -1922,7 +1922,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
     try:
         supabase = get_supabase()
         # Use limit(1) instead of single() so "not found" returns 404, not 500
-        order_response = org_table(supabase, org_id, "orders").select("*").eq("id", order_id).limit(1).execute()
+        order_response = org_table(supabase, org_id, "shopify_orders").select("*").eq("id", order_id).limit(1).execute()
         
         if not order_response.data or len(order_response.data) == 0:
             raise HTTPException(status_code=404, detail="Order not found")
@@ -1990,7 +1990,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                         update_payload["piece_received"] = "Done"
             else:
                 logger.info(f"[delivery-status] No derived_status, order_status not updated")
-            org_table(supabase, org_id, "orders").update(update_payload).eq("id", order_id).execute()
+            org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
             logger.info(f"[delivery-status] Update payload: {update_payload.keys()}")
 
         return delivery_status_data
@@ -2024,7 +2024,7 @@ async def get_delivery_status_bulk(
     try:
         supabase = get_supabase()
         org_creds = get_org_integration_settings(org_id)
-        orders_response = org_table(supabase, org_id, "orders").select("*").in_("id", order_ids).execute()
+        orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
         orders_by_id = {o["id"]: o for o in orders_response.data or []}
 
         postex_orders: List[Tuple[str, str]] = []
@@ -2091,7 +2091,7 @@ async def delete_order(order_id: str, org_id: str = Depends(get_org_id)):
     """Delete an order"""
     try:
         supabase = get_supabase()
-        response = org_table(supabase, org_id, "orders").delete().eq("id", order_id).execute()
+        response = org_table(supabase, org_id, "shopify_orders").delete().eq("id", order_id).execute()
         return {"message": "Order deleted successfully"}
     except HTTPException:
         raise
@@ -2110,7 +2110,7 @@ async def generate_invoice(request: Request, order_ids: List[str] = Body(..., em
             raise HTTPException(status_code=400, detail=f"Cannot generate an invoice for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
         org_creds = get_org_integration_settings(org_id)
-        orders_response = org_table(supabase, org_id, "orders").select("*").in_("id", order_ids).execute()
+        orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
@@ -2159,7 +2159,7 @@ async def generate_packaging_list(request: Request, order_ids: List[str] = Body(
         if len(order_ids) > MAX_PDF_BATCH_ORDERS:
             raise HTTPException(status_code=400, detail=f"Cannot generate a packaging list for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
-        orders_response = org_table(supabase, org_id, "orders").select("id, order_number, order_status, line_items").in_("id", order_ids).execute()
+        orders_response = org_table(supabase, org_id, "shopify_orders").select("id, order_number, order_status, line_items").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found")
@@ -2219,7 +2219,7 @@ async def generate_packaging_list_by_numbers(request: Request, body: PackagingLi
             raise HTTPException(status_code=400, detail=f"Cannot generate a packaging list for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
         orders_response = (
-            org_table(supabase, org_id, "orders")
+            org_table(supabase, org_id, "shopify_orders")
             .select("id, order_number, order_status, line_items")
             .in_("order_number", order_numbers)
             .execute()
@@ -2267,7 +2267,7 @@ async def generate_load_sheet(request: Request, order_ids: List[str], org_id: st
 
         # Get orders from database
         supabase = get_supabase()
-        orders_response = org_table(supabase, org_id, "orders").select("*").in_("id", order_ids).execute()
+        orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
         orders = orders_response.data
 
         if not orders:
@@ -2347,7 +2347,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
         # Only order_status/line_items are needed here - the rest of the period's
         # aggregation (sums/counts) now comes from the get_month_summary_totals RPC.
         orders = fetch_all(
-            lambda: org_table(supabase, org_id, "orders")
+            lambda: org_table(supabase, org_id, "shopify_orders")
             .select("order_status, line_items")
             .gte("order_receiving_date", start_iso)
             .lt("order_receiving_date", end_iso)
@@ -2356,7 +2356,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
 
         # Products sold by collection (5 collections + Others for products without a collection)
         KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
-        products_resp = org_table(supabase, org_id, "products").select("id, name, collection, price").execute()
+        products_resp = org_table(supabase, org_id, "shopify_products").select("id, name, collection, price").execute()
         products_list = []  # (name_lower, collection_display, price)
         products_map = {}   # name_lower -> (collection_display, price)
         products_by_id = {} # products.id -> (collection_display, price)

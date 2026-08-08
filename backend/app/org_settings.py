@@ -71,7 +71,7 @@ class OrgIntegrationSettings:
 def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
     rows = (
         get_supabase()
-        .table("org_integration_settings")
+        .table("system_integration_settings")
         .select("*")
         .eq("org_id", org_id)
         .limit(1)
@@ -121,4 +121,4 @@ def upsert_org_integration_settings(
         payload["shopify_api_version"] = shopify_api_version
     if postex_merchant_token is not None:
         payload["postex_merchant_token"] = _encrypt(postex_merchant_token)
-    get_supabase().table("org_integration_settings").upsert(payload, on_conflict="org_id").execute()
+    get_supabase().table("system_integration_settings").upsert(payload, on_conflict="org_id").execute()

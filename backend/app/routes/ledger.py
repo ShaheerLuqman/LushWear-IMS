@@ -20,9 +20,9 @@ router = APIRouter(prefix="/ledgers", tags=["ledgers"])
 
 
 def _flatten_ledger_balance(row: dict) -> dict:
-    """Collapse the embedded ledger_balances(balance) relation into a flat
+    """Collapse the embedded finances_ledger_balances(balance) relation into a flat
     `balance` field; missing (no entries yet) defaults to 0."""
-    embedded = row.pop("ledger_balances", None)
+    embedded = row.pop("finances_ledger_balances", None)
     row["balance"] = float(embedded["balance"]) if embedded else 0.0
     return row
 
@@ -30,7 +30,7 @@ def _flatten_ledger_balance(row: dict) -> dict:
 def _system_key(supabase, org_id: str, ledger_id: str):
     """This ledger's system role, or None for an ordinary account."""
     resp = (
-        org_table(supabase, org_id, "ledgers")
+        org_table(supabase, org_id, "finances_ledgers")
         .select("system_key")
         .eq("id", ledger_id)
         .limit(1)
@@ -44,7 +44,7 @@ def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> boo
     in renderer.js). Backstopped by idx_ledgers_org_id_name_lower for races/non-API
     writers; this just gives a friendly error for the common case."""
     target = name.strip().lower()
-    resp = org_table(supabase, org_id, "ledgers").select("id, name").execute()
+    resp = org_table(supabase, org_id, "finances_ledgers").select("id, name").execute()
     return any(
         row["id"] != exclude_id and (row.get("name") or "").strip().lower() == target
         for row in resp.data or []
@@ -54,8 +54,8 @@ def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> boo
 @router.get("/", response_model=List[Ledger])
 async def list_ledgers(org_id: str = Depends(get_org_id)):
     response = (
-        org_table(get_supabase(), org_id, "ledgers")
-        .select("*, ledger_balances(balance)")
+        org_table(get_supabase(), org_id, "finances_ledgers")
+        .select("*, finances_ledger_balances(balance)")
         .order("name", desc=False)
         .execute()
     )
@@ -74,7 +74,7 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
     if _name_taken(supabase, org_id, name):
         raise HTTPException(status_code=400, detail="A ledger with this name already exists")
 
-    response = org_table(supabase, org_id, "ledgers").insert({
+    response = org_table(supabase, org_id, "finances_ledgers").insert({
         "name": name,
         "type": ledger.type,
         "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
@@ -90,7 +90,7 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
 async def get_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     response = (
-        org_table(supabase, org_id, "ledgers")
+        org_table(supabase, org_id, "finances_ledgers")
         .select("*")
         .eq("id", ledger_id)
         .execute()
@@ -101,7 +101,7 @@ async def get_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     # Journal lines, matching what delete_ledger actually refuses on: an account
     # can be posted to by a bill or a manual entry as well as by the cashbook.
     lines_resp = (
-        org_table(supabase, org_id, "journal_lines")
+        org_table(supabase, org_id, "finances_journal_lines")
         .select("id")
         .eq("account_id", ledger_id)
         .limit(1)
@@ -138,7 +138,7 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
         raise HTTPException(status_code=400, detail="No fields to update")
 
     response = (
-        org_table(supabase, org_id, "ledgers")
+        org_table(supabase, org_id, "finances_ledgers")
         .update(payload)
         .eq("id", ledger_id)
         .execute()
@@ -163,7 +163,7 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
     # posted to by a bill or a manual entry, and those would otherwise only be
     # caught by the ON DELETE RESTRICT foreign key, as a raw database error.
     lines_resp = (
-        org_table(supabase, org_id, "journal_lines")
+        org_table(supabase, org_id, "finances_journal_lines")
         .select("id")
         .eq("account_id", ledger_id)
         .limit(1)
@@ -175,7 +175,7 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
             detail="Cannot delete ledger: it has entries posted against it",
         )
 
-    response = org_table(supabase, org_id, "ledgers").delete().eq("id", ledger_id).execute()
+    response = org_table(supabase, org_id, "finances_ledgers").delete().eq("id", ledger_id).execute()
     if not response.data:
         raise HTTPException(status_code=404, detail="Ledger not found")
     return {"status": "deleted", "id": ledger_id}

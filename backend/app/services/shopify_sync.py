@@ -273,7 +273,7 @@ _SYNC_LOCK_STALE_AFTER = timedelta(minutes=4)
 
 def _get_sync_status_row(supabase, org_id: str) -> Dict[str, Any]:
     resp = (
-        org_table(supabase, org_id, "sync_status")
+        org_table(supabase, org_id, "shopify_sync_status")
         .select("last_synced_at, in_progress")
         .eq("id", _SYNC_STATUS_ORDERS_ID)
         .execute()
@@ -287,7 +287,7 @@ def _get_last_synced_at(supabase, org_id: str) -> Optional[str]:
 
 
 def _set_last_synced_at(supabase, org_id: str, when_iso: str) -> None:
-    org_table(supabase, org_id, "sync_status").update({
+    org_table(supabase, org_id, "shopify_sync_status").update({
         "last_synced_at": when_iso,
         "updated_at": when_iso,
     }).eq("id", _SYNC_STATUS_ORDERS_ID).execute()
@@ -300,7 +300,7 @@ def _release_stale_sync_lock(supabase, org_id: str) -> None:
     OR'd single-UPDATE version this replaced, which had no precedent in this
     codebase and turned out not to reclaim stale locks correctly."""
     stale_cutoff = (datetime.now(timezone.utc) - _SYNC_LOCK_STALE_AFTER).isoformat()
-    org_table(supabase, org_id, "sync_status").update({"in_progress": False}).eq(
+    org_table(supabase, org_id, "shopify_sync_status").update({"in_progress": False}).eq(
         "id", _SYNC_STATUS_ORDERS_ID
     ).eq("in_progress", True).lt("lock_acquired_at", stale_cutoff).execute()
 
@@ -310,7 +310,7 @@ def _try_acquire_sync_lock(supabase, org_id: str) -> bool:
     Postgres serializes concurrent UPDATEs on the same row, so at most one caller
     can ever flip it - race-free without an advisory lock (unusable through
     PostgREST anyway)."""
-    org_table(supabase, org_id, "sync_status").upsert(
+    org_table(supabase, org_id, "shopify_sync_status").upsert(
         {"id": _SYNC_STATUS_ORDERS_ID, "in_progress": False},
         on_conflict="org_id,id",
         ignore_duplicates=True,
@@ -318,7 +318,7 @@ def _try_acquire_sync_lock(supabase, org_id: str) -> bool:
     _release_stale_sync_lock(supabase, org_id)
     now_iso = datetime.now(timezone.utc).isoformat()
     resp = (
-        org_table(supabase, org_id, "sync_status")
+        org_table(supabase, org_id, "shopify_sync_status")
         .update({"in_progress": True, "lock_acquired_at": now_iso})
         .eq("id", _SYNC_STATUS_ORDERS_ID)
         .eq("in_progress", False)
@@ -328,7 +328,7 @@ def _try_acquire_sync_lock(supabase, org_id: str) -> bool:
 
 
 def _release_sync_lock(supabase, org_id: str) -> None:
-    org_table(supabase, org_id, "sync_status").update({"in_progress": False}).eq(
+    org_table(supabase, org_id, "shopify_sync_status").update({"in_progress": False}).eq(
         "id", _SYNC_STATUS_ORDERS_ID
     ).execute()
 
@@ -400,10 +400,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             async with sem:
                 return await asyncio.to_thread(run)
 
-        products_task = select_concurrently("products", "id, name, cost_price, shopify_product_id")
-        variants_task = select_concurrently("variants", "id, shopify_variant_id")
+        products_task = select_concurrently("shopify_products", "id, name, cost_price, shopify_product_id")
+        variants_task = select_concurrently("shopify_variants", "id, shopify_variant_id")
         order_chunk_tasks = [
-            select_concurrently("orders", existing_orders_select, "order_number", chunk)
+            select_concurrently("shopify_orders", existing_orders_select, "order_number", chunk)
             for chunk in order_chunks
         ]
         products_data, variants_data, *order_chunk_results = await asyncio.gather(
@@ -969,7 +969,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             batch_size = 1000
             for i in range(0, len(orders_to_insert), batch_size):
                 batch = orders_to_insert[i:i + batch_size]
-                org_table(supabase, org_id, "orders").upsert(batch, on_conflict="org_id,order_number").execute()
+                org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
                 created_count += len(batch)
 
         updated_count = 0
@@ -977,13 +977,13 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             batch_size = 1000
             for i in range(0, len(orders_to_update), batch_size):
                 batch = orders_to_update[i:i + batch_size]
-                org_table(supabase, org_id, "orders").upsert(batch, on_conflict="org_id,order_number").execute()
+                org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
                 updated_count += len(batch)
         t_upserts = time.perf_counter()
 
         if original_orders_to_reset_piece_received:
             originals_resp = (
-                org_table(supabase, org_id, "orders")
+                org_table(supabase, org_id, "shopify_orders")
                 .select("id, piece_received")
                 .in_("order_number", list(original_orders_to_reset_piece_received))
                 .execute()
@@ -993,7 +993,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 if (row.get("piece_received") or "").strip().lower() == "done"
             ]
             if ids_to_reset:
-                org_table(supabase, org_id, "orders").update({
+                org_table(supabase, org_id, "shopify_orders").update({
                     "piece_received": "Pending",
                     "updated_at": current_time,
                 }).in_("id", ids_to_reset).execute()

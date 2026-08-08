@@ -36,7 +36,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- (Shopify order management, Finance) this org's users can see/use -
 -- enforced server-side by app/features.py's require_feature, not just a
 -- sidebar hint. See supabase/migrations/20260801000000_org_feature_flags.sql.
-CREATE TABLE IF NOT EXISTS organizations (
+CREATE TABLE IF NOT EXISTS system_organizations (
     id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     name             TEXT NOT NULL,
     enabled_features TEXT[] NOT NULL DEFAULT ARRAY['orders', 'finance'],
@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS organizations (
 -- name defaults to '' for identities created before it existed - see
 -- supabase/migrations/20260801020000_add_name_to_users.sql. New identities
 -- require one via app-level validation (NonBlankStr), not this default.
-CREATE TABLE IF NOT EXISTS users (
+CREATE TABLE IF NOT EXISTS system_users (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     email         TEXT NOT NULL UNIQUE,
     name          TEXT NOT NULL DEFAULT '',
@@ -58,16 +58,16 @@ CREATE TABLE IF NOT EXISTS users (
 
 -- is_active lives on the membership, not the identity - deactivating someone
 -- in one org must not affect their access to another.
-CREATE TABLE IF NOT EXISTS org_memberships (
-    user_id    UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    org_id     UUID NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+CREATE TABLE IF NOT EXISTS system_org_memberships (
+    user_id    UUID NOT NULL REFERENCES system_users(id) ON DELETE CASCADE,
+    org_id     UUID NOT NULL REFERENCES system_organizations(id) ON DELETE CASCADE,
     role       TEXT NOT NULL CHECK (role IN ('admin', 'staff')),
     is_active  BOOLEAN NOT NULL DEFAULT true,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     PRIMARY KEY (user_id, org_id)
 );
 
-CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON org_memberships(org_id);
+CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON system_org_memberships(org_id);
 
 
 -- ============================================================================
@@ -81,8 +81,8 @@ CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON org_memberships(org_id)
 -- See supabase/migrations/20260730110000_org_integration_settings_table.sql.
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS org_integration_settings (
-    org_id                UUID PRIMARY KEY REFERENCES organizations(id),
+CREATE TABLE IF NOT EXISTS system_integration_settings (
+    org_id                UUID PRIMARY KEY REFERENCES system_organizations(id),
     shopify_store_url     TEXT,
     shopify_access_token  TEXT,
     -- Per-org override; falls back to a shared default (app/org_settings.py)
@@ -102,7 +102,7 @@ CREATE TABLE IF NOT EXISTS org_integration_settings (
 -- See supabase/migrations/20260730050000_login_lockouts_table.sql.
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS login_lockouts (
+CREATE TABLE IF NOT EXISTS system_login_lockouts (
     email         TEXT PRIMARY KEY,
     fails         INTEGER NOT NULL DEFAULT 0,
     first_fail_at TIMESTAMPTZ NOT NULL,
@@ -125,7 +125,7 @@ DECLARE
     v_locked_until TIMESTAMPTZ;
 BEGIN
     SELECT fails, first_fail_at INTO v_fails, v_first_fail
-    FROM login_lockouts WHERE email = p_email
+    FROM system_login_lockouts WHERE email = p_email
     FOR UPDATE;
 
     IF v_fails IS NULL OR v_now - v_first_fail > (p_window_seconds || ' seconds')::INTERVAL THEN
@@ -139,7 +139,7 @@ BEGIN
         THEN v_now + (p_window_seconds || ' seconds')::INTERVAL
         ELSE NULL END;
 
-    INSERT INTO login_lockouts (email, fails, first_fail_at, locked_until, updated_at)
+    INSERT INTO system_login_lockouts (email, fails, first_fail_at, locked_until, updated_at)
     VALUES (p_email, v_fails, v_first_fail, v_locked_until, v_now)
     ON CONFLICT (email) DO UPDATE SET
         fails = EXCLUDED.fails,
@@ -174,9 +174,9 @@ CREATE TABLE IF NOT EXISTS system_bootstrap (
 -- Products (one row per product). shopify_product_id stays a plain global
 -- UNIQUE (not per-org) - Shopify's numeric resource ids are globally unique
 -- across the whole platform, unlike the shop-scoped order_number below.
-CREATE TABLE IF NOT EXISTS products (
+CREATE TABLE IF NOT EXISTS shopify_products (
     id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id              UUID NOT NULL REFERENCES organizations(id),
+    org_id              UUID NOT NULL REFERENCES system_organizations(id),
     shopify_product_id  BIGINT UNIQUE,                 -- Shopify sync key
     name                VARCHAR(255) NOT NULL,
     price               DECIMAL(10, 2) DEFAULT 0.00,   -- Selling price (same across variants)
@@ -188,10 +188,10 @@ CREATE TABLE IF NOT EXISTS products (
 );
 
 -- Variants (one row per variant, linked to a product).
-CREATE TABLE IF NOT EXISTS variants (
+CREATE TABLE IF NOT EXISTS shopify_variants (
     id                  UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id              UUID NOT NULL REFERENCES organizations(id),
-    product_id          UUID NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+    org_id              UUID NOT NULL REFERENCES system_organizations(id),
+    product_id          UUID NOT NULL REFERENCES shopify_products(id) ON DELETE CASCADE,
     shopify_variant_id  BIGINT UNIQUE,                 -- Shopify sync key
     title               VARCHAR(255) NOT NULL,         -- e.g. "S", "M", "Red"
     quantity            INTEGER DEFAULT 0,
@@ -204,11 +204,11 @@ CREATE TABLE IF NOT EXISTS variants (
 -- Orders
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS orders (
+CREATE TABLE IF NOT EXISTS shopify_orders (
     id                       UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id                   UUID NOT NULL REFERENCES organizations(id),
+    org_id                   UUID NOT NULL REFERENCES system_organizations(id),
     -- order_number is shop-scoped in Shopify (sequential, starts low), unlike
-    -- products/orders' own numeric Shopify resource ids - two different orgs'
+    -- shopify_products/shopify_orders' own numeric Shopify resource ids - two different orgs'
     -- stores can and will produce the same order_number, so uniqueness is
     -- composite with org_id, not a plain column UNIQUE.
     order_number             INTEGER NOT NULL,
@@ -242,16 +242,16 @@ CREATE TABLE IF NOT EXISTS orders (
 -- (JSONB) above. Verified every order either has line_items populated or has no item
 -- data in either column (see TODO.md §6) before dropping - safe to re-run, no-ops once
 -- the column is gone.
-    ALTER TABLE orders DROP COLUMN IF EXISTS items;
+    ALTER TABLE shopify_orders DROP COLUMN IF EXISTS items;
 
 
 -- ============================================================================
 -- Load sheet logs (courier assignment records)
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS load_sheet_logs (
+CREATE TABLE IF NOT EXISTS shopify_load_sheet_logs (
     id                 UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id             UUID NOT NULL REFERENCES organizations(id),
+    org_id             UUID NOT NULL REFERENCES system_organizations(id),
     assignment_number  VARCHAR(100) NOT NULL,
     rider_name         VARCHAR(255) NOT NULL,
     order_numbers      JSONB NOT NULL DEFAULT '[]',   -- e.g. ["2721", "2722"]
@@ -272,8 +272,8 @@ CREATE TABLE IF NOT EXISTS load_sheet_logs (
 -- 20260730070000_add_org_id_to_business_tables.sql.
 -- ============================================================================
 
-CREATE TABLE IF NOT EXISTS sync_status (
-    org_id           UUID NOT NULL REFERENCES organizations(id),
+CREATE TABLE IF NOT EXISTS shopify_sync_status (
+    org_id           UUID NOT NULL REFERENCES system_organizations(id),
     id               TEXT NOT NULL,
     last_synced_at   TIMESTAMPTZ,
     in_progress      BOOLEAN NOT NULL DEFAULT FALSE,
@@ -310,9 +310,9 @@ CREATE TABLE IF NOT EXISTS sync_status (
 -- recalc_ledger_balance below, whose formula is the same for every ledger
 -- regardless of Nature) — a fixed, closed set rather than free text, since a
 -- typo here silently creates an untracked bucket.
-CREATE TABLE IF NOT EXISTS ledgers (
+CREATE TABLE IF NOT EXISTS finances_ledgers (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id      UUID NOT NULL REFERENCES organizations(id),
+    org_id      UUID NOT NULL REFERENCES system_organizations(id),
     name        VARCHAR(255) NOT NULL,
     type        VARCHAR(100) NOT NULL
                 CONSTRAINT ledgers_type_check
@@ -331,21 +331,21 @@ DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'section'
+        WHERE table_schema = 'public' AND table_name = 'finances_ledgers' AND column_name = 'section'
     ) THEN
-        ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS type VARCHAR(100);
-        UPDATE ledgers
+        ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS type VARCHAR(100);
+        UPDATE finances_ledgers
         SET type = CASE WHEN section = 'Vendors' THEN 'Payable Vendors' ELSE section END
         WHERE type IS NULL;
-        ALTER TABLE ledgers ALTER COLUMN type SET NOT NULL;
-        ALTER TABLE ledgers DROP COLUMN section;
+        ALTER TABLE finances_ledgers ALTER COLUMN type SET NOT NULL;
+        ALTER TABLE finances_ledgers DROP COLUMN section;
     END IF;
 END $$;
 
 -- Migrates the old business-category `type` values to standard accounting
 -- Nature categories. Self-guarding via the WHERE clause — a no-op once no
 -- rows carry the old values.
-UPDATE ledgers SET type = CASE type
+UPDATE finances_ledgers SET type = CASE type
     WHEN 'Bank' THEN 'Asset'
     WHEN 'Receivable Vendors' THEN 'Asset'
     WHEN 'Payable Vendors' THEN 'Liability'
@@ -357,8 +357,8 @@ WHERE type IN ('Bank', 'Receivable Vendors', 'Payable Vendors', 'Investors', 'Sa
 
 -- Idempotent either way: applies the CHECK constraint after a migration
 -- (the inline CREATE TABLE definition only ran on a fresh install).
-ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_type_check;
-ALTER TABLE ledgers ADD CONSTRAINT ledgers_type_check
+ALTER TABLE finances_ledgers DROP CONSTRAINT IF EXISTS ledgers_type_check;
+ALTER TABLE finances_ledgers ADD CONSTRAINT ledgers_type_check
     CHECK (type IN ('Asset', 'Liability', 'Equity', 'Revenue', 'Expense'));
 
 -- Whether this ledger's balance is included in the Cash In Hand total (set via
@@ -369,10 +369,10 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'include_in_cash_in_hand'
+        WHERE table_schema = 'public' AND table_name = 'finances_ledgers' AND column_name = 'include_in_cash_in_hand'
     ) THEN
-        ALTER TABLE ledgers ADD COLUMN include_in_cash_in_hand BOOLEAN NOT NULL DEFAULT FALSE;
-        UPDATE ledgers SET include_in_cash_in_hand = TRUE WHERE type = 'Bank';
+        ALTER TABLE finances_ledgers ADD COLUMN include_in_cash_in_hand BOOLEAN NOT NULL DEFAULT FALSE;
+        UPDATE finances_ledgers SET include_in_cash_in_hand = TRUE WHERE type = 'Bank';
     END IF;
 END $$;
 
@@ -380,17 +380,17 @@ END $$;
 -- deliberately not renamed to `accounts`, which would cascade through every
 -- route, the frontend, the RLS list and the org-scope lint for no functional
 -- gain. system_key names the accounts posting code looks up by role.
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS code               VARCHAR(20);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS parent_id          UUID REFERENCES ledgers(id);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS subtype            VARCHAR(50);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS system_key         VARCHAR(40);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_cash_equivalent BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS enabled            BOOLEAN NOT NULL DEFAULT TRUE;
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS code               VARCHAR(20);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS parent_id          UUID REFERENCES finances_ledgers(id);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS subtype            VARCHAR(50);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS system_key         VARCHAR(40);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS is_cash_equivalent BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS enabled            BOOLEAN NOT NULL DEFAULT TRUE;
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_system_key
-    ON ledgers (org_id, system_key) WHERE system_key IS NOT NULL;
+    ON finances_ledgers (org_id, system_key) WHERE system_key IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_code
-    ON ledgers (org_id, code) WHERE code IS NOT NULL;
+    ON finances_ledgers (org_id, code) WHERE code IS NOT NULL;
 
 -- Which ledger order advances post to is system_key = 'orders', like every other
 -- fixed role. It began as a dedicated is_orders_ledger boolean (Phase 0, before
@@ -401,29 +401,29 @@ DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'ledgers'
+         WHERE table_schema = 'public' AND table_name = 'finances_ledgers'
            AND column_name = 'is_orders_ledger'
     ) THEN
         -- Only where system_key is free: an account already holding another role
         -- keeps it rather than being silently repurposed.
         EXECUTE $q$
-            UPDATE ledgers SET system_key = 'orders'
+            UPDATE finances_ledgers SET system_key = 'orders'
              WHERE is_orders_ledger IS TRUE AND system_key IS NULL
         $q$;
     END IF;
 END $$;
 
 DROP INDEX IF EXISTS idx_ledgers_one_orders_ledger_per_org;
-ALTER TABLE ledgers DROP COLUMN IF EXISTS is_orders_ledger;
+ALTER TABLE finances_ledgers DROP COLUMN IF EXISTS is_orders_ledger;
 
 -- Which Month Summary expense line this ledger's spending rolls into (NULL =
 -- excluded). Replaces get_month_summary_totals' old ledger-*name* substring
 -- matching, where 'ad' also caught "Load Sheet"/"Trade"/"Adnan" and renaming a
 -- ledger silently moved money between P&L lines. See
 -- supabase/migrations/20260801040000_ledgers_report_category.sql.
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS report_category VARCHAR(20);
-ALTER TABLE ledgers DROP CONSTRAINT IF EXISTS ledgers_report_category_check;
-ALTER TABLE ledgers ADD CONSTRAINT ledgers_report_category_check
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS report_category VARCHAR(20);
+ALTER TABLE finances_ledgers DROP CONSTRAINT IF EXISTS ledgers_report_category_check;
+ALTER TABLE finances_ledgers ADD CONSTRAINT ledgers_report_category_check
     CHECK (report_category IS NULL OR report_category IN ('shopify', 'ad', 'other'));
 
 -- Opening balance, set once at ledger creation (rarely changed after). Folded
@@ -434,22 +434,22 @@ DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1 FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'ledgers' AND column_name = 'opening_balance'
+        WHERE table_schema = 'public' AND table_name = 'finances_ledgers' AND column_name = 'opening_balance'
     ) THEN
-        ALTER TABLE ledgers ADD COLUMN opening_balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00;
+        ALTER TABLE finances_ledgers ADD COLUMN opening_balance DECIMAL(12, 2) NOT NULL DEFAULT 0.00;
     END IF;
 END $$;
 
 -- Cashbook entries: all transactions. folio is required and links to a ledger.
-CREATE TABLE IF NOT EXISTS cashbook_entries (
+CREATE TABLE IF NOT EXISTS finances_cashbook_entries (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id        UUID NOT NULL REFERENCES organizations(id),
+    org_id        UUID NOT NULL REFERENCES system_organizations(id),
     entry_date    DATE NOT NULL,
     amount        DECIMAL(12, 2) NOT NULL CHECK (amount > 0),
     description   TEXT,
     -- NULL on a side means cash; see "BOTH SIDES ARE NAMED" above.
-    from_account_id UUID REFERENCES ledgers(id) ON DELETE RESTRICT,
-    to_account_id   UUID REFERENCES ledgers(id) ON DELETE RESTRICT,
+    from_account_id UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT,
+    to_account_id   UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT,
     -- Set only for order-advance entries (created via the order advance modal);
     -- links the entry to an order so advance amounts can be reconciled.
     order_number  VARCHAR(20),
@@ -464,24 +464,24 @@ CREATE TABLE IF NOT EXISTS cashbook_entries (
 
 -- Safe to re-run against an existing table: adds the column if this schema
 -- was applied before idempotency_key existed.
-ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
+ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS idempotency_key UUID;
 
 -- Carries a database created before the two-sided change over, then retires the
 -- old columns. entry_type was the FOLIO's side: 'credit' = money came from it
 -- into cash, 'debit' = cash paid out to it.
 -- See supabase/migrations/20260801160000_cashbook_from_to_accounts.sql.
-ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES ledgers(id) ON DELETE RESTRICT;
-ALTER TABLE cashbook_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES ledgers(id) ON DELETE RESTRICT;
+ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
+ALTER TABLE finances_cashbook_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
 
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1 FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = 'cashbook_entries'
+         WHERE table_schema = 'public' AND table_name = 'finances_cashbook_entries'
            AND column_name = 'entry_type'
     ) THEN
         EXECUTE $q$
-            UPDATE cashbook_entries
+            UPDATE finances_cashbook_entries
                SET from_account_id = CASE WHEN entry_type = 'credit' THEN folio ELSE NULL END,
                    to_account_id   = CASE WHEN entry_type = 'debit'  THEN folio ELSE NULL END
              WHERE from_account_id IS NULL AND to_account_id IS NULL
@@ -491,14 +491,14 @@ END $$;
 
 DROP INDEX IF EXISTS idx_cashbook_entries_folio_order_number;
 DROP INDEX IF EXISTS idx_cashbook_entries_type;
-ALTER TABLE cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_entry_type_check;
-ALTER TABLE cashbook_entries DROP COLUMN IF EXISTS folio;
-ALTER TABLE cashbook_entries DROP COLUMN IF EXISTS entry_type;
+ALTER TABLE finances_cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_entry_type_check;
+ALTER TABLE finances_cashbook_entries DROP COLUMN IF EXISTS folio;
+ALTER TABLE finances_cashbook_entries DROP COLUMN IF EXISTS entry_type;
 
 -- Both NULL would be cash-to-cash, which moves nothing; both equal would be an
 -- account paying itself.
-ALTER TABLE cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_two_sides_check;
-ALTER TABLE cashbook_entries ADD CONSTRAINT cashbook_entries_two_sides_check
+ALTER TABLE finances_cashbook_entries DROP CONSTRAINT IF EXISTS cashbook_entries_two_sides_check;
+ALTER TABLE finances_cashbook_entries ADD CONSTRAINT cashbook_entries_two_sides_check
     CHECK (
         (from_account_id IS NOT NULL OR to_account_id IS NOT NULL)
         AND from_account_id IS DISTINCT FROM to_account_id
@@ -508,9 +508,9 @@ ALTER TABLE cashbook_entries ADD CONSTRAINT cashbook_entries_two_sides_check
 -- trigger on cashbook_entries — see "Triggers" section below).
 -- balance_date is unique per org (not globally) - two orgs both posting
 -- entries on the same calendar date must each get their own balance row.
-CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
+CREATE TABLE IF NOT EXISTS finances_cashbook_daily_balances (
     id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id           UUID NOT NULL REFERENCES organizations(id),
+    org_id           UUID NOT NULL REFERENCES system_organizations(id),
     balance_date     DATE NOT NULL,
     opening_balance  DECIMAL(12, 2) NOT NULL DEFAULT 0.00,
     -- Cash-perspective (see "THE TWO PERSPECTIVES" above): total_debit is money
@@ -529,9 +529,9 @@ CREATE TABLE IF NOT EXISTS cashbook_daily_balances (
 -- row; treat a missing row as 0. Keyed by ledger_id alone (not org_id, ledger_id)
 -- since ledger_id is already a UUID unique to one org's ledger - org_id is
 -- still added as a plain column so app.org_scope.org_table() has one to filter on.
-CREATE TABLE IF NOT EXISTS ledger_balances (
-    ledger_id   UUID PRIMARY KEY REFERENCES ledgers(id) ON DELETE CASCADE,
-    org_id      UUID NOT NULL REFERENCES organizations(id),
+CREATE TABLE IF NOT EXISTS finances_ledger_balances (
+    ledger_id   UUID PRIMARY KEY REFERENCES finances_ledgers(id) ON DELETE CASCADE,
+    org_id      UUID NOT NULL REFERENCES system_organizations(id),
     -- DECIMAL(14, 2) to match journal_lines: a balance sums many lines, so it
     -- can legitimately exceed the width of any single amount.
     balance     DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
@@ -540,7 +540,7 @@ CREATE TABLE IF NOT EXISTS ledger_balances (
 
 -- Widens an existing table created before the Phase 1 journal (CREATE TABLE
 -- above only runs on a fresh install). Idempotent: a no-op once already 14,2.
-ALTER TABLE ledger_balances ALTER COLUMN balance TYPE DECIMAL(14, 2);
+ALTER TABLE finances_ledger_balances ALTER COLUMN balance TYPE DECIMAL(14, 2);
 
 -- Immutable log of cashbook_entries deletions (DELETE /cashbook/entries/{id}
 -- is a hard delete with no other record). Auto-populated by a DB trigger —
@@ -549,9 +549,9 @@ ALTER TABLE ledger_balances ALTER COLUMN balance TYPE DECIMAL(14, 2);
 -- was deleted and when; not who — there's no per-user identity yet (see
 -- Organizations & Users backlog), so this closes the "what/when" half of the
 -- gap only.
-CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
+CREATE TABLE IF NOT EXISTS finances_cashbook_entry_audit_log (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id        UUID NOT NULL REFERENCES organizations(id),
+    org_id        UUID NOT NULL REFERENCES system_organizations(id),
     entry_id      UUID NOT NULL,
     entry_date    DATE NOT NULL,
     amount        DECIMAL(12, 2) NOT NULL,
@@ -563,10 +563,10 @@ CREATE TABLE IF NOT EXISTS cashbook_entry_audit_log (
 );
 
 -- Carry-over for a log created before the two-sided change.
-ALTER TABLE cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS from_account_id UUID;
-ALTER TABLE cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS to_account_id   UUID;
-ALTER TABLE cashbook_entry_audit_log ALTER COLUMN entry_type DROP NOT NULL;
-ALTER TABLE cashbook_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
+ALTER TABLE finances_cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS from_account_id UUID;
+ALTER TABLE finances_cashbook_entry_audit_log ADD COLUMN IF NOT EXISTS to_account_id   UUID;
+ALTER TABLE finances_cashbook_entry_audit_log ALTER COLUMN entry_type DROP NOT NULL;
+ALTER TABLE finances_cashbook_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
 
 
 -- ============================================================================
@@ -574,29 +574,29 @@ ALTER TABLE cashbook_entry_audit_log ALTER COLUMN folio      DROP NOT NULL;
 -- ============================================================================
 
 -- Products & variants
-CREATE INDEX IF NOT EXISTS idx_products_name                ON products(name);
-CREATE INDEX IF NOT EXISTS idx_products_shopify_product_id  ON products(shopify_product_id);
-CREATE INDEX IF NOT EXISTS idx_products_org_id               ON products(org_id);
-CREATE INDEX IF NOT EXISTS idx_variants_product_id          ON variants(product_id);
-CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id  ON variants(shopify_variant_id);
-CREATE INDEX IF NOT EXISTS idx_variants_org_id              ON variants(org_id);
+CREATE INDEX IF NOT EXISTS idx_products_name                ON shopify_products(name);
+CREATE INDEX IF NOT EXISTS idx_products_shopify_product_id  ON shopify_products(shopify_product_id);
+CREATE INDEX IF NOT EXISTS idx_products_org_id               ON shopify_products(org_id);
+CREATE INDEX IF NOT EXISTS idx_variants_product_id          ON shopify_variants(product_id);
+CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id  ON shopify_variants(shopify_variant_id);
+CREATE INDEX IF NOT EXISTS idx_variants_org_id              ON shopify_variants(org_id);
 
 -- Orders
-CREATE INDEX IF NOT EXISTS idx_orders_number                 ON orders(order_number);
-CREATE INDEX IF NOT EXISTS idx_orders_order_status           ON orders(order_status);
-CREATE INDEX IF NOT EXISTS idx_orders_piece_received         ON orders(piece_received);
+CREATE INDEX IF NOT EXISTS idx_orders_number                 ON shopify_orders(order_number);
+CREATE INDEX IF NOT EXISTS idx_orders_order_status           ON shopify_orders(order_status);
+CREATE INDEX IF NOT EXISTS idx_orders_piece_received         ON shopify_orders(piece_received);
 -- Period/month views filter and paginate on order_receiving_date (largest, hottest scan).
-CREATE INDEX IF NOT EXISTS idx_orders_order_receiving_date   ON orders(order_receiving_date);
+CREATE INDEX IF NOT EXISTS idx_orders_order_receiving_date   ON shopify_orders(order_receiving_date);
 -- Shopify sync links NNNN-R replacement orders back to their originals via this column.
-CREATE INDEX IF NOT EXISTS idx_orders_replacement_of_order_no ON orders(replacement_of_order_no);
-CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON orders(org_id);
+CREATE INDEX IF NOT EXISTS idx_orders_replacement_of_order_no ON shopify_orders(replacement_of_order_no);
+CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON shopify_orders(org_id);
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
---   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON orders USING GIN (delivery_status);
+--   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON shopify_orders USING GIN (delivery_status);
 
 -- Load sheet logs
-CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at    ON load_sheet_logs(created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_org_id        ON load_sheet_logs(org_id);
+CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_created_at    ON shopify_load_sheet_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_org_id        ON shopify_load_sheet_logs(org_id);
 
 -- Ledgers: case-insensitive uniqueness so "Bank" and "bank" can't both exist
 -- within the same org (matches the case-insensitive name match already used
@@ -608,27 +608,27 @@ CREATE INDEX IF NOT EXISTS idx_load_sheet_logs_org_id        ON load_sheet_logs(
 -- Postgres can't promote a UNIQUE constraint onto an expression like
 -- lower(name) (ADD CONSTRAINT ... USING INDEX rejects expression indexes),
 -- so there is no separate named constraint here.
-CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_id_name_lower ON ledgers (org_id, lower(name));
-CREATE INDEX IF NOT EXISTS idx_ledgers_org_id ON ledgers(org_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_id_name_lower ON finances_ledgers (org_id, lower(name));
+CREATE INDEX IF NOT EXISTS idx_ledgers_org_id ON finances_ledgers(org_id);
 
 -- Cashbook
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON cashbook_entries(entry_date);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_account ON cashbook_entries(from_account_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_to_account   ON cashbook_entries(to_account_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON cashbook_entries(order_number);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entries_org_id       ON cashbook_entries(org_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_date         ON finances_cashbook_entries(entry_date);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_account ON finances_cashbook_entries(from_account_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_to_account   ON finances_cashbook_entries(to_account_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_order_number ON finances_cashbook_entries(order_number);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entries_org_id       ON finances_cashbook_entries(org_id);
 -- Advance reconciliation (advance_status.py) filters on the From side plus the
 -- order number: an advance is money received from the Orders account.
 CREATE INDEX IF NOT EXISTS idx_cashbook_entries_from_order_number
-    ON cashbook_entries(from_account_id, order_number);
+    ON finances_cashbook_entries(from_account_id, order_number);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_cashbook_entries_idempotency_key
-    ON cashbook_entries(idempotency_key);
-CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON cashbook_daily_balances(balance_date);
-CREATE INDEX IF NOT EXISTS idx_cashbook_daily_balances_org_id ON cashbook_daily_balances(org_id);
-CREATE INDEX IF NOT EXISTS idx_ledger_balances_org_id        ON ledger_balances(org_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON cashbook_entry_audit_log(entry_id);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON cashbook_entry_audit_log(deleted_at DESC);
-CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON cashbook_entry_audit_log(org_id);
+    ON finances_cashbook_entries(idempotency_key);
+CREATE INDEX IF NOT EXISTS idx_daily_balances_date           ON finances_cashbook_daily_balances(balance_date);
+CREATE INDEX IF NOT EXISTS idx_cashbook_daily_balances_org_id ON finances_cashbook_daily_balances(org_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_balances_org_id        ON finances_ledger_balances(org_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_entry_id   ON finances_cashbook_entry_audit_log(entry_id);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_deleted_at ON finances_cashbook_entry_audit_log(deleted_at DESC);
+CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON finances_cashbook_entry_audit_log(org_id);
 
 
 -- ============================================================================
@@ -650,9 +650,9 @@ CREATE INDEX IF NOT EXISTS idx_cashbook_entry_audit_log_org_id     ON cashbook_e
 --   'cashbook_entry'  -> cashbook_entries.id (written by the projection below)
 --   'opening_balance' -> NULL (one per org)
 --   'manual'          -> NULL
-CREATE TABLE IF NOT EXISTS journal_entries (
+CREATE TABLE IF NOT EXISTS finances_journal_entries (
     id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id         UUID NOT NULL REFERENCES organizations(id),
+    org_id         UUID NOT NULL REFERENCES system_organizations(id),
     entry_date     DATE NOT NULL,
     voucher_type   VARCHAR(30) NOT NULL DEFAULT 'manual',
     narration      TEXT,
@@ -660,8 +660,8 @@ CREATE TABLE IF NOT EXISTS journal_entries (
     source_id      UUID,
     -- Posted entries are corrected by a reversing entry, never edited in place
     -- (FINANCE_ACCOUNTING_PLAN.md C1); Phase 5 adds the immutability trigger.
-    reversal_of_id UUID REFERENCES journal_entries(id),
-    created_by     UUID REFERENCES users(id),
+    reversal_of_id UUID REFERENCES finances_journal_entries(id),
+    created_by     UUID REFERENCES system_users(id),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -669,18 +669,18 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 -- At most one entry per source row, so re-projecting updates instead of
 -- silently posting the same amount twice.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_entries_source
-    ON journal_entries (org_id, source_type, source_id)
+    ON finances_journal_entries (org_id, source_type, source_id)
     WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_journal_entries_org_date ON journal_entries (org_id, entry_date);
+CREATE INDEX IF NOT EXISTS idx_journal_entries_org_date ON finances_journal_entries (org_id, entry_date);
 
 -- Amounts are unsigned in two columns rather than one signed column: that is
 -- the form every statement, trial balance and audit expects, and it makes
 -- "exactly one side per line" a CHECK rather than a convention.
-CREATE TABLE IF NOT EXISTS journal_lines (
+CREATE TABLE IF NOT EXISTS finances_journal_lines (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id      UUID NOT NULL REFERENCES organizations(id),
-    journal_id  UUID NOT NULL REFERENCES journal_entries(id) ON DELETE CASCADE,
-    account_id  UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    org_id      UUID NOT NULL REFERENCES system_organizations(id),
+    journal_id  UUID NOT NULL REFERENCES finances_journal_entries(id) ON DELETE CASCADE,
+    account_id  UUID NOT NULL REFERENCES finances_ledgers(id) ON DELETE RESTRICT,
     debit       DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (debit  >= 0),
     credit      DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (credit >= 0),
     description TEXT,
@@ -690,9 +690,9 @@ CREATE TABLE IF NOT EXISTS journal_lines (
     )
 );
 
-CREATE INDEX IF NOT EXISTS idx_journal_lines_journal_id ON journal_lines (journal_id);
-CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON journal_lines (account_id);
-CREATE INDEX IF NOT EXISTS idx_journal_lines_org_id     ON journal_lines (org_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_journal_id ON finances_journal_lines (journal_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_account_id ON finances_journal_lines (account_id);
+CREATE INDEX IF NOT EXISTS idx_journal_lines_org_id     ON finances_journal_lines (org_id);
 
 -- Debits = credits, enforced by the database. DEFERRABLE INITIALLY DEFERRED so
 -- it runs once at COMMIT, after all of an entry's lines are in - which is why
@@ -709,13 +709,13 @@ DECLARE
 BEGIN
     v_journal_id := COALESCE(NEW.journal_id, OLD.journal_id);
 
-    IF NOT EXISTS (SELECT 1 FROM journal_entries WHERE id = v_journal_id) THEN
+    IF NOT EXISTS (SELECT 1 FROM finances_journal_entries WHERE id = v_journal_id) THEN
         RETURN NULL;
     END IF;
 
     SELECT COALESCE(SUM(debit), 0), COALESCE(SUM(credit), 0)
       INTO v_debit, v_credit
-      FROM journal_lines WHERE journal_id = v_journal_id;
+      FROM finances_journal_lines WHERE journal_id = v_journal_id;
 
     IF v_debit <> v_credit THEN
         RAISE EXCEPTION 'Journal entry % does not balance: debits %, credits %',
@@ -726,9 +726,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS journal_lines_must_balance ON journal_lines;
+DROP TRIGGER IF EXISTS journal_lines_must_balance ON finances_journal_lines;
 CREATE CONSTRAINT TRIGGER journal_lines_must_balance
-AFTER INSERT OR UPDATE OR DELETE ON journal_lines
+AFTER INSERT OR UPDATE OR DELETE ON finances_journal_lines
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION trg_journal_entry_must_balance();
@@ -739,19 +739,19 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM journal_entries WHERE id = NEW.id) THEN
+    IF NOT EXISTS (SELECT 1 FROM finances_journal_entries WHERE id = NEW.id) THEN
         RETURN NULL;
     END IF;
-    IF (SELECT COUNT(*) FROM journal_lines WHERE journal_id = NEW.id) < 2 THEN
+    IF (SELECT COUNT(*) FROM finances_journal_lines WHERE journal_id = NEW.id) < 2 THEN
         RAISE EXCEPTION 'Journal entry % must have at least two lines', NEW.id;
     END IF;
     RETURN NULL;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS journal_entries_must_have_lines ON journal_entries;
+DROP TRIGGER IF EXISTS journal_entries_must_have_lines ON finances_journal_entries;
 CREATE CONSTRAINT TRIGGER journal_entries_must_have_lines
-AFTER INSERT ON journal_entries
+AFTER INSERT ON finances_journal_entries
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION trg_journal_entry_must_have_lines();
@@ -775,9 +775,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS journal_lines_balance_trigger ON journal_lines;
+DROP TRIGGER IF EXISTS journal_lines_balance_trigger ON finances_journal_lines;
 CREATE TRIGGER journal_lines_balance_trigger
-AFTER INSERT OR UPDATE OF account_id, debit, credit OR DELETE ON journal_lines
+AFTER INSERT OR UPDATE OF account_id, debit, credit OR DELETE ON finances_journal_lines
 FOR EACH ROW
 EXECUTE FUNCTION trg_journal_lines_recalc_balance();
 
@@ -803,19 +803,19 @@ DECLARE
     v_name   VARCHAR := p_name;
     v_suffix INT := 1;
 BEGIN
-    SELECT id INTO v_id FROM ledgers WHERE org_id = p_org_id AND system_key = p_system_key;
+    SELECT id INTO v_id FROM finances_ledgers WHERE org_id = p_org_id AND system_key = p_system_key;
     IF v_id IS NOT NULL THEN
         RETURN v_id;
     END IF;
 
     WHILE EXISTS (
-        SELECT 1 FROM ledgers WHERE org_id = p_org_id AND lower(name) = lower(v_name)
+        SELECT 1 FROM finances_ledgers WHERE org_id = p_org_id AND lower(name) = lower(v_name)
     ) LOOP
         v_suffix := v_suffix + 1;
         v_name := p_name || ' (' || v_suffix || ')';
     END LOOP;
 
-    INSERT INTO ledgers (org_id, name, type, code, system_key, is_cash_equivalent, opening_balance)
+    INSERT INTO finances_ledgers (org_id, name, type, code, system_key, is_cash_equivalent, opening_balance)
     VALUES (p_org_id, v_name, p_type, p_code, p_system_key, p_is_cash_equivalent, 0)
     RETURNING id INTO v_id;
 
@@ -838,20 +838,20 @@ DECLARE
     v_date       DATE;
 BEGIN
     SELECT id INTO v_obe_id
-      FROM ledgers WHERE org_id = p_org_id AND system_key = 'opening_balance_equity';
+      FROM finances_ledgers WHERE org_id = p_org_id AND system_key = 'opening_balance_equity';
     IF v_obe_id IS NULL THEN
         RETURN;
     END IF;
 
-    DELETE FROM journal_entries WHERE org_id = p_org_id AND source_type = 'opening_balance';
+    DELETE FROM finances_journal_entries WHERE org_id = p_org_id AND source_type = 'opening_balance';
 
     SELECT COALESCE(SUM(opening_balance), 0) INTO v_net
-      FROM ledgers WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id;
+      FROM finances_ledgers WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id;
 
     -- Tests for rows, not for v_net: a net of zero is not the same as having no
     -- opening balances at all.
     IF NOT EXISTS (
-        SELECT 1 FROM ledgers
+        SELECT 1 FROM finances_ledgers
          WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id
     ) THEN
         RETURN;
@@ -860,23 +860,23 @@ BEGIN
     -- One day before the earliest transaction, so opening balances always sort
     -- ahead of activity on a statement.
     SELECT COALESCE(MIN(entry_date), CURRENT_DATE) - 1 INTO v_date
-      FROM cashbook_entries WHERE org_id = p_org_id;
+      FROM finances_cashbook_entries WHERE org_id = p_org_id;
 
-    INSERT INTO journal_entries (org_id, entry_date, voucher_type, narration, source_type)
+    INSERT INTO finances_journal_entries (org_id, entry_date, voucher_type, narration, source_type)
     VALUES (p_org_id, v_date, 'opening', 'Opening balances', 'opening_balance')
     RETURNING id INTO v_journal_id;
 
     -- opening_balance is stored Debit-positive, matching journal convention.
-    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    INSERT INTO finances_journal_lines (org_id, journal_id, account_id, debit, credit, description)
     SELECT p_org_id, v_journal_id, id,
            CASE WHEN opening_balance > 0 THEN  opening_balance ELSE 0 END,
            CASE WHEN opening_balance < 0 THEN -opening_balance ELSE 0 END,
            'Opening balance'
-      FROM ledgers
+      FROM finances_ledgers
      WHERE org_id = p_org_id AND opening_balance <> 0 AND id <> v_obe_id;
 
     IF v_net <> 0 THEN
-        INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+        INSERT INTO finances_journal_lines (org_id, journal_id, account_id, debit, credit, description)
         VALUES (p_org_id, v_journal_id, v_obe_id,
                 CASE WHEN v_net < 0 THEN -v_net ELSE 0 END,
                 CASE WHEN v_net > 0 THEN  v_net ELSE 0 END,
@@ -896,10 +896,10 @@ DECLARE
     v_to         UUID;
     v_journal_id UUID;
 BEGIN
-    SELECT * INTO e FROM cashbook_entries WHERE id = p_entry_id;
+    SELECT * INTO e FROM finances_cashbook_entries WHERE id = p_entry_id;
 
     IF NOT FOUND THEN
-        DELETE FROM journal_entries
+        DELETE FROM finances_journal_entries
          WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
         RETURN;
     END IF;
@@ -907,7 +907,7 @@ BEGIN
     -- Only looked up when a side is actually cash, so an org with no cash
     -- account can still record transfers between two named ledgers.
     IF e.from_account_id IS NULL OR e.to_account_id IS NULL THEN
-        SELECT id INTO v_cash_id FROM ledgers WHERE org_id = e.org_id AND system_key = 'cash';
+        SELECT id INTO v_cash_id FROM finances_ledgers WHERE org_id = e.org_id AND system_key = 'cash';
         IF v_cash_id IS NULL THEN
             RAISE EXCEPTION 'Organization % has no system cash account', e.org_id;
         END IF;
@@ -918,17 +918,17 @@ BEGIN
 
     -- Rebuild rather than patch: an edited entry can change date, amount or
     -- either side, and re-posting from scratch cannot drift.
-    DELETE FROM journal_entries
+    DELETE FROM finances_journal_entries
      WHERE source_type = 'cashbook_entry' AND source_id = p_entry_id;
 
-    INSERT INTO journal_entries
+    INSERT INTO finances_journal_entries
         (org_id, entry_date, voucher_type, narration, source_type, source_id)
     VALUES
         (e.org_id, e.entry_date, 'cashbook', e.description, 'cashbook_entry', e.id)
     RETURNING id INTO v_journal_id;
 
     -- Money goes TO the debit side and comes FROM the credit side.
-    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    INSERT INTO finances_journal_lines (org_id, journal_id, account_id, debit, credit, description)
     VALUES (e.org_id, v_journal_id, v_to,   e.amount, 0, e.description),
            (e.org_id, v_journal_id, v_from, 0, e.amount, e.description);
 END;
@@ -941,7 +941,7 @@ LANGUAGE plpgsql
 AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
-        DELETE FROM journal_entries
+        DELETE FROM finances_journal_entries
          WHERE source_type = 'cashbook_entry' AND source_id = OLD.id;
         RETURN OLD;
     END IF;
@@ -951,10 +951,10 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_journal_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_journal_trigger ON finances_cashbook_entries;
 CREATE TRIGGER cashbook_entries_journal_trigger
 AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount, description OR DELETE
-ON cashbook_entries
+ON finances_cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_project_journal();
 
@@ -983,9 +983,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS organizations_seed_system_ledgers ON organizations;
+DROP TRIGGER IF EXISTS organizations_seed_system_ledgers ON system_organizations;
 CREATE TRIGGER organizations_seed_system_ledgers
-AFTER INSERT ON organizations
+AFTER INSERT ON system_organizations
 FOR EACH ROW
 EXECUTE FUNCTION trg_organizations_seed_system_ledgers();
 
@@ -994,7 +994,7 @@ DO $$
 DECLARE
     org RECORD;
 BEGIN
-    FOR org IN SELECT id FROM organizations LOOP
+    FOR org IN SELECT id FROM system_organizations LOOP
         PERFORM ensure_system_ledger(org.id, 'cash', 'Cash', 'Asset', '1000', TRUE);
         PERFORM ensure_system_ledger(org.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
         PERFORM ensure_system_ledger(org.id, 'orders', 'Orders', 'Liability', '2200');
@@ -1052,19 +1052,19 @@ BEGIN
     SELECT COUNT(*) INTO v_foreign
       FROM jsonb_array_elements(p_lines) AS l
      WHERE NOT EXISTS (
-         SELECT 1 FROM ledgers WHERE id = (l->>'account_id')::UUID AND org_id = p_org_id
+         SELECT 1 FROM finances_ledgers WHERE id = (l->>'account_id')::UUID AND org_id = p_org_id
      );
     IF v_foreign > 0 THEN
         RAISE EXCEPTION 'Journal lines reference % account(s) outside this organization', v_foreign;
     END IF;
 
-    INSERT INTO journal_entries
+    INSERT INTO finances_journal_entries
         (org_id, entry_date, voucher_type, narration, source_type, source_id, created_by)
     VALUES
         (p_org_id, p_entry_date, p_voucher_type, p_narration, p_source_type, p_source_id, p_created_by)
     RETURNING id INTO v_journal_id;
 
-    INSERT INTO journal_lines (org_id, journal_id, account_id, debit, credit, description)
+    INSERT INTO finances_journal_lines (org_id, journal_id, account_id, debit, credit, description)
     SELECT p_org_id, v_journal_id, (l->>'account_id')::UUID,
            COALESCE((l->>'debit')::NUMERIC, 0),
            COALESCE((l->>'credit')::NUMERIC, 0),
@@ -1101,8 +1101,8 @@ AS $$
            jl.credit,
            je.voucher_type,
            je.source_type
-      FROM journal_lines jl
-      JOIN journal_entries je ON je.id = jl.journal_id
+      FROM finances_journal_lines jl
+      JOIN finances_journal_entries je ON je.id = jl.journal_id
      WHERE jl.org_id = p_org_id
        AND jl.account_id = p_ledger_id
      -- created_at breaks ties within a date so the running balance is stable
@@ -1130,9 +1130,9 @@ AS $$
     WITH balances AS (
         SELECT l.id, l.code, l.name, l.type,
                COALESCE(SUM(jl.debit) - SUM(jl.credit), 0) AS net
-          FROM ledgers l
-          JOIN journal_lines jl   ON jl.account_id = l.id
-          JOIN journal_entries je ON je.id = jl.journal_id
+          FROM finances_ledgers l
+          JOIN finances_journal_lines jl   ON jl.account_id = l.id
+          JOIN finances_journal_entries je ON je.id = jl.journal_id
          WHERE l.org_id = p_org_id
            AND je.org_id = p_org_id
            AND je.entry_date <= p_as_of
@@ -1181,18 +1181,18 @@ DECLARE
     v_opening NUMERIC(12, 2);
 BEGIN
     SELECT closing_balance INTO v_opening
-    FROM cashbook_daily_balances
+    FROM finances_cashbook_daily_balances
     WHERE org_id = p_org_id AND balance_date < p_from_date
     ORDER BY balance_date DESC
     LIMIT 1;
 
     v_opening := COALESCE(v_opening, 0);
 
-    DELETE FROM cashbook_daily_balances
+    DELETE FROM finances_cashbook_daily_balances
     WHERE org_id = p_org_id
       AND balance_date >= p_from_date
       AND balance_date NOT IN (
-          SELECT DISTINCT entry_date FROM cashbook_entries
+          SELECT DISTINCT entry_date FROM finances_cashbook_entries
           WHERE org_id = p_org_id AND entry_date >= p_from_date
       );
 
@@ -1202,7 +1202,7 @@ BEGIN
                COALESCE(SUM(amount) FILTER (WHERE to_account_id IS NULL), 0)   AS total_debit,
                -- Cash is the source: cash paid out, a credit to cash.
                COALESCE(SUM(amount) FILTER (WHERE from_account_id IS NULL), 0) AS total_credit
-        FROM cashbook_entries
+        FROM finances_cashbook_entries
         WHERE org_id = p_org_id AND entry_date >= p_from_date
         GROUP BY entry_date
     ),
@@ -1214,7 +1214,7 @@ BEGIN
                    OVER (ORDER BY balance_date ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS closing_balance
         FROM day_totals
     )
-    INSERT INTO cashbook_daily_balances
+    INSERT INTO finances_cashbook_daily_balances
         (org_id, balance_date, opening_balance, total_debit, total_credit, closing_balance, updated_at)
     SELECT p_org_id,
            balance_date,
@@ -1262,9 +1262,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_balance_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_balance_trigger ON finances_cashbook_entries;
 CREATE TRIGGER cashbook_entries_balance_trigger
-AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount OR DELETE ON cashbook_entries
+AFTER INSERT OR UPDATE OF entry_date, from_account_id, to_account_id, amount OR DELETE ON finances_cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_recalc_balances();
 
@@ -1283,21 +1283,21 @@ DECLARE
     v_balance NUMERIC(14, 2);
     v_org_id  UUID;
 BEGIN
-    SELECT org_id INTO v_org_id FROM ledgers WHERE id = p_ledger_id;
+    SELECT org_id INTO v_org_id FROM finances_ledgers WHERE id = p_ledger_id;
     IF v_org_id IS NULL THEN
-        DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
+        DELETE FROM finances_ledger_balances WHERE ledger_id = p_ledger_id;
         RETURN;
     END IF;
 
     SELECT COALESCE(SUM(debit) - SUM(credit), 0) INTO v_balance
-      FROM journal_lines WHERE account_id = p_ledger_id;
+      FROM finances_journal_lines WHERE account_id = p_ledger_id;
 
     IF v_balance = 0 THEN
-        DELETE FROM ledger_balances WHERE ledger_id = p_ledger_id;
+        DELETE FROM finances_ledger_balances WHERE ledger_id = p_ledger_id;
         RETURN;
     END IF;
 
-    INSERT INTO ledger_balances (ledger_id, org_id, balance, updated_at)
+    INSERT INTO finances_ledger_balances (ledger_id, org_id, balance, updated_at)
     VALUES (p_ledger_id, v_org_id, v_balance, NOW())
     ON CONFLICT (ledger_id) DO UPDATE SET
         balance    = EXCLUDED.balance,
@@ -1310,7 +1310,7 @@ $$;
 -- Journal section above), so the old direct cashbook -> ledger_balances trigger
 -- is gone: keeping it would recompute the same number from the retired source
 -- and race the journal-driven one.
-DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_ledger_balance_trigger ON finances_cashbook_entries;
 DROP FUNCTION IF EXISTS trg_cashbook_entries_recalc_ledger_balance();
 
 -- Creating a ledger with an opening balance, or editing one later, rewrites the
@@ -1325,9 +1325,9 @@ BEGIN
 END;
 $$;
 
-DROP TRIGGER IF EXISTS ledgers_opening_balance_trigger ON ledgers;
+DROP TRIGGER IF EXISTS ledgers_opening_balance_trigger ON finances_ledgers;
 CREATE TRIGGER ledgers_opening_balance_trigger
-AFTER INSERT OR UPDATE OF opening_balance ON ledgers
+AFTER INSERT OR UPDATE OF opening_balance ON finances_ledgers
 FOR EACH ROW
 EXECUTE FUNCTION trg_ledgers_recalc_balance();
 
@@ -1338,15 +1338,15 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    TRUNCATE cashbook_daily_balances;
-    TRUNCATE ledger_balances;
+    TRUNCATE finances_cashbook_daily_balances;
+    TRUNCATE finances_ledger_balances;
     RETURN NULL;
 END;
 $$;
 
-DROP TRIGGER IF EXISTS cashbook_entries_truncate_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_truncate_trigger ON finances_cashbook_entries;
 CREATE TRIGGER cashbook_entries_truncate_trigger
-AFTER TRUNCATE ON cashbook_entries
+AFTER TRUNCATE ON finances_cashbook_entries
 FOR EACH STATEMENT
 EXECUTE FUNCTION trg_cashbook_entries_truncate_balances();
 
@@ -1355,7 +1355,7 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO cashbook_entry_audit_log
+    INSERT INTO finances_cashbook_entry_audit_log
         (org_id, entry_id, entry_date, amount, description,
          from_account_id, to_account_id, order_number, deleted_at)
     VALUES
@@ -1366,9 +1366,9 @@ END;
 $$;
 
 
-DROP TRIGGER IF EXISTS cashbook_entries_audit_delete_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_audit_delete_trigger ON finances_cashbook_entries;
 CREATE TRIGGER cashbook_entries_audit_delete_trigger
-AFTER DELETE ON cashbook_entries
+AFTER DELETE ON finances_cashbook_entries
 FOR EACH ROW
 EXECUTE FUNCTION trg_cashbook_entries_audit_delete();
 
@@ -1377,20 +1377,20 @@ RETURNS trigger
 LANGUAGE plpgsql
 AS $$
 BEGIN
-    INSERT INTO cashbook_entry_audit_log
+    INSERT INTO finances_cashbook_entry_audit_log
         (org_id, entry_id, entry_date, amount, description,
          from_account_id, to_account_id, order_number)
     SELECT org_id, id, entry_date, amount, description,
            from_account_id, to_account_id, order_number
-    FROM cashbook_entries;
+    FROM finances_cashbook_entries;
     RETURN NULL;
 END;
 $$;
 
 
-DROP TRIGGER IF EXISTS cashbook_entries_audit_before_truncate_trigger ON cashbook_entries;
+DROP TRIGGER IF EXISTS cashbook_entries_audit_before_truncate_trigger ON finances_cashbook_entries;
 CREATE TRIGGER cashbook_entries_audit_before_truncate_trigger
-BEFORE TRUNCATE ON cashbook_entries
+BEFORE TRUNCATE ON finances_cashbook_entries
 FOR EACH STATEMENT
 EXECUTE FUNCTION trg_cashbook_entries_audit_before_truncate();
 
@@ -1426,7 +1426,7 @@ AS $$
             EXTRACT(YEAR FROM local_ts)::INT  AS yr
         FROM (
             SELECT order_receiving_date AT TIME ZONE INTERVAL '+05:00' AS local_ts
-            FROM orders
+            FROM shopify_orders
             WHERE org_id = p_org_id
         ) t
     )
@@ -1466,7 +1466,7 @@ STABLE
 AS $$
     WITH period_orders AS (
         SELECT *
-        FROM orders
+        FROM shopify_orders
         WHERE org_id = p_org_id
           AND order_receiving_date >= p_period_start
           AND order_receiving_date <  p_period_end
@@ -1493,8 +1493,8 @@ AS $$
             COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'shopify'), 0) AS shopify_expense,
             COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'ad'), 0)      AS ad_expense,
             COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'other'), 0)   AS other_expense
-        FROM ledgers l
-        JOIN cashbook_entries ce ON ce.to_account_id = l.id
+        FROM finances_ledgers l
+        JOIN finances_cashbook_entries ce ON ce.to_account_id = l.id
         WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
           AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
     )
@@ -1540,7 +1540,7 @@ AS $$
         courier,
         COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'delivered')::INT AS delivered_count,
         COUNT(*)::INT AS total_count
-    FROM orders
+    FROM shopify_orders
     WHERE org_id = p_org_id
       AND order_receiving_date >= p_period_start
       AND order_receiving_date <  p_period_end
@@ -1580,13 +1580,13 @@ $$;
 -- Nullable and only meaningful on party accounts; a Rent or Sales ledger simply
 -- leaves them empty. is_party marks the accounts the bill supplier picker
 -- offers, so it doesn't list every expense head.
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS is_party           BOOLEAN NOT NULL DEFAULT FALSE;
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS phone              VARCHAR(50);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS email              VARCHAR(255);
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS address            TEXT;
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS tax_number         VARCHAR(50);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS is_party           BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS phone              VARCHAR(50);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS email              VARCHAR(255);
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS address            TEXT;
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS tax_number         VARCHAR(50);
 -- Drives the default due date on a new bill. NULL = due on receipt.
-ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
     CONSTRAINT ledgers_payment_terms_days_check CHECK (payment_terms_days IS NULL OR payment_terms_days >= 0);
 
 -- Any ledger that already has bills posted against it is a party by definition.
@@ -1600,14 +1600,14 @@ ALTER TABLE ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
 -- oldest-first (see the bills_with_paid view below). Payments are ordinary
 -- cashbook entries against the supplier and are never allocated to a bill, so
 -- there is no stored payment status to drift out of step with reality.
-CREATE TABLE IF NOT EXISTS bills (
+CREATE TABLE IF NOT EXISTS finances_bills (
     id            UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id        UUID NOT NULL REFERENCES organizations(id),
+    org_id        UUID NOT NULL REFERENCES system_organizations(id),
     -- Our own sequence (BILL-0001). supplier_ref is the number printed on the
     -- supplier's document, which is theirs to choose and is not unique to us.
     bill_number   VARCHAR(30) NOT NULL,
     supplier_ref  VARCHAR(100),
-    supplier_id   UUID NOT NULL REFERENCES ledgers(id) ON DELETE RESTRICT,
+    supplier_id   UUID NOT NULL REFERENCES finances_ledgers(id) ON DELETE RESTRICT,
     bill_date     DATE NOT NULL,
     due_date      DATE,
     status        VARCHAR(20) NOT NULL DEFAULT 'draft'
@@ -1620,15 +1620,15 @@ CREATE TABLE IF NOT EXISTS bills (
     -- receive/unreceive transition so stock can't be applied twice or reversed
     -- for a bill that never applied it.
     stock_applied BOOLEAN NOT NULL DEFAULT FALSE,
-    created_by    UUID REFERENCES users(id),
+    created_by    UUID REFERENCES system_users(id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT bills_org_id_bill_number_key UNIQUE (org_id, bill_number)
 );
 
-CREATE INDEX IF NOT EXISTS idx_bills_org_supplier ON bills (org_id, supplier_id);
-CREATE INDEX IF NOT EXISTS idx_bills_org_status   ON bills (org_id, status);
-CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON bills (org_id, due_date);
+CREATE INDEX IF NOT EXISTS idx_bills_org_supplier ON finances_bills (org_id, supplier_id);
+CREATE INDEX IF NOT EXISTS idx_bills_org_status   ON finances_bills (org_id, status);
+CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON finances_bills (org_id, due_date);
 
 -- ---------------------------------------------------------------------------
 -- bill_items
@@ -1638,11 +1638,11 @@ CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON bills (org_id, due_date);
 -- goods - anything paid for on the spot (ads, rent, packaging) is a cashbook
 -- entry against its expense ledger, which is fewer steps and already works.
 -- Bills exist to record what is OWED, not to categorise spending.
-CREATE TABLE IF NOT EXISTS bill_items (
+CREATE TABLE IF NOT EXISTS finances_bill_items (
     id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id      UUID NOT NULL REFERENCES organizations(id),
-    bill_id     UUID NOT NULL REFERENCES bills(id) ON DELETE CASCADE,
-    -- Soft links, matching orders.line_items' convention: a product can be
+    org_id      UUID NOT NULL REFERENCES system_organizations(id),
+    bill_id     UUID NOT NULL REFERENCES finances_bills(id) ON DELETE CASCADE,
+    -- Soft links, matching shopify_orders.line_items' convention: a product can be
     -- deleted without destroying the purchase history that mentions it.
     product_id  UUID,
     variant_id  UUID,
@@ -1656,11 +1656,11 @@ CREATE TABLE IF NOT EXISTS bill_items (
 -- Removes the column from a database created before the account was dropped:
 -- CREATE TABLE IF NOT EXISTS above only runs on a fresh install.
 -- See supabase/migrations/20260801110000_bills_drop_line_account.sql.
-ALTER TABLE bill_items DROP COLUMN IF EXISTS account_id;
+ALTER TABLE finances_bill_items DROP COLUMN IF EXISTS account_id;
 
-CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON bill_items (bill_id);
-CREATE INDEX IF NOT EXISTS idx_bill_items_org_id  ON bill_items (org_id);
-CREATE INDEX IF NOT EXISTS idx_bill_items_variant ON bill_items (variant_id) WHERE variant_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON finances_bill_items (bill_id);
+CREATE INDEX IF NOT EXISTS idx_bill_items_org_id  ON finances_bill_items (org_id);
+CREATE INDEX IF NOT EXISTS idx_bill_items_variant ON finances_bill_items (variant_id) WHERE variant_id IS NOT NULL;
 
 -- Phase 2, part 2: bill numbering, totals, posting, stock, and AP ageing.
 
@@ -1679,7 +1679,7 @@ STABLE
 AS $$
     SELECT 'BILL-' || LPAD(
         (COALESCE(MAX(SUBSTRING(bill_number FROM 6)::INT), 0) + 1)::TEXT, 4, '0')
-      FROM bills
+      FROM finances_bills
      WHERE org_id = p_org_id AND bill_number ~ '^BILL-[0-9]+$';
 $$;
 
@@ -1692,9 +1692,9 @@ DECLARE
     v_subtotal NUMERIC(14, 2);
 BEGIN
     SELECT COALESCE(SUM(amount), 0) INTO v_subtotal
-      FROM bill_items WHERE bill_id = p_bill_id;
+      FROM finances_bill_items WHERE bill_id = p_bill_id;
 
-    UPDATE bills
+    UPDATE finances_bills
        SET subtotal   = v_subtotal,
            total      = v_subtotal + tax_amount,
            updated_at = NOW()
@@ -1704,10 +1704,10 @@ $$;
 
 -- Adds (p_sign = 1) or removes (p_sign = -1) this bill's stock.
 --
--- Caveat worth knowing: receiving updates products.cost_price to the purchase
+-- Caveat worth knowing: receiving updates shopify_products.cost_price to the purchase
 -- cost, but un-receiving does NOT restore the previous cost - the old value was
 -- never recorded anywhere. Past orders are unaffected either way, since
--- orders.cost_price is snapshotted at order time.
+-- shopify_orders.cost_price is snapshotted at order time.
 CREATE OR REPLACE FUNCTION apply_bill_stock(p_bill_id UUID, p_sign INT)
 RETURNS void
 LANGUAGE plpgsql
@@ -1715,24 +1715,24 @@ AS $$
 BEGIN
     -- variants.quantity is INTEGER while a bill line can be fractional (fabric
     -- by the metre), so the movement is rounded to whole units.
-    UPDATE variants v
+    UPDATE shopify_variants v
        SET quantity   = v.quantity + (p_sign * ROUND(agg.qty))::INT,
            updated_at = NOW()
       FROM (
           SELECT variant_id, SUM(quantity) AS qty
-            FROM bill_items
+            FROM finances_bill_items
            WHERE bill_id = p_bill_id AND variant_id IS NOT NULL
            GROUP BY variant_id
       ) agg
      WHERE v.id = agg.variant_id;
 
     IF p_sign > 0 THEN
-        UPDATE products p
+        UPDATE shopify_products p
            SET cost_price = agg.unit_cost,
                updated_at = NOW()
           FROM (
               SELECT DISTINCT ON (product_id) product_id, unit_cost
-                FROM bill_items
+                FROM finances_bill_items
                WHERE bill_id = p_bill_id AND product_id IS NOT NULL
                ORDER BY product_id, created_at DESC
           ) agg
@@ -1754,7 +1754,7 @@ DECLARE
     v_tax_account UUID;
     v_lines       JSONB;
 BEGIN
-    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+    SELECT * INTO b FROM finances_bills WHERE id = p_bill_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Bill % not found', p_bill_id;
     END IF;
@@ -1766,7 +1766,7 @@ BEGIN
     END IF;
 
     PERFORM recalc_bill_totals(p_bill_id);
-    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+    SELECT * INTO b FROM finances_bills WHERE id = p_bill_id;
 
     IF b.total <= 0 THEN
         RAISE EXCEPTION 'Bill % has nothing to post - add at least one line', b.bill_number;
@@ -1800,7 +1800,7 @@ BEGIN
 
     -- Defensive: post_journal_entry does not replace an existing entry for the
     -- same source, and idx_journal_entries_source would reject a duplicate.
-    DELETE FROM journal_entries
+    DELETE FROM finances_journal_entries
      WHERE org_id = b.org_id AND source_type = 'bill' AND source_id = p_bill_id;
 
     PERFORM post_journal_entry(
@@ -1815,10 +1815,10 @@ BEGIN
 
     IF NOT b.stock_applied THEN
         PERFORM apply_bill_stock(p_bill_id, 1);
-        UPDATE bills SET stock_applied = TRUE WHERE id = p_bill_id;
+        UPDATE finances_bills SET stock_applied = TRUE WHERE id = p_bill_id;
     END IF;
 
-    UPDATE bills SET status = 'received', updated_at = NOW() WHERE id = p_bill_id;
+    UPDATE finances_bills SET status = 'received', updated_at = NOW() WHERE id = p_bill_id;
 END;
 $$;
 
@@ -1833,7 +1833,7 @@ AS $$
 DECLARE
     b RECORD;
 BEGIN
-    SELECT * INTO b FROM bills WHERE id = p_bill_id;
+    SELECT * INTO b FROM finances_bills WHERE id = p_bill_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION 'Bill % not found', p_bill_id;
     END IF;
@@ -1841,15 +1841,15 @@ BEGIN
         RETURN;
     END IF;
 
-    DELETE FROM journal_entries
+    DELETE FROM finances_journal_entries
      WHERE org_id = b.org_id AND source_type = 'bill' AND source_id = p_bill_id;
 
     IF b.stock_applied THEN
         PERFORM apply_bill_stock(p_bill_id, -1);
-        UPDATE bills SET stock_applied = FALSE WHERE id = p_bill_id;
+        UPDATE finances_bills SET stock_applied = FALSE WHERE id = p_bill_id;
     END IF;
 
-    UPDATE bills SET status = 'draft', updated_at = NOW() WHERE id = p_bill_id;
+    UPDATE finances_bills SET status = 'draft', updated_at = NOW() WHERE id = p_bill_id;
 END;
 $$;
 
@@ -1862,11 +1862,11 @@ $$;
 --
 -- `prior` is the total of that supplier's earlier received bills, so each bill
 -- is settled only once everything before it has been.
-CREATE OR REPLACE VIEW bills_with_paid AS
+CREATE OR REPLACE VIEW finances_bills_with_paid AS
 WITH settled AS (
     SELECT account_id AS supplier_id,
            COALESCE(SUM(debit), 0) AS amount
-      FROM journal_lines
+      FROM finances_journal_lines
      GROUP BY account_id
 ),
 received AS (
@@ -1878,7 +1878,7 @@ received AS (
                ORDER BY b.bill_date, b.bill_number
                ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING
            ), 0) AS prior
-      FROM bills b
+      FROM finances_bills b
      WHERE b.status = 'received'
 ),
 allocated AS (
@@ -1900,7 +1900,7 @@ SELECT b.*,
            WHEN COALESCE(a.paid, 0) > 0        THEN 'partially_paid'
            ELSE 'unpaid'
        END AS payment_status
-  FROM bills b
+  FROM finances_bills b
   LEFT JOIN allocated a ON a.id = b.id;
 
 -- Ageing now reads the view, so it inherits the same FIFO settlement.
@@ -1923,7 +1923,7 @@ AS $$
                b.outstanding,
                -- No due date means due on receipt.
                p_as_of - COALESCE(b.due_date, b.bill_date) AS days_overdue
-          FROM bills_with_paid b
+          FROM finances_bills_with_paid b
          WHERE b.org_id = p_org_id
            AND b.status = 'received'
            AND b.bill_date <= p_as_of
@@ -1938,7 +1938,7 @@ AS $$
            COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN 61 AND 90), 0),
            COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue > 90), 0)
       FROM open_bills ob
-      JOIN ledgers l ON l.id = ob.supplier_id
+      JOIN finances_ledgers l ON l.id = ob.supplier_id
      GROUP BY l.id, l.name
      ORDER BY l.name;
 $$;
@@ -1973,7 +1973,7 @@ DECLARE
     entry RECORD;
 BEGIN
     FOR entry IN
-        SELECT ce.id FROM cashbook_entries ce ORDER BY ce.entry_date, ce.created_at
+        SELECT ce.id FROM finances_cashbook_entries ce ORDER BY ce.entry_date, ce.created_at
     LOOP
         PERFORM project_cashbook_entry_to_journal(entry.id);
     END LOOP;
@@ -1983,7 +1983,7 @@ DO $$
 DECLARE
     org RECORD;
 BEGIN
-    FOR org IN SELECT id FROM organizations LOOP
+    FOR org IN SELECT id FROM system_organizations LOOP
         PERFORM sync_opening_balance_journal(org.id);
         -- Cash totals are derived too: only entries with a cash side count
         -- towards them, so they have to be rebuilt alongside the journal.
@@ -1995,7 +1995,7 @@ DO $$
 DECLARE
     l RECORD;
 BEGIN
-    FOR l IN SELECT id FROM ledgers LOOP
+    FOR l IN SELECT id FROM finances_ledgers LOOP
         PERFORM recalc_ledger_balance(l.id);
     END LOOP;
 END $$;
@@ -2012,21 +2012,21 @@ END $$;
 -- future accidental use of the anon/publishable key reading these tables
 -- directly. See supabase/migrations/20260730100000_rls_default_deny_business_tables.sql.
 -- ============================================================================
-ALTER TABLE products                 ENABLE ROW LEVEL SECURITY;
-ALTER TABLE variants                 ENABLE ROW LEVEL SECURITY;
-ALTER TABLE orders                   ENABLE ROW LEVEL SECURITY;
-ALTER TABLE load_sheet_logs          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE ledgers                  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cashbook_entries         ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cashbook_daily_balances  ENABLE ROW LEVEL SECURITY;
-ALTER TABLE ledger_balances          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE cashbook_entry_audit_log ENABLE ROW LEVEL SECURITY;
-ALTER TABLE sync_status              ENABLE ROW LEVEL SECURITY;
-ALTER TABLE organizations            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE users                    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE org_memberships          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE org_integration_settings ENABLE ROW LEVEL SECURITY;
-ALTER TABLE journal_entries          ENABLE ROW LEVEL SECURITY;
-ALTER TABLE journal_lines            ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bills                    ENABLE ROW LEVEL SECURITY;
-ALTER TABLE bill_items               ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_products                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_variants                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_orders                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_load_sheet_logs          ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_ledgers                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_cashbook_entries        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_cashbook_daily_balances ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_ledger_balances         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_cashbook_entry_audit_log ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_sync_status              ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_organizations             ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_users                     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_org_memberships           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE system_integration_settings      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_journal_entries         ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_journal_lines           ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_bills                   ENABLE ROW LEVEL SECURITY;
+ALTER TABLE finances_bill_items              ENABLE ROW LEVEL SECURITY;

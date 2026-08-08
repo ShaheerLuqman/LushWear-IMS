@@ -20,7 +20,7 @@ ALL_FEATURES = ("orders", "finance")
 def get_org_enabled_features(org_id: str) -> list:
     rows = (
         get_supabase()
-        .table("organizations")
+        .table("system_organizations")
         .select("enabled_features")
         .eq("id", org_id)
         .limit(1)
@@ -36,7 +36,7 @@ def get_org_enabled_features(org_id: str) -> list:
 def set_org_enabled_features(org_id: str, features: list) -> list:
     rows = (
         get_supabase()
-        .table("organizations")
+        .table("system_organizations")
         .update({"enabled_features": features})
         .eq("id", org_id)
         .execute()

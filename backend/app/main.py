@@ -129,7 +129,7 @@ async def ready_check():
     frontend's online/offline indicator should poll instead of /health, which
     only proves this process is up, not that it can reach the database."""
     try:
-        get_supabase().table("organizations").select("id").limit(1).execute()
+        get_supabase().table("system_organizations").select("id").limit(1).execute()
     except Exception:
         logger.exception("Readiness check failed")
         raise HTTPException(status_code=503, detail="Not ready")

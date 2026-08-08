@@ -40,9 +40,9 @@ def _bill(status="draft", total=5000.0, paid=0.0, payment_status=None):
 
 def _tables(bill, items=None):
     return {
-        "bills_with_paid": [bill],
-        "bills": [bill],
-        "bill_items": items if items is not None else [{
+        "finances_bills_with_paid": [bill],
+        "finances_bills": [bill],
+        "finances_bill_items": items if items is not None else [{
             "id": "i1", "bill_id": BILL_ID,
             "product_id": None, "variant_id": None, "description": "Fabric",
             "quantity": 10.0, "unit_cost": 500.0, "amount": 5000.0,
@@ -86,11 +86,11 @@ class TestCreateBill:
 
         def _table(name):
             handle = original_table(name)
-            if name == "bill_items":
+            if name == "finances_bill_items":
                 def _explode(*_a, **_k):
                     raise _Boom("null value in column ... violates not-null constraint")
                 handle.insert = _explode
-            elif name == "bills":
+            elif name == "finances_bills":
                 real_delete = handle.delete
                 def _delete(*a, **k):
                     deleted.append(name)
@@ -109,7 +109,7 @@ class TestCreateBill:
         finally:
             fake.table = original_table
 
-        assert deleted == ["bills"], "the orphaned header was not deleted"
+        assert deleted == ["finances_bills"], "the orphaned header was not deleted"
 
     def test_bill_with_no_lines_is_rejected(self, make_client):
         client = make_client(rpc_results={"next_bill_number": "BILL-0001"})

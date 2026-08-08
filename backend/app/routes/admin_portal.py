@@ -20,7 +20,7 @@ router = APIRouter(prefix="/admin", tags=["admin-portal"])
 
 
 def _get_org_or_404(org_id: str) -> dict:
-    rows = get_supabase().table("organizations").select("*").eq("id", org_id).limit(1).execute().data or []
+    rows = get_supabase().table("system_organizations").select("*").eq("id", org_id).limit(1).execute().data or []
     if not rows:
         raise HTTPException(status_code=404, detail="Organization not found")
     return rows[0]
@@ -28,7 +28,7 @@ def _get_org_or_404(org_id: str) -> dict:
 
 @router.get("/organizations", response_model=list[Organization], dependencies=[Depends(require_superadmin_or_impersonating)])
 async def list_organizations():
-    return get_supabase().table("organizations").select("*").order("created_at").execute().data or []
+    return get_supabase().table("system_organizations").select("*").order("created_at").execute().data or []
 
 
 @router.post("/organizations/{org_id}/impersonate")
@@ -50,7 +50,7 @@ async def create_organization(body: SuperadminOrgCreate):
     just get an instant membership here instead of a rejected duplicate
     (Multi-Org User Membership plan)."""
     supabase = get_supabase()
-    org = supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
+    org = supabase.table("system_organizations").insert({"name": body.org_name}).execute().data[0]
     user = get_or_create_identity(body.admin_email, body.admin_password, body.admin_name)
     membership = add_membership(user["id"], org["id"], "admin")
     admin_user = {

@@ -39,7 +39,7 @@ class _LoginLockout:
     def check(self, email: str) -> None:
         rows = (
             get_supabase()
-            .table("login_lockouts")
+            .table("system_login_lockouts")
             .select("locked_until")
             .eq("email", email)
             .limit(1)
@@ -68,7 +68,7 @@ class _LoginLockout:
         }).execute()
 
     def clear(self, email: str) -> None:
-        get_supabase().table("login_lockouts").delete().eq("email", email).execute()
+        get_supabase().table("system_login_lockouts").delete().eq("email", email).execute()
 
 
 _lockout = _LoginLockout()
@@ -77,7 +77,7 @@ _lockout = _LoginLockout()
 def _get_user_by_email(email: str) -> Optional[dict]:
     rows = (
         get_supabase()
-        .table("users")
+        .table("system_users")
         .select("*")
         .eq("email", email)
         .limit(1)
@@ -95,7 +95,7 @@ def _fetch_active_memberships(user_id: str) -> list:
     telling it which."""
     return (
         get_supabase()
-        .table("org_memberships")
+        .table("system_org_memberships")
         .select("*")
         .eq("user_id", user_id)
         .eq("is_active", True)
@@ -110,7 +110,7 @@ def _fetch_active_memberships(user_id: str) -> list:
 async def auth_status():
     """Whether any user has been created yet (i.e. whether bootstrap has run)."""
     try:
-        rows = get_supabase().table("users").select("id").limit(1).execute().data or []
+        rows = get_supabase().table("system_users").select("id").limit(1).execute().data or []
         return {"has_users": bool(rows)}
     except Exception:
         raise HTTPException(
@@ -152,17 +152,17 @@ async def auth_bootstrap(body: BootstrapBody, x_bootstrap_token: Optional[str] =
     # this first admin in an empty org while all the migrated data sits under
     # the other one.
     existing_orgs = (
-        supabase.table("organizations").select("*").order("created_at").limit(1).execute().data
+        supabase.table("system_organizations").select("*").order("created_at").limit(1).execute().data
     )
     org = existing_orgs[0] if existing_orgs else (
-        supabase.table("organizations").insert({"name": body.org_name}).execute().data[0]
+        supabase.table("system_organizations").insert({"name": body.org_name}).execute().data[0]
     )
-    user = supabase.table("users").insert({
+    user = supabase.table("system_users").insert({
         "email": body.email,
         "name": body.name,
         "password_hash": hash_password(body.password),
     }).execute().data[0]
-    supabase.table("org_memberships").insert({
+    supabase.table("system_org_memberships").insert({
         "user_id": user["id"],
         "org_id": org["id"],
         "role": "admin",
@@ -233,7 +233,7 @@ async def auth_me(payload: dict = Depends(require_auth)):
     different role in each org they belong to (Multi-Org User Membership
     plan), so "current role" only makes sense per session."""
     user_id = payload.get("sub")
-    rows = get_supabase().table("users").select("*").eq("id", user_id).limit(1).execute().data or []
+    rows = get_supabase().table("system_users").select("*").eq("id", user_id).limit(1).execute().data or []
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
     org_id = payload.get("org_id")
@@ -255,7 +255,7 @@ async def auth_my_organizations(payload: dict = Depends(require_auth)):
     if not memberships:
         return []
     org_ids = [m["org_id"] for m in memberships]
-    orgs = get_supabase().table("organizations").select("id, name").in_("id", org_ids).execute().data or []
+    orgs = get_supabase().table("system_organizations").select("id, name").in_("id", org_ids).execute().data or []
     org_names = {o["id"]: o["name"] for o in orgs}
     return [
         {"id": m["org_id"], "name": org_names.get(m["org_id"], ""), "role": m["role"]}
@@ -271,7 +271,7 @@ async def auth_switch_org(body: SwitchOrgBody, payload: dict = Depends(require_a
     which bypasses the membership check entirely."""
     rows = (
         get_supabase()
-        .table("org_memberships")
+        .table("system_org_memberships")
         .select("*")
         .eq("user_id", payload.get("sub"))
         .eq("org_id", body.org_id)
@@ -295,14 +295,14 @@ async def auth_change_password(body: ChangePasswordBody, payload: dict = Depends
     """Replace the caller's own password; requires the current one."""
     user_id = payload.get("sub")
     supabase = get_supabase()
-    rows = supabase.table("users").select("*").eq("id", user_id).limit(1).execute().data or []
+    rows = supabase.table("system_users").select("*").eq("id", user_id).limit(1).execute().data or []
     if not rows:
         raise HTTPException(status_code=404, detail="User not found")
     user = rows[0]
     if not verify_password(body.current_password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
-    supabase.table("users").update({
+    supabase.table("system_users").update({
         "password_hash": hash_password(body.new_password),
     }).eq("id", user_id).execute()
     return {"ok": True}

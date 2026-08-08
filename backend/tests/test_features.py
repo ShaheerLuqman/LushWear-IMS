@@ -34,7 +34,7 @@ class _FakeSupabase:
         self._rows = rows
 
     def table(self, name):
-        assert name == "organizations"
+        assert name == "system_organizations"
         return _FakeQuery(self._rows)
 
 
@@ -91,22 +91,22 @@ class TestRouterGateIntegration:
 
     def test_disabled_finance_blocks_cashbook_router(self, make_client):
         client = make_client({
-            "organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders"]}],
+            "system_organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders"]}],
         })
         r = client.get("/api/ledgers/")
         assert r.status_code == 403
 
     def test_disabled_orders_blocks_products_router(self, make_client):
         client = make_client({
-            "organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["finance"]}],
+            "system_organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["finance"]}],
         })
         r = client.get("/api/products/")
         assert r.status_code == 403
 
     def test_enabled_feature_is_not_blocked(self, make_client):
         client = make_client({
-            "organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}],
-            "ledgers": [],
+            "system_organizations": [{"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"]}],
+            "finances_ledgers": [],
         })
         r = client.get("/api/ledgers/")
         assert r.status_code == 200

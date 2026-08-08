@@ -42,7 +42,7 @@ def _rpc(supabase, name: str, params: dict):
 
 def _get_bill_or_404(supabase, org_id: str, bill_id: str) -> dict:
     resp = (
-        org_table(supabase, org_id, "bills_with_paid")
+        org_table(supabase, org_id, "finances_bills_with_paid")
         .select("*")
         .eq("id", bill_id)
         .limit(1)
@@ -58,7 +58,7 @@ def _attach_items(supabase, org_id: str, bills: List[dict]) -> List[dict]:
     if not bills:
         return []
     items = (
-        org_table(supabase, org_id, "bill_items")
+        org_table(supabase, org_id, "finances_bill_items")
         .select("*")
         .in_("bill_id", [b["id"] for b in bills])
         .order("created_at", desc=False)
@@ -74,10 +74,10 @@ def _attach_items(supabase, org_id: str, bills: List[dict]) -> List[dict]:
 
 
 def _replace_items(supabase, org_id: str, bill_id: str, items) -> None:
-    org_table(supabase, org_id, "bill_items").delete().eq("bill_id", bill_id).execute()
+    org_table(supabase, org_id, "finances_bill_items").delete().eq("bill_id", bill_id).execute()
     if not items:
         return
-    org_table(supabase, org_id, "bill_items").insert([
+    org_table(supabase, org_id, "finances_bill_items").insert([
         {
             "bill_id": bill_id,
             "product_id": item.product_id,
@@ -107,7 +107,7 @@ async def list_bills(
 ):
     supabase = get_supabase()
     query = (
-        org_table(supabase, org_id, "bills_with_paid")
+        org_table(supabase, org_id, "finances_bills_with_paid")
         .select("*")
         .order("bill_date", desc=True)
         .order("bill_number", desc=True)
@@ -154,7 +154,7 @@ async def create_bill(
     if not number:
         raise HTTPException(status_code=500, detail="Could not allocate a bill number")
 
-    resp = org_table(supabase, org_id, "bills").insert({
+    resp = org_table(supabase, org_id, "finances_bills").insert({
         "bill_number": number,
         "supplier_id": bill.supplier_id,
         "supplier_ref": bill.supplier_ref,
@@ -177,7 +177,7 @@ async def create_bill(
         # transaction around them, so a failure here would otherwise strand a
         # line-less draft that can never be received (receive_bill rejects a
         # zero total) and only clutters the list.
-        org_table(supabase, org_id, "bills").delete().eq("id", bill_id).execute()
+        org_table(supabase, org_id, "finances_bills").delete().eq("id", bill_id).execute()
         raise
 
     return _attach_items(supabase, org_id, [_get_bill_or_404(supabase, org_id, bill_id)])[0]
@@ -194,7 +194,7 @@ async def update_bill(bill_id: str, update: BillUpdate, org_id: str = Depends(ge
             payload[field] = payload[field].isoformat()
 
     if payload:
-        org_table(supabase, org_id, "bills").update(payload).eq("id", bill_id).execute()
+        org_table(supabase, org_id, "finances_bills").update(payload).eq("id", bill_id).execute()
     if update.items is not None:
         _replace_items(supabase, org_id, bill_id, update.items)
 
@@ -209,7 +209,7 @@ async def delete_bill(bill_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     _require_draft(_get_bill_or_404(supabase, org_id, bill_id))
 
-    org_table(supabase, org_id, "bills").delete().eq("id", bill_id).execute()
+    org_table(supabase, org_id, "finances_bills").delete().eq("id", bill_id).execute()
     return {"status": "deleted", "id": bill_id}
 
 
@@ -242,5 +242,5 @@ async def cancel_bill(bill_id: str, org_id: str = Depends(get_org_id)):
         # Unposts and reverses stock first.
         _rpc(supabase, "unreceive_bill", {"p_bill_id": bill_id})
 
-    org_table(supabase, org_id, "bills").update({"status": "cancelled"}).eq("id", bill_id).execute()
+    org_table(supabase, org_id, "finances_bills").update({"status": "cancelled"}).eq("id", bill_id).execute()
     return _attach_items(supabase, org_id, [_get_bill_or_404(supabase, org_id, bill_id)])[0]

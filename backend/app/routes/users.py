@@ -12,7 +12,7 @@ router = APIRouter(prefix="/users", tags=["users"])
 
 def _active_admin_count(supabase, org_id: str, exclude_user_id: Optional[str] = None) -> int:
     rows = (
-        supabase.table("org_memberships")
+        supabase.table("system_org_memberships")
         .select("user_id")
         .eq("org_id", org_id)
         .eq("role", "admin")
@@ -63,7 +63,7 @@ async def update_user(user_id: str, body: UserUpdate, org_id: str = Depends(get_
     if it didn't exist."""
     supabase = get_supabase()
     existing_rows = (
-        supabase.table("org_memberships")
+        supabase.table("system_org_memberships")
         .select("*")
         .eq("user_id", user_id)
         .eq("org_id", org_id)
@@ -86,7 +86,7 @@ async def update_user(user_id: str, body: UserUpdate, org_id: str = Depends(get_
     update_fields = body.model_dump(exclude_unset=True)
     if update_fields:
         existing = (
-            supabase.table("org_memberships")
+            supabase.table("system_org_memberships")
             .update(update_fields)
             .eq("user_id", user_id)
             .eq("org_id", org_id)
@@ -94,5 +94,5 @@ async def update_user(user_id: str, body: UserUpdate, org_id: str = Depends(get_
             .data[0]
         )
 
-    user_row = supabase.table("users").select("email, name").eq("id", user_id).limit(1).execute().data[0]
+    user_row = supabase.table("system_users").select("email, name").eq("id", user_id).limit(1).execute().data[0]
     return _membership_to_public(existing, user_row)
