@@ -1444,17 +1444,19 @@ def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
     return False
 
 
-def _classify_status(status_text: str) -> Optional[str]:
-    """Classify a status text into one of the relevant order statuses."""
+def _classify_status(status_text: str, courier_normalized: str) -> Optional[str]:
+    """Classify a status text into one of the relevant order statuses.
+
+    Return detection is courier-specific: PostEx flags a return as soon as the parcel
+    is en route back to the merchant warehouse; Couriers Next only reports the parcel
+    reaching its office. Neither phrase appears in the other courier's statuses.
+    """
     if not status_text:
         return None
     status_lower = status_text.lower()
-    # Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
-    if (
-        "return" in status_lower
-        or "refused by consignee" in status_lower
-        or "shipper advice" in status_lower
-    ):
+    if courier_normalized == "postex" and "en route to merchant warehouse" in status_lower:
+        return "returned"
+    if courier_normalized in ("couriersnext", "couriernext") and "parcel return to office" in status_lower:
         return "returned"
     # Handle both PostEx ("Delivered to Customer") and Courier Next ("Delivered ...") variants.
     if "delivered to customer" in status_lower or ("delivered" in status_lower and "undelivered" not in status_lower):
@@ -1482,28 +1484,29 @@ def _derive_order_status_from_latest(delivery_status_data: dict) -> Optional[str
     if not delivery_status_data:
         return None
 
+    courier_normalized = _normalize_courier_name(delivery_status_data.get("courier", ""))
     history = delivery_status_data.get("status_history") or []
-    
+
     # Sort by datetime ascending (oldest first, newest last)
     sorted_history = sorted(
         history,
         key=lambda x: x.get("datetime", "") or ""
     )
-    
+
     # Find the last relevant status by iterating from newest to oldest
     for entry in reversed(sorted_history):
         status_text = (entry.get("status") or "").strip()
-        classified = _classify_status(status_text)
+        classified = _classify_status(status_text, courier_normalized)
         if classified:
             return classified
-    
+
     # Fallback: check latest_status field if no relevant status found in history
     latest = (delivery_status_data.get("latest_status") or "").strip()
     if latest:
-        classified = _classify_status(latest)
+        classified = _classify_status(latest, courier_normalized)
         if classified:
             return classified
-    
+
     return None
 
 @router.post("/", response_model=Order)
