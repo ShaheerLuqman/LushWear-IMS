@@ -281,6 +281,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('headerOrdersAppActions', isOrders);
     show('deliveryRefreshProgress', false);
     show('transactionDateFilterWrap', viewName === 'transactions');
+    show('billsHeaderWrap', viewName === 'bills');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();

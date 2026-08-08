@@ -925,7 +925,9 @@ body:has(#ordersView.active) .header-actions {
 }
 
 #transactionsGrid,
-#transactionsGrid.grid-container {
+#transactionsGrid.grid-container,
+#billsGrid,
+#billsGrid.grid-container {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -940,11 +942,13 @@ body:has(#ordersView.active) .header-actions {
 .content-area:has(#productsView.active),
 .content-area:has(#ledgerDetailView.active),
 .content-area:has(#ledgersView.active),
+.content-area:has(#billsView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
 body:has(#productsView.active) .content-area,
 body:has(#ledgerDetailView.active) .content-area,
-body:has(#ledgersView.active) .content-area {
+body:has(#ledgersView.active) .content-area,
+body:has(#billsView.active) .content-area {
     padding: 4px;
 }
 
@@ -3271,10 +3275,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     margin-bottom: 4px;
 }
 
-.bill-action-btn + .bill-action-btn {
-    margin-left: 6px;
-}
-
 .bill-status {
     font-weight: 600;
 }
@@ -3681,7 +3681,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell {
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell,
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .bill-amount-cell {
     color: var(--accent-primary);
     font-weight: 600;
     justify-content: flex-end;
@@ -3713,8 +3714,9 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-color: rgba(245, 158, 11, 0.9) !important;
 }
 
-/* Transaction row actions menu (triple dot) */
-.transaction-menu-btn {
+/* Row actions menu (triple dot) - shared by the transactions and bills grids */
+.transaction-menu-btn,
+.bill-menu-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -3732,26 +3734,35 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .transaction-menu-btn:hover,
-.transaction-menu-btn.open {
+.transaction-menu-btn.open,
+.bill-menu-btn:hover,
+.bill-menu-btn.open {
     opacity: 1;
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
 
-.transaction-menu-panel {
-    min-width: 140px;
+.transaction-menu-panel,
+.bill-menu-panel {
+    min-width: 160px;
     padding: 4px;
 }
 
-.transaction-menu-option-danger {
+.transaction-menu-panel .folio-dropdown-option,
+.bill-menu-panel .folio-dropdown-option {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.transaction-menu-option-danger,
+.bill-menu-option-danger {
     color: #dc2626;
     border-radius: var(--radius-sm);
 }
 
-.transaction-menu-option-danger:hover {
+.transaction-menu-option-danger:hover,
+.bill-menu-option-danger:hover {
     background: rgba(220, 38, 38, 0.1) !important;
 }
 

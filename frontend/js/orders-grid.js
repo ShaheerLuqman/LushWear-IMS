@@ -1207,7 +1207,7 @@ function createTransactionRowMenu(params) {
 
         const deleteOption = document.createElement('div');
         deleteOption.className = 'folio-dropdown-option transaction-menu-option-danger';
-        deleteOption.innerHTML = '<i class="fa-solid fa-trash"></i> Delete';
+        deleteOption.innerHTML = '<i class="fa-solid fa-trash"></i><span>Delete</span>';
         deleteOption.addEventListener('click', () => {
             closeMenu();
             deleteTransactionEntry(params.data.id);

@@ -266,6 +266,15 @@
                         <button id="transactionTodayBtn" class="btn btn-secondary btn-sm">Today</button>
                         <button id="transactionCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new transaction entry"><i class="fa-solid fa-plus"></i> New Transaction</button>
                     </div>
+                    <div id="billsHeaderWrap" class="header-inline" style="display: none;">
+                        <select id="billsStatusFilter" class="orders-period-filter">
+                            <option value="">All statuses</option>
+                            <option value="draft">Draft</option>
+                            <option value="received">Received</option>
+                            <option value="cancelled">Cancelled</option>
+                        </select>
+                        <button id="createBillBtn" class="btn btn-primary btn-sm">New Bill</button>
+                    </div>
                 </div>
             </header>
 
@@ -351,18 +360,7 @@
                 </div>
 
                 <div id="billsView" class="view">
-                    <div class="trial-balance-container">
-                        <div class="trial-balance-bar">
-                            <button id="createBillBtn" class="btn btn-primary">New Bill</button>
-                            <select id="billsStatusFilter" class="form-input trial-balance-date">
-                                <option value="">All statuses</option>
-                                <option value="draft">Draft</option>
-                                <option value="received">Received</option>
-                                <option value="cancelled">Cancelled</option>
-                            </select>
-                        </div>
-                        <div id="billsGrid" class="ag-theme-alpine grid-container"></div>
-                    </div>
+                    <div id="billsGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <div id="apAgeingView" class="view">
@@ -444,7 +442,9 @@
 
                                 <div class="modal-actions form-actions">
                                     <button type="button" id="billCancelBtn" class="btn btn-secondary">Cancel</button>
-                                    <button type="submit" class="btn btn-primary">Save draft</button>
+                                    <button type="button" id="billRevertBtn" class="btn btn-secondary" style="display: none;">Revert to Draft</button>
+                                    <button type="button" id="billConfirmBtn" class="btn btn-primary" style="display: none;">Confirm Bill</button>
+                                    <button type="submit" id="billSaveBtn" class="btn btn-primary">Save draft</button>
                                 </div>
                             </form>
                         </div>

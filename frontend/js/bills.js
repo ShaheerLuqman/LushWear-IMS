@@ -14,6 +14,9 @@ let editingBillId = null;
 // Line rows live here while the modal is open rather than being read back out
 // of the DOM on save, so a half-typed row can't silently become a zero line.
 let billLineDrafts = [];
+// A posted (non-draft) bill opens the same modal in read-only mode so it can
+// still be reviewed — editing it would just bounce off the API's status guard.
+let billModalReadOnly = false;
 
 const BILL_STATUS_LABELS = {
     draft: 'Draft',
@@ -75,15 +78,18 @@ function renderBillLines() {
     const container = document.getElementById('billLines');
     if (!container) return;
 
+    const disabled = billModalReadOnly ? 'disabled' : '';
     container.innerHTML = billLineDrafts.map((line, index) => `
         <div class="bill-line" data-index="${index}">
-            <input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric">
-            <input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0">
-            <input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00">
+            <input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>
+            <input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0" ${disabled}>
+            <input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00" ${disabled}>
             <span class="bill-line-amount">${formatMoney(billLineAmount(line))}</span>
-            <button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>
+            ${billModalReadOnly ? '' : `<button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>`}
         </div>
     `).join('');
+
+    if (billModalReadOnly) { renderBillTotals(); return; }
 
     container.querySelectorAll('.bill-line').forEach(row => {
         const index = parseInt(row.dataset.index, 10);
@@ -147,6 +153,7 @@ async function openBillModal(billId) {
     const dueDateEl = document.getElementById('billDueDate');
     dueDateEl.dataset.touched = 'false';
 
+    let status = null;
     if (billId) {
         let bill;
         try {
@@ -156,7 +163,10 @@ async function openBillModal(billId) {
             showToast('Failed to load bill', 'error');
             return;
         }
-        document.getElementById('billModalTitle').textContent = `Edit ${bill.bill_number}`;
+        status = bill.status;
+        billModalReadOnly = status !== 'draft';
+        document.getElementById('billModalTitle').textContent =
+            `${billModalReadOnly ? 'View' : 'Edit'} ${bill.bill_number}`;
         supplierSelect.value = bill.supplier_id;
         document.getElementById('billSupplierRef').value = bill.supplier_ref || '';
         document.getElementById('billDate').value = bill.bill_date;
@@ -171,6 +181,7 @@ async function openBillModal(billId) {
             unit_cost: item.unit_cost,
         }));
     } else {
+        billModalReadOnly = false;
         document.getElementById('billModalTitle').textContent = 'New Bill';
         document.getElementById('billForm').reset();
         document.getElementById('billDate').value = getTodayDateString();
@@ -179,14 +190,35 @@ async function openBillModal(billId) {
     }
     if (!billLineDrafts.length) billLineDrafts = [emptyBillLine()];
 
+    applyBillModalFooter(status);
     renderBillLines();
     document.getElementById('billModal').classList.add('active');
+}
+
+// Buttons shown depend on where the bill is in the draft -> received ->
+// cancelled workflow; a new/draft bill is the only editable state.
+function applyBillModalFooter(status) {
+    const readOnly = billModalReadOnly;
+    ['billSupplier', 'billSupplierRef', 'billDate', 'billDueDate', 'billTax', 'billNotes'].forEach(id => {
+        document.getElementById(id).disabled = readOnly;
+    });
+    const addLineBtn = document.getElementById('addBillLineBtn');
+    if (addLineBtn) addLineBtn.style.display = readOnly ? 'none' : '';
+    const saveBtn = document.getElementById('billSaveBtn');
+    if (saveBtn) saveBtn.style.display = readOnly ? 'none' : '';
+    const confirmBtn = document.getElementById('billConfirmBtn');
+    if (confirmBtn) confirmBtn.style.display = status === 'draft' ? '' : 'none';
+    const revertBtn = document.getElementById('billRevertBtn');
+    if (revertBtn) revertBtn.style.display = status === 'received' ? '' : 'none';
+    const cancelBtn = document.getElementById('billCancelBtn');
+    if (cancelBtn) cancelBtn.textContent = readOnly ? 'Close' : 'Cancel';
 }
 
 function closeBillModal() {
     document.getElementById('billModal').classList.remove('active');
     editingBillId = null;
     billLineDrafts = [];
+    billModalReadOnly = false;
 }
 
 function collectBillPayload() {
@@ -227,24 +259,31 @@ function collectBillPayload() {
     };
 }
 
-async function saveBill() {
-    const payload = collectBillPayload();
-    if (!payload) return;
-
+// Shared by the Save button and Confirm Bill (which must persist edits before
+// posting them — otherwise a half-typed change would be silently dropped).
+async function persistBillPayload(payload) {
     try {
         if (editingBillId) {
             await apiJson(`/bills/${editingBillId}`, { method: 'PUT', body: payload, fallback: 'Failed to update bill' });
-            showToast('Bill updated', 'success');
         } else {
             await apiJson('/bills/', { method: 'POST', body: payload, fallback: 'Failed to create bill' });
-            showToast('Draft bill created', 'success');
         }
-        closeBillModal();
-        await loadBills();
+        return true;
     } catch (error) {
         console.error('Error saving bill:', error);
         showToast(error.message || 'Failed to save bill', 'error');
+        return false;
     }
+}
+
+async function saveBill() {
+    const payload = collectBillPayload();
+    if (!payload) return;
+    const wasNew = !editingBillId;
+    if (!(await persistBillPayload(payload))) return;
+    showToast(wasNew ? 'Draft bill created' : 'Bill updated', 'success');
+    closeBillModal();
+    await loadBills();
 }
 
 // --- Bill actions ------------------------------------------------------------
@@ -252,30 +291,32 @@ async function saveBill() {
 async function billAction(billId, action, { confirm } = {}) {
     if (confirm) {
         const ok = await showAppConfirm(confirm);
-        if (!ok) return;
+        if (!ok) return false;
     }
     try {
         await apiJson(`/bills/${billId}/${action}`, { method: 'POST', fallback: `Failed to ${action} bill` });
         await loadBills();
+        return true;
     } catch (error) {
         console.error(`Error on bill ${action}:`, error);
         showToast(error.message || `Failed to ${action} bill`, 'error');
+        return false;
     }
 }
 
 function receiveBill(billId) {
     return billAction(billId, 'receive', {
-        title: 'Receive Bill',
+        title: 'Confirm Bill',
         message: 'This posts the bill to the accounts and adds its stock. Continue?',
-        confirmText: 'Receive',
+        confirmText: 'Confirm',
     });
 }
 
 function unreceiveBill(billId) {
     return billAction(billId, 'unreceive', {
-        title: 'Reopen Bill',
+        title: 'Revert to Draft',
         message: 'This unposts the bill and removes the stock it added. Continue?',
-        confirmText: 'Reopen',
+        confirmText: 'Revert to draft',
     });
 }
 
@@ -308,21 +349,78 @@ async function deleteBill(billId) {
 
 // --- Grids -------------------------------------------------------------------
 
-function billActionsRenderer(params) {
+// Row actions menu (triple dot), mirroring createTransactionRowMenu in
+// orders-grid.js: a menu scales to more actions without another column reshuffle.
+function createBillRowMenu(params) {
     const bill = params.data;
-    if (!bill || !bill.id) return '';
-    const button = (action, label, cls = 'btn-secondary') =>
-        `<button type="button" class="btn ${cls} btn-sm bill-action-btn" data-action="${action}" data-id="${bill.id}">${label}</button>`;
+    const wrapper = document.createElement('div');
+    if (!bill || !bill.id) return wrapper;
 
-    if (bill.status === 'draft') {
-        return button('receive', 'Receive', 'btn-primary') + button('delete', 'Delete', 'btn-danger');
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bill-menu-btn';
+    btn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+    btn.title = 'More actions';
+
+    let menu = null;
+
+    function closeMenu() {
+        if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
+        menu = null;
+        btn.classList.remove('open');
     }
-    if (bill.status === 'received') {
-        // Reopen stays available even once partly settled: the supplier's
-        // balance moves with the bill, so nothing is left dangling.
-        return button('unreceive', 'Reopen') + button('cancel', 'Cancel', 'btn-danger');
+
+    function addOption({ label, icon, danger, onClick }) {
+        const option = document.createElement('div');
+        option.className = 'folio-dropdown-option' + (danger ? ' bill-menu-option-danger' : '');
+        option.innerHTML = `<i class="fa-solid ${icon}"></i><span>${label}</span>`;
+        option.addEventListener('click', () => {
+            closeMenu();
+            onClick();
+        });
+        menu.appendChild(option);
     }
-    return '';
+
+    function openMenu() {
+        if (menu) return;
+        btn.classList.add('open');
+
+        menu = document.createElement('div');
+        menu.className = 'folio-dropdown-panel bill-menu-panel';
+
+        addOption({ label: 'View', icon: 'fa-eye', onClick: () => openBillModal(bill.id) });
+        if (bill.status === 'draft') {
+            addOption({ label: 'Confirm Bill', icon: 'fa-check', onClick: () => receiveBill(bill.id) });
+            addOption({ label: 'Delete', icon: 'fa-trash', danger: true, onClick: () => deleteBill(bill.id) });
+        } else if (bill.status === 'received') {
+            // Revert to draft stays available even once partly settled: the
+            // supplier's balance moves with the bill, so nothing is left dangling.
+            addOption({ label: 'Revert to Draft', icon: 'fa-rotate-left', onClick: () => unreceiveBill(bill.id) });
+            addOption({ label: 'Cancel', icon: 'fa-ban', danger: true, onClick: () => cancelBill(bill.id) });
+        }
+
+        document.body.appendChild(menu);
+        const rect = btn.getBoundingClientRect();
+        menu.style.top = (rect.bottom + 2) + 'px';
+        menu.style.left = Math.max(rect.right - menu.offsetWidth, 8) + 'px';
+
+        const closeHandler = (e) => {
+            if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                closeMenu();
+                document.removeEventListener('mousedown', closeHandler);
+            }
+        };
+        document.addEventListener('mousedown', closeHandler);
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu) closeMenu();
+        else openMenu();
+    });
+
+    wrapper.appendChild(btn);
+    return wrapper;
 }
 
 function initBillsGrid() {
@@ -330,25 +428,27 @@ function initBillsGrid() {
     if (!gridDiv) return;
 
     const columnDefs = [
-        { headerName: 'Bill #', field: 'bill_number', width: 130 },
+        { headerName: 'Bill #', field: 'bill_number', flex: 12, minWidth: 110 },
         {
             headerName: 'Supplier',
             field: 'supplier_id',
-            flex: 1,
+            flex: 25,
             minWidth: 160,
             valueGetter: (params) => ledgerName(params.data?.supplier_id),
         },
-        { headerName: 'Supplier ref', field: 'supplier_ref', width: 140 },
+        { headerName: 'Supplier ref', field: 'supplier_ref', flex: 12, minWidth: 120 },
         {
             headerName: 'Date',
             field: 'bill_date',
-            width: 120,
+            flex: 10,
+            minWidth: 100,
             valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
         },
         {
             headerName: 'Due',
             field: 'due_date',
-            width: 120,
+            flex: 10,
+            minWidth: 100,
             valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
             cellStyle: (params) => {
                 const bill = params.data;
@@ -362,60 +462,55 @@ function initBillsGrid() {
         {
             headerName: 'Total (Rs)',
             field: 'total',
-            width: 130,
+            flex: 11,
+            minWidth: 110,
             type: 'rightAligned',
+            cellClass: 'bill-amount-cell',
             valueFormatter: (params) => formatMoney(params.value),
         },
         {
             headerName: 'Outstanding (Rs)',
             field: 'outstanding',
-            width: 150,
+            flex: 12,
+            minWidth: 130,
             type: 'rightAligned',
+            cellClass: 'bill-amount-cell',
             valueFormatter: (params) => formatMoney(params.value),
         },
         {
             headerName: 'Status',
             field: 'payment_status',
-            width: 130,
+            flex: 11,
+            minWidth: 110,
             valueFormatter: (params) => BILL_STATUS_LABELS[params.value] || params.value || '',
             cellClass: (params) => `bill-status bill-status-${params.value || ''}`,
         },
         {
             headerName: '',
             colId: 'actions',
-            width: 220,
+            flex: 5,
+            minWidth: 56,
             sortable: false,
             filter: false,
-            cellRenderer: billActionsRenderer,
+            cellRenderer: createBillRowMenu,
         },
     ];
 
     agGrid.createGrid(gridDiv, {
         columnDefs,
         rowData: [],
-        defaultColDef: { sortable: true, resizable: true, filter: true, minWidth: 90 },
+        defaultColDef: { sortable: true, resizable: true, filter: true, floatingFilter: false, minWidth: 90 },
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
         getRowId: (params) => params.data.id,
         onGridReady: (params) => { billsGridApi = params.api; },
         onCellClicked: (params) => {
-            // Only a draft is editable; opening a posted bill for edit would
-            // just bounce off the API's status guard.
+            // A posted bill opens the same modal read-only (see
+            // applyBillModalFooter) instead of being excluded here.
             if (params.colDef.colId === 'actions') return;
-            if (params.data?.status === 'draft') openBillModal(params.data.id);
+            if (params.data?.id) openBillModal(params.data.id);
         },
-    });
-
-    gridDiv.addEventListener('click', (e) => {
-        const btn = e.target.closest('.bill-action-btn');
-        if (!btn) return;
-        e.stopPropagation();
-        const { action, id } = btn.dataset;
-        if (action === 'receive') receiveBill(id);
-        else if (action === 'unreceive') unreceiveBill(id);
-        else if (action === 'cancel') cancelBill(id);
-        else if (action === 'delete') deleteBill(id);
     });
 }
 
@@ -495,6 +590,16 @@ function initBills() {
         e.preventDefault();
         if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }
         saveBill();
+    });
+    document.getElementById('billConfirmBtn')?.addEventListener('click', async () => {
+        if (!editingBillId) return;
+        const payload = collectBillPayload();
+        if (!payload) return;
+        if (!(await persistBillPayload(payload))) return;
+        if (await receiveBill(editingBillId)) closeBillModal();
+    });
+    document.getElementById('billRevertBtn')?.addEventListener('click', async () => {
+        if (editingBillId && await unreceiveBill(editingBillId)) closeBillModal();
     });
 
     document.getElementById('apAgeingAsOf')?.addEventListener('change', (e) => {
