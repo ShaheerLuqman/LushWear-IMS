@@ -1490,8 +1490,20 @@ input[type="number"] {
     flex-wrap: wrap;
 }
 
-.upload-postex-file-row input[type="file"] {
-    max-width: 100%;
+/* Safari only opens the file picker on the tiny native "Choose File" sub-button,
+   not anywhere in the input's styled/padded box - so the visible control is a
+   <label for> (whole-element click forwards to the input in every browser) and
+   the real input is hidden off-screen rather than shown. */
+.upload-postex-file-input {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
 }
 
 .upload-postex-filename {
