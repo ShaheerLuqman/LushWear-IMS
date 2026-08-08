@@ -949,12 +949,20 @@ async def _sync_shopify_orders(org_id: str) -> dict:
 
                 # Cancellation overrides the freeze above: a cancelled order's total is 0
                 # even if it was already fulfilled (and therefore otherwise frozen).
+                cancelled_total_needs_fix = False
                 if order_data["order_status"] == "cancelled":
                     order_data["total_amount"] = 0.0
                     order_data["advance_amount"] = 0.0
+                    cancelled_total_needs_fix = (
+                        abs(float(existing_order.get("total_amount") or 0)) > 0.01
+                        or abs(float(existing_order.get("advance_amount") or 0)) > 0.01
+                    )
 
-                # Always update if courier or tracking_number changed, otherwise check other fields
-                if courier_changed or tracking_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+                # Always update if courier or tracking_number changed, otherwise check other fields.
+                # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
+                # total_amount, so an already-cancelled order whose advance_amount was already 0 would
+                # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers that.
+                if courier_changed or tracking_changed or cancelled_total_needs_fix or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:
