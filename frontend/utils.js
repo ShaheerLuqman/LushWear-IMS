@@ -154,18 +154,22 @@ function deliveryStatusIndicatesCNA(data) {
     return deliveryStatusIncludes(data, 'Attempt Made: CNA');
 }
 
+/** Normalize courier names for resilient matching. Mirrors backend _normalize_courier_name. */
+function normalizeCourierName(courier) {
+    return (courier || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');
+}
+
 /**
  * Classify a status text into one of the relevant order statuses.
+ * Return detection is courier-specific: PostEx flags a return as soon as the parcel is en
+ * route back to the merchant warehouse; Couriers Next only reports the parcel reaching its
+ * office. Mirrors backend _classify_status exactly.
  */
-function classifyStatus(statusText) {
+function classifyStatus(statusText, courierNormalized) {
     if (!statusText) return null;
     const statusLower = statusText.toLowerCase();
-    // Check for return-related statuses (Return to KARACHI, Returned at Merchant Warehouse, etc.)
-    if (
-        statusLower.includes('return') ||
-        statusLower.includes('refused by consignee') ||
-        statusLower.includes('shipper advice')
-    ) return 'returned';
+    if (courierNormalized === 'postex' && statusLower.includes('en route to merchant warehouse')) return 'returned';
+    if ((courierNormalized === 'couriersnext' || courierNormalized === 'couriernext') && statusLower.includes('parcel return to office')) return 'returned';
     // Handle both PostEx ("Delivered to Customer") and Courier Next ("Delivered") variants.
     if (statusLower.includes('delivered to customer') || (statusLower.includes('delivered') && !statusLower.includes('undelivered'))) return 'delivered';
     if (statusLower.includes('attempt made: rfd')) return 'RFD';
@@ -182,28 +186,29 @@ function classifyStatus(statusText) {
 function deriveOrderStatusFromLatest(data) {
     if (!data) return null;
 
+    const courierNormalized = normalizeCourierName(data.courier);
     const history = data.status_history || [];
-    
+
     // Sort by datetime ascending (oldest first, newest last)
     const sorted = [...history].sort((a, b) => {
         const dtA = a.datetime || '';
         const dtB = b.datetime || '';
         return dtA.localeCompare(dtB);
     });
-    
+
     // Find the last relevant status by iterating from newest to oldest
     for (let i = sorted.length - 1; i >= 0; i--) {
         const statusText = (sorted[i].status || '').trim();
-        const classified = classifyStatus(statusText);
+        const classified = classifyStatus(statusText, courierNormalized);
         if (classified) return classified;
     }
-    
+
     // Fallback: check latest_status field if no relevant status found in history
     const latest = (data.latest_status || '').trim();
     if (latest) {
-        const classified = classifyStatus(latest);
+        const classified = classifyStatus(latest, courierNormalized);
         if (classified) return classified;
     }
-    
+
     return null;
 }

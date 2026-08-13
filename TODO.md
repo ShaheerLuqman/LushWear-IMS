@@ -79,6 +79,27 @@ each, under "Full-stack" below.
       and/or a periodic fallback sync alongside it — this is a trigger for
       `sync_shopify_orders`'s reconciliation logic, not a replacement for it.
 
+### Couriers
+- [ ] **Couriers Next delivery status is stale via `TrackOrder.php`** — the
+      endpoint `_fetch_couriersnext_status` calls (`orders.py`) only echoes the
+      raw sub-vendor (Trax) checkpoint feed and can sit stuck on "in transit"
+      after the parcel is actually delivered. Confirmed for tracking
+      `202370601123`: `TrackOrder.php` still showed "Parcel in Transit to
+      Destination" while both the public tracking page
+      (`portal.couriersnext.com/track-details.php`) and the documented
+      `CurrentStatus.php` endpoint (no auth required — see
+      `CouriersNext-API-V1.0.pdf`) already showed "Delivered". **First step:
+      ask the Couriers Next team why `TrackOrder.php` lags/never reflects
+      post-handoff statuses** before changing anything — want to understand if
+      this is expected behavior, a bug on their end, or if there's a better
+      endpoint/webhook we're missing. If it turns out `CurrentStatus.php` is
+      the right fix, the plan is to merge its single status into
+      `status_history` as one more entry (both endpoints use the same
+      `YYYY-MM-DD HH:MM:SS` format) rather than deriving `order_status` from it
+      directly, so `_derive_order_status_from_latest`'s existing
+      backward-search over history keeps working unchanged and non-terminal
+      current-statuses stay a no-op.
+
 ### New capabilities
 - [ ] **AI chatbot** — natural-language querying of the data (API/agent layer).
 

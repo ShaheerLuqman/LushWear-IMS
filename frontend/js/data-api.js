@@ -121,9 +121,18 @@ function populateOrdersPeriodFilterDropdown() {
     }
 }
 
-/** Loads the current period's orders - the default/reset view (e.g. after any mutation
- * elsewhere resets the grid back to this instead of preserving a past period). */
+/** Loads orders for whichever period is currently selected in the period dropdown, falling
+ * back to the current period when none is selected yet (e.g. initial load). Single entry
+ * point for reloading orders - safe to call after any mutation without silently dropping
+ * the user out of a selected past period back to "now". */
 async function loadOrders() {
+    const periodVal = document.getElementById('ordersPeriodFilter')?.value;
+    if (periodVal) {
+        const [month, year] = periodVal.split('-');
+        await loadOrdersForPeriod(Number(month), Number(year));
+        return;
+    }
+
     const { month, year } = getCurrentOrdersPeriod();
     try {
         orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders' });
@@ -152,19 +161,6 @@ async function loadOrders() {
                 setTimeout(() => updateFooterRow(), 0);
             }
         }
-    }
-}
-
-/** Reload orders while preserving whichever period view is currently selected - loadOrders()
- * always resets the period dropdown to the current period, which would silently drop a
- * selected past period out from under the user (e.g. after a background sync). */
-async function refreshOrdersView() {
-    const periodVal = document.getElementById('ordersPeriodFilter')?.value;
-    if (periodVal) {
-        const [month, year] = periodVal.split('-');
-        await loadOrdersForPeriod(Number(month), Number(year));
-    } else {
-        await loadOrders();
     }
 }
 

@@ -776,7 +776,7 @@ async function syncShopifyOrders() {
                 `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
                 'success'
             );
-            await refreshOrdersView();
+            await loadOrders();
         }
         if (result.last_synced_at) {
             lastOrdersSyncAt = new Date(result.last_synced_at).getTime();
@@ -862,7 +862,7 @@ async function uploadPostExCsv(file, assignmentNumber) {
         const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(String));
         
         await loadOrders();
-        
+
         if (ordersGridApi && (updatedOrderIds.length > 0 || matchedOrderNumbers.size > 0)) {
             setTimeout(() => {
                 if (ordersGridApi) {

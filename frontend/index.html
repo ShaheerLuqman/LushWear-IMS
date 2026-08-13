@@ -236,19 +236,16 @@
                             <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
                         </button>
                         <div id="ordersMoreActionsMenu" class="orders-more-actions__menu" role="menu">
-                            <button type="button" id="ordersMoreActionFetchDeliveryStatus" class="orders-more-actions__item" role="menuitem" title="Fetch live delivery status from the courier (PostEx / Couriers Next) for selected orders">Fetch Delivery Status</button>
-                            <button type="button" id="refreshDeliveryStatusSelectedBtn" class="orders-more-actions__item" role="menuitem" title="Show a delivery status breakdown for selected orders, from data already on file">Delivery Status Report</button>
+                            <button type="button" id="ordersMoreActionFetchDeliveryStatus" class="orders-more-actions__item" role="menuitem" title="Fetch live delivery status from the courier (PostEx / Couriers Next) for selected orders, then show a status report">Track Delivery Status</button>
                             <button type="button" id="bulkUpdateOrderBtn" class="orders-more-actions__item" role="menuitem" title="Bulk update order">Bulk update order</button>
                             <button type="button" id="ordersMoreActionUploadPostEx" class="orders-more-actions__item" role="menuitem" title="Upload PostEx CSV">Upload PostEx CSV</button>
                             <button type="button" id="ordersMoreActionGenerateLoadSheet" class="orders-more-actions__item" role="menuitem" title="Generate load sheet for selected orders">Generate Load Sheet</button>
                             <button type="button" id="ordersMoreActionGeneratePackagingList" class="orders-more-actions__item" role="menuitem" title="Generate combined packaging list for selected orders">Generate Packaging List</button>
                             <button type="button" id="ordersMoreActionGenerateInvoice" class="orders-more-actions__item" role="menuitem" title="Generate invoice PDF for selected orders">Generate Invoice</button>
+                            <button type="button" id="exportGridExcelBtn" class="orders-more-actions__item" role="menuitem" title="Export current AG Grid data to Excel">Export Data to Excel</button>
                         </div>
                     </div>
                     <div id="headerOrdersAppActions" class="header-orders-app-actions" style="display: none;" role="group" aria-label="App security and view">
-                        <button type="button" id="exportGridExcelBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Export data to Excel" aria-label="Export current AG Grid data to Excel">
-                            <i class="fas fa-file-export" aria-hidden="true"></i>
-                        </button>
                         <button type="button" id="ordersFullScreenBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn" title="Full screen (Esc to exit)">
                             <span class="header-fullscreen-icon" aria-hidden="true"><i data-lucide="maximize"></i></span>
                         </button>

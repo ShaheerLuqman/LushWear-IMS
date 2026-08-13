@@ -66,10 +66,13 @@ function _collectGridRowsForExport(gridApi) {
 
 function _collectGridColumnsForExport(gridApi) {
     if (!gridApi) return [];
-    const cols = (gridApi.getAllDisplayedColumns && gridApi.getAllDisplayedColumns()) || [];
+    // All grid columns, not just the currently displayed ones - hidden columns (e.g. orders'
+    // Tracking #, Items, Date) still export, since they hold real data the user may want.
+    const cols = (gridApi.getAllGridColumns && gridApi.getAllGridColumns()) || [];
     return cols
         .map((col) => {
             const colDef = col.getColDef ? col.getColDef() : null;
+            if (colDef?.checkboxSelection) return null; // row-select column, not real data
             const field = colDef?.field || col.getColId?.();
             const header = colDef?.headerName || field;
             if (!header) return null;
@@ -90,17 +93,19 @@ function _getExportCellValue(gridApi, column, node) {
         value = node.data[column.field];
     }
     if (value == null) return '';
-    if (Array.isArray(value)) return value.join(', ');
-    if (typeof value === 'object') return JSON.stringify(value);
-    
-    // Apply valueFormatter if it exists in the column definition
+
+    // Apply valueFormatter before the array/object fallback below - some columns'
+    // valueGetter returns a Date (e.g. order_receiving_date), which is a JS object
+    // and would otherwise get JSON.stringify'd instead of formatted.
     if (column?.col?.getColDef) {
         const colDef = column.col.getColDef();
         if (colDef?.valueFormatter && typeof colDef.valueFormatter === 'function') {
             value = colDef.valueFormatter({ value, data: node.data });
         }
     }
-    
+
+    if (Array.isArray(value)) return value.join(', ');
+    if (typeof value === 'object') return JSON.stringify(value);
     return value;
 }
 
@@ -162,9 +167,10 @@ async function fetchDeliveryStatusBulk(orderIds) {
     });
 }
 
-/** Live-fetch delivery status from the courier for selected orders and update the grid.
- * Skips cancelled orders and anything not on PostEx/Couriers Next with a tracking number,
- * since those are the only couriers the bulk-fetch endpoint supports. */
+/** Live-fetch delivery status for selected orders (skipping cancelled orders and anything
+ * not on PostEx/Couriers Next with a tracking number, since those are the only couriers the
+ * bulk-fetch endpoint supports), then always show the delivery status report - orders that
+ * couldn't be live-fetched are still included in the report from whatever data is on file. */
 async function fetchDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && (row.order_status || '').toLowerCase() !== 'cancelled');
@@ -178,7 +184,7 @@ async function fetchDeliveryStatusSelected() {
         return (courierNormalized === 'POSTEX' || courierNormalized === 'COURIERS NEXT') && track && track !== '-';
     });
     if (fetchable.length === 0) {
-        showToast('Selected orders have no PostEx/Couriers Next tracking to fetch', 'warning');
+        refreshDeliveryStatusSelected();
         return;
     }
 
@@ -205,6 +211,7 @@ async function fetchDeliveryStatusSelected() {
             updated++;
         });
         showToast(`Delivery status fetched for ${updated} order${updated === 1 ? '' : 's'}${failed ? `, ${failed} failed` : ''}`, failed && !updated ? 'error' : 'success');
+        refreshDeliveryStatusSelected();
     } catch (err) {
         showToast(err.message || 'Failed to fetch delivery status', 'error');
     } finally {
