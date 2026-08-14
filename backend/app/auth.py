@@ -106,6 +106,21 @@ def create_token(
     return jwt.encode(payload, _get_secret(), algorithm=_ALGORITHM)
 
 
+def create_state_token(data: dict, ttl_seconds: int = 600) -> str:
+    """Short-lived signed token for an OAuth-style redirect round-trip (the
+    Shopify install flow, routes/org_settings.py + routes/shopify_oauth.py).
+    Same signing key/algorithm as session tokens, but carries its own claims
+    (org_id/shop/origin, no role) so it can't be replayed as a session token,
+    and the short TTL bounds how long a captured install link stays usable."""
+    now = int(time.time())
+    payload = {**data, "iat": now, "exp": now + ttl_seconds}
+    return jwt.encode(payload, _get_secret(), algorithm=_ALGORITHM)
+
+
+def verify_state_token(token: str) -> dict:
+    return jwt.decode(token, _get_secret(), algorithms=[_ALGORITHM])
+
+
 async def require_auth(authorization: str = Header(default=None)) -> dict:
     """FastAPI dependency: require a valid Bearer token. Returns the token payload."""
     if not authorization or not authorization.lower().startswith("bearer "):

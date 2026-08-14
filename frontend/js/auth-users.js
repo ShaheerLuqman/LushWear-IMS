@@ -136,6 +136,63 @@ async function loadIntegrationsSection() {
     }
 }
 
+// Origin the OAuth popup's final page (served by the backend, not this frontend)
+// posts its result from - see app/routes/shopify_oauth.py's _popup_result.
+const SHOPIFY_OAUTH_BACKEND_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
+
+function initShopifyConnectButton() {
+    const btn = document.getElementById('settingsShopifyConnectBtn');
+    if (!btn || btn.dataset.bound) return;
+    btn.dataset.bound = '1';
+
+    window.addEventListener('message', (event) => {
+        if (event.origin !== SHOPIFY_OAUTH_BACKEND_ORIGIN) return;
+        if (!event.data || event.data.source !== 'lushwear-shopify-oauth') return;
+        const statusEl = document.getElementById('settingsShopifyConnectStatus');
+        if (event.data.status === 'connected') {
+            if (statusEl) statusEl.textContent = '';
+            showToast('Shopify connected', 'success');
+            loadIntegrationsSection();
+        } else {
+            if (statusEl) statusEl.textContent = 'Could not connect Shopify - please try again';
+            showToast('Could not connect Shopify', 'error');
+        }
+        btn.disabled = false;
+    });
+
+    btn.addEventListener('click', async () => {
+        const statusEl = document.getElementById('settingsShopifyConnectStatus');
+        const shop = document.getElementById('settingsShopifyStoreUrl').value.trim();
+        if (!shop) {
+            if (statusEl) statusEl.textContent = 'Enter your store URL first (your-store.myshopify.com)';
+            return;
+        }
+        if (statusEl) statusEl.textContent = '';
+        btn.disabled = true;
+        try {
+            const { url } = await apiJson(`/org-settings/shopify/install?shop=${encodeURIComponent(shop)}`);
+            const popup = window.open(url, 'shopify-connect', 'width=500,height=720');
+            if (!popup) {
+                if (statusEl) statusEl.textContent = 'Popup blocked - allow popups for this site and try again';
+                btn.disabled = false;
+                return;
+            }
+            // Re-enable if the merchant closes the popup without finishing (no
+            // message ever arrives in that case) - the 'message' handler above
+            // also re-enables on a normal completion, this just covers abandonment.
+            const closedCheck = setInterval(() => {
+                if (popup.closed) {
+                    clearInterval(closedCheck);
+                    btn.disabled = false;
+                }
+            }, 500);
+        } catch (ex) {
+            if (statusEl) statusEl.textContent = ex.message || 'Could not start Shopify connect';
+            btn.disabled = false;
+        }
+    });
+}
+
 function initIntegrationsForm() {
     const form = document.getElementById('settingsIntegrationsForm');
     const errEl = document.getElementById('settingsIntegrationsError');
@@ -177,6 +234,7 @@ function initIntegrationsForm() {
 async function loadAccountSettings() {
     initAddUserForm();
     initIntegrationsForm();
+    initShopifyConnectButton();
 
     const nameEl = document.getElementById('settingsAccountName');
     const emailEl = document.getElementById('settingsAccountEmail');

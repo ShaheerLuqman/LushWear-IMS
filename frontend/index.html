@@ -816,11 +816,16 @@
                                 <div class="form-group">
                                     <label for="settingsShopifyStoreUrl">Shopify store URL</label>
                                     <input type="text" id="settingsShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
+                                    <div class="form-actions">
+                                        <button type="button" id="settingsShopifyConnectBtn" class="btn btn-secondary">Connect Shopify</button>
+                                        <span class="form-hint" id="settingsShopifyConnectStatus"></span>
+                                    </div>
                                 </div>
                                 <div class="form-group">
-                                    <label for="settingsShopifyAccessToken">Shopify access token</label>
+                                    <label for="settingsShopifyAccessToken">Shopify access token (advanced)</label>
                                     <input type="password" id="settingsShopifyAccessToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
                                     <span class="form-hint" id="settingsShopifyTokenStatus"></span>
+                                    <span class="form-hint">Only needed as a manual fallback - "Connect Shopify" above sets this for you.</span>
                                 </div>
                                 <div class="form-group">
                                     <label for="settingsShopifyApiVersion">Shopify API version</label>
