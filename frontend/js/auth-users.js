@@ -131,34 +131,17 @@ async function loadIntegrationsSection() {
         if (postexEl) postexEl.placeholder = settings.postex_merchant_token_configured
             ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
         if (postexStatusEl) postexStatusEl.textContent = settings.postex_merchant_token_configured ? 'Configured' : 'Not configured';
+        return settings;
     } catch (ex) {
         showToast(ex.message || 'Failed to load integrations', 'error');
+        return null;
     }
 }
-
-// Origin the OAuth popup's final page (served by the backend, not this frontend)
-// posts its result from - see app/routes/shopify_oauth.py's _popup_result.
-const SHOPIFY_OAUTH_BACKEND_ORIGIN = API_BASE.replace(/\/api\/?$/, '');
 
 function initShopifyConnectButton() {
     const btn = document.getElementById('settingsShopifyConnectBtn');
     if (!btn || btn.dataset.bound) return;
     btn.dataset.bound = '1';
-
-    window.addEventListener('message', (event) => {
-        if (event.origin !== SHOPIFY_OAUTH_BACKEND_ORIGIN) return;
-        if (!event.data || event.data.source !== 'lushwear-shopify-oauth') return;
-        const statusEl = document.getElementById('settingsShopifyConnectStatus');
-        if (event.data.status === 'connected') {
-            if (statusEl) statusEl.textContent = '';
-            showToast('Shopify connected', 'success');
-            loadIntegrationsSection();
-        } else {
-            if (statusEl) statusEl.textContent = 'Could not connect Shopify - please try again';
-            showToast('Could not connect Shopify', 'error');
-        }
-        btn.disabled = false;
-    });
 
     btn.addEventListener('click', async () => {
         const statusEl = document.getElementById('settingsShopifyConnectStatus');
@@ -177,13 +160,21 @@ function initShopifyConnectButton() {
                 btn.disabled = false;
                 return;
             }
-            // Re-enable if the merchant closes the popup without finishing (no
-            // message ever arrives in that case) - the 'message' handler above
-            // also re-enables on a normal completion, this just covers abandonment.
-            const closedCheck = setInterval(() => {
-                if (popup.closed) {
-                    clearInterval(closedCheck);
-                    btn.disabled = false;
+            // The popup's final page is served by the backend (cross-origin), and some
+            // browsers null out window.opener once the popup has navigated through
+            // Shopify's own pages - so it can't reliably postMessage its result back.
+            // Instead, wait for the popup to close (the callback closes it itself once
+            // done) and just re-fetch to see whether it actually got configured.
+            const closedCheck = setInterval(async () => {
+                if (!popup.closed) return;
+                clearInterval(closedCheck);
+                const settings = await loadIntegrationsSection();
+                btn.disabled = false;
+                if (settings && settings.shopify_access_token_configured) {
+                    if (statusEl) statusEl.textContent = '';
+                    showToast('Shopify connected', 'success');
+                } else if (statusEl) {
+                    statusEl.textContent = 'Connection window closed before finishing';
                 }
             }, 500);
         } catch (ex) {

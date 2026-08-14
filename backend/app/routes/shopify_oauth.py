@@ -6,14 +6,16 @@ signature plus the signed `state` minted by routes/org_settings.py's
 dependency org_settings.router carries (see app/main.py).
 
 The frontend opens /shopify/install's URL in a popup (not a full-page
-redirect), so every path here ends by closing that popup and posting the
-result back to the opener via postMessage rather than redirecting - see
+redirect). This page can't reliably reach back into that popup's opener via
+postMessage - window.opener gets nulled out by some browsers/Shopify's own
+pages once the popup has navigated cross-origin through them - so it just
+self-closes; the frontend detects completion by polling for the popup
+closing and re-fetching, not by listening for anything from here. See
 frontend/js/auth-users.js's initShopifyConnectButton.
 """
 
 import hashlib
 import hmac
-import html
 import logging
 import os
 import re
@@ -39,23 +41,11 @@ def _verify_hmac(params: dict) -> bool:
     return bool(secret) and hmac.compare_digest(digest, received)
 
 
-def _popup_result(status: str, origin: str = "") -> HTMLResponse:
-    """Tiny self-closing page the popup lands on. Posts to a specific origin when
-    known (the tab that started the flow); falls back to "*" only for the
-    failure paths where `state` never decoded, so origin is genuinely unknown -
-    the message carries nothing but a status flag, so broadcasting it is harmless."""
-    target = html.escape(origin) if origin else "*"
-    message = "connected" if status == "connected" else "error"
+def _popup_result(status: str) -> HTMLResponse:
+    message = "Shopify connected." if status == "connected" else "Could not connect Shopify."
     body = f"""<!doctype html><meta charset="utf-8"><title>Shopify</title>
-<script>
-(function() {{
-    if (window.opener) {{
-        window.opener.postMessage({{ source: "lushwear-shopify-oauth", status: "{message}" }}, "{target}");
-    }}
-    window.close();
-}})();
-</script>
-<p>{"Shopify connected." if message == "connected" else "Could not connect Shopify."} You can close this window.</p>"""
+<script>window.close();</script>
+<p>{message} You can close this window.</p>"""
     return HTMLResponse(body)
 
 
@@ -77,9 +67,8 @@ async def shopify_callback(request: Request):
         return _popup_result("error")
     if claims.get("shop") != shop:
         logger.warning("Rejected Shopify callback: state shop != callback shop (%r)", shop)
-        return _popup_result("error", claims.get("origin") or "")
+        return _popup_result("error")
 
-    origin = claims.get("origin") or ""
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             resp = await client.post(
@@ -95,6 +84,6 @@ async def shopify_callback(request: Request):
         upsert_org_integration_settings(claims["org_id"], shopify_store_url=shop, shopify_access_token=access_token)
     except Exception:
         logger.exception("Shopify OAuth token exchange failed for %s", shop)
-        return _popup_result("error", origin)
+        return _popup_result("error")
 
-    return _popup_result("connected", origin)
+    return _popup_result("connected")
