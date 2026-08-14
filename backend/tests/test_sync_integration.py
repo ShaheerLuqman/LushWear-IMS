@@ -28,6 +28,8 @@ _FAKE_ORG_CREDS = OrgIntegrationSettings(
     shopify_store_url="test-shop.myshopify.com",
     shopify_access_token="fake-token",
     shopify_api_version="2024-07",
+    shopify_refresh_token=None,
+    shopify_token_expires_at=None,
     postex_merchant_token=None,
 )
 

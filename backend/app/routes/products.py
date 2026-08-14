@@ -12,7 +12,7 @@ from app import shopify
 from app.db_utils import fetch_all
 from app.money import money
 from app.org_scope import org_table
-from app.org_settings import get_org_integration_settings
+from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 from datetime import datetime, timezone
 from supabase import create_client
 import asyncio
@@ -93,7 +93,7 @@ async def get_all_products(org_id: str = Depends(get_org_id)):
 async def sync_shopify_products(org_id: str = Depends(get_org_id)):
     """Sync products and variants from Shopify"""
     try:
-        org_creds = get_org_integration_settings(org_id)
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
         # Shopify fetch and the local DB reads are independent - run them concurrently
         # instead of paying for both durations back to back.
         (all_products, page_count), (existing_products, existing_variants) = await asyncio.gather(

@@ -26,7 +26,7 @@ from app.advance_status import recompute_advance_statuses
 from app.config import settings
 from app.database import get_supabase
 from app.org_scope import org_table
-from app.org_settings import OrgIntegrationSettings, get_org_integration_settings
+from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
 
 logger = logging.getLogger("app.orders")
 
@@ -354,7 +354,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
     try:
         t_start = time.perf_counter()
         now = datetime.now(timezone.utc)
-        org_creds = get_org_integration_settings(org_id)
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
 
         # Incremental: resume from the last successful sync's checkpoint instead of always
         # re-fetching a fixed window - see _fetch_shopify_orders_in_range for why this is

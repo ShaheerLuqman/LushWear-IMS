@@ -82,14 +82,19 @@ CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON system_org_memberships(
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS system_integration_settings (
-    org_id                UUID PRIMARY KEY REFERENCES system_organizations(id),
-    shopify_store_url     TEXT,
-    shopify_access_token  TEXT,
+    org_id                    UUID PRIMARY KEY REFERENCES system_organizations(id),
+    shopify_store_url         TEXT,
+    shopify_access_token      TEXT,
     -- Per-org override; falls back to a shared default (app/org_settings.py)
     -- when unset - it isn't sensitive, so no need to force every org to set it.
-    shopify_api_version   TEXT,
-    postex_merchant_token TEXT,
-    updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    shopify_api_version       TEXT,
+    -- Shopify's expiring offline token model (mandatory for Public apps created
+    -- on/after 2026-04-01) - shopify_access_token expires at shopify_token_expires_at
+    -- and is refreshed via shopify_refresh_token; see app/org_settings.py.
+    shopify_refresh_token     TEXT,
+    shopify_token_expires_at  TIMESTAMPTZ,
+    postex_merchant_token     TEXT,
+    updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 

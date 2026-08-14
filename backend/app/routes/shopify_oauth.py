@@ -19,6 +19,7 @@ import hmac
 import logging
 import os
 import re
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from fastapi import APIRouter, Request
@@ -81,11 +82,21 @@ async def shopify_callback(request: Request):
                     "client_id": os.getenv("SHOPIFY_APP_CLIENT_ID"),
                     "client_secret": os.getenv("SHOPIFY_APP_CLIENT_SECRET"),
                     "code": code,
+                    # Public apps created on/after 2026-04-01 are rejected outright
+                    # without this - see app/org_settings.py's module docstring.
+                    "expiring": 1,
                 },
             )
         resp.raise_for_status()
-        access_token = resp.json()["access_token"]
-        upsert_org_integration_settings(claims["org_id"], shopify_store_url=shop, shopify_access_token=access_token)
+        data = resp.json()
+        expires_at = datetime.now(timezone.utc) + timedelta(seconds=data["expires_in"])
+        upsert_org_integration_settings(
+            claims["org_id"],
+            shopify_store_url=shop,
+            shopify_access_token=data["access_token"],
+            shopify_refresh_token=data["refresh_token"],
+            shopify_token_expires_at=expires_at,
+        )
     except Exception:
         logger.exception("Shopify OAuth token exchange failed for %s", shop)
         return _popup_result("error")

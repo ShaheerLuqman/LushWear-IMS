@@ -22,7 +22,7 @@ from app.money import money
 from app.order_pdf import extract_order_numbers
 from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
-from app.org_settings import get_org_integration_settings
+from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
 from app.services import postex
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
@@ -333,7 +333,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
 
     try:
         supabase = get_supabase()
-        org_creds = get_org_integration_settings(org_id)
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
         current_time = datetime.now(timezone.utc).isoformat()
         order_numbers_input = list(dict.fromkeys(body.order_numbers))
 
@@ -1738,7 +1738,7 @@ async def generate_invoice(request: Request, order_ids: List[str] = Body(..., em
         if len(order_ids) > MAX_PDF_BATCH_ORDERS:
             raise HTTPException(status_code=400, detail=f"Cannot generate an invoice for more than {MAX_PDF_BATCH_ORDERS} orders at once")
         supabase = get_supabase()
-        org_creds = get_org_integration_settings(org_id)
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
         orders_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", order_ids).execute()
         orders = orders_response.data or []
         if not orders:
