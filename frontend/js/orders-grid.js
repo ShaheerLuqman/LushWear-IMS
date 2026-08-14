@@ -588,9 +588,9 @@ function advanceStatusMeta(status) {
  * recorded yet). Single source of truth for the net_profit column, profit_percent column,
  * and the selected-rows footer sum below - keep all three reading from here instead of
  * recomputing so the definition can't drift between them.
- * Backend's month-summary net_profit (routes/orders.py, ~line 3161) computes the same
- * concept as a period aggregate over unfiltered orders - a different code path by design
- * (see TODO.md), but the definition should stay in agreement; check both if it changes. */
+ * Backend's month-summary net_profit (get_month_summary_totals SQL function) mirrors this
+ * same per-row formula, just summed as a period aggregate over unfiltered orders instead of
+ * selected rows - a separate implementation by necessity, so keep both in sync if this changes. */
 function computeNetProfit(row) {
     const status = (row.order_status || '').toLowerCase();
     const delivery = parseFloat(row.delivery_charge) || 0;

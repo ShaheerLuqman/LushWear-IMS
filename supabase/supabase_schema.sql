@@ -1486,9 +1486,15 @@ AS $$
             COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('fulfilled', 'cna', 'rfd', 'ica'))::INT AS enroute_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'unfulfilled')::INT AS unfulfilled_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'cancelled')::INT AS cancelled_orders_count,
-            COALESCE(SUM(total_amount) FILTER (WHERE delivery_charge IS NOT NULL AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS gross_with_delivery,
-            COALESCE(SUM(total_amount) FILTER (WHERE delivery_charge IS NOT NULL AND lower(trim(order_status)) = 'returned'), 0) AS return_amount_with_delivery,
-            COALESCE(SUM(cost_price) FILTER (WHERE delivery_charge IS NOT NULL AND COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS cost_with_delivery,
+            COALESCE(SUM(
+                CASE
+                    WHEN lower(trim(order_status)) = 'returned' AND delivery_charge IS NOT NULL AND delivery_charge <> 0
+                        THEN -delivery_charge
+                    WHEN lower(trim(order_status)) = 'delivered' AND delivery_charge IS NOT NULL AND delivery_charge <> 0
+                        THEN total_amount - (delivery_charge + COALESCE(tax_amount, 0) + COALESCE(cost_price, 0))
+                    ELSE 0
+                END
+            ), 0) AS net_profit,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
@@ -1513,7 +1519,7 @@ AS $$
         ot.unfulfilled_orders_count,
         ot.cancelled_orders_count,
         (ot.total_gross_sale - ot.total_return_amount) AS net_sales,
-        ((ot.gross_with_delivery - ot.return_amount_with_delivery) - ot.cost_with_delivery) AS net_profit,
+        ot.net_profit,
         ot.dc_charges_delivered,
         ot.dc_charges_returned,
         (ot.dc_charges_delivered + ot.dc_charges_returned) AS dc_charges_total,
