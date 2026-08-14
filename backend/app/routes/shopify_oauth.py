@@ -65,9 +65,13 @@ async def shopify_callback(request: Request):
     except Exception:
         logger.warning("Rejected Shopify callback for shop=%r (invalid/expired state)", shop)
         return _popup_result("error")
-    if claims.get("shop") != shop:
-        logger.warning("Rejected Shopify callback: state shop != callback shop (%r)", shop)
-        return _popup_result("error")
+    # No check that `shop` matches whatever /shopify/install recorded when the
+    # flow started: Shopify echoes back the store's permanent domain here,
+    # which differs from a renamed store's current *.myshopify.com alias - the
+    # domain typed into Connect Shopify. The state's org_id (HMAC-signed by us)
+    # is what ties this callback to the right org; a code only redeems against
+    # the shop it was actually issued for, so there's nothing to gain from
+    # also requiring the shop string to match.
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:

@@ -49,7 +49,9 @@ async def shopify_install(shop: str, org_id: str = Depends(get_org_id)):
     redirect_uri = os.getenv("SHOPIFY_APP_REDIRECT_URI")
     if not client_id or not redirect_uri:
         raise HTTPException(status_code=500, detail="Shopify app is not configured on the server.")
-    state = create_state_token({"org_id": org_id, "shop": shop})
+    # Deliberately no `shop` claim here - see shopify_oauth.py's callback for why
+    # the callback's shop param can't be matched against this anyway.
+    state = create_state_token({"org_id": org_id})
     params = {
         "client_id": client_id,
         "scope": _SHOPIFY_OAUTH_SCOPES,
