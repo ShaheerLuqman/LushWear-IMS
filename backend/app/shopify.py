@@ -12,6 +12,10 @@ PAGE_LIMIT = 250
 _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
 
+# The only collection names the month-summary "products sold by collection" breakdown
+# (routes/orders.py) recognizes - anything else falls into "Others" there.
+KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
+
 
 def _credentials(org_creds: OrgIntegrationSettings) -> tuple[str, str]:
     store_url = org_creds.shopify_store_url
@@ -112,3 +116,34 @@ async def fetch_all(
                 break
 
     return records, page_count
+
+
+async def fetch_product_collections(
+    product_ids: List[int], org_creds: OrgIntegrationSettings
+) -> Dict[int, List[str]]:
+    """Map shopify_product_id -> collection names, for just the given products.
+
+    products.json never includes collection membership (Shopify models it as a separate
+    many-to-many resource). Collections rarely change once set, so callers pass only the
+    ids of products still missing one - each becomes a single collects.json?product_id=
+    call instead of paging the whole store's collects table on every sync.
+    """
+    if not product_ids:
+        return {}
+
+    (custom_collections, _), (smart_collections, _), collects_by_product = await asyncio.gather(
+        fetch_all("custom_collections", f"limit={PAGE_LIMIT}", org_creds),
+        fetch_all("smart_collections", f"limit={PAGE_LIMIT}", org_creds),
+        asyncio.gather(*(
+            fetch_all("collects", f"product_id={pid}&limit={PAGE_LIMIT}", org_creds)
+            for pid in product_ids
+        )),
+    )
+    titles_by_id = {c["id"]: c["title"] for c in custom_collections + smart_collections}
+
+    product_collections: Dict[int, List[str]] = {}
+    for product_id, (collects, _) in zip(product_ids, collects_by_product):
+        names = [titles_by_id[c["collection_id"]] for c in collects if c.get("collection_id") in titles_by_id]
+        if names:
+            product_collections[product_id] = names
+    return product_collections

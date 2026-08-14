@@ -1983,8 +1983,8 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
         )
         non_cancelled = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
 
-        # Products sold by collection (5 collections + Others for products without a collection)
-        KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
+        # Products sold by collection (KNOWN_COLLECTIONS + Others for products without a collection)
+        KNOWN_COLLECTIONS = shopify.KNOWN_COLLECTIONS
         products_resp = org_table(supabase, org_id, "shopify_products").select("id, name, collection, price").execute()
         products_list = []  # (name_lower, collection_display, price)
         products_map = {}   # name_lower -> (collection_display, price)

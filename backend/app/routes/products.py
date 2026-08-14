@@ -45,6 +45,18 @@ SHOPIFY_SYNC_PRODUCTS_IGNORE: List[str] = [
 ]
 
 
+def _resolve_collection(names: List[str]) -> str | None:
+    """A product can sit in multiple Shopify collections; the collection column is a
+    single value. Prefer whichever one the month-summary breakdown (shopify.KNOWN_COLLECTIONS)
+    recognizes, else fall back to the first collection Shopify returns."""
+    if not names:
+        return None
+    for name in names:
+        if name in shopify.KNOWN_COLLECTIONS:
+            return name
+    return names[0]
+
+
 def _is_replacement_order(row: dict) -> bool:
     """Same notion as Shopify sync: an order tagged as a replacement for another."""
     return bool(row.get("replacement_of_order_no"))
@@ -98,6 +110,19 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
         existing_variants_map = {
             v["shopify_variant_id"]: v for v in existing_variants if v.get("shopify_variant_id")
         }
+
+        # Only ask Shopify for collection membership on products that'll actually be synced
+        # and don't already have one stored - collects.json is a per-product call, so this
+        # keeps steady-state syncs from re-fetching collection data for the whole catalog
+        # every time.
+        missing_collection_ids = [
+            p["id"] for p in all_products
+            if p.get("id")
+            and p.get("status") == "active"
+            and p.get("title", "Untitled Product") not in SHOPIFY_SYNC_PRODUCTS_IGNORE
+            and not (existing_products_map.get(p["id"], {}).get("collection") or "").strip()
+        ]
+        product_collections = await shopify.fetch_product_collections(missing_collection_ids, org_creds)
         
         def normalize_value(val):
             if val is None:
@@ -107,7 +132,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             return str(val).strip() if val else None
         
         def product_has_changed(shopify_data, existing_data):
-            fields_to_compare = ["name", "price", "image_url"]
+            fields_to_compare = ["name", "price", "image_url", "collection"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
@@ -167,24 +192,27 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             if variants:
                 price = float(variants[0].get("price", 0) or 0)
             
+            existing_product = existing_products_map.get(shopify_product_id)
+            existing_collection = (existing_product.get("collection") or "").strip() if existing_product else ""
+            collection = existing_collection or _resolve_collection(product_collections.get(shopify_product_id, []))
+
             # Build product data
             product_data = {
                 "name": name,
                 "price": price,
                 "image_url": image_url,
+                "collection": collection,
                 "shopify_product_id": shopify_product_id,
                 "updated_at": current_time
             }
-            
-            if shopify_product_id in existing_products_map:
+
+            if existing_product:
                 # Product exists, check if needs update
-                existing_product = existing_products_map[shopify_product_id]
                 product_id_map[shopify_product_id] = existing_product["id"]
                 if product_has_changed(product_data, existing_product):
                     product_data["id"] = existing_product["id"]
-                    # Preserve cost_price and collection from existing product
+                    # Preserve cost_price - it's set locally, Shopify has no notion of it
                     product_data["cost_price"] = existing_product.get("cost_price")
-                    product_data["collection"] = existing_product.get("collection")
                     products_to_update.append(product_data)
             else:
                 # New product, will need to insert and get ID
