@@ -330,6 +330,97 @@ def test_unfulfilled_order_total_amount_keeps_resyncing_from_shopify(synced_once
     assert fake_db.orders.rows_by_number[order_number]["total_amount"] == original_total
 
 
+def _run_sync_with_fixture(monkeypatch, orders_fixture):
+    """Same wiring as the `synced_once` fixture, but against a caller-supplied (possibly
+    mutated) copy of the fixture orders instead of the file's own, so a test can plant a
+    courier == "Other" fulfillment before the first sync."""
+    products, variants = _load_fixture_products_and_variants()
+    fake_db = _FakeDB([], products, variants)
+
+    async def fake_fetch_range(*_a, **_k):
+        return orders_fixture, 1
+
+    monkeypatch.setattr(shopify_sync, "get_supabase", lambda: fake_db)
+    monkeypatch.setattr(shopify_sync, "create_client", lambda *_a, **_k: fake_db)
+    monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
+    monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
+    monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", lambda *_a, **_k: 0)
+    return fake_db
+
+
+class TestOtherCourierDeliveryCharge:
+    """Courier "Other" has no tracking API - the merchant types the courier name and
+    delivery charge together into Shopify's free-text tracking-number field (e.g.
+    "Bykea 300"), parsed by _delivery_charge_from_other_tracking."""
+
+    def _set_other_tracking(self, orders_fixture, order_number, text):
+        target = next(o for o in orders_fixture if int(o["order_number"]) == order_number)
+        for f in target["fulfillments"]:
+            f["tracking_company"] = "Other"
+            f["tracking_number"] = text
+        return target
+
+    def test_new_order_gets_delivery_charge_from_tracking_text(self, monkeypatch):
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_tracking(orders_fixture, order_number, "Bykea 300")
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["courier"] == "Other"
+        assert row["tracking_number"] == "Bykea 300"
+        assert row["delivery_charge"] == 300.0
+
+    def test_resyncs_past_the_delivered_freeze_when_the_shopify_text_changes(self, monkeypatch):
+        """Every other field freezes once an order is delivered/returned (see
+        test_fulfilled_order_freezes_total_amount_against_a_manual_edit above) - "Other"
+        courier/tracking_number/delivery_charge must not, since re-typing the Shopify
+        text is the only way to ever correct them post-delivery."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_tracking(orders_fixture, order_number, "Bykea 300")
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        # order_status "delivered" is only ever set by a delivery-status refresh, never by
+        # extract_order_status itself - simulate that having already happened.
+        row["order_status"] = "delivered"
+
+        self._set_other_tracking(orders_fixture, order_number, "Bykea 350")
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["order_status"] == "delivered"  # the frozen status itself is untouched
+        assert row["tracking_number"] == "Bykea 350"
+        assert row["delivery_charge"] == 350.0
+
+    def test_delivered_freeze_still_holds_for_a_non_other_courier(self, monkeypatch):
+        """Control case: an ordinary courier's tracking_number must stay frozen once
+        delivered, same as before this feature."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        target = next(o for o in orders_fixture if int(o["order_number"]) == order_number)
+        for f in target["fulfillments"]:
+            f["tracking_company"] = "PostEx"
+            f["tracking_number"] = "111111"
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        row["order_status"] = "delivered"
+
+        for f in target["fulfillments"]:
+            f["tracking_number"] = "222222"
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert fake_db.orders.rows_by_number[order_number]["tracking_number"] == "111111"
+
+
 class TestIncrementalSyncWindow:
     """Covers the fix for TODO.md's "Sync performance" item: the sync used to always
     re-fetch a fixed SHOPIFY_SYNC_WINDOW_DAYS-day window, even when almost nothing in

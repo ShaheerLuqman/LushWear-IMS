@@ -37,6 +37,7 @@ from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     SyncShopifyOrdersResult,
     _cost_from_line_items,
+    _delivery_charge_from_other_tracking,
     _get_sync_status_row,
     _line_items_incomplete,
     _line_items_signature,
@@ -367,7 +368,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
         existing_rows = (
             org_table(supabase, org_id, "shopify_orders")
             .select(
-                "id, order_number, order_status, piece_received, delivery_status, "
+                "id, order_number, courier, tracking_number, order_status, piece_received, delivery_status, "
                 "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no, "
                 "cost_price, line_items"
             )
@@ -638,8 +639,22 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             else:
                 order_received_date = current_time
 
-            delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else 0.0
+            other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+            delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else (other_charge if other_charge is not None else 0.0)
             tax_amount = 0.0
+
+            if existing_order:
+                existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
+                # "Other" has no tracking API, so re-derive delivery_charge only when the
+                # Shopify tracking-number text actually changed - otherwise a manual in-app
+                # correction would get clobbered on every force-sync.
+                tracking_retyped = (
+                    str(courier or "").strip().lower() == "other"
+                    and (tracking_number or "").strip() != (existing_order.get("tracking_number") or "").strip()
+                )
+                final_delivery_charge = (other_charge if other_charge is not None else existing_delivery_charge) if tracking_retyped else existing_delivery_charge
+            else:
+                final_delivery_charge = delivery_charge
 
             payload: Dict[str, Any] = {
                 "order_number": target_order_number,
@@ -650,7 +665,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 "delivery_status": existing_order.get("delivery_status") if existing_order else None,
                 "total_amount": total_amount,
                 "advance_amount": advance_amount,
-                "delivery_charge": float(existing_order.get("delivery_charge") or 0) if existing_order else delivery_charge,
+                "delivery_charge": final_delivery_charge,
                 "tax_amount": float(existing_order.get("tax_amount") or 0) if existing_order else tax_amount,
                 "cost_price": final_cost_price,
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),

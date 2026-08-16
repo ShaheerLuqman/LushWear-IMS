@@ -41,6 +41,9 @@ each, under "Full-stack" below.
 - [ ] **Per-user view persistence** — remember each user's column widths / layout
       (cookies or user prefs, keyed by the now-real per-user accounts).
 - [ ] **Keyboard shortcuts / keybinds** — add shortcuts for common actions.
+- [ ] **Reduce base font size app-wide** — current type scale reads large;
+      tighten it across the whole app, not just one page.
+- [ ] **Refresh the color theme** — update the UI's color palette.
 
 ### Full-stack
 
@@ -71,6 +74,16 @@ each, under "Full-stack" below.
       round-trips.
 
 ### Data & reporting
+- [ ] **Generalize `KNOWN_COLLECTIONS`** — the month-summary "products sold by
+      collection" breakdown (`routes/orders.py`) and the Shopify product sync
+      (`routes/products.py`'s `_resolve_collection`) both key off a hardcoded
+      `shopify.KNOWN_COLLECTIONS` list (`["Cami Sets", "Linen PJs", "Pajama
+      T-Shirt", "Silk Collection", "Trousers"]`), so any collection outside that
+      list collapses into "Others" and a product in multiple Shopify collections
+      is forced to pick whichever one happens to match this list. Needs a
+      data-driven replacement (e.g. an org-configurable list, or just reporting
+      every Shopify collection Shopify actually returns) instead of the fixed
+      array.
 - [ ] **Shopify webhooks for real-time order ingestion** — replace/augment the
       manual sync button with `orders/create` / `orders/updated` / `orders/fulfilled`
       webhooks (HMAC-verified) that trigger reconciliation for the affected order
@@ -99,6 +112,19 @@ each, under "Full-stack" below.
       directly, so `_derive_order_status_from_latest`'s existing
       backward-search over history keeps working unchanged and non-terminal
       current-statuses stay a no-op.
+
+### Finance / Bills
+- [ ] **Unit type on bill lines?** — came up while adding the other-expense
+      field to bills. `bill_items.quantity` is already `NUMERIC(12,3)` to allow
+      fractional quantities (e.g. fabric by the metre), and the unit itself is
+      currently left to the free-text `description` (e.g. "Cotton fabric —
+      10m") rather than a dedicated column. Decided to skip for now: it's
+      display/print clarity only — it doesn't affect `recalc_bill_totals` /
+      `receive_bill` math, and stock movement stays in the sellable unit on
+      `variants.quantity` regardless of what unit the bill line was in. Revisit
+      if unit ambiguity across bills becomes a real problem (e.g. the same
+      material bought by the metre on one bill and by the roll on another), or
+      if a supplier-facing exported bill needs printed units.
 
 ### New capabilities
 - [ ] **AI chatbot** — natural-language querying of the data (API/agent layer).

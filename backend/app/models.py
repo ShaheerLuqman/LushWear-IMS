@@ -428,6 +428,7 @@ class BillBase(BaseModel):
     due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
     tax_amount: float = Field(default=0.0, ge=0)
+    other_expense_amount: float = Field(default=0.0, ge=0)
     notes: Optional[str] = None
 
 class BillCreate(BillBase):
@@ -445,6 +446,7 @@ class BillUpdate(BaseModel):
     due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
     tax_amount: Optional[float] = Field(default=None, ge=0)
+    other_expense_amount: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = None
     # Replaces the whole line set when present — a bill's lines are edited as a
     # unit, and diffing them per row would buy nothing on a draft.

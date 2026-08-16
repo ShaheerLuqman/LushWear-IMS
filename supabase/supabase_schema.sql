@@ -1631,6 +1631,9 @@ CREATE TABLE IF NOT EXISTS finances_bills (
                   CONSTRAINT bills_status_check CHECK (status IN ('draft', 'received', 'cancelled')),
     subtotal      DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
     tax_amount    DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (tax_amount >= 0),
+    -- Flat cost that came with the purchase but isn't stock or tax - transport,
+    -- loading, courier. Folded into total the same way tax_amount is.
+    other_expense_amount DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (other_expense_amount >= 0),
     total         DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
     notes         TEXT,
     -- Whether this bill's lines have been added to variant stock. Guards the
@@ -1713,7 +1716,7 @@ BEGIN
 
     UPDATE finances_bills
        SET subtotal   = v_subtotal,
-           total      = v_subtotal + tax_amount,
+           total      = v_subtotal + tax_amount + other_expense_amount,
            updated_at = NOW()
      WHERE id = p_bill_id;
 END;
@@ -1766,10 +1769,11 @@ RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    b             RECORD;
-    v_inventory   UUID;
-    v_tax_account UUID;
-    v_lines       JSONB;
+    b               RECORD;
+    v_inventory     UUID;
+    v_tax_account   UUID;
+    v_other_account UUID;
+    v_lines         JSONB;
 BEGIN
     SELECT * INTO b FROM finances_bills WHERE id = p_bill_id;
     IF NOT FOUND THEN
@@ -1805,6 +1809,16 @@ BEGIN
             'debit',      b.tax_amount,
             'credit',     0,
             'description', 'Tax on bill ' || b.bill_number));
+    END IF;
+
+    IF b.other_expense_amount > 0 THEN
+        v_other_account := ensure_system_ledger(
+            b.org_id, 'other_expenses', 'Other Expenses', 'Expense', '5910');
+        v_lines := v_lines || jsonb_build_array(jsonb_build_object(
+            'account_id', v_other_account,
+            'debit',      b.other_expense_amount,
+            'credit',     0,
+            'description', 'Other expense on bill ' || b.bill_number));
     END IF;
 
     -- The supplier's own ledger is the credit side - there is no separate

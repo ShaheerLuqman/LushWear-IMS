@@ -161,6 +161,7 @@ async def create_bill(
         "bill_date": bill.bill_date.isoformat(),
         "due_date": bill.due_date.isoformat() if bill.due_date else None,
         "tax_amount": bill.tax_amount,
+        "other_expense_amount": bill.other_expense_amount,
         "notes": bill.notes,
         "status": "draft",
         "created_by": auth.get("sub"),

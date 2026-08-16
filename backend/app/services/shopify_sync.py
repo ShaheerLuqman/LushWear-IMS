@@ -129,6 +129,20 @@ def _line_items_incomplete(line_items) -> bool:
     )
 
 
+_OTHER_COURIER_TRACKING_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
+
+
+def _delivery_charge_from_other_tracking(courier: Optional[str], tracking_number: Optional[str]) -> Optional[float]:
+    """Courier "Other" has no tracking API, so the merchant types the courier name and
+    delivery charge together into Shopify's free-text tracking number field (e.g. "Bykea
+    300" -> Bykea, 180). Pull the trailing number back out as delivery_charge; None if the
+    tracking number doesn't end in "<name> <number>"."""
+    if (courier or "").strip().lower() != "other":
+        return None
+    m = _OTHER_COURIER_TRACKING_CHARGE_RE.match((tracking_number or "").strip())
+    return float(m.group(1)) if m else None
+
+
 def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
     """
     Compute order total from fulfillments: fulfilled merchandise (price * quantity per
@@ -783,6 +797,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             # Set fixed delivery charge for SCS courier
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
+            else:
+                other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+                if other_charge is not None:
+                    delivery_charge = other_charge
             structured_line_items = extract_line_items(sp_order, order_status)
             calculated_cost_from_items = _cost_from_line_items(structured_line_items) if structured_line_items else 0.0
 
@@ -839,6 +857,27 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 existing_order = existing_orders_map[order_number]
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
                 if existing_status in ("delivered", "returned"):
+                    existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
+                    shopify_courier_lower = (courier or "").strip().lower()
+                    if existing_courier_lower == "other" or shopify_courier_lower == "other":
+                        # "Other" has no tracking API, so the courier name / delivery charge can
+                        # only ever be corrected by re-typing the Shopify tracking-number text -
+                        # keep pulling that in even past the delivered/returned freeze below.
+                        existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
+                        shopify_tracking_frozen = (tracking_number or "").strip() or None
+                        if shopify_courier_lower != existing_courier_lower or shopify_tracking_frozen != existing_tracking_frozen:
+                            other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+                            update_payload = {
+                                **existing_order,
+                                "courier": courier,
+                                "tracking_number": tracking_number,
+                                "delivery_charge": other_charge if other_charge is not None else existing_order.get("delivery_charge"),
+                                "updated_at": current_time,
+                            }
+                            if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
+                                update_payload["replacement_of_order_no"] = replacement_of
+                            orders_to_update.append(update_payload)
+                            continue
                     # Once an order has left "unfulfilled" (e.g. delivered/returned), do not overwrite totals/items/cost.
                     # Allow only replacement_of_order_no to be set if it was missing.
                     if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
@@ -910,6 +949,11 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 if final_courier == "SCS" and existing_delivery_charge == 0:
                     # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
                     order_data["delivery_charge"] = 180.0
+                elif final_courier == "OTHER" and tracking_changed:
+                    # Re-derive only when the Shopify text itself changed, so a manual in-app
+                    # correction isn't clobbered on every sync when nothing upstream moved.
+                    other_charge = _delivery_charge_from_other_tracking(order_data.get("courier"), order_data.get("tracking_number"))
+                    order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
                 else:
                     # Preserve existing delivery_charge (including any non-zero values)
                     order_data["delivery_charge"] = existing_delivery_charge
