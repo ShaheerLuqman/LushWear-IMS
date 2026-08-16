@@ -181,6 +181,15 @@ def upsert_org_integration_settings(
         payload["shopify_store_url"] = shopify_store_url
     if shopify_access_token is not None:
         payload["shopify_access_token"] = _encrypt(shopify_access_token)
+        if shopify_refresh_token is None:
+            # A new access_token with no accompanying refresh_token only ever
+            # happens from manual entry (Settings > Integrations, or the
+            # superadmin portal) - the OAuth callback and ensure_valid_shopify_token()
+            # always pass both together. Clear any refresh_token/expiry left over
+            # from a prior OAuth connect so this token is treated as fixed, not
+            # silently overwritten by a refresh on borrowed OAuth state.
+            payload["shopify_refresh_token"] = None
+            payload["shopify_token_expires_at"] = None
     if shopify_api_version is not None:
         payload["shopify_api_version"] = shopify_api_version
     if shopify_refresh_token is not None:
