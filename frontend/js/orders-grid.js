@@ -1251,7 +1251,8 @@ function buildTransactionGridColumns() {
             cellClass: 'transaction-row-num-cell',
             // Position in the day's list, not a stored id - the blank row at the
             // bottom isn't numbered since it isn't an entry yet.
-            valueGetter: (params) => (isTransactionNewRow(params.data) ? '' : params.node.rowIndex + 1)
+            valueGetter: (params) => (isTransactionNewRow(params.data) ? '' : params.node.rowIndex + 1),
+            getQuickFilterText: () => ''
         },
         {
             // Both sides of the entry, named. An empty side is the cash account.
@@ -1264,7 +1265,8 @@ function buildTransactionGridColumns() {
             sortable: false,
             cellRenderer: (params) => createFolioCellRenderer(params, 'from_account_id'),
             // Only the Excel export reads this - the renderer draws the cell itself.
-            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel()),
+            getQuickFilterText: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
         },
         {
             // To is the account money went to, i.e. the debited side.
@@ -1275,7 +1277,8 @@ function buildTransactionGridColumns() {
             filter: false,
             sortable: false,
             cellRenderer: (params) => createFolioCellRenderer(params, 'to_account_id'),
-            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
+            valueFormatter: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel()),
+            getQuickFilterText: (params) => (params.value ? ledgerNameById(params.value) : cashSideLabel())
         },
         {
             headerName: 'Amount (PKR)',
@@ -1295,6 +1298,7 @@ function buildTransactionGridColumns() {
             },
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => formatTransactionCell(params.value),
+            getQuickFilterText: (params) => formatTransactionCell(params.value),
             cellRenderer: (params) => transactionCellWithPlaceholder(params, '0.00'),
             valueSetter: (params) => {
                 if (isTransactionNewRow(params.data)) {
@@ -1332,6 +1336,9 @@ function buildTransactionGridColumns() {
             },
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => (params.value != null && params.value !== '' ? String(params.value) : ''),
+            // Order number isn't its own column, but a search for it should still
+            // find the entry even when the particulars text doesn't spell it out.
+            getQuickFilterText: (params) => `${params.value || ''} ${params.data.order_number || ''}`.trim(),
             cellRenderer: (params) => transactionCellWithPlaceholder(params, 'What was this for?'),
             valueSetter: (params) => {
                 const val = String(params.newValue ?? '').trim();
@@ -1353,7 +1360,8 @@ function buildTransactionGridColumns() {
             minWidth: 40,
             filter: false,
             sortable: false,
-            cellRenderer: (params) => createTransactionRowMenu(params)
+            cellRenderer: (params) => createTransactionRowMenu(params),
+            getQuickFilterText: () => ''
         }
     ];
 }

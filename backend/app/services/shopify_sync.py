@@ -129,18 +129,24 @@ def _line_items_incomplete(line_items) -> bool:
     )
 
 
-_OTHER_COURIER_TRACKING_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
+_OTHER_COURIER_TAG_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
 
 
-def _delivery_charge_from_other_tracking(courier: Optional[str], tracking_number: Optional[str]) -> Optional[float]:
-    """Courier "Other" has no tracking API, so the merchant types the courier name and
-    delivery charge together into Shopify's free-text tracking number field (e.g. "Bykea
-    300" -> Bykea, 180). Pull the trailing number back out as delivery_charge; None if the
-    tracking number doesn't end in "<name> <number>"."""
+def _delivery_charge_from_other_tags(courier: Optional[str], tags_raw) -> Optional[float]:
+    """Courier "Other" has no tracking API. Shopify's free-text tracking-number field for
+    it turned out to get inconsistently formatted by the fulfillment flow ("Bykea 300",
+    "300 bykea", "bykea300" have all shown up in real data), so the merchant instead tags
+    the order with the courier name and delivery charge together (e.g. tag "Bykea 300" ->
+    Bykea, 300). Returns the number from the first tag matching "<name> <number>"; None if
+    no tag matches. `tags_raw` is Shopify's own `tags` field - a comma-separated string."""
     if (courier or "").strip().lower() != "other":
         return None
-    m = _OTHER_COURIER_TRACKING_CHARGE_RE.match((tracking_number or "").strip())
-    return float(m.group(1)) if m else None
+    tags_str = tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")
+    for tag in tags_str.split(","):
+        m = _OTHER_COURIER_TAG_CHARGE_RE.match(tag.strip())
+        if m:
+            return float(m.group(1))
+    return None
 
 
 def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
@@ -798,7 +804,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             if courier.upper() == "SCS":
                 delivery_charge = 180.0
             else:
-                other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+                other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
                 if other_charge is not None:
                     delivery_charge = other_charge
             structured_line_items = extract_line_items(sp_order, order_status)
@@ -861,17 +867,24 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                     shopify_courier_lower = (courier or "").strip().lower()
                     if existing_courier_lower == "other" or shopify_courier_lower == "other":
                         # "Other" has no tracking API, so the courier name / delivery charge can
-                        # only ever be corrected by re-typing the Shopify tracking-number text -
-                        # keep pulling that in even past the delivered/returned freeze below.
+                        # only ever be corrected via the courier tag - keep pulling that (and the
+                        # fulfillment's own courier/tracking_number) in even past the
+                        # delivered/returned freeze below.
                         existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
                         shopify_tracking_frozen = (tracking_number or "").strip() or None
-                        if shopify_courier_lower != existing_courier_lower or shopify_tracking_frozen != existing_tracking_frozen:
-                            other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+                        existing_delivery_charge_frozen = float(existing_order.get("delivery_charge") or 0)
+                        other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+                        new_delivery_charge_frozen = other_charge if other_charge is not None else existing_delivery_charge_frozen
+                        if (
+                            shopify_courier_lower != existing_courier_lower
+                            or shopify_tracking_frozen != existing_tracking_frozen
+                            or abs(new_delivery_charge_frozen - existing_delivery_charge_frozen) > 0.01
+                        ):
                             update_payload = {
                                 **existing_order,
                                 "courier": courier,
                                 "tracking_number": tracking_number,
-                                "delivery_charge": other_charge if other_charge is not None else existing_order.get("delivery_charge"),
+                                "delivery_charge": new_delivery_charge_frozen,
                                 "updated_at": current_time,
                             }
                             if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
@@ -949,14 +962,18 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 if final_courier == "SCS" and existing_delivery_charge == 0:
                     # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
                     order_data["delivery_charge"] = 180.0
-                elif final_courier == "OTHER" and tracking_changed:
-                    # Re-derive only when the Shopify text itself changed, so a manual in-app
-                    # correction isn't clobbered on every sync when nothing upstream moved.
-                    other_charge = _delivery_charge_from_other_tracking(order_data.get("courier"), order_data.get("tracking_number"))
+                elif final_courier == "OTHER":
+                    # The courier tag is the authoritative source (unlike the free-text
+                    # tracking-number field, it's not stored anywhere to diff against, so
+                    # just re-derive from Shopify's live tags on every sync); falls back to
+                    # whatever's on file when no tag matches, so a manually set charge isn't
+                    # zeroed out just because the order has no courier tag.
+                    other_charge = _delivery_charge_from_other_tags(order_data.get("courier"), sp_order.get("tags"))
                     order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
                 else:
                     # Preserve existing delivery_charge (including any non-zero values)
                     order_data["delivery_charge"] = existing_delivery_charge
+                delivery_charge_changed = abs(order_data["delivery_charge"] - existing_delivery_charge) > 0.01
 
                 # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
                 order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
@@ -1005,8 +1022,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 # Always update if courier or tracking_number changed, otherwise check other fields.
                 # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
                 # total_amount, so an already-cancelled order whose advance_amount was already 0 would
-                # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers that.
-                if courier_changed or tracking_changed or cancelled_total_needs_fix or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+                # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers
+                # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
+                # invisible to has_changed's skip mode once courier is assigned).
+                if courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:

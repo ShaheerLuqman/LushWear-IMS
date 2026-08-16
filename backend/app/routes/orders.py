@@ -37,7 +37,7 @@ from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     SyncShopifyOrdersResult,
     _cost_from_line_items,
-    _delivery_charge_from_other_tracking,
+    _delivery_charge_from_other_tags,
     _get_sync_status_row,
     _line_items_incomplete,
     _line_items_signature,
@@ -639,20 +639,20 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             else:
                 order_received_date = current_time
 
-            other_charge = _delivery_charge_from_other_tracking(courier, tracking_number)
+            other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
             delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else (other_charge if other_charge is not None else 0.0)
             tax_amount = 0.0
 
             if existing_order:
                 existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
-                # "Other" has no tracking API, so re-derive delivery_charge only when the
-                # Shopify tracking-number text actually changed - otherwise a manual in-app
-                # correction would get clobbered on every force-sync.
-                tracking_retyped = (
-                    str(courier or "").strip().lower() == "other"
-                    and (tracking_number or "").strip() != (existing_order.get("tracking_number") or "").strip()
-                )
-                final_delivery_charge = (other_charge if other_charge is not None else existing_delivery_charge) if tracking_retyped else existing_delivery_charge
+                # The courier tag is the authoritative source for "Other" - not stored anywhere
+                # to diff against, so just re-derive from Shopify's live tags on every
+                # force-sync; falls back to what's on file when no tag matches, so a manually
+                # set charge isn't zeroed out just because the order has no courier tag.
+                if str(courier or "").strip().lower() == "other":
+                    final_delivery_charge = other_charge if other_charge is not None else existing_delivery_charge
+                else:
+                    final_delivery_charge = existing_delivery_charge
             else:
                 final_delivery_charge = delivery_charge
 

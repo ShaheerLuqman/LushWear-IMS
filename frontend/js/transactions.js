@@ -362,6 +362,11 @@ function initTransactionsActions() {
         if (transactionDateFilter) transactionDateFilter.value = formatDateDDMMYYYY(today);
         reloadTransactionsForCurrentDate();
     });
+    // Matches against every searchable field at once (accounts, amount,
+    // description, order number) via each column's getQuickFilterText.
+    document.getElementById('transactionSearchFilter')?.addEventListener('input', (e) => {
+        transactionsGridApi?.setGridOption('quickFilterText', e.target.value);
+    });
     document.getElementById('transactionPrevDayBtn')?.addEventListener('click', () => {
         const current = transactionSelectedDate || getTodayDateString();
         const [year, month, day] = current.split('-').map(Number);

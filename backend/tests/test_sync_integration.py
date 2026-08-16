@@ -349,38 +349,40 @@ def _run_sync_with_fixture(monkeypatch, orders_fixture):
 
 
 class TestOtherCourierDeliveryCharge:
-    """Courier "Other" has no tracking API - the merchant types the courier name and
-    delivery charge together into Shopify's free-text tracking-number field (e.g.
-    "Bykea 300"), parsed by _delivery_charge_from_other_tracking."""
+    """Courier "Other" has no tracking API - the merchant tags the order with the courier
+    name and delivery charge together (e.g. tag "Bykea 300"), parsed by
+    _delivery_charge_from_other_tags. Shopify's free-text tracking-number field was tried
+    first but turned out to get inconsistently formatted by the fulfillment flow, so the
+    tag is now the authoritative source; tracking_number itself still syncs normally."""
 
-    def _set_other_tracking(self, orders_fixture, order_number, text):
+    def _set_other_courier(self, orders_fixture, order_number, *, tag=None, tracking_number="111111"):
         target = next(o for o in orders_fixture if int(o["order_number"]) == order_number)
         for f in target["fulfillments"]:
             f["tracking_company"] = "Other"
-            f["tracking_number"] = text
+            f["tracking_number"] = tracking_number
+        target["tags"] = tag if tag is not None else ""
         return target
 
-    def test_new_order_gets_delivery_charge_from_tracking_text(self, monkeypatch):
+    def test_new_order_gets_delivery_charge_from_a_courier_tag(self, monkeypatch):
         orders_fixture = _load_fixture_orders()
         order_number = _find_order_number(orders_fixture, fulfilled=True)
-        self._set_other_tracking(orders_fixture, order_number, "Bykea 300")
+        self._set_other_courier(orders_fixture, order_number, tag="✅ Order Confirmed, Bykea 300")
 
         fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
         row = fake_db.orders.rows_by_number[order_number]
         assert row["courier"] == "Other"
-        assert row["tracking_number"] == "Bykea 300"
         assert row["delivery_charge"] == 300.0
 
-    def test_resyncs_past_the_delivered_freeze_when_the_shopify_text_changes(self, monkeypatch):
+    def test_resyncs_past_the_delivered_freeze_when_the_tag_changes(self, monkeypatch):
         """Every other field freezes once an order is delivered/returned (see
         test_fulfilled_order_freezes_total_amount_against_a_manual_edit above) - "Other"
-        courier/tracking_number/delivery_charge must not, since re-typing the Shopify
-        text is the only way to ever correct them post-delivery."""
+        courier/delivery_charge must not, since correcting the tag in Shopify is the only
+        way to ever fix them post-delivery."""
         orders_fixture = _load_fixture_orders()
         order_number = _find_order_number(orders_fixture, fulfilled=True)
-        self._set_other_tracking(orders_fixture, order_number, "Bykea 300")
+        self._set_other_courier(orders_fixture, order_number, tag="Bykea 300")
 
         fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
@@ -390,13 +392,84 @@ class TestOtherCourierDeliveryCharge:
         # extract_order_status itself - simulate that having already happened.
         row["order_status"] = "delivered"
 
-        self._set_other_tracking(orders_fixture, order_number, "Bykea 350")
+        self._set_other_courier(orders_fixture, order_number, tag="Bykea 350")
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
         row = fake_db.orders.rows_by_number[order_number]
         assert row["order_status"] == "delivered"  # the frozen status itself is untouched
-        assert row["tracking_number"] == "Bykea 350"
         assert row["delivery_charge"] == 350.0
+
+    def test_backfills_delivery_charge_when_a_tag_is_added_after_the_fact(self, monkeypatch):
+        """The tag is re-derived from live Shopify data every sync (nothing about it is
+        stored to diff against), so adding the tag later - or a stale 0 left over from
+        before this feature existed - both get picked up on the very next sync."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number)  # no tag yet
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 0.0
+
+        self._set_other_courier(orders_fixture, order_number, tag="Bykea 300")
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 300.0
+
+    def test_backfills_delivery_charge_for_a_delivered_order_when_a_tag_is_added_after_the_fact(self, monkeypatch):
+        """Same as above, but for an order that's already delivered/returned - covered by
+        the freeze-bypass branch instead of the ordinary has_changed path."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number)  # no tag yet
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        row = fake_db.orders.rows_by_number[order_number]
+        row["order_status"] = "delivered"
+        assert row["delivery_charge"] == 0.0
+
+        self._set_other_courier(orders_fixture, order_number, tag="Bykea 300")
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["order_status"] == "delivered"
+        assert row["delivery_charge"] == 300.0
+
+    def test_manual_delivery_charge_is_preserved_when_no_courier_tag_is_present(self, monkeypatch):
+        """A delivery_charge set by hand in-app (no matching tag on the order) must survive
+        a resync rather than getting zeroed out just because there's nothing to derive."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number)  # no tag
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        fake_db.orders.rows_by_number[order_number]["delivery_charge"] = 220.0  # manual, no tag backing it
+
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 220.0
+
+    def test_zero_charge_orders_stay_a_no_op_when_no_tag_matches(self, monkeypatch):
+        """A courier "Other" order with no courier tag must not be flagged as changed on
+        every sync just because delivery_charge is (legitimately) 0 - only the
+        delivered-freeze bypass branch skips has_changed(), so this guards that branch
+        specifically against a perpetual no-op-that-isn't."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number, tag="Bykea")  # no trailing number
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        first_result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        assert first_result["created"] == len(orders_fixture)
+        fake_db.orders.rows_by_number[order_number]["order_status"] = "delivered"
+
+        second_result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 0.0
+        assert second_result["updated"] == 0
+        assert second_result["skipped"] == len(orders_fixture)
 
     def test_delivered_freeze_still_holds_for_a_non_other_courier(self, monkeypatch):
         """Control case: an ordinary courier's tracking_number must stay frozen once
