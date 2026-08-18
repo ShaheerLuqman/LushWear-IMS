@@ -202,17 +202,27 @@ function ledgerSectionHtml(title, sectionLedgers) {
     `;
 }
 
+let ledgerSearchQuery = '';
+
 function renderLedgerCards() {
     const container = document.getElementById('ledgerCards');
     if (!container) return;
 
     if (ledgers.length === 0) {
-        container.innerHTML = '<p style="color: var(--text-muted); padding: 20px;">No ledgers yet. Click "Create Ledger" to add one.</p>';
+        container.innerHTML = '<p style="color: var(--text-muted); padding: 20px;">No ledgers yet. Click "New Ledger" to add one.</p>';
         return;
     }
 
-    const systemLedgers = ledgers.filter(l => SECTIONED_SYSTEM_KEYS.includes(l.system_key));
-    const regularLedgers = ledgers.filter(l => !SECTIONED_SYSTEM_KEYS.includes(l.system_key));
+    const query = ledgerSearchQuery.trim().toLowerCase();
+    const visibleLedgers = query ? ledgers.filter(l => l.name.toLowerCase().includes(query)) : ledgers;
+
+    if (visibleLedgers.length === 0) {
+        container.innerHTML = `<p style="color: var(--text-muted); padding: 20px;">No ledgers match "${escapeHtml(ledgerSearchQuery.trim())}".</p>`;
+        return;
+    }
+
+    const systemLedgers = visibleLedgers.filter(l => SECTIONED_SYSTEM_KEYS.includes(l.system_key));
+    const regularLedgers = visibleLedgers.filter(l => !SECTIONED_SYSTEM_KEYS.includes(l.system_key));
 
     // Group ledgers by type
     const groupedLedgers = {};
@@ -543,6 +553,15 @@ function renderLedgerDetailGrid() {
 
 function initLedgerModals() {
     document.getElementById('createLedgerBtn')?.addEventListener('click', () => openCreateLedgerModal());
+    let ledgerSearchDebounceId = null;
+    document.getElementById('ledgerSearchFilter')?.addEventListener('input', (e) => {
+        ledgerSearchQuery = e.target.value;
+        // Debounced so the fade-in animation (which restarts on every re-render,
+        // since renderLedgerCards() rebuilds the cards' innerHTML) doesn't
+        // re-trigger and flicker on every keystroke while typing fast.
+        clearTimeout(ledgerSearchDebounceId);
+        ledgerSearchDebounceId = setTimeout(renderLedgerCards, 150);
+    });
 
     const createLedgerForm = document.getElementById('createLedgerForm');
     if (createLedgerForm) {

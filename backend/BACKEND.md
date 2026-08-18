@@ -10,7 +10,7 @@ improve it. Written for the current state of the `webapp-migration` branch.
 >   direct-frontend reads.
 > - **RLS enabled** on all tables (no policies — public path closed).
 > - Database constraints/indexes/trigger added and **verified live** — see
->   [`DATABASE.md`](DATABASE.md).
+>   [`supabase_schema.sql`](../supabase_schema.sql).
 > - Orders now carry structured **`line_items`** (JSONB) alongside the legacy
 >   `items` string array (the legacy column is slated for removal — see
 >   [`TODO.md`](../TODO.md)).
@@ -139,10 +139,25 @@ backend/
 `products` → `variants` (1-N), `orders` (with JSONB `line_items` + legacy `items`
 string array), `transaction_entries` → `transaction_daily_balances`, `ledgers`,
 `load_sheet_logs`, `org_integration_settings`. There is no ORM; tables/columns
-are referenced by string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql)
-and is documented (with the deliberate soft-link/`order_status` design choices) in
-[`DATABASE.md`](DATABASE.md). Adopting versioned migrations is still open
-([`TODO.md`](../TODO.md)).
+are referenced by string name. The canonical schema lives in [`supabase_schema.sql`](../supabase_schema.sql);
+deliberate design choices (soft links, `order_status`, money type) are below.
+Adopting versioned migrations is still open ([`TODO.md`](../TODO.md)).
+
+### Settled schema decisions
+
+Recurring questions that were investigated and deliberately closed — not open items:
+
+- `order_status` stays open text (live courier codes CNA/ICA/RFD), not a fixed enum.
+- Orders ↔ transactions and JSONB line-item ids stay soft links, not FKs.
+- Money stays `float` at the API boundary, not `Decimal`.
+- `order_number` is `INTEGER`, not `VARCHAR`
+  ([`20260728010000_order_number_to_integer.sql`](../supabase/migrations/20260728010000_order_number_to_integer.sql)).
+  It was kept as `VARCHAR` only because `create_replacement_order` wrote
+  `"NNNN-R"` into it; that endpoint (and its UI) has been removed —
+  replacements are tracked solely via Shopify's `NNNN-R` tag → numeric
+  `replacement_of_order_no`, never via `order_number` itself.
+  `get_all_orders`'s numeric re-sort has since moved into Postgres
+  (`.order("order_number", desc=True)`, `order_number` being a real `INTEGER` now).
 
 ### The heavy pieces
 
@@ -182,7 +197,7 @@ not a task list.
 
 ## 4. Status
 
-The de-risking pass is complete: DB constraints/indexes/RLS ([`DATABASE.md`](DATABASE.md)),
+The de-risking pass is complete: DB constraints/indexes/RLS (see `supabase_schema.sql`),
 prod-gated config in `main.py`, structured logging with generic error responses,
 Stages A–C, the PDF/CSV extractions, and a 123-test suite that gates both CI and
 the Docker build. Current sizes: `orders.py` 2451 (was 4280), `products.py` 671,

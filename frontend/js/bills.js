@@ -118,12 +118,13 @@ function renderBillLines() {
 
 function renderBillTotals() {
     const subtotal = billLineDrafts.reduce((sum, line) => sum + billLineAmount(line), 0);
+    const discount = parseFloat(document.getElementById('billDiscount')?.value) || 0;
     const tax = parseFloat(document.getElementById('billTax')?.value) || 0;
     const otherExpense = parseFloat(document.getElementById('billOtherExpense')?.value) || 0;
     const subtotalEl = document.getElementById('billSubtotal');
     const totalEl = document.getElementById('billTotal');
     if (subtotalEl) subtotalEl.textContent = formatMoney(subtotal);
-    if (totalEl) totalEl.textContent = formatMoney(subtotal + tax + otherExpense);
+    if (totalEl) totalEl.textContent = formatMoney(subtotal - discount + tax + otherExpense);
 }
 
 // Suppliers can carry payment terms; a new bill defaults its due date from them
@@ -173,6 +174,7 @@ async function openBillModal(billId) {
         document.getElementById('billDate').value = bill.bill_date;
         dueDateEl.value = bill.due_date || '';
         dueDateEl.dataset.touched = 'true';
+        document.getElementById('billDiscount').value = bill.discount_amount || 0;
         document.getElementById('billTax').value = bill.tax_amount || 0;
         document.getElementById('billOtherExpense').value = bill.other_expense_amount || 0;
         document.getElementById('billNotes').value = bill.notes || '';
@@ -187,6 +189,7 @@ async function openBillModal(billId) {
         document.getElementById('billModalTitle').textContent = 'New Bill';
         document.getElementById('billForm').reset();
         document.getElementById('billDate').value = getTodayDateString();
+        document.getElementById('billDiscount').value = 0;
         document.getElementById('billTax').value = 0;
         document.getElementById('billOtherExpense').value = 0;
         billLineDrafts = [emptyBillLine()];
@@ -202,7 +205,7 @@ async function openBillModal(billId) {
 // cancelled workflow; a new/draft bill is the only editable state.
 function applyBillModalFooter(status) {
     const readOnly = billModalReadOnly;
-    ['billSupplier', 'billSupplierRef', 'billDate', 'billDueDate', 'billTax', 'billOtherExpense', 'billNotes'].forEach(id => {
+    ['billSupplier', 'billSupplierRef', 'billDate', 'billDueDate', 'billDiscount', 'billTax', 'billOtherExpense', 'billNotes'].forEach(id => {
         document.getElementById(id).disabled = readOnly;
     });
     const addLineBtn = document.getElementById('addBillLineBtn');
@@ -256,6 +259,7 @@ function collectBillPayload() {
         bill_date: billDate,
         due_date: dueDate || null,
         supplier_ref: document.getElementById('billSupplierRef').value.trim() || null,
+        discount_amount: parseFloat(document.getElementById('billDiscount').value) || 0,
         tax_amount: parseFloat(document.getElementById('billTax').value) || 0,
         other_expense_amount: parseFloat(document.getElementById('billOtherExpense').value) || 0,
         notes: document.getElementById('billNotes').value.trim() || null,
@@ -584,6 +588,7 @@ function initBills() {
         billLineDrafts.push(emptyBillLine());
         renderBillLines();
     });
+    document.getElementById('billDiscount')?.addEventListener('input', renderBillTotals);
     document.getElementById('billTax')?.addEventListener('input', renderBillTotals);
     document.getElementById('billOtherExpense')?.addEventListener('input', renderBillTotals);
     document.getElementById('billSupplier')?.addEventListener('change', applySupplierPaymentTerms);

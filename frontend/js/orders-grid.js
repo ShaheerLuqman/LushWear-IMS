@@ -469,27 +469,33 @@ FinalStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel
     }
 };
 
-// Custom floating filter for Collection (products): dropdown like Order Status
-const COLLECTION_VALUES = ['', 'Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers'];
+// Custom floating filter for Collection (products): dropdown like Order Status, but
+// its options are the distinct collection values actually on the loaded products
+// (not a fixed list) - refreshCollectionFilterValues() rebuilds them after each
+// loadProducts(), since products (and this filter) load after the grid itself does.
+function collectionValuesFromProducts() {
+    const values = new Set(['']);
+    (products || []).forEach((p) => values.add(p.collection || ''));
+    return ['', ...Array.from(values).filter((v) => v !== '').sort((a, b) => a.localeCompare(b))];
+}
+
+const collectionFloatingFilterInstances = [];
+
+function refreshCollectionFilterValues() {
+    const values = collectionValuesFromProducts();
+    collectionFloatingFilterInstances.forEach((instance) => instance.setValues(values));
+}
+
 function CollectionFloatingFilter() {}
 CollectionFloatingFilter.prototype.init = function (params) {
     this.params = params;
+    this.values = collectionValuesFromProducts();
     this.eGui = document.createElement('div');
     this.eGui.className = 'grid-floating-filter-wrap';
     this.eGui.style.width = '100%';
     const select = document.createElement('select');
     select.className = 'grid-floating-filter-select';
     select.style.width = '100%';
-    const allOption = document.createElement('option');
-    allOption.value = '__all__';
-    allOption.textContent = 'All';
-    select.appendChild(allOption);
-    COLLECTION_VALUES.forEach(function (v) {
-        const opt = document.createElement('option');
-        opt.value = v;
-        opt.textContent = v === '' ? '—' : v;
-        select.appendChild(opt);
-    });
     const api = params.api;
     const columnId = params.column.getColId();
     select.addEventListener('change', function () {
@@ -507,6 +513,25 @@ CollectionFloatingFilter.prototype.init = function (params) {
     });
     this.eGui.appendChild(select);
     this.select = select;
+    this.setValues(this.values);
+    collectionFloatingFilterInstances.push(this);
+};
+CollectionFloatingFilter.prototype.setValues = function (values) {
+    this.values = values;
+    const current = this.select.value || '__all__';
+    this.select.innerHTML = '';
+    const allOption = document.createElement('option');
+    allOption.value = '__all__';
+    allOption.textContent = 'All';
+    this.select.appendChild(allOption);
+    values.forEach(function (v) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v === '' ? '—' : v;
+        this.select.appendChild(opt);
+    }, this);
+    // Keep the current selection if it's still a valid option, else fall back to "All".
+    this.select.value = (current === '__all__' || values.indexOf(current) !== -1) ? current : '__all__';
 };
 CollectionFloatingFilter.prototype.getGui = function () { return this.eGui; };
 CollectionFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
@@ -514,7 +539,7 @@ CollectionFloatingFilter.prototype.onParentModelChanged = function (parentModel)
         this.select.value = '__all__';
     } else if (parentModel.filter === '__empty__') {
         this.select.value = '';
-    } else if (COLLECTION_VALUES.indexOf(parentModel.filter) !== -1) {
+    } else if (this.values.indexOf(parentModel.filter) !== -1) {
         this.select.value = parentModel.filter;
     } else {
         this.select.value = '__all__';

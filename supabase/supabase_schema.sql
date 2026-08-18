@@ -188,6 +188,10 @@ CREATE TABLE IF NOT EXISTS shopify_products (
     cost_price          DECIMAL(10, 2),                -- Cost price (same across variants)
     collection          VARCHAR(255),                  -- Collection name (e.g. from Shopify)
     image_url           TEXT,
+    -- True while Shopify reports this product active; sync-shopify flips it false instead
+    -- of deleting the row when a product is archived/removed on Shopify. The products list
+    -- only shows is_active = true rows.
+    is_active           BOOLEAN NOT NULL DEFAULT true,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
@@ -582,6 +586,7 @@ ALTER TABLE finances_transaction_entry_audit_log ALTER COLUMN folio      DROP NO
 CREATE INDEX IF NOT EXISTS idx_products_name                ON shopify_products(name);
 CREATE INDEX IF NOT EXISTS idx_products_shopify_product_id  ON shopify_products(shopify_product_id);
 CREATE INDEX IF NOT EXISTS idx_products_org_id               ON shopify_products(org_id);
+CREATE INDEX IF NOT EXISTS idx_products_is_active            ON shopify_products(is_active);
 CREATE INDEX IF NOT EXISTS idx_variants_product_id          ON shopify_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id  ON shopify_variants(shopify_variant_id);
 CREATE INDEX IF NOT EXISTS idx_variants_org_id              ON shopify_variants(org_id);
@@ -1422,9 +1427,17 @@ DROP FUNCTION IF EXISTS get_month_summary_carrier_health(TIMESTAMPTZ, TIMESTAMPT
 -- Same-signature return-type change (cancelled_orders_count column added) -
 -- CREATE OR REPLACE can't alter OUT-parameter row types, so drop first.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
+-- Same-signature return-type change (warning_orders_count column added) -
+-- CREATE OR REPLACE can't alter OUT-parameter row types, so drop first.
+DROP FUNCTION IF EXISTS get_month_summary_periods(UUID);
 
+-- warning_orders_count mirrors the Orders grid's final_status column
+-- (orders-columns.js): cancelled orders are excluded entirely, an order is
+-- "OK" only if delivered with delivery_charge > 0, or returned with
+-- delivery_charge > 0 and piece_received = 'Received'; everything else
+-- (non-cancelled) counts as Warning.
 CREATE OR REPLACE FUNCTION get_month_summary_periods(p_org_id UUID)
-RETURNS TABLE(month INT, year INT)
+RETURNS TABLE(month INT, year INT, warning_orders_count INT)
 LANGUAGE sql
 STABLE
 AS $$
@@ -1432,17 +1445,38 @@ AS $$
         SELECT
             EXTRACT(DAY FROM local_ts)::INT   AS day,
             EXTRACT(MONTH FROM local_ts)::INT AS mon,
-            EXTRACT(YEAR FROM local_ts)::INT  AS yr
+            EXTRACT(YEAR FROM local_ts)::INT  AS yr,
+            order_status,
+            delivery_charge,
+            piece_received
         FROM (
-            SELECT order_receiving_date AT TIME ZONE INTERVAL '+05:00' AS local_ts
+            SELECT order_receiving_date AT TIME ZONE INTERVAL '+05:00' AS local_ts,
+                   order_status, delivery_charge, piece_received
             FROM shopify_orders
             WHERE org_id = p_org_id
         ) t
+    ),
+    bucketed AS (
+        SELECT
+            CASE WHEN day < 22 THEN (CASE WHEN mon = 1 THEN 12 ELSE mon - 1 END) ELSE mon END AS month,
+            CASE WHEN day < 22 AND mon = 1 THEN yr - 1 ELSE yr END AS year,
+            order_status,
+            delivery_charge,
+            piece_received
+        FROM local_dates
     )
-    SELECT DISTINCT
-        CASE WHEN day < 22 THEN (CASE WHEN mon = 1 THEN 12 ELSE mon - 1 END) ELSE mon END AS month,
-        CASE WHEN day < 22 AND mon = 1 THEN yr - 1 ELSE yr END AS year
-    FROM local_dates
+    SELECT
+        month,
+        year,
+        COUNT(*) FILTER (
+            WHERE lower(trim(order_status)) <> 'cancelled'
+              AND NOT (
+                    (lower(trim(order_status)) = 'delivered' AND delivery_charge > 0)
+                 OR (lower(trim(order_status)) = 'returned' AND delivery_charge > 0 AND piece_received = 'Received')
+              )
+        )::INT AS warning_orders_count
+    FROM bucketed
+    GROUP BY month, year
     ORDER BY year DESC, month DESC;
 $$;
 
@@ -1630,6 +1664,9 @@ CREATE TABLE IF NOT EXISTS finances_bills (
     status        VARCHAR(20) NOT NULL DEFAULT 'draft'
                   CONSTRAINT bills_status_check CHECK (status IN ('draft', 'received', 'cancelled')),
     subtotal      DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
+    -- Flat trade discount off the goods, netted straight out of the Inventory
+    -- debit in receive_bill rather than posted to its own account.
+    discount_amount DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (discount_amount >= 0),
     tax_amount    DECIMAL(14, 2) NOT NULL DEFAULT 0.00 CHECK (tax_amount >= 0),
     -- Flat cost that came with the purchase but isn't stock or tax - transport,
     -- loading, courier. Folded into total the same way tax_amount is.
@@ -1716,7 +1753,7 @@ BEGIN
 
     UPDATE finances_bills
        SET subtotal   = v_subtotal,
-           total      = v_subtotal + tax_amount + other_expense_amount,
+           total      = v_subtotal - discount_amount + tax_amount + other_expense_amount,
            updated_at = NOW()
      WHERE id = p_bill_id;
 END;
@@ -1793,11 +1830,12 @@ BEGIN
         RAISE EXCEPTION 'Bill % has nothing to post - add at least one line', b.bill_number;
     END IF;
 
-    -- Every line is stock, so the whole subtotal is one Inventory debit.
+    -- Every line is stock, so the whole subtotal (net of any discount) is one
+    -- Inventory debit - a trade discount lowers the recorded cost of the goods.
     v_inventory := ensure_system_ledger(b.org_id, 'inventory', 'Inventory', 'Asset', '1400');
     v_lines := jsonb_build_array(jsonb_build_object(
         'account_id', v_inventory,
-        'debit',      b.subtotal,
+        'debit',      b.subtotal - b.discount_amount,
         'credit',     0,
         'description', 'Bill ' || b.bill_number));
 

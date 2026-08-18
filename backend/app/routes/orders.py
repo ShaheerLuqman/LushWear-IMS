@@ -1091,8 +1091,21 @@ def _classify_status(status_text: str, courier_normalized: str) -> Optional[str]
         return "returned"
     if courier_normalized in ("couriersnext", "couriernext") and "parcel return to office" in status_lower:
         return "returned"
+    # "Return to KARACHI" is the marker bulk_update_order_status writes for a manual
+    # "returned" override (_delivery_status_with_latest_status) - not courier text, so
+    # it's checked regardless of courier, and must be classified or a later manual
+    # override gets skipped over in favor of an earlier real courier status.
+    if "return to karachi" in status_lower:
+        return "returned"
     # Handle both PostEx ("Delivered to Customer") and Courier Next ("Delivered ...") variants.
-    if "delivered to customer" in status_lower or ("delivered" in status_lower and "undelivered" not in status_lower):
+    # "not_delivered"/"not delivered" contain "delivered" too, so they're excluded alongside
+    # "undelivered" rather than misclassified as delivered.
+    if "delivered to customer" in status_lower or (
+        "delivered" in status_lower
+        and "undelivered" not in status_lower
+        and "not delivered" not in status_lower
+        and "not_delivered" not in status_lower
+    ):
         return "delivered"
     if "attempt made: rfd" in status_lower:
         return "RFD"
@@ -1942,7 +1955,10 @@ async def get_month_summary_list(org_id: str = Depends(get_org_id)):
     try:
         supabase = get_supabase()
         periods = supabase.rpc("get_month_summary_periods", {"p_org_id": org_id}).execute().data or []
-        return [{"month": p["month"], "year": p["year"]} for p in periods]
+        return [
+            {"month": p["month"], "year": p["year"], "warning_orders_count": p.get("warning_orders_count") or 0}
+            for p in periods
+        ]
     except HTTPException:
         raise
     except Exception:

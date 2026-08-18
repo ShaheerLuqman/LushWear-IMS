@@ -568,6 +568,23 @@ body:has(#ordersView.active) .header-actions {
     margin-right: 6px;
 }
 
+/* Every per-view control that sits in the header row (selects, text/date
+   inputs, the cash-in-hand pill) pins to the same 36px as .header-toolbar-btn
+   above — otherwise each view's row grows to its tallest control's natural
+   height and the top row visibly changes size when switching views. */
+.header-actions .orders-period-filter,
+.header-actions .transaction-date-filter,
+.header-actions .transaction-search-filter,
+.header-actions .trial-balance-date,
+.header-actions .cash-in-hand-display,
+.header-actions .btn-sm,
+.header-actions .btn-icon-sm {
+    height: 36px;
+    min-height: 36px;
+    max-height: 36px;
+    box-sizing: border-box;
+}
+
 .orders-sync-status {
     flex: 0 0 auto;
     font-size: 12px;
@@ -949,15 +966,19 @@ body:has(#ordersView.active) .header-actions {
 }
 
 #transactionsView,
-#billsView {
+#billsView,
+#trialBalanceView,
+#apAgeingView {
     overflow: hidden;
     gap: 0;
     min-height: 0;
-    padding: 4px;
+    padding: 0;
 }
 
 #transactionsView.active,
-#billsView.active {
+#billsView.active,
+#trialBalanceView.active,
+#apAgeingView.active {
     height: 100%;
     width: 100%;
 }
@@ -965,7 +986,11 @@ body:has(#ordersView.active) .header-actions {
 #transactionsGrid,
 #transactionsGrid.grid-container,
 #billsGrid,
-#billsGrid.grid-container {
+#billsGrid.grid-container,
+#trialBalanceGrid,
+#trialBalanceGrid.grid-container,
+#apAgeingGrid,
+#apAgeingGrid.grid-container {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -981,20 +1006,24 @@ body:has(#ordersView.active) .header-actions {
 .content-area:has(#ledgerDetailView.active),
 .content-area:has(#ledgersView.active),
 .content-area:has(#billsView.active),
+.content-area:has(#trialBalanceView.active),
+.content-area:has(#apAgeingView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
 body:has(#productsView.active) .content-area,
 body:has(#ledgerDetailView.active) .content-area,
 body:has(#ledgersView.active) .content-area,
-body:has(#billsView.active) .content-area {
-    padding: 4px;
+body:has(#billsView.active) .content-area,
+body:has(#trialBalanceView.active) .content-area,
+body:has(#apAgeingView.active) .content-area {
+    padding: 0;
 }
 
 #productsView {
     overflow: hidden;
     gap: 0;
     min-height: 0;
-    padding: 4px;
+    padding: 0;
 }
 
 #productsView.active {
@@ -2998,7 +3027,7 @@ input[type="number"] {
     overflow: hidden;
     gap: 0;
     min-height: 0;
-    padding: 4px;
+    padding: 0;
 }
 
 #ordersView.active {
@@ -3080,7 +3109,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     overflow: hidden;
     gap: 0;
     min-height: 0;
-    padding: 4px;
+    padding: 0;
 }
 
 #ledgersView.active {
@@ -3097,19 +3126,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     padding: 4px;
 }
 
-.ledger-create-bar {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex-shrink: 0;
-}
-
 /* Fields that sit outside a .form-group.
    `.form-input` is only a marker class and carries no rules of its own — all
    field styling comes from `.form-group input/select`. These controls live in
    filter bars and in the bill line grid, where a .form-group wrapper would
    break the layout, so they need the same treatment applied directly. */
-.trial-balance-bar .form-input,
+.trial-balance-date,
 .bill-line .form-input,
 .bill-tax-input {
     padding: 10px 12px;
@@ -3125,12 +3147,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     min-width: 0;
 }
 
-.trial-balance-bar .form-input::placeholder,
+.trial-balance-date::placeholder,
 .bill-line .form-input::placeholder {
     color: var(--text-muted);
 }
 
-.trial-balance-bar .form-input:focus,
+.trial-balance-date:focus,
 .bill-line .form-input:focus,
 .bill-tax-input:focus {
     outline: none;
@@ -3140,7 +3162,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 /* Same themed chevron as .form-group select: the native arrow is drawn by the
    OS and ignores the field's background, so it disappears on dark. */
-.trial-balance-bar select.form-input,
 .bill-line select.form-input {
     cursor: pointer;
     appearance: none;
@@ -3152,7 +3173,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     padding-right: 32px;
 }
 
-:root[data-theme="dark"] .trial-balance-bar select.form-input,
 :root[data-theme="dark"] .bill-line select.form-input {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
 }
@@ -3166,22 +3186,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 /* Trial Balance */
-.trial-balance-container {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    height: 100%;
-    min-height: 0;
-    padding: 4px;
-}
-
-.trial-balance-bar {
-    display: flex;
-    gap: 12px;
-    align-items: center;
-    flex-shrink: 0;
-}
-
 .trial-balance-date {
     width: auto;
     min-width: 160px;
@@ -3204,14 +3208,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .trial-balance-status-bad {
     color: var(--danger);
     background: color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-#trialBalanceGrid,
-#billsGrid,
-#apAgeingGrid {
-    flex: 1;
-    min-height: 0;
-    width: 100%;
 }
 
 /* Purchase bills */
@@ -3341,6 +3337,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    animation: ledgerCardFadeIn 0.15s ease;
+}
+
+@keyframes ledgerCardFadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
 .ledger-section-header {
@@ -3386,6 +3388,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    animation: ledgerCardFadeIn 0.15s ease;
 }
 
 .ledger-card:hover {
@@ -3490,7 +3493,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     overflow: hidden;
     gap: 0;
     min-height: 0;
-    padding: 4px;
+    padding: 0;
 }
 
 #ledgerDetailView.active {
@@ -3934,6 +3937,15 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .month-summary-card-body {
     flex: 1;
+}
+
+.month-summary-card-warning {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
 }
 
 .month-summary-card-description {

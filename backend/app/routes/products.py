@@ -72,7 +72,7 @@ async def get_all_products(org_id: str = Depends(get_org_id)):
         # tables and grouping them into a dict here. Renamed back to `variants`
         # on the way out - that's this endpoint's own response shape, not the
         # embed's table name.
-        products = fetch_all(lambda: org_table(supabase, org_id, "shopify_products").select("*, shopify_variants(*)"))
+        products = fetch_all(lambda: org_table(supabase, org_id, "shopify_products").select("*, shopify_variants(*)").eq("is_active", True))
 
         for product in products:
             product_variants = product.pop("shopify_variants", None) or []
@@ -169,7 +169,10 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
         # Track which products we'll have (for linking variants)
         # Maps shopify_product_id -> product_id (existing or to be created)
         product_id_map = {}
-        
+        # shopify_product_ids seen active in this sync - anything in existing_products_map
+        # not in here gets deactivated below, instead of orphaned as an untracked DB row.
+        synced_shopify_ids = set()
+
         for shopify_product in all_products:
             shopify_product_id = shopify_product.get("id")
             if not shopify_product_id:
@@ -182,7 +185,8 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             name = shopify_product.get("title", "Untitled Product")
             if name in SHOPIFY_SYNC_PRODUCTS_IGNORE:
                 continue
-            
+            synced_shopify_ids.add(shopify_product_id)
+
             images = shopify_product.get("images", [])
             image_url = images[0].get("src") if images and len(images) > 0 else None
             variants = shopify_product.get("variants", [])
@@ -203,13 +207,15 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
                 "image_url": image_url,
                 "collection": collection,
                 "shopify_product_id": shopify_product_id,
+                "is_active": True,
                 "updated_at": current_time
             }
 
             if existing_product:
-                # Product exists, check if needs update
+                # Product exists, check if needs update. Also update on reactivation
+                # (was previously deactivated below) even if nothing else changed.
                 product_id_map[shopify_product_id] = existing_product["id"]
-                if product_has_changed(product_data, existing_product):
+                if product_has_changed(product_data, existing_product) or not existing_product.get("is_active", True):
                     product_data["id"] = existing_product["id"]
                     # Preserve cost_price - it's set locally, Shopify has no notion of it
                     product_data["cost_price"] = existing_product.get("cost_price")
@@ -239,7 +245,22 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
                 batch = products_to_update[i:i + batch_size]
                 org_table(supabase, org_id, "shopify_products").upsert(batch, on_conflict="id").execute()
                 updated_products_count += len(batch)
-        
+
+        # Deactivate DB products no longer active on Shopify (archived/removed there),
+        # instead of leaving them as untracked rows the products list still shows.
+        ids_to_deactivate = [
+            p["id"] for p in existing_products
+            if p.get("shopify_product_id") is not None
+            and p.get("shopify_product_id") not in synced_shopify_ids
+            and p.get("is_active", True)
+        ]
+        deactivated_products_count = 0
+        if ids_to_deactivate:
+            org_table(supabase, org_id, "shopify_products").update(
+                {"is_active": False, "updated_at": current_time}
+            ).in_("id", ids_to_deactivate).execute()
+            deactivated_products_count = len(ids_to_deactivate)
+
         # Now process variants for all active products
         for shopify_product in all_products:
             shopify_product_id = shopify_product.get("id")
@@ -316,6 +337,7 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             "products": {
                 "created": created_products_count,
                 "updated": updated_products_count,
+                "deactivated": deactivated_products_count,
                 "total_from_shopify": total_active_products
             },
             "variants": {
@@ -625,6 +647,7 @@ async def search_products(query: str, org_id: str = Depends(get_org_id)):
             org_table(supabase, org_id, "shopify_products")
             .select("*, shopify_variants(*)")
             .ilike("name", f"%{query}%")
+            .eq("is_active", True)
             .execute()
         )
         products = response.data

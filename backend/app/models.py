@@ -58,9 +58,11 @@ class ProductUpdate(BaseModel):
     collection: Optional[str] = None
     image_url: Optional[str] = None
     shopify_product_id: Optional[int] = None
+    is_active: Optional[bool] = None
 
 class Product(ProductBase):
     id: str
+    is_active: bool = True
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -427,6 +429,7 @@ class BillBase(BaseModel):
     bill_date: date
     due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
+    discount_amount: float = Field(default=0.0, ge=0)
     tax_amount: float = Field(default=0.0, ge=0)
     other_expense_amount: float = Field(default=0.0, ge=0)
     notes: Optional[str] = None
@@ -445,6 +448,7 @@ class BillUpdate(BaseModel):
     bill_date: Optional[date] = None
     due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
+    discount_amount: Optional[float] = Field(default=None, ge=0)
     tax_amount: Optional[float] = Field(default=None, ge=0)
     other_expense_amount: Optional[float] = Field(default=None, ge=0)
     notes: Optional[str] = None

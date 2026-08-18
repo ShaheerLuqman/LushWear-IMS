@@ -274,7 +274,24 @@
                             <option value="received">Received</option>
                             <option value="cancelled">Cancelled</option>
                         </select>
-                        <button id="createBillBtn" class="btn btn-primary btn-sm">New Bill</button>
+                        <button id="createBillBtn" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> New Bill</button>
+                    </div>
+                    <div id="ledgersHeaderWrap" class="header-inline" style="display: none;">
+                        <div class="transaction-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
+                            <input id="ledgerSearchFilter" type="text" class="transaction-search-filter" placeholder="Search ledgers..." autocomplete="off">
+                        </div>
+                        <button id="createLedgerBtn" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> New Ledger</button>
+                    </div>
+                    <div id="trialBalanceHeaderWrap" class="header-inline" style="display: none;">
+                        <label for="trialBalanceAsOf">As at</label>
+                        <input type="date" id="trialBalanceAsOf" class="form-input trial-balance-date">
+                        <span id="trialBalanceStatus" class="trial-balance-status"></span>
+                    </div>
+                    <div id="apAgeingHeaderWrap" class="header-inline" style="display: none;">
+                        <label for="apAgeingAsOf">As at</label>
+                        <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
+                        <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
                 </div>
             </header>
@@ -340,9 +357,6 @@
                 <!-- Ledgers List View -->
                 <div id="ledgersView" class="view">
                     <div class="ledger-list-container">
-                        <div class="ledger-create-bar">
-                            <button id="createLedgerBtn" class="btn btn-primary">Create Ledger</button>
-                        </div>
                         <div class="ledger-cards" id="ledgerCards">
                             <!-- Ledger cards rendered by JS -->
                         </div>
@@ -350,14 +364,7 @@
                 </div>
 
                 <div id="trialBalanceView" class="view">
-                    <div class="trial-balance-container">
-                        <div class="trial-balance-bar">
-                            <label for="trialBalanceAsOf">As at</label>
-                            <input type="date" id="trialBalanceAsOf" class="form-input trial-balance-date">
-                            <span id="trialBalanceStatus" class="trial-balance-status"></span>
-                        </div>
-                        <div id="trialBalanceGrid" class="ag-theme-alpine grid-container"></div>
-                    </div>
+                    <div id="trialBalanceGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <div id="billsView" class="view">
@@ -365,14 +372,7 @@
                 </div>
 
                 <div id="apAgeingView" class="view">
-                    <div class="trial-balance-container">
-                        <div class="trial-balance-bar">
-                            <label for="apAgeingAsOf">As at</label>
-                            <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
-                            <span id="apAgeingTotal" class="trial-balance-status"></span>
-                        </div>
-                        <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
-                    </div>
+                    <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Create / edit purchase bill -->
@@ -425,6 +425,10 @@
                                     <div class="bill-total-line">
                                         <span>Subtotal</span>
                                         <span id="billSubtotal">0.00</span>
+                                    </div>
+                                    <div class="bill-total-line">
+                                        <label for="billDiscount">Discount</label>
+                                        <input type="number" id="billDiscount" class="form-input bill-tax-input" step="0.01" min="0" value="0">
                                     </div>
                                     <div class="bill-total-line">
                                         <label for="billTax">Tax</label>

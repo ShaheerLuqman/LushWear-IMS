@@ -124,12 +124,19 @@ function displayMonthSummaryCards(months) {
         const cardsHtml = yearMonths.map(month => {
             const monthName = getMonthName(month.month);
             const periodLabel = formatOrdersPeriodLabel(month.month, month.year);
+            const warningCount = month.warning_orders_count || 0;
+            const warningHtml = warningCount > 0
+                ? `<div class="month-summary-card-body">
+                        <span class="month-summary-card-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${warningCount} on warning</span>
+                    </div>`
+                : '';
             return `
                 <div class="month-summary-card" data-month="${month.month}" data-year="${month.year}">
                     <div class="month-summary-card-header">
                         <h3 class="month-summary-card-title">${monthName} ${month.year}</h3>
                         <span class="month-summary-card-period">${periodLabel}</span>
                     </div>
+                    ${warningHtml}
                 </div>
             `;
         }).join('');

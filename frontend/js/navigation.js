@@ -282,6 +282,9 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('deliveryRefreshProgress', false);
     show('transactionDateFilterWrap', viewName === 'transactions');
     show('billsHeaderWrap', viewName === 'bills');
+    show('ledgersHeaderWrap', viewName === 'ledgers');
+    show('trialBalanceHeaderWrap', viewName === 'trialBalance');
+    show('apAgeingHeaderWrap', viewName === 'apAgeing');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();

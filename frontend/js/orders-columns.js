@@ -10,11 +10,8 @@
 const REFRESH_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>';
 
 function buildOrdersGridColumns() {
-    const numberFilterValueGetter = (params) => {
-        const v = params.api.getValue(params.column.getColId(), params.node);
-        return (v != null && v !== '') ? String(v) : '';
-    };
     const textFilterContains = { filterOptions: ['contains'], defaultOption: 'contains' };
+    const numberFilterExact = { filterOptions: ['equals'], defaultOption: 'equals', maxNumConditions: 1 };
 
     const columnDefs = [
         {
@@ -153,9 +150,8 @@ function buildOrdersGridColumns() {
             headerName: 'Total',
             field: 'total_amount',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             editable: (params) => isEditingAllowed() && params.node?.rowPinned !== 'bottom',
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agNumberCellEditor',
@@ -180,9 +176,8 @@ function buildOrdersGridColumns() {
             headerName: 'Advance',
             field: 'advance_amount',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             editable: (params) => isEditingAllowed() && params.node?.rowPinned !== 'bottom',
             cellStyle: { cursor: 'pointer' },
             cellEditor: 'agNumberCellEditor',
@@ -218,9 +213,8 @@ function buildOrdersGridColumns() {
             headerName: 'CoD',
             field: 'cod',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.cod;
                 const status = (params.data.order_status || '').toLowerCase();
@@ -238,9 +232,8 @@ function buildOrdersGridColumns() {
             headerName: 'D. Charge',
             field: 'delivery_charge',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
@@ -262,9 +255,8 @@ function buildOrdersGridColumns() {
             headerName: 'Tax',
             field: 'tax_amount',
             width: 80,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
@@ -286,9 +278,8 @@ function buildOrdersGridColumns() {
             headerName: 'Receivable',
             field: 'receivable',
             width: 110,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.receivable;
                 const status = (params.data.order_status || '').toLowerCase();
@@ -334,9 +325,8 @@ function buildOrdersGridColumns() {
             headerName: 'Cost Price',
             field: 'cost_price',
             width: 110,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
             valueFormatter: (params) => {
@@ -358,9 +348,8 @@ function buildOrdersGridColumns() {
             headerName: 'Net Profit',
             field: 'net_profit',
             width: 110,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.net_profit;
                 return computeNetProfit(params.data);
@@ -379,9 +368,8 @@ function buildOrdersGridColumns() {
             headerName: 'Profit %',
             field: 'profit_percent',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: numberFilterValueGetter,
+            filter: 'agNumberColumnFilter',
+            filterParams: numberFilterExact,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return params.data.profit_percent;
                 const netProfit = computeNetProfit(params.data);

@@ -183,11 +183,17 @@ class TestOrders:
 class TestMonthSummaryList:
     def test_returns_periods_from_the_rpc_as_is(self, make_client):
         client = make_client({}, rpc_results={
-            "get_month_summary_periods": [{"month": 7, "year": 2026}, {"month": 6, "year": 2026}],
+            "get_month_summary_periods": [
+                {"month": 7, "year": 2026, "warning_orders_count": 3},
+                {"month": 6, "year": 2026, "warning_orders_count": 0},
+            ],
         })
         r = client.get("/api/orders/month-summary/list")
         assert r.status_code == 200
-        assert r.json() == [{"month": 7, "year": 2026}, {"month": 6, "year": 2026}]
+        assert r.json() == [
+            {"month": 7, "year": 2026, "warning_orders_count": 3},
+            {"month": 6, "year": 2026, "warning_orders_count": 0},
+        ]
 
     def test_no_orders_returns_empty_list(self, make_client):
         client = make_client({}, rpc_results={"get_month_summary_periods": []})
