@@ -306,7 +306,7 @@ function fillLedgerPartyFields(prefix, ledger) {
 
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type, includeInCashInHand, openingBalance, reportCategory, partyFields) {
+async function createLedger(name, type, includeInCashInHand, openingBalance, partyFields) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -319,7 +319,6 @@ async function createLedger(name, type, includeInCashInHand, openingBalance, rep
                 type,
                 include_in_cash_in_hand: !!includeInCashInHand,
                 opening_balance: openingBalance || 0,
-                report_category: reportCategory || null,
                 ...(partyFields || {})
             },
             fallback: 'Failed to create ledger'
@@ -340,7 +339,6 @@ function openCreateLedgerModal(onCreated) {
     document.getElementById('createLedgerName').value = '';
     document.getElementById('createLedgerType').value = '';
     document.getElementById('createLedgerOpeningBalance').value = '';
-    document.getElementById('createLedgerReportCategory').value = '';
     document.getElementById('createLedgerCashInHand').checked = false;
     fillLedgerPartyFields('create', null);
     document.getElementById('createLedgerModal').classList.add('active');
@@ -378,8 +376,6 @@ async function openEditLedgerModal(ledgerId) {
         }
         const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
         if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
-        const reportCategorySelect = document.getElementById('editLedgerReportCategory');
-        if (reportCategorySelect) reportCategorySelect.value = ledger.report_category || '';
         renderLedgerSystemNotice(ledger);
         fillLedgerPartyFields('edit', ledger);
 
@@ -416,7 +412,6 @@ async function saveEditLedger() {
     const type = (document.getElementById('editLedgerType').value || '').trim();
     const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
     const openingBalance = parseFloat(document.getElementById('editLedgerOpeningBalance').value) || 0;
-    const reportCategory = document.getElementById('editLedgerReportCategory').value;
     if (!name || !type) {
         showToast('Name and type are required', 'error');
         return;
@@ -431,7 +426,6 @@ async function saveEditLedger() {
     const body = {
         name, type,
         include_in_cash_in_hand: includeInCashInHand,
-        report_category: reportCategory || null,
         ...readLedgerPartyFields('edit'),
     };
     if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
@@ -627,7 +621,6 @@ function initLedgerModals() {
             const type = document.getElementById('createLedgerType').value;
             const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
             const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
-            const reportCategory = document.getElementById('createLedgerReportCategory').value;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
                 return;
@@ -636,8 +629,7 @@ function initLedgerModals() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type, includeInCashInHand, openingBalance, reportCategory,
-                readLedgerPartyFields('create'));
+            createLedger(name, type, includeInCashInHand, openingBalance, readLedgerPartyFields('create'));
         });
     }
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);

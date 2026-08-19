@@ -241,16 +241,10 @@ class TransactionEntryAuditLog(BaseModel):
 # Note: Ledger entries are no longer stored separately.
 # Ledgers show a statement built from their journal lines (get_ledger_statement).
 
-# Which Month Summary expense line a ledger's spending rolls up into. Replaces
-# the ledger-name substring matching get_month_summary_totals used to do (see
-# FINANCE_ACCOUNTING_PLAN.md B4). None = excluded from those lines.
-ReportCategory = Literal["shopify", "ad", "other"]
-
 class LedgerBase(BaseModel):
     name: NonBlankStr
     type: LedgerType
     include_in_cash_in_hand: bool = False
-    report_category: Optional[ReportCategory] = None
 
     # Party fields (Phase 2). A supplier is a ledger rather than a separate
     # contact, so these live here; they stay empty on non-party accounts like
@@ -272,7 +266,6 @@ class LedgerUpdate(BaseModel):
     type: Optional[LedgerType] = None
     include_in_cash_in_hand: Optional[bool] = None
     opening_balance: Optional[float] = None
-    report_category: Optional[ReportCategory] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None

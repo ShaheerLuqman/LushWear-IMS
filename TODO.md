@@ -63,6 +63,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Per-ledger expenses in Month Summary** — removed `is_party`/`report_category`; every Expense-type ledger now shows its own Month Summary line by name, no manual tagging.
 - [x] **Faster bill view** — skip the redundant ledger re-fetch in the bill modal when ledgers are already loaded.
 - [x] **View Bill button on bills table** — dedicated row button opens the bill; row click/dblclick no longer opens it.
 - [x] **Ledger entry source navigation** — arrow on statement lines jumps to and flashes the originating transaction/bill.

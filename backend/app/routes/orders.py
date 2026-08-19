@@ -1994,6 +1994,16 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
         }).execute()
         totals = (totals_resp.data or [{}])[0]
 
+        expense_lines_resp = supabase.rpc("get_month_summary_expense_lines", {
+            "p_entry_start": start_date,
+            "p_entry_end": end_date,
+            "p_org_id": org_id,
+        }).execute()
+        expense_lines = [
+            {"name": row["ledger_name"], "amount": round(float(row.get("amount") or 0), 2)}
+            for row in (expense_lines_resp.data or [])
+        ]
+
         carrier_health_resp = supabase.rpc("get_month_summary_carrier_health", {
             "p_period_start": start_iso,
             "p_period_end": end_iso,
@@ -2104,9 +2114,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
             "dc_charges_total": round(float(totals.get("dc_charges_total") or 0), 2),
             "products_sold_by_collection": products_sold_by_collection,
             "carrier_health": carrier_health,
-            "shopify_expense": round(float(totals.get("shopify_expense") or 0), 2),
-            "ad_expense": round(float(totals.get("ad_expense") or 0), 2),
-            "other_expense": round(float(totals.get("other_expense") or 0), 2),
+            "expense_lines": expense_lines,
         }
     except HTTPException:
         raise

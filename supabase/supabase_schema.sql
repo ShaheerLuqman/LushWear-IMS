@@ -425,15 +425,6 @@ END $$;
 DROP INDEX IF EXISTS idx_ledgers_one_orders_ledger_per_org;
 ALTER TABLE finances_ledgers DROP COLUMN IF EXISTS is_orders_ledger;
 
--- Which Month Summary expense line this ledger's spending rolls into (NULL =
--- excluded). Replaces get_month_summary_totals' old ledger-*name* substring
--- matching, where 'ad' also caught "Load Sheet"/"Trade"/"Adnan" and renaming a
--- ledger silently moved money between P&L lines. See
--- supabase/migrations/20260801040000_ledgers_report_category.sql.
-ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS report_category VARCHAR(20);
-ALTER TABLE finances_ledgers DROP CONSTRAINT IF EXISTS ledgers_report_category_check;
-ALTER TABLE finances_ledgers ADD CONSTRAINT ledgers_report_category_check
-    CHECK (report_category IS NULL OR report_category IN ('shopify', 'ad', 'other'));
 
 -- Opening balance, set once at ledger creation (rarely changed after). Folded
 -- into ledger_balances by recalc_ledger_balance so the running balance always
@@ -1486,7 +1477,11 @@ AS $$
     ORDER BY year DESC, month DESC;
 $$;
 
-CREATE OR REPLACE FUNCTION get_month_summary_totals(
+-- Dropped and recreated (not just CREATE OR REPLACE) because shopify_expense
+-- and ad_expense were removed from the return columns, which Postgres won't
+-- allow on a plain replace.
+DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
+CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
     p_period_end TIMESTAMPTZ,
     p_entry_start DATE,
@@ -1506,10 +1501,7 @@ RETURNS TABLE(
     net_profit NUMERIC,
     dc_charges_delivered NUMERIC,
     dc_charges_returned NUMERIC,
-    dc_charges_total NUMERIC,
-    shopify_expense NUMERIC,
-    ad_expense NUMERIC,
-    other_expense NUMERIC
+    dc_charges_total NUMERIC
 )
 LANGUAGE sql
 STABLE
@@ -1543,16 +1535,6 @@ AS $$
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
-    ),
-    ledger_totals AS (
-        SELECT
-            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'shopify'), 0) AS shopify_expense,
-            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'ad'), 0)      AS ad_expense,
-            COALESCE(SUM(ce.amount) FILTER (WHERE l.report_category = 'other'), 0)   AS other_expense
-        FROM finances_ledgers l
-        JOIN finances_transaction_entries ce ON ce.to_account_id = l.id
-        WHERE l.org_id = p_org_id AND ce.org_id = p_org_id
-          AND ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
     )
     SELECT
         ot.total_orders,
@@ -1567,14 +1549,39 @@ AS $$
         ot.net_profit,
         ot.dc_charges_delivered,
         ot.dc_charges_returned,
-        (ot.dc_charges_delivered + ot.dc_charges_returned) AS dc_charges_total,
-        lt.shopify_expense,
-        lt.ad_expense,
-        lt.other_expense
-    FROM order_totals ot, ledger_totals lt;
+        (ot.dc_charges_delivered + ot.dc_charges_returned) AS dc_charges_total
+    FROM order_totals ot;
 $$;
 
-
+-- One row per Expense-type ledger, LEFT JOINed so a ledger with no activity
+-- that period still shows up at 0 instead of disappearing.
+CREATE OR REPLACE FUNCTION get_month_summary_expense_lines(
+    p_entry_start DATE,
+    p_entry_end DATE,
+    p_org_id UUID
+)
+RETURNS TABLE(
+    ledger_id UUID,
+    ledger_name VARCHAR,
+    amount NUMERIC
+)
+LANGUAGE sql
+STABLE
+AS $$
+    SELECT
+        l.id,
+        l.name,
+        COALESCE(SUM(ce.amount) FILTER (
+            WHERE ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
+        ), 0) AS amount
+    FROM finances_ledgers l
+    LEFT JOIN finances_transaction_entries ce
+           ON ce.to_account_id = l.id AND ce.org_id = p_org_id
+    WHERE l.org_id = p_org_id
+      AND l.type = 'Expense'
+    GROUP BY l.id, l.name
+    ORDER BY l.name;
+$$;
 
 -- Per-carrier delivered/total parcel counts for the Month Summary "Carrier health"
 -- display. Same period filter as get_month_summary_totals (cancelled orders

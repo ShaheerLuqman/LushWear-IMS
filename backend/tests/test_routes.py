@@ -218,9 +218,6 @@ class TestMonthSummaryDetail:
             "dc_charges_delivered": 180.0,
             "dc_charges_returned": 180.0,
             "dc_charges_total": 360.0,
-            "shopify_expense": 50.0,
-            "ad_expense": 25.0,
-            "other_expense": 10.0,
         }
         client = make_client(
             {
@@ -230,7 +227,10 @@ class TestMonthSummaryDetail:
                 ],
                 "shopify_products": [{"id": "p1", "name": "Silk Robe", "collection": "Silk Collection", "price": 100.0}],
             },
-            rpc_results={"get_month_summary_totals": [totals_row]},
+            rpc_results={
+                "get_month_summary_totals": [totals_row],
+                "get_month_summary_expense_lines": [{"ledger_name": "Rent", "amount": 10.0}],
+            },
         )
         r = client.get("/api/orders/month-summary/6/2026")
         assert r.status_code == 200
@@ -239,8 +239,8 @@ class TestMonthSummaryDetail:
         # Totals come straight from the RPC row, not recomputed in Python.
         assert body["total_orders"] == 3
         assert body["net_profit"] == 900.25
-        assert body["shopify_expense"] == 50.0
         assert body["cancelled_orders_count"] == 1
+        assert body["expense_lines"] == [{"name": "Rent", "amount": 10.0}]
 
         # Collection breakdown is still computed in Python from the fetched
         # line_items - the cancelled order's 5 qty must not count.

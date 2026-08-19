@@ -88,9 +88,12 @@ async function loadBills() {
 function emptyBillLine() {
     return {
         _key: `line_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        mode: 'product',
         description: '',
         quantity: '',
         unit_cost: '',
+        product_id: null,
+        variant_id: null,
     };
 }
 
@@ -101,34 +104,89 @@ function billLineAmount(line) {
     return Math.round(qty * cost * 100) / 100;
 }
 
+function billLineProduct(line) {
+    return products.find(p => p.id === line.product_id) || null;
+}
+
+// The bill only stores a free-text description, so a product/variant line's
+// description is generated here for display on the bill and its PDF.
+function billLineDisplayDescription(line) {
+    if (line.mode !== 'product') return line.description || null;
+    const product = billLineProduct(line);
+    if (!product) return null;
+    const variant = (product.variants || []).find(v => v.id === line.variant_id);
+    return variant ? `${product.name} — ${variant.title}` : product.name;
+}
+
+function billLineProductOptions(selectedId) {
+    return '<option value="">Select product...</option>' +
+        products.map(p => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+}
+
+function billLineVariantOptions(product, selectedId) {
+    const variants = product?.variants || [];
+    if (!variants.length) return '<option value="">No variants</option>';
+    return '<option value="">Select variant...</option>' +
+        variants.map(v => `<option value="${v.id}" ${v.id === selectedId ? 'selected' : ''}>${escapeHtml(v.title)}</option>`).join('');
+}
+
 function renderBillLines() {
     const container = document.getElementById('billLines');
     if (!container) return;
 
     const disabled = billModalReadOnly ? 'disabled' : '';
-    container.innerHTML = billLineDrafts.map((line, index) => `
+    container.innerHTML = billLineDrafts.map((line, index) => {
+        const product = line.mode === 'product' ? billLineProduct(line) : null;
+        // The product list only holds active products, so a line referencing one
+        // that's since been deactivated has nothing to put in the select — fall
+        // back to the description already stored for it rather than show blank.
+        const productMissing = line.mode === 'product' && line.product_id && !product;
+        const itemField = productMissing
+            ? `<input type="text" class="form-input" value="${escapeHtml(line.description || '')}" disabled>`
+            : line.mode === 'product'
+            ? `<select class="form-input bill-line-product" ${disabled}>${billLineProductOptions(line.product_id)}</select>
+               <select class="form-input bill-line-variant" ${disabled || !product ? 'disabled' : ''}>${billLineVariantOptions(product, line.variant_id)}</select>`
+            : `<input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>`;
+        const toggleTitle = line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection';
+        const toggleIcon = line.mode === 'product' ? 'fa-pen-to-square' : 'fa-list-check';
+        const toggle = billModalReadOnly ? '' :
+            `<button type="button" class="bill-line-mode-toggle" data-index="${index}" title="${toggleTitle}" aria-label="${toggleTitle}"><i class="fa-solid ${toggleIcon}"></i></button>`;
+        return `
         <div class="bill-line" data-index="${index}">
-            <input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>
+            <div class="bill-line-desc-cell">${itemField}${toggle}</div>
             <input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0" ${disabled}>
             <input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00" ${disabled}>
             <span class="bill-line-amount">${formatMoney(billLineAmount(line))}</span>
             ${billModalReadOnly ? '' : `<button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>`}
-        </div>
-    `).join('');
+        </div>`;
+    }).join('');
 
     if (billModalReadOnly) { renderBillTotals(); return; }
 
     container.querySelectorAll('.bill-line').forEach(row => {
         const index = parseInt(row.dataset.index, 10);
-        const update = (field, value) => {
-            billLineDrafts[index][field] = value;
-            row.querySelector('.bill-line-amount').textContent =
-                formatMoney(billLineAmount(billLineDrafts[index]));
+        const line = billLineDrafts[index];
+        const updateAmount = () => {
+            row.querySelector('.bill-line-amount').textContent = formatMoney(billLineAmount(line));
             renderBillTotals();
         };
-        row.querySelector('.bill-line-description').addEventListener('input', e => update('description', e.target.value));
-        row.querySelector('.bill-line-quantity').addEventListener('input', e => update('quantity', e.target.value));
-        row.querySelector('.bill-line-cost').addEventListener('input', e => update('unit_cost', e.target.value));
+
+        row.querySelector('.bill-line-description')?.addEventListener('input', e => { line.description = e.target.value; });
+        row.querySelector('.bill-line-quantity').addEventListener('input', e => { line.quantity = e.target.value; updateAmount(); });
+        row.querySelector('.bill-line-cost').addEventListener('input', e => { line.unit_cost = e.target.value; updateAmount(); });
+        row.querySelector('.bill-line-product')?.addEventListener('change', e => {
+            line.product_id = e.target.value || null;
+            line.variant_id = null;
+            renderBillLines();
+        });
+        row.querySelector('.bill-line-variant')?.addEventListener('change', e => { line.variant_id = e.target.value || null; });
+        row.querySelector('.bill-line-mode-toggle')?.addEventListener('click', () => {
+            line.mode = line.mode === 'product' ? 'text' : 'product';
+            line.product_id = null;
+            line.variant_id = null;
+            line.description = '';
+            renderBillLines();
+        });
     });
 
     container.querySelectorAll('.bill-line-remove').forEach(btn => {
@@ -159,6 +217,7 @@ async function openBillModal(billId) {
     // The Bills page already loads ledgers on nav (see navigation.js); only
     // re-fetch if the modal is somehow opened before that finished.
     if (!ledgers.length) await loadLedgersList();
+    if (!products.length) await loadProducts();
 
     const supplierSelect = document.getElementById('billSupplier');
     supplierSelect.innerHTML = '<option value="">Select supplier...</option>' +
@@ -187,9 +246,12 @@ async function openBillModal(billId) {
         document.getElementById('billNotes').value = bill.notes || '';
         billLineDrafts = (bill.items || []).map(item => ({
             _key: item.id,
+            mode: item.product_id ? 'product' : 'text',
             description: item.description || '',
             quantity: item.quantity,
             unit_cost: item.unit_cost,
+            product_id: item.product_id || null,
+            variant_id: item.variant_id || null,
         }));
     } else {
         billModalReadOnly = false;
@@ -243,7 +305,7 @@ function collectBillPayload() {
     // A blank trailing row is normal (the form always keeps one), so drop empties
     // rather than failing on them — but a row with only some fields filled is a
     // mistake worth surfacing.
-    const filled = billLineDrafts.filter(l => l.quantity !== '' || l.unit_cost !== '' || l.description);
+    const filled = billLineDrafts.filter(l => l.quantity !== '' || l.unit_cost !== '' || l.description || l.product_id);
     const items = [];
     for (const line of filled) {
         const qty = parseFloat(line.quantity);
@@ -252,10 +314,35 @@ function collectBillPayload() {
             showToast('Every line needs a quantity above 0 and a unit cost', 'error');
             return null;
         }
+
+        let productId = null, variantId = null, description = line.description || null;
+        if (line.mode === 'product') {
+            const product = billLineProduct(line);
+            if (product) {
+                if ((product.variants || []).length && !line.variant_id) {
+                    showToast('Select a variant for every product line', 'error');
+                    return null;
+                }
+                productId = product.id;
+                variantId = line.variant_id || null;
+                description = billLineDisplayDescription(line);
+            } else if (line.product_id) {
+                // References a product deactivated since the line was set — keep
+                // the existing reference and its already-stored label untouched.
+                productId = line.product_id;
+                variantId = line.variant_id || null;
+            } else {
+                showToast('Select a product for every product line', 'error');
+                return null;
+            }
+        }
+
         items.push({
-            description: line.description || null,
+            description,
             quantity: qty,
             unit_cost: cost,
+            product_id: productId,
+            variant_id: variantId,
         });
     }
     if (!items.length) { showToast('Add at least one line', 'error'); return null; }

@@ -19,7 +19,7 @@ def _ledger(ledger_id, name, system_key=None):
     return {
         "id": ledger_id, "org_id": "test-org", "name": name, "type": "Asset",
         "system_key": system_key, "include_in_cash_in_hand": False,
-        "opening_balance": 0, "report_category": None,
+        "opening_balance": 0,
     }
 
 

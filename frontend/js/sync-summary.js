@@ -229,9 +229,8 @@ function displayMonthDetail(data) {
                 <section class="month-detail-section">
                     <h3 class="month-detail-section-heading">Expenses</h3>
                     <div class="month-detail-lines">
-                        <div class="month-detail-line"><span class="month-detail-line-label">Shopify Expense</span><span class="month-detail-line-value">Rs ${fmt(data.shopify_expense ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Ad Expense</span><span class="month-detail-line-value">Rs ${fmt(data.ad_expense ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Other Expenses</span><span class="month-detail-line-value">Rs ${fmt(data.other_expense ?? 0)}</span></div>
+                        ${(data.expense_lines || []).map(line => `
+                        <div class="month-detail-line"><span class="month-detail-line-label">${escapeHtml(line.name)}</span><span class="month-detail-line-value">Rs ${fmt(line.amount ?? 0)}</span></div>`).join('')}
                     </div>
                 </section>
                 <section class="month-detail-section">
