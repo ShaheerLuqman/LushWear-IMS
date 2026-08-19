@@ -208,6 +208,7 @@ async def list_ledger_entries(ledger_id: str, org_id: str = Depends(get_org_id))
             "credit": float(row.get("credit") or 0),
             "voucher_type": row.get("voucher_type"),
             "source_type": row.get("source_type"),
+            "source_id": row.get("source_id"),
         }
         for row in resp.data or []
     ]

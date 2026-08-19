@@ -1,6 +1,6 @@
 import asyncio
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import unquote, urlparse, parse_qs
 
 import httpx
@@ -13,8 +13,52 @@ _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
 
 # The only collection names the month-summary "products sold by collection" breakdown
-# (routes/orders.py) recognizes - anything else falls into "Others" there.
+# and the packaging list (routes/orders.py) recognize - anything else falls into
+# "Others" there.
 KNOWN_COLLECTIONS = ["Cami Sets", "Linen PJs", "Pajama T-Shirt", "Silk Collection", "Trousers"]
+
+
+def build_collection_resolver(products: List[Dict[str, Any]]) -> Callable[[Optional[str], Optional[str]], str]:
+    """Resolve an order line's (product_id, item name) to a display collection -
+    one of KNOWN_COLLECTIONS, or "Others". Falls back to fuzzy name matching when
+    product_id doesn't match a known product."""
+    products_list: List[tuple] = []
+    products_map: Dict[str, str] = {}
+    products_by_id: Dict[Any, str] = {}
+    for p in products:
+        name = (p.get("name") or "").strip()
+        if not name:
+            continue
+        name_lower = name.lower()
+        coll_raw = (p.get("collection") or "").strip()
+        collection = coll_raw if coll_raw in KNOWN_COLLECTIONS else "Others"
+        products_list.append((name_lower, collection))
+        products_map[name_lower] = collection
+        if p.get("id"):
+            products_by_id[p["id"]] = collection
+        if " - " in name:
+            base = name.rsplit(" - ", 1)[0].lower().strip()
+            if base and base not in products_map:
+                products_map[base] = collection
+
+    def resolve(product_id: Optional[str], item_name: Optional[str]) -> str:
+        if product_id and product_id in products_by_id:
+            return products_by_id[product_id]
+        item_lower = (item_name or "").lower().strip()
+        if not item_lower:
+            return "Others"
+        if item_lower in products_map:
+            return products_map[item_lower]
+        if item_name and " - " in item_name:
+            base = item_name.rsplit(" - ", 1)[0].lower().strip()
+            if base in products_map:
+                return products_map[base]
+        for name_lower, coll in products_list:
+            if name_lower in item_lower or item_lower in name_lower:
+                return coll
+        return "Others"
+
+    return resolve
 
 
 def _credentials(org_creds: OrgIntegrationSettings) -> tuple[str, str]:

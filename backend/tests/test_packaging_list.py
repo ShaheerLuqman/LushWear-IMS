@@ -1,6 +1,7 @@
 from app.services.pdf.packaging_list import (
     _aggregate_packaging_items,
     _generate_pdf_packaging_list,
+    _group_by_collection,
     _normalize_size,
     _order_line_rows,
 )
@@ -68,6 +69,44 @@ class TestAggregate:
         assert [r["product"] for r in rows] == ["Apple", "zebra"]
 
 
+class TestAggregateWithCollection:
+    def test_defaults_to_others_without_a_resolver(self):
+        orders = [{"line_items": [{"name": "Camisole", "variant_title": "M", "qty": 1, "product_id": "p1"}]}]
+        rows, _ = _aggregate_packaging_items(orders)
+        assert rows[0]["collection"] == "Others"
+
+    def test_uses_resolver_with_product_id_and_name(self):
+        orders = [{"line_items": [{"name": "Camisole", "variant_title": "M", "qty": 1, "product_id": "p1"}]}]
+        resolve = lambda product_id, name: "Cami Sets" if product_id == "p1" else "Others"
+        rows, _ = _aggregate_packaging_items(orders, resolve)
+        assert rows[0]["collection"] == "Cami Sets"
+
+
+class TestGroupByCollection:
+    def test_orders_known_collections_before_others_and_drops_empty_groups(self):
+        rows = [
+            {"product": "Trouser A", "collection": "Trousers"},
+            {"product": "Cami A", "collection": "Cami Sets"},
+            {"product": "Misc A", "collection": "Others"},
+        ]
+        grouped = _group_by_collection(rows)
+        assert [c for c, _ in grouped] == ["Cami Sets", "Trousers", "Others"]
+
+    def test_groups_multiple_products_under_the_same_collection(self):
+        rows = [
+            {"product": "Cami A", "collection": "Cami Sets"},
+            {"product": "Cami B", "collection": "Cami Sets"},
+        ]
+        grouped = _group_by_collection(rows)
+        assert len(grouped) == 1
+        assert [r["product"] for r in grouped[0][1]] == ["Cami A", "Cami B"]
+
+    def test_missing_collection_falls_back_to_others(self):
+        rows = [{"product": "Mystery", "collection": None}]
+        grouped = _group_by_collection(rows)
+        assert grouped == [("Others", rows)]
+
+
 class TestPdf:
     def test_produces_a_pdf(self):
         orders = [{"line_items": [{"name": "Camisole", "variant_title": "M", "qty": 2}]}]
@@ -77,3 +116,12 @@ class TestPdf:
     def test_handles_no_items_without_raising(self):
         rows, sizes = _aggregate_packaging_items([])
         assert _generate_pdf_packaging_list(rows, sizes, 0).getvalue().startswith(b"%PDF")
+
+    def test_produces_a_pdf_with_multiple_collections(self):
+        orders = [{"line_items": [
+            {"name": "Camisole", "variant_title": "M", "qty": 2, "product_id": "p1"},
+            {"name": "Trouser", "variant_title": "L", "qty": 1, "product_id": "p2"},
+        ]}]
+        resolve = lambda product_id, name: {"p1": "Cami Sets", "p2": "Trousers"}.get(product_id, "Others")
+        rows, sizes = _aggregate_packaging_items(orders, resolve)
+        assert _generate_pdf_packaging_list(rows, sizes, len(orders)).getvalue().startswith(b"%PDF")

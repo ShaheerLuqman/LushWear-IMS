@@ -260,8 +260,6 @@ class LedgerBase(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     tax_number: Optional[str] = None
-    # Drives the default due date on a new bill; None = due on receipt.
-    payment_terms_days: Optional[int] = Field(default=None, ge=0)
     # Seeded once at ledger creation; folded into ledger_balances by the
     # recalc_ledger_balance DB trigger so `balance` starts from this instead
     # of 0. Rare to change after creation, but editable (see LedgerUpdate).
@@ -281,7 +279,6 @@ class LedgerUpdate(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     tax_number: Optional[str] = None
-    payment_terms_days: Optional[int] = Field(default=None, ge=0)
 
 class Ledger(LedgerBase):
     id: str
@@ -427,7 +424,6 @@ class BillItem(BaseModel):
 class BillBase(BaseModel):
     supplier_id: NonBlankStr
     bill_date: date
-    due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
     discount_amount: float = Field(default=0.0, ge=0)
     tax_amount: float = Field(default=0.0, ge=0)
@@ -446,7 +442,6 @@ class BillCreate(BillBase):
 class BillUpdate(BaseModel):
     supplier_id: Optional[str] = None
     bill_date: Optional[date] = None
-    due_date: Optional[date] = None
     supplier_ref: Optional[str] = None
     discount_amount: Optional[float] = Field(default=None, ge=0)
     tax_amount: Optional[float] = Field(default=None, ge=0)
@@ -480,7 +475,7 @@ class ApAgeingRow(BaseModel):
     supplier_id: str
     supplier_name: str
     outstanding: float = 0.0
-    not_due: float = 0.0
+    current: float = 0.0
     d1_30: float = 0.0
     d31_60: float = 0.0
     d61_90: float = 0.0

@@ -274,7 +274,6 @@ function renderLedgerCards() {
 const LEDGER_PARTY_FIELDS = [
     ['IsParty', 'is_party', 'checkbox'],
     ['TaxNumber', 'tax_number', 'text'],
-    ['PaymentTerms', 'payment_terms_days', 'number'],
     ['Phone', 'phone', 'text'],
     ['Email', 'email', 'text'],
     ['Address', 'address', 'text'],
@@ -551,16 +550,70 @@ function renderLedgerDetailGrid() {
     ledgerDetailGridApi.refreshCells({ force: true });
 }
 
+// Statement lines for a transaction entry or a bill link back to the row that
+// produced them (source_type/source_id); opening balances and manual journal
+// entries don't have a page of their own to jump to.
+function particularsCellRenderer(params) {
+    const entry = params.data;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'folio-dropdown';
+
+    const textSpan = document.createElement('span');
+    textSpan.className = 'folio-display-text';
+    textSpan.textContent = params.value || '';
+    wrapper.appendChild(textSpan);
+
+    if ((entry?.source_type === 'transaction_entry' || entry?.source_type === 'bill') && entry.source_id) {
+        const goToBtn = document.createElement('button');
+        goToBtn.type = 'button';
+        goToBtn.className = 'folio-goto-btn';
+        goToBtn.innerHTML = '<i class="fa-solid fa-arrow-right"></i>';
+        goToBtn.title = entry.source_type === 'bill' ? 'Go to bill' : 'Go to transaction';
+        goToBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            goToLedgerEntrySource(entry);
+        });
+        wrapper.appendChild(goToBtn);
+    }
+
+    return wrapper;
+}
+
+async function goToLedgerEntrySource(entry) {
+    if (entry.source_type === 'transaction_entry') {
+        transactionSelectedDate = entry.entry_date;
+        switchView('transactions', { skipReload: true });
+        await loadTransactions();
+        flashGridRowTwice(transactionsGridApi, entry.source_id);
+    } else if (entry.source_type === 'bill') {
+        // Reset the status filter first - the bill may not match whatever
+        // filter was left selected, and it needs to be on the grid to flash.
+        const statusFilter = document.getElementById('billsStatusFilter');
+        if (statusFilter) statusFilter.value = '';
+        switchView('bills', { skipReload: true });
+        await loadLedgersList();
+        await loadBills();
+        flashGridRowTwice(billsGridApi, entry.source_id);
+    }
+}
+
+// AG Grid's flashCells only flashes once; two passes make the row easier to
+// spot among others sharing the same date.
+function flashGridRowTwice(gridApi, rowId) {
+    if (!gridApi || !rowId) return;
+    const node = gridApi.getRowNode(rowId);
+    if (!node) return;
+    gridApi.ensureNodeVisible(node, 'middle');
+    const flash = () => gridApi.flashCells({ rowNodes: [node], flashDelay: 600, fadeDelay: 600 });
+    flash();
+    setTimeout(flash, 1200);
+}
+
 function initLedgerModals() {
     document.getElementById('createLedgerBtn')?.addEventListener('click', () => openCreateLedgerModal());
-    let ledgerSearchDebounceId = null;
     document.getElementById('ledgerSearchFilter')?.addEventListener('input', (e) => {
         ledgerSearchQuery = e.target.value;
-        // Debounced so the fade-in animation (which restarts on every re-render,
-        // since renderLedgerCards() rebuilds the cards' innerHTML) doesn't
-        // re-trigger and flicker on every keystroke while typing fast.
-        clearTimeout(ledgerSearchDebounceId);
-        ledgerSearchDebounceId = setTimeout(renderLedgerCards, 150);
+        renderLedgerCards();
     });
 
     const createLedgerForm = document.getElementById('createLedgerForm');
@@ -643,6 +696,7 @@ function initLedgerDetailGrid() {
             field: 'particulars',
             flex: 2,
             editable: false,
+            cellRenderer: particularsCellRenderer,
         },
         {
             headerName: 'Type',

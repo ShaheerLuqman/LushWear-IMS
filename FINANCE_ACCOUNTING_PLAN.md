@@ -189,7 +189,7 @@ Grouped by whether it's foundational, the modules you asked about, or optional.
 
 | # | Gap | Status | Notes |
 |---|---|---|---|
-| 5 | **Purchase Bills (AP)** — *the one you named* | **done** | Header + lines + tax + totals + `draft`/`received`/`cancelled` + due date + number series + stock on receive. Attachments and bill PDFs deferred. |
+| 5 | **Purchase Bills (AP)** — *the one you named* | **done** | Header + lines + tax + totals + `draft`/`received`/`cancelled` + number series + stock on receive. Attachments and bill PDFs deferred. |
 | 6 | **Payments / receipts against a document** | **superseded** | No allocation table: a payment is a transaction entry against the supplier, and settlement is derived FIFO from that ledger. Partial payments and AP ageing both work. |
 | 7 | **Sales Invoices (AR)** | **open** | Shopify covers D2C; no way to invoice a wholesale/B2B customer, no AR balance. Gated on open question 3. |
 | 8 | **Expenses with real categories** | **done** | `report_category` replaced the name-substring buckets. |
@@ -438,8 +438,8 @@ Consequences of that decision, all simplifications:
   `tax_on_purchases` on the first bill that carries tax.
 - **No separate supplier statement.** The supplier's ledger statement already is
   one, and it now reads from the journal.
-- **Party attributes live on `ledgers`** (phone, email, address, tax number,
-  payment terms) rather than in their own table.
+- **Party attributes live on `ledgers`** (phone, email, address, tax number)
+  rather than in their own table.
 - **`parent_id` stops being speculative** — it is how party ledgers group under a
   "Sundry Creditors" heading.
 
@@ -448,7 +448,7 @@ would fill with party accounts and want a control account), or one entity traded
 with as both customer and supplier. Both are recoverable later — a contacts
 table can be layered over existing party ledgers without redoing the bills or
 the journal, because the accounting lives in the ledger either way. AP ageing is
-*not* a reason: it comes from bill due dates, not from a party record.
+*not* a reason: it comes from bill dates, not from a party record.
 
 Two further decisions taken while building it:
 

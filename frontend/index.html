@@ -174,9 +174,9 @@
                             <span class="nav-icon"><i data-lucide="scale"></i></span>
                             <span class="nav-tooltip">Trial Balance</span>
                         </button>
-                        <button class="nav-item" data-view="apAgeing" title="Payables Ageing">
+                        <button class="nav-item" data-view="apAgeing" title="Outstanding Payables">
                             <span class="nav-icon"><i data-lucide="hourglass"></i></span>
-                            <span class="nav-tooltip">Payables Ageing</span>
+                            <span class="nav-tooltip">Outstanding Payables</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
@@ -397,16 +397,9 @@
                                         <input type="text" id="billSupplierRef" class="form-input" placeholder="e.g. INV-2291">
                                     </div>
                                 </div>
-                                <div class="bill-form-row">
-                                    <div class="form-group">
-                                        <label for="billDate">Bill date *</label>
-                                        <input type="date" id="billDate" class="form-input" required>
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="billDueDate">Due date</label>
-                                        <input type="date" id="billDueDate" class="form-input">
-                                        <span class="form-hint">Defaults from the supplier's payment terms.</span>
-                                    </div>
+                                <div class="form-group">
+                                    <label for="billDate">Bill date *</label>
+                                    <input type="date" id="billDate" class="form-input" required>
                                 </div>
 
                                 <div class="bill-lines-wrap">
@@ -507,15 +500,9 @@
                                     <input type="checkbox" id="createLedgerIsParty">
                                     <span>Party (supplier or customer)</span>
                                 </label>
-                                <div class="bill-form-row">
-                                    <div class="form-group">
-                                        <label for="createLedgerTaxNumber">Tax number (NTN)</label>
-                                        <input type="text" id="createLedgerTaxNumber" class="form-input">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="createLedgerPaymentTerms">Payment terms (days)</label>
-                                        <input type="number" id="createLedgerPaymentTerms" class="form-input" min="0" step="1" placeholder="e.g. 30">
-                                    </div>
+                                <div class="form-group">
+                                    <label for="createLedgerTaxNumber">Tax number (NTN)</label>
+                                    <input type="text" id="createLedgerTaxNumber" class="form-input">
                                 </div>
                                 <div class="bill-form-row">
                                     <div class="form-group">
@@ -664,15 +651,9 @@
                                     <input type="checkbox" id="editLedgerIsParty">
                                     <span>Party (supplier or customer)</span>
                                 </label>
-                                <div class="bill-form-row">
-                                    <div class="form-group">
-                                        <label for="editLedgerTaxNumber">Tax number (NTN)</label>
-                                        <input type="text" id="editLedgerTaxNumber" class="form-input">
-                                    </div>
-                                    <div class="form-group">
-                                        <label for="editLedgerPaymentTerms">Payment terms (days)</label>
-                                        <input type="number" id="editLedgerPaymentTerms" class="form-input" min="0" step="1" placeholder="e.g. 30">
-                                    </div>
+                                <div class="form-group">
+                                    <label for="editLedgerTaxNumber">Tax number (NTN)</label>
+                                    <input type="text" id="editLedgerTaxNumber" class="form-input">
                                 </div>
                                 <div class="bill-form-row">
                                     <div class="form-group">

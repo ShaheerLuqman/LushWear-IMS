@@ -250,7 +250,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'ledgerDetail': 'Ledger',
         'trialBalance': 'Trial Balance',
         'bills': 'Purchase Bills',
-        'apAgeing': 'Payables Ageing',
+        'apAgeing': 'Outstanding Payables',
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',

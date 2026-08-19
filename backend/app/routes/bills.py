@@ -159,7 +159,6 @@ async def create_bill(
         "supplier_id": bill.supplier_id,
         "supplier_ref": bill.supplier_ref,
         "bill_date": bill.bill_date.isoformat(),
-        "due_date": bill.due_date.isoformat() if bill.due_date else None,
         "discount_amount": bill.discount_amount,
         "tax_amount": bill.tax_amount,
         "other_expense_amount": bill.other_expense_amount,
@@ -191,9 +190,8 @@ async def update_bill(bill_id: str, update: BillUpdate, org_id: str = Depends(ge
     _require_draft(_get_bill_or_404(supabase, org_id, bill_id))
 
     payload = update.model_dump(exclude_unset=True, exclude={"items"})
-    for field in ("bill_date", "due_date"):
-        if payload.get(field) is not None:
-            payload[field] = payload[field].isoformat()
+    if payload.get("bill_date") is not None:
+        payload["bill_date"] = payload["bill_date"].isoformat()
 
     if payload:
         org_table(supabase, org_id, "finances_bills").update(payload).eq("id", bill_id).execute()

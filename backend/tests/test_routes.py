@@ -247,6 +247,7 @@ class TestMonthSummaryDetail:
         silk = next(c for c in body["products_sold_by_collection"] if c["collection"] == "Silk Collection")
         assert silk["count"] == 2
         assert silk["sum"] == 200.0
+        assert silk["products"] == [{"name": "Silk Robe", "count": 2, "sum": 200.0}]
 
     def test_invalid_month_is_rejected(self, make_client):
         client = make_client({"shopify_orders": [], "shopify_products": []})
@@ -326,6 +327,25 @@ class TestPdfBatchCaps:
         order_ids = [f"id-{i}" for i in range(MAX_PDF_BATCH_ORDERS + 1)]
         r = client.post("/api/orders/generate-load-sheet", json=order_ids)
         assert r.status_code == 400
+
+
+class TestGeneratePackagingList:
+    """The PDF groups items by each product's shopify_products.collection - see
+    test_packaging_list.py for the aggregation/grouping unit tests."""
+
+    def test_looks_up_collections_from_shopify_products(self, make_client):
+        client = make_client({
+            "shopify_orders": [
+                {"id": "o1", "order_number": 1, "order_status": "unfulfilled", "line_items": [
+                    {"name": "Cami Robe", "variant_title": "M", "qty": 1, "product_id": "p1"},
+                ]},
+            ],
+            "shopify_products": [{"id": "p1", "name": "Cami Robe", "collection": "Cami Sets"}],
+        })
+        r = client.post("/api/orders/generate-packaging-list", json=["o1"])
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "application/pdf"
+        assert r.content.startswith(b"%PDF")
 
 
 class TestPostexCsvUpload:

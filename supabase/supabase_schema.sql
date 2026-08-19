@@ -1090,7 +1090,11 @@ $$;
 -- or a manual journal entry moves an account's balance, so it has to appear as a
 -- row explaining why. See
 -- supabase/migrations/20260801130000_ledger_statement_from_journal.sql.
-CREATE OR REPLACE FUNCTION get_ledger_statement(p_org_id UUID, p_ledger_id UUID)
+-- Postgres won't let CREATE OR REPLACE change a table-returning function's
+-- column list ("cannot change return type of existing function") - drop it first.
+DROP FUNCTION IF EXISTS get_ledger_statement(UUID, UUID);
+
+CREATE FUNCTION get_ledger_statement(p_org_id UUID, p_ledger_id UUID)
 RETURNS TABLE(
     id           UUID,
     entry_date   DATE,
@@ -1098,7 +1102,8 @@ RETURNS TABLE(
     debit        NUMERIC,
     credit       NUMERIC,
     voucher_type VARCHAR,
-    source_type  VARCHAR
+    source_type  VARCHAR,
+    source_id    UUID
 )
 LANGUAGE sql
 STABLE
@@ -1111,7 +1116,8 @@ AS $$
            jl.debit,
            jl.credit,
            je.voucher_type,
-           je.source_type
+           je.source_type,
+           je.source_id
       FROM finances_journal_lines jl
       JOIN finances_journal_entries je ON je.id = jl.journal_id
      WHERE jl.org_id = p_org_id
@@ -1636,9 +1642,6 @@ ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS phone              VARCHAR
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS email              VARCHAR(255);
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS address            TEXT;
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS tax_number         VARCHAR(50);
--- Drives the default due date on a new bill. NULL = due on receipt.
-ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS payment_terms_days INTEGER
-    CONSTRAINT ledgers_payment_terms_days_check CHECK (payment_terms_days IS NULL OR payment_terms_days >= 0);
 
 -- Any ledger that already has bills posted against it is a party by definition.
 -- (No-op on first run - bills doesn't exist yet - but keeps a re-run honest.)
@@ -1660,7 +1663,6 @@ CREATE TABLE IF NOT EXISTS finances_bills (
     supplier_ref  VARCHAR(100),
     supplier_id   UUID NOT NULL REFERENCES finances_ledgers(id) ON DELETE RESTRICT,
     bill_date     DATE NOT NULL,
-    due_date      DATE,
     status        VARCHAR(20) NOT NULL DEFAULT 'draft'
                   CONSTRAINT bills_status_check CHECK (status IN ('draft', 'received', 'cancelled')),
     subtotal      DECIMAL(14, 2) NOT NULL DEFAULT 0.00,
@@ -1685,7 +1687,6 @@ CREATE TABLE IF NOT EXISTS finances_bills (
 
 CREATE INDEX IF NOT EXISTS idx_bills_org_supplier ON finances_bills (org_id, supplier_id);
 CREATE INDEX IF NOT EXISTS idx_bills_org_status   ON finances_bills (org_id, status);
-CREATE INDEX IF NOT EXISTS idx_bills_org_due_date ON finances_bills (org_id, due_date);
 
 -- ---------------------------------------------------------------------------
 -- bill_items
@@ -1972,13 +1973,14 @@ SELECT b.*,
   FROM finances_bills b
   LEFT JOIN allocated a ON a.id = b.id;
 
--- Ageing now reads the view, so it inherits the same FIFO settlement.
+-- Ageing now reads the view, so it inherits the same FIFO settlement. Bills
+-- carry no due date, so buckets are days-since-bill-date rather than overdue.
 CREATE OR REPLACE FUNCTION get_ap_ageing(p_org_id UUID, p_as_of DATE)
 RETURNS TABLE(
     supplier_id   UUID,
     supplier_name VARCHAR,
     outstanding   NUMERIC,
-    not_due       NUMERIC,
+    current       NUMERIC,
     d1_30         NUMERIC,
     d31_60        NUMERIC,
     d61_90        NUMERIC,
@@ -1990,8 +1992,7 @@ AS $$
     WITH open_bills AS (
         SELECT b.supplier_id,
                b.outstanding,
-               -- No due date means due on receipt.
-               p_as_of - COALESCE(b.due_date, b.bill_date) AS days_overdue
+               p_as_of - b.bill_date AS days_since_bill
           FROM finances_bills_with_paid b
          WHERE b.org_id = p_org_id
            AND b.status = 'received'
@@ -2001,11 +2002,11 @@ AS $$
     SELECT l.id,
            l.name,
            SUM(ob.outstanding),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue <= 0), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN  1 AND 30), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN 31 AND 60), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue BETWEEN 61 AND 90), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_overdue > 90), 0)
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill <= 0), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN  1 AND 30), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN 31 AND 60), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN 61 AND 90), 0),
+           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill > 90), 0)
       FROM open_bills ob
       JOIN finances_ledgers l ON l.id = ob.supplier_id
      GROUP BY l.id, l.name

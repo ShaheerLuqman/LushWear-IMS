@@ -1,12 +1,9 @@
 """Packaging list: aggregation of order lines into per-product/per-size counts,
-and the PDF rendering of that table.
-
-Extracted verbatim from routes/orders.py; behaviour is unchanged.
-"""
+grouped by collection, and the PDF rendering of that table."""
 
 from datetime import datetime
 from io import BytesIO
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER
@@ -15,6 +12,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Table, TableStyle
 
+from app.shopify import KNOWN_COLLECTIONS
 from app.timezones import PKT_TIMEZONE
 
 
@@ -56,19 +54,27 @@ def _normalize_size(variant: str) -> str:
     return s if s and s != "-" else "-"
 
 
-def _aggregate_packaging_items(orders: List[dict]) -> Tuple[List[dict], List[str]]:
+def _aggregate_packaging_items(
+    orders: List[dict],
+    resolve_collection: Optional[Callable[[Optional[str], Optional[str]], str]] = None,
+) -> Tuple[List[dict], List[str]]:
     """
     Combine items across orders into a per-product, per-size count.
 
     Returns (rows, sizes) where:
-      rows  = sorted list of { product, total, sizes: { <size>: count, ... } }
+      rows  = sorted list of { product, total, sizes: { <size>: count, ... }, collection }
       sizes = ordered list of size columns to show: S, M, L, XL first, then any
               other sizes present in the data (sorted), e.g. XXL or Free Size.
+
+    `resolve_collection(product_id, product_name)` assigns each product a collection
+    (see app.shopify.build_collection_resolver); products fall under "Others" when
+    it's omitted or can't resolve one.
 
     Uses structured line_items (real qty per line) via _order_line_rows.
     """
     # product -> size -> count
     products: Dict[str, Dict[str, int]] = {}
+    product_ids: Dict[str, Any] = {}
     seen_sizes: set = set()
     for o in orders:
         for row in _order_line_rows(o):
@@ -80,6 +86,7 @@ def _aggregate_packaging_items(orders: List[dict]) -> Tuple[List[dict], List[str
             products.setdefault(product, {})
             products[product][size] = products[product].get(size, 0) + qty
             seen_sizes.add(size)
+            product_ids.setdefault(product, row["product_id"])
 
     # Column order: base sizes first, then any extra sizes present (sorted).
     extra_sizes = sorted(s for s in seen_sizes if s not in PACKAGING_BASE_SIZES)
@@ -89,8 +96,18 @@ def _aggregate_packaging_items(orders: List[dict]) -> Tuple[List[dict], List[str
     for product in sorted(products.keys(), key=lambda s: s.lower()):
         size_counts = products[product]
         total = sum(size_counts.values())
-        rows.append({"product": product, "total": total, "sizes": size_counts})
+        collection = resolve_collection(product_ids.get(product), product) if resolve_collection else "Others"
+        rows.append({"product": product, "total": total, "sizes": size_counts, "collection": collection})
     return rows, sizes
+
+
+def _group_by_collection(aggregated: List[dict]) -> List[Tuple[str, List[dict]]]:
+    """Group aggregated product rows by collection, ordered KNOWN_COLLECTIONS first
+    then "Others", omitting collections with no items."""
+    groups: Dict[str, List[dict]] = {}
+    for row in aggregated:
+        groups.setdefault(row.get("collection") or "Others", []).append(row)
+    return [(c, groups[c]) for c in KNOWN_COLLECTIONS + ["Others"] if c in groups]
 
 
 def _generate_pdf_packaging_list(aggregated: List[dict], sizes: List[str], order_count: int) -> BytesIO:
@@ -112,6 +129,7 @@ def _generate_pdf_packaging_list(aggregated: List[dict], sizes: List[str], order
     cell_center = ParagraphStyle("PkgCellCenter", parent=cell_style, alignment=TA_CENTER)
     cell_bold = ParagraphStyle("PkgCellBold", parent=styles["Normal"], fontSize=10, fontName="Helvetica-Bold")
     cell_bold_center = ParagraphStyle("PkgCellBoldCenter", parent=cell_bold, alignment=TA_CENTER)
+    section_style = ParagraphStyle("PkgSection", parent=styles["Normal"], fontSize=10.5, fontName="Helvetica-Bold")
 
     def _esc(s: str) -> str:
         return str(s or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -136,22 +154,31 @@ def _generate_pdf_packaging_list(aggregated: List[dict], sizes: List[str], order
     header += [Paragraph(_esc(s), cell_bold_center) for s in sizes]
     header.append(Paragraph("Total", cell_bold_center))
     table_data = [header]
-
-    # Column totals (per size + grand total), shown in a footer row.
-    size_totals = {s: 0 for s in sizes}
-    for idx, p in enumerate(aggregated, start=1):
-        row = [
-            Paragraph(str(idx), cell_center),
-            Paragraph(_esc(p["product"]), cell_style),
-        ]
-        for s in sizes:
-            count = p["sizes"].get(s, 0)
-            size_totals[s] += count
-            row.append(Paragraph(str(count) if count else "-", cell_center))
-        row.append(Paragraph(str(p["total"]), cell_bold_center))
-        table_data.append(row)
-
     num_cols = len(header)
+
+    # Rows are grouped into a shaded, full-width section row per collection;
+    # S. No. numbering runs continuously across sections.
+    size_totals = {s: 0 for s in sizes}
+    section_row_indices: List[int] = []
+    idx = 0
+    for collection, rows in _group_by_collection(aggregated):
+        section_row_indices.append(len(table_data))
+        table_data.append(
+            [Paragraph(_esc(collection), section_style)] + [Paragraph("", cell_style) for _ in range(num_cols - 1)]
+        )
+        for p in rows:
+            idx += 1
+            row = [
+                Paragraph(str(idx), cell_center),
+                Paragraph(_esc(p["product"]), cell_style),
+            ]
+            for s in sizes:
+                count = p["sizes"].get(s, 0)
+                size_totals[s] += count
+                row.append(Paragraph(str(count) if count else "-", cell_center))
+            row.append(Paragraph(str(p["total"]), cell_bold_center))
+            table_data.append(row)
+
     if len(table_data) == 1:
         empty = [Paragraph("No items found in the selected orders.", cell_style)]
         empty += [Paragraph("", cell_style) for _ in range(num_cols - 1)]
@@ -198,6 +225,10 @@ def _generate_pdf_packaging_list(aggregated: List[dict], sizes: List[str], order
     ]
     if footer_row_index is not None:
         style.append(("LINEABOVE", (0, footer_row_index), (-1, footer_row_index), 1, colors.black))
+    for r in section_row_indices:
+        style.append(("SPAN", (0, r), (-1, r)))
+        style.append(("BACKGROUND", (0, r), (-1, r), colors.whitesmoke))
+        style.append(("ALIGN", (0, r), (-1, r), "LEFT"))
     table.setStyle(TableStyle(style))
     elements.append(table)
     doc.build(elements)

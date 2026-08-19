@@ -38,6 +38,36 @@ function ledgerName(id) {
     return ledger ? ledger.name : '';
 }
 
+// Mirrors the "Go to Ledger" button on the transactions grid so a supplier's
+// account is one click away from the bill referencing it.
+function supplierCellRenderer(params) {
+    const supplierId = params.data?.supplier_id;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'folio-dropdown';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'folio-display-text';
+    nameSpan.textContent = ledgerName(supplierId);
+    wrapper.appendChild(nameSpan);
+
+    const goToLedgerBtn = document.createElement('button');
+    goToLedgerBtn.type = 'button';
+    goToLedgerBtn.className = 'folio-goto-btn';
+    goToLedgerBtn.innerHTML = '<i class="fa-solid fa-arrow-right"></i>';
+    goToLedgerBtn.title = supplierId ? `Go to ${nameSpan.textContent}` : 'No supplier';
+    if (!supplierId) {
+        goToLedgerBtn.style.opacity = '0.4';
+        goToLedgerBtn.style.cursor = 'not-allowed';
+    }
+    goToLedgerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (supplierId) openLedgerDetail(supplierId);
+    });
+    wrapper.appendChild(goToLedgerBtn);
+
+    return wrapper;
+}
+
 async function loadBills() {
     if (billsGridApi) billsGridApi.showLoadingOverlay();
     try {
@@ -127,33 +157,15 @@ function renderBillTotals() {
     if (totalEl) totalEl.textContent = formatMoney(subtotal - discount + tax + otherExpense);
 }
 
-// Suppliers can carry payment terms; a new bill defaults its due date from them
-// so the AP ageing buckets mean something without extra typing.
-function applySupplierPaymentTerms() {
-    const supplierId = document.getElementById('billSupplier')?.value;
-    const billDate = document.getElementById('billDate')?.value;
-    const dueDateEl = document.getElementById('billDueDate');
-    if (!supplierId || !billDate || !dueDateEl || dueDateEl.dataset.touched === 'true') return;
-
-    const supplier = ledgers.find(l => l.id === supplierId);
-    const days = supplier && supplier.payment_terms_days;
-    if (days == null) return;
-
-    const due = new Date(billDate);
-    due.setDate(due.getDate() + days);
-    dueDateEl.value = due.toISOString().slice(0, 10);
-}
-
 async function openBillModal(billId) {
     editingBillId = billId || null;
-    await loadLedgersList();
+    // The Bills page already loads ledgers on nav (see navigation.js); only
+    // re-fetch if the modal is somehow opened before that finished.
+    if (!ledgers.length) await loadLedgersList();
 
     const supplierSelect = document.getElementById('billSupplier');
     supplierSelect.innerHTML = '<option value="">Select supplier...</option>' +
         partyLedgers().map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
-
-    const dueDateEl = document.getElementById('billDueDate');
-    dueDateEl.dataset.touched = 'false';
 
     let status = null;
     if (billId) {
@@ -172,8 +184,6 @@ async function openBillModal(billId) {
         supplierSelect.value = bill.supplier_id;
         document.getElementById('billSupplierRef').value = bill.supplier_ref || '';
         document.getElementById('billDate').value = bill.bill_date;
-        dueDateEl.value = bill.due_date || '';
-        dueDateEl.dataset.touched = 'true';
         document.getElementById('billDiscount').value = bill.discount_amount || 0;
         document.getElementById('billTax').value = bill.tax_amount || 0;
         document.getElementById('billOtherExpense').value = bill.other_expense_amount || 0;
@@ -205,7 +215,7 @@ async function openBillModal(billId) {
 // cancelled workflow; a new/draft bill is the only editable state.
 function applyBillModalFooter(status) {
     const readOnly = billModalReadOnly;
-    ['billSupplier', 'billSupplierRef', 'billDate', 'billDueDate', 'billDiscount', 'billTax', 'billOtherExpense', 'billNotes'].forEach(id => {
+    ['billSupplier', 'billSupplierRef', 'billDate', 'billDiscount', 'billTax', 'billOtherExpense', 'billNotes'].forEach(id => {
         document.getElementById(id).disabled = readOnly;
     });
     const addLineBtn = document.getElementById('addBillLineBtn');
@@ -253,11 +263,9 @@ function collectBillPayload() {
     }
     if (!items.length) { showToast('Add at least one line', 'error'); return null; }
 
-    const dueDate = document.getElementById('billDueDate').value;
     return {
         supplier_id: supplierId,
         bill_date: billDate,
-        due_date: dueDate || null,
         supplier_ref: document.getElementById('billSupplierRef').value.trim() || null,
         discount_amount: parseFloat(document.getElementById('billDiscount').value) || 0,
         tax_amount: parseFloat(document.getElementById('billTax').value) || 0,
@@ -357,11 +365,32 @@ async function deleteBill(billId) {
 
 // --- Grids -------------------------------------------------------------------
 
+function createBillViewButton(params) {
+    const bill = params.data;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'bill-cell-center';
+    if (!bill || !bill.id) return wrapper;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'bill-view-btn';
+    btn.innerHTML = '<i class="fa-solid fa-eye"></i><span>View Bill</span>';
+    btn.title = 'View bill';
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openBillModal(bill.id);
+    });
+
+    wrapper.appendChild(btn);
+    return wrapper;
+}
+
 // Row actions menu (triple dot), mirroring createTransactionRowMenu in
 // orders-grid.js: a menu scales to more actions without another column reshuffle.
 function createBillRowMenu(params) {
     const bill = params.data;
     const wrapper = document.createElement('div');
+    wrapper.className = 'bill-cell-center';
     if (!bill || !bill.id) return wrapper;
 
     const btn = document.createElement('button');
@@ -396,7 +425,6 @@ function createBillRowMenu(params) {
         menu = document.createElement('div');
         menu.className = 'folio-dropdown-panel bill-menu-panel';
 
-        addOption({ label: 'View', icon: 'fa-eye', onClick: () => openBillModal(bill.id) });
         if (bill.status === 'draft') {
             addOption({ label: 'Confirm Bill', icon: 'fa-check', onClick: () => receiveBill(bill.id) });
             addOption({ label: 'Delete', icon: 'fa-trash', danger: true, onClick: () => deleteBill(bill.id) });
@@ -443,6 +471,7 @@ function initBillsGrid() {
             flex: 25,
             minWidth: 160,
             valueGetter: (params) => ledgerName(params.data?.supplier_id),
+            cellRenderer: supplierCellRenderer,
         },
         { headerName: 'Supplier ref', field: 'supplier_ref', flex: 12, minWidth: 120 },
         {
@@ -451,21 +480,6 @@ function initBillsGrid() {
             flex: 10,
             minWidth: 100,
             valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
-        },
-        {
-            headerName: 'Due',
-            field: 'due_date',
-            flex: 10,
-            minWidth: 100,
-            valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
-            cellStyle: (params) => {
-                const bill = params.data;
-                if (!params.value || !bill || bill.status !== 'received' || bill.outstanding <= 0) {
-                    return { color: 'var(--text-primary)' };
-                }
-                const overdue = params.value < getTodayDateString();
-                return { color: overdue ? 'var(--danger)' : 'var(--text-primary)' };
-            },
         },
         {
             headerName: 'Total (Rs)',
@@ -495,9 +509,20 @@ function initBillsGrid() {
         },
         {
             headerName: '',
+            colId: 'view',
+            flex: 8,
+            width: 92,
+            minWidth: 92,
+            sortable: false,
+            filter: false,
+            cellRenderer: createBillViewButton,
+        },
+        {
+            headerName: '',
             colId: 'actions',
-            flex: 5,
-            minWidth: 56,
+            flex: 3,
+            width: 40,
+            minWidth: 40,
             sortable: false,
             filter: false,
             cellRenderer: createBillRowMenu,
@@ -513,12 +538,6 @@ function initBillsGrid() {
         domLayout: 'normal',
         getRowId: (params) => params.data.id,
         onGridReady: (params) => { billsGridApi = params.api; },
-        onCellClicked: (params) => {
-            // A posted bill opens the same modal read-only (see
-            // applyBillModalFooter) instead of being excluded here.
-            if (params.colDef.colId === 'actions') return;
-            if (params.data?.id) openBillModal(params.data.id);
-        },
     });
 }
 
@@ -530,10 +549,10 @@ async function loadApAgeing() {
     if (apAgeingGridApi) apAgeingGridApi.showLoadingOverlay();
     let rows;
     try {
-        rows = await apiJson(`/bills/ap-ageing?as_of=${apAgeingAsOf}`, { fallback: 'Failed to load AP ageing' });
+        rows = await apiJson(`/bills/ap-ageing?as_of=${apAgeingAsOf}`, { fallback: 'Failed to load outstanding payables' });
     } catch (error) {
-        console.error('Error loading AP ageing:', error);
-        showToast('Failed to load AP ageing', 'error');
+        console.error('Error loading outstanding payables:', error);
+        showToast('Failed to load outstanding payables', 'error');
         if (apAgeingGridApi) apAgeingGridApi.hideOverlay();
         return;
     }
@@ -557,7 +576,7 @@ function initApAgeingGrid() {
     const money = (params) => (params.value ? formatMoney(params.value) : '');
     const columnDefs = [
         { headerName: 'Supplier', field: 'supplier_name', flex: 1, minWidth: 180 },
-        { headerName: 'Not due', field: 'not_due', width: 130, type: 'rightAligned', valueFormatter: money },
+        { headerName: 'Current', field: 'current', width: 130, type: 'rightAligned', valueFormatter: money },
         { headerName: '1–30 days', field: 'd1_30', width: 130, type: 'rightAligned', valueFormatter: money },
         { headerName: '31–60 days', field: 'd31_60', width: 130, type: 'rightAligned', valueFormatter: money },
         { headerName: '61–90 days', field: 'd61_90', width: 130, type: 'rightAligned', valueFormatter: money },
@@ -591,11 +610,6 @@ function initBills() {
     document.getElementById('billDiscount')?.addEventListener('input', renderBillTotals);
     document.getElementById('billTax')?.addEventListener('input', renderBillTotals);
     document.getElementById('billOtherExpense')?.addEventListener('input', renderBillTotals);
-    document.getElementById('billSupplier')?.addEventListener('change', applySupplierPaymentTerms);
-    document.getElementById('billDate')?.addEventListener('change', applySupplierPaymentTerms);
-    document.getElementById('billDueDate')?.addEventListener('input', (e) => {
-        e.target.dataset.touched = 'true';
-    });
     document.getElementById('billForm')?.addEventListener('submit', (e) => {
         e.preventDefault();
         if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }

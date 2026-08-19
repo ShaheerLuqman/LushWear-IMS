@@ -236,11 +236,24 @@ function displayMonthDetail(data) {
                 </section>
                 <section class="month-detail-section">
                     <h3 class="month-detail-section-heading">Products Sold by Collection</h3>
-                    <div class="month-detail-lines">
+                    <div class="month-detail-lines collection-breakdown">
                         ${(data.products_sold_by_collection || []).map(row => `
-                            <div class="month-detail-line">
-                                <span class="month-detail-line-label">${row.collection || 'Others'}</span>
-                                <span class="month-detail-line-value">${fmt(row.count)} units · Rs ${fmt(row.sum)}</span>
+                            <div class="collection-breakdown-group">
+                                <button type="button" class="month-detail-line collection-breakdown-toggle" ${(row.products || []).length ? '' : 'disabled'}>
+                                    <span class="month-detail-line-label">
+                                        ${(row.products || []).length ? '<span class="collection-breakdown-chevron">▸</span>' : ''}
+                                        ${escapeHtml(row.collection || 'Others')}
+                                    </span>
+                                    <span class="month-detail-line-value">${fmt(row.count)} units · Rs ${fmt(row.sum)}</span>
+                                </button>
+                                <div class="collection-breakdown-products">
+                                    ${(row.products || []).map(p => `
+                                        <div class="month-detail-line collection-breakdown-product">
+                                            <span class="month-detail-line-label">${escapeHtml(p.name)}</span>
+                                            <span class="month-detail-line-value">${fmt(p.count)} units · Rs ${fmt(p.sum)}</span>
+                                        </div>
+                                    `).join('')}
+                                </div>
                             </div>
                         `).join('')}
                     </div>
@@ -289,6 +302,9 @@ function displayMonthDetail(data) {
 function initMonthSummaryNav() {
     document.getElementById('backToMonthSummaryBtn')?.addEventListener('click', () => {
         switchView('monthSummary');
+    });
+    document.getElementById('monthDetailContent')?.addEventListener('click', (e) => {
+        e.target.closest('.collection-breakdown-toggle')?.parentElement.classList.toggle('expanded');
     });
 }
 

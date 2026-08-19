@@ -1824,7 +1824,9 @@ async def generate_packaging_list(request: Request, order_ids: List[str] = Body(
         orders = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
         if not orders:
             raise HTTPException(status_code=400, detail="All selected orders are cancelled")
-        aggregated, sizes = _aggregate_packaging_items(orders)
+        products = org_table(supabase, org_id, "shopify_products").select("id, name, collection").execute().data or []
+        resolve_collection = shopify.build_collection_resolver(products)
+        aggregated, sizes = _aggregate_packaging_items(orders, resolve_collection)
         pdf_buffer = await asyncio.to_thread(_generate_pdf_packaging_list, aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
@@ -1893,7 +1895,9 @@ async def generate_packaging_list_by_numbers(request: Request, body: PackagingLi
         orders = [o for o in orders if (o.get("order_status") or "").strip().lower() != "cancelled"]
         if not orders:
             raise HTTPException(status_code=400, detail="All matched orders are cancelled")
-        aggregated, sizes = _aggregate_packaging_items(orders)
+        products = org_table(supabase, org_id, "shopify_products").select("id, name, collection").execute().data or []
+        resolve_collection = shopify.build_collection_resolver(products)
+        aggregated, sizes = _aggregate_packaging_items(orders, resolve_collection)
         pdf_buffer = await asyncio.to_thread(_generate_pdf_packaging_list, aggregated, sizes, len(orders))
         return Response(
             content=pdf_buffer.getvalue(),
@@ -2052,7 +2056,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
                     return (coll, price)
             return ("Others", 0.0)
 
-        products_agg = {c: {"count": 0, "sum": 0.0} for c in KNOWN_COLLECTIONS + ["Others"]}
+        products_agg = {c: {"count": 0, "sum": 0.0, "items": {}} for c in KNOWN_COLLECTIONS + ["Others"]}
         for order in non_cancelled:
             for row in _order_line_rows(order):
                 qty = row["quantity"]
@@ -2063,8 +2067,22 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
                     coll, price = resolve_item_to_collection_and_price(row["product"])
                 products_agg[coll]["count"] += qty
                 products_agg[coll]["sum"] += price * qty
+                item = products_agg[coll]["items"].setdefault(row["product"] or "(unnamed)", {"count": 0, "sum": 0.0})
+                item["count"] += qty
+                item["sum"] += price * qty
         products_sold_by_collection = [
-            {"collection": c, "count": products_agg[c]["count"], "sum": round(products_agg[c]["sum"], 2)}
+            {
+                "collection": c,
+                "count": products_agg[c]["count"],
+                "sum": round(products_agg[c]["sum"], 2),
+                "products": sorted(
+                    (
+                        {"name": name, "count": item["count"], "sum": round(item["sum"], 2)}
+                        for name, item in products_agg[c]["items"].items()
+                    ),
+                    key=lambda p: -p["count"],
+                ),
+            }
             for c in KNOWN_COLLECTIONS + ["Others"]
         ]
 
