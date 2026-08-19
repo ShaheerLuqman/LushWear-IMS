@@ -3288,6 +3288,72 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     min-width: 0;
 }
 
+.bill-line-qty-total {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+}
+
+/* Falls into row 2 of the line's own grid (an implicit row under it) since
+   .bill-line only defines 5 explicit column tracks - spans all of them,
+   wide enough for a product's whole variant run rather than just the item
+   column's width. Holds the variant quantity grid, the cost-effect caption,
+   or both. */
+.bill-line-extra {
+    grid-column: 1 / -1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.bill-line-variant-qtys {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+    padding: 8px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.bill-line-variant-qty {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.bill-line-variant-qty-label {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.bill-line-variant-qty-input {
+    width: 56px;
+    padding: 6px 8px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 13px;
+    min-width: 0;
+}
+
+.bill-line-variant-qty-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.bill-line-cost-effect {
+    font-size: 0.76rem;
+    color: var(--text-muted);
+}
+
+.bill-line-cost-effect-up { color: var(--danger); }
+.bill-line-cost-effect-down { color: var(--success); }
+
 .bill-line-mode-toggle {
     flex: 0 0 38px;
     display: flex;

@@ -202,6 +202,10 @@ CREATE TABLE IF NOT EXISTS shopify_variants (
     org_id              UUID NOT NULL REFERENCES system_organizations(id),
     product_id          UUID NOT NULL REFERENCES shopify_products(id) ON DELETE CASCADE,
     shopify_variant_id  BIGINT UNIQUE,                 -- Shopify sync key
+    -- Addresses Shopify's inventory_levels/adjust.json (location + inventory item,
+    -- not variant) - needed to push a received/reverted bill's stock into Shopify
+    -- itself, not just this row. NULL for variants never synced from Shopify.
+    inventory_item_id   BIGINT,
     title               VARCHAR(255) NOT NULL,         -- e.g. "S", "M", "Red"
     quantity            INTEGER DEFAULT 0,
     created_at          TIMESTAMPTZ DEFAULT NOW(),
@@ -1684,6 +1688,10 @@ CREATE TABLE IF NOT EXISTS finances_bills (
     -- receive/unreceive transition so stock can't be applied twice or reversed
     -- for a bill that never applied it.
     stock_applied BOOLEAN NOT NULL DEFAULT FALSE,
+    -- {product_id: cost_price} as it stood immediately before receive_bill
+    -- last overwrote it, so unreceive_bill can put each product's price back
+    -- exactly. Set on receive, cleared on unreceive.
+    cost_price_snapshot JSONB,
     created_by    UUID REFERENCES system_users(id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1767,14 +1775,20 @@ $$;
 
 -- Adds (p_sign = 1) or removes (p_sign = -1) this bill's stock.
 --
--- Caveat worth knowing: receiving updates shopify_products.cost_price to the purchase
--- cost, but un-receiving does NOT restore the previous cost - the old value was
--- never recorded anywhere. Past orders are unaffected either way, since
--- shopify_orders.cost_price is snapshotted at order time.
+-- Receiving also lands each referenced product's cost_price: the
+-- quantity-weighted average of its own line(s) unit cost on this bill, plus
+-- an even share of the bill's tax/other-expense/discount spread across the
+-- whole bill's quantity (the same figure the bill modal previews live before
+-- it's confirmed). Each product's price beforehand is snapshotted onto the
+-- bill first, so un-receiving restores it exactly rather than leaving it at
+-- whatever this bill set it to.
 CREATE OR REPLACE FUNCTION apply_bill_stock(p_bill_id UUID, p_sign INT)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
+DECLARE
+    v_total_qty NUMERIC;
+    v_extra     NUMERIC := 0;
 BEGIN
     -- variants.quantity is INTEGER while a bill line can be fractional (fabric
     -- by the metre), so the movement is rounded to whole units.
@@ -1790,16 +1804,49 @@ BEGIN
      WHERE v.id = agg.variant_id;
 
     IF p_sign > 0 THEN
+        SELECT COALESCE(SUM(quantity), 0) INTO v_total_qty
+          FROM finances_bill_items WHERE bill_id = p_bill_id;
+
+        IF v_total_qty > 0 THEN
+            SELECT (b.tax_amount + b.other_expense_amount - b.discount_amount) / v_total_qty
+              INTO v_extra
+              FROM finances_bills b WHERE b.id = p_bill_id;
+        END IF;
+
+        UPDATE finances_bills
+           SET cost_price_snapshot = (
+                   SELECT jsonb_object_agg(p.id::text, p.cost_price)
+                     FROM shopify_products p
+                    WHERE p.id IN (
+                        SELECT DISTINCT product_id FROM finances_bill_items
+                         WHERE bill_id = p_bill_id AND product_id IS NOT NULL
+                    )
+               )
+         WHERE id = p_bill_id;
+
         UPDATE shopify_products p
-           SET cost_price = agg.unit_cost,
+           SET cost_price = ROUND(agg.avg_cost + v_extra, 2),
                updated_at = NOW()
           FROM (
-              SELECT DISTINCT ON (product_id) product_id, unit_cost
+              SELECT product_id, SUM(quantity * unit_cost) / SUM(quantity) AS avg_cost
                 FROM finances_bill_items
-               WHERE bill_id = p_bill_id AND product_id IS NOT NULL
-               ORDER BY product_id, created_at DESC
+               WHERE bill_id = p_bill_id AND product_id IS NOT NULL AND quantity > 0
+               GROUP BY product_id
           ) agg
          WHERE p.id = agg.product_id;
+
+    ELSIF p_sign < 0 THEN
+        UPDATE shopify_products p
+           SET cost_price = (snap.value #>> '{}')::NUMERIC,
+               updated_at = NOW()
+          FROM (
+              SELECT kv.key AS product_id, kv.value
+                FROM (SELECT cost_price_snapshot FROM finances_bills WHERE id = p_bill_id) b,
+                     jsonb_each(COALESCE(b.cost_price_snapshot, '{}'::jsonb)) kv
+          ) snap
+         WHERE p.id = snap.product_id::UUID;
+
+        UPDATE finances_bills SET cost_price_snapshot = NULL WHERE id = p_bill_id;
     END IF;
 END;
 $$;

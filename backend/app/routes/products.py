@@ -147,11 +147,15 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
             return False
         
         def variant_has_changed(shopify_data, existing_data):
-            fields_to_compare = ["title", "quantity"]
+            # inventory_item_id is compared here too so it gets backfilled onto
+            # variants synced before it was tracked, as soon as anything else
+            # about them changes (or immediately, since existing_data won't have
+            # it yet and so will differ from Shopify's value).
+            fields_to_compare = ["title", "quantity", "inventory_item_id"]
             for field in fields_to_compare:
                 shopify_val = normalize_value(shopify_data.get(field))
                 existing_val = normalize_value(existing_data.get(field))
-                if field == "quantity":
+                if field in ("quantity", "inventory_item_id"):
                     shopify_num = int(shopify_val) if shopify_val is not None else 0
                     existing_num = int(existing_val) if existing_val is not None else 0
                     if shopify_num != existing_num:
@@ -289,6 +293,10 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
                     "title": variant_title,
                     "quantity": quantity,
                     "shopify_variant_id": shopify_variant_id,
+                    # Needed to push inventory adjustments back to Shopify (bills.py) -
+                    # inventory_levels/adjust.json addresses a location + inventory item,
+                    # not a variant.
+                    "inventory_item_id": variant.get("inventory_item_id"),
                     "updated_at": current_time
                 }
                 

@@ -49,6 +49,22 @@ def _tables(bill, items=None):
     }
 
 
+VARIANT_ID = "eeeeeeee-0000-0000-0000-000000000001"
+INVENTORY_ITEM_ID = 555
+
+
+def _tables_with_shopify_variant(bill, quantity=7.0):
+    """A bill line referencing a Shopify-linked variant, so receiving/reverting
+    it has something to push to Shopify's own inventory."""
+    tables = _tables(bill, items=[{
+        "id": "i1", "bill_id": BILL_ID,
+        "product_id": None, "variant_id": VARIANT_ID, "description": "Cotton Tee - M",
+        "quantity": quantity, "unit_cost": 500.0, "amount": quantity * 500.0,
+    }])
+    tables["shopify_variants"] = [{"id": VARIANT_ID, "inventory_item_id": INVENTORY_ITEM_ID}]
+    return tables
+
+
 class TestCreateBill:
     def test_creates_a_draft_with_an_allocated_number(self, make_client):
         client = make_client(
@@ -161,6 +177,98 @@ class TestReceive:
 
         assert response.status_code == 200, response.text
         assert ("receive_bill", {"p_bill_id": BILL_ID}) in bills.get_supabase().rpc_calls
+
+
+class TestShopifyInventorySync:
+    """A bill's stock also has to land in Shopify's own inventory - our
+    variants.quantity is overwritten from Shopify on every products sync, so a
+    purchase that only updated our DB would be silently wiped out later."""
+
+    def _patch_shopify(self, monkeypatch, location_id=999, on_adjust=None):
+        import app.routes.bills as bills
+
+        async def fake_ensure_token(_org_id, settings):
+            return settings
+
+        async def fake_location(_creds):
+            return location_id
+
+        calls = []
+
+        async def fake_adjust(adjustments, loc_id, _creds):
+            if on_adjust:
+                on_adjust()
+            calls.append((adjustments, loc_id))
+
+        monkeypatch.setattr(bills, "ensure_valid_shopify_token", fake_ensure_token)
+        monkeypatch.setattr(bills, "get_org_integration_settings", lambda _org_id: object())
+        monkeypatch.setattr(bills.shopify, "get_primary_location_id", fake_location)
+        monkeypatch.setattr(bills.shopify, "adjust_inventory_levels", fake_adjust)
+        return calls
+
+    def test_receive_pushes_a_positive_adjustment_for_linked_variants(self, make_client, monkeypatch):
+        client = make_client(tables=_tables_with_shopify_variant(_bill(status="received"), quantity=7))
+        calls = self._patch_shopify(monkeypatch)
+
+        response = client.post(f"/api/bills/{BILL_ID}/receive")
+
+        assert response.status_code == 200, response.text
+        assert calls == [([(INVENTORY_ITEM_ID, 7)], 999)]
+
+    def test_receive_with_nothing_shopify_linked_never_calls_shopify(self, make_client, monkeypatch):
+        client = make_client(tables=_tables(_bill(status="received")))
+        calls = self._patch_shopify(monkeypatch)
+
+        response = client.post(f"/api/bills/{BILL_ID}/receive")
+
+        assert response.status_code == 200, response.text
+        assert calls == []
+
+    def test_receive_rolls_back_locally_when_the_shopify_push_fails(self, make_client, monkeypatch):
+        client = make_client(tables=_tables_with_shopify_variant(_bill(status="received"), quantity=7))
+        import app.routes.bills as bills
+
+        def _boom():
+            raise RuntimeError("shopify is down")
+        self._patch_shopify(monkeypatch, on_adjust=_boom)
+
+        response = client.post(f"/api/bills/{BILL_ID}/receive")
+
+        assert response.status_code == 502
+        rpc_names = [name for name, _params in bills.get_supabase().rpc_calls]
+        assert rpc_names == ["receive_bill", "unreceive_bill"], "did not roll back the local receive"
+
+    def test_unreceive_pushes_a_negative_adjustment(self, make_client, monkeypatch):
+        client = make_client(tables=_tables_with_shopify_variant(_bill(status="received"), quantity=7))
+        calls = self._patch_shopify(monkeypatch)
+
+        response = client.post(f"/api/bills/{BILL_ID}/unreceive")
+
+        assert response.status_code == 200, response.text
+        assert calls == [([(INVENTORY_ITEM_ID, -7)], 999)]
+
+    def test_unreceive_rolls_back_locally_when_the_shopify_push_fails(self, make_client, monkeypatch):
+        client = make_client(tables=_tables_with_shopify_variant(_bill(status="received"), quantity=7))
+        import app.routes.bills as bills
+
+        def _boom():
+            raise RuntimeError("shopify is down")
+        self._patch_shopify(monkeypatch, on_adjust=_boom)
+
+        response = client.post(f"/api/bills/{BILL_ID}/unreceive")
+
+        assert response.status_code == 502
+        rpc_names = [name for name, _params in bills.get_supabase().rpc_calls]
+        assert rpc_names == ["unreceive_bill", "receive_bill"], "did not roll back the local unreceive"
+
+    def test_cancel_of_a_received_bill_reverses_shopify_stock_too(self, make_client, monkeypatch):
+        client = make_client(tables=_tables_with_shopify_variant(_bill(status="received"), quantity=7))
+        calls = self._patch_shopify(monkeypatch)
+
+        response = client.post(f"/api/bills/{BILL_ID}/cancel")
+
+        assert response.status_code == 200, response.text
+        assert calls == [([(INVENTORY_ITEM_ID, -7)], 999)]
 
 
 class TestDerivedPaymentStatus:

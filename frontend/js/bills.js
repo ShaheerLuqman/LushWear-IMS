@@ -93,28 +93,46 @@ function emptyBillLine() {
         quantity: '',
         unit_cost: '',
         product_id: null,
+        // variant_id + quantity are used for a text line, or a product line
+        // whose product can't offer the per-variant grid (no variants, or a
+        // product deactivated since the line was set). variantQuantities is
+        // used instead once a product with variants is selected - see
+        // billLineUsesVariantGrid.
         variant_id: null,
+        variantQuantities: {},
     };
-}
-
-function billLineAmount(line) {
-    const qty = parseFloat(line.quantity);
-    const cost = parseFloat(line.unit_cost);
-    if (Number.isNaN(qty) || Number.isNaN(cost)) return 0;
-    return Math.round(qty * cost * 100) / 100;
 }
 
 function billLineProduct(line) {
     return products.find(p => p.id === line.product_id) || null;
 }
 
-// The bill only stores a free-text description, so a product/variant line's
-// description is generated here for display on the bill and its PDF.
-function billLineDisplayDescription(line) {
-    if (line.mode !== 'product') return line.description || null;
+// True once a line has a resolvable product that actually has variants - the
+// per-variant quantity grid replaces the single quantity field for it.
+function billLineUsesVariantGrid(line) {
+    if (line.mode !== 'product') return false;
     const product = billLineProduct(line);
-    if (!product) return null;
-    const variant = (product.variants || []).find(v => v.id === line.variant_id);
+    return !!(product && (product.variants || []).length);
+}
+
+function billLineTotalQty(line) {
+    if (billLineUsesVariantGrid(line)) {
+        return Object.values(line.variantQuantities || {})
+            .reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+    }
+    return parseFloat(line.quantity) || 0;
+}
+
+function billLineAmount(line) {
+    const qty = billLineTotalQty(line);
+    const cost = parseFloat(line.unit_cost);
+    if (!qty || Number.isNaN(cost)) return 0;
+    return Math.round(qty * cost * 100) / 100;
+}
+
+// The bill only stores a free-text description, so a product/variant's
+// description is generated here for display on the bill and its PDF.
+function billLineVariantDescription(product, variant) {
     return variant ? `${product.name} — ${variant.title}` : product.name;
 }
 
@@ -123,11 +141,75 @@ function billLineProductOptions(selectedId) {
         products.map(p => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
 }
 
-function billLineVariantOptions(product, selectedId) {
-    const variants = product?.variants || [];
-    if (!variants.length) return '<option value="">No variants</option>';
-    return '<option value="">Select variant...</option>' +
-        variants.map(v => `<option value="${v.id}" ${v.id === selectedId ? 'selected' : ''}>${escapeHtml(v.title)}</option>`).join('');
+// One quantity input per variant, defaulting to 0, so the whole size run of a
+// product can be entered in one go instead of one bill line per variant.
+function billLineVariantQtyGrid(line, variants, disabled) {
+    const qtys = line.variantQuantities || {};
+    return `<div class="bill-line-variant-qtys">
+        ${variants.map(v => `
+            <label class="bill-line-variant-qty">
+                <span class="bill-line-variant-qty-label">${escapeHtml(v.title)}</span>
+                <input type="number" class="bill-line-variant-qty-input" data-variant-id="${v.id}" min="0" step="1" value="${qtys[v.id] ?? '0'}" ${disabled}>
+            </label>
+        `).join('')}
+    </div>`;
+}
+
+// A bill's tax/other-expense/discount land on the goods, not just on the lines
+// that happen to reference a catalog product, so the per-unit share is spread
+// across the whole bill's quantity rather than only the product-tagged lines.
+function billLandedCostExtra() {
+    const totalQty = billLineDrafts.reduce((sum, l) => sum + billLineTotalQty(l), 0);
+    if (totalQty <= 0) return 0;
+    const discount = parseFloat(document.getElementById('billDiscount')?.value) || 0;
+    const tax = parseFloat(document.getElementById('billTax')?.value) || 0;
+    const otherExpense = parseFloat(document.getElementById('billOtherExpense')?.value) || 0;
+    return (tax + otherExpense - discount) / totalQty;
+}
+
+// Landed cost per product referenced on this bill: the quantity-weighted
+// average of its own line(s) unit cost (a product can appear on more than one
+// line, e.g. bought at a different cost in a separate line), plus its even
+// share of the bill's tax/other-expense/discount.
+function billProductLandedCosts() {
+    const extra = billLandedCostExtra();
+    const byProduct = new Map();
+    for (const line of billLineDrafts) {
+        if (line.mode !== 'product' || !line.product_id) continue;
+        const qty = billLineTotalQty(line);
+        const cost = parseFloat(line.unit_cost) || 0;
+        if (qty <= 0) continue;
+        const agg = byProduct.get(line.product_id) || { qty: 0, costTotal: 0 };
+        agg.qty += qty;
+        agg.costTotal += qty * cost;
+        byProduct.set(line.product_id, agg);
+    }
+    const result = new Map();
+    for (const [productId, agg] of byProduct) {
+        result.set(productId, Math.round((agg.costTotal / agg.qty + extra) * 100) / 100);
+    }
+    return result;
+}
+
+function billLineCostEffectHtml(product, newCost) {
+    const current = product.cost_price || 0;
+    const diff = Math.round((newCost - current) * 100) / 100;
+    const changeClass = diff > 0 ? 'bill-line-cost-effect-up' : diff < 0 ? 'bill-line-cost-effect-down' : '';
+    const change = diff === 0 ? '' : ` <span class="${changeClass}">(${diff > 0 ? '+' : ''}${formatMoney(diff)})</span>`;
+    return `Cost price: Rs ${formatMoney(current)} → Rs ${formatMoney(newCost)}${change}`;
+}
+
+// Patches the per-line cost-price captions in place rather than a full
+// renderBillLines(), so typing into a quantity/cost/tax/discount field doesn't
+// blow away the input's focus and cursor position on every keystroke.
+function updateCostEffects() {
+    const landedCosts = billProductLandedCosts();
+    document.querySelectorAll('.bill-line-cost-effect').forEach(el => {
+        const line = billLineDrafts[parseInt(el.dataset.index, 10)];
+        const product = line && line.mode === 'product' ? billLineProduct(line) : null;
+        const newCost = product ? landedCosts.get(product.id) : null;
+        el.innerHTML = (product && newCost != null) ? billLineCostEffectHtml(product, newCost) : '';
+    });
 }
 
 function renderBillLines() {
@@ -135,29 +217,47 @@ function renderBillLines() {
     if (!container) return;
 
     const disabled = billModalReadOnly ? 'disabled' : '';
+    const landedCosts = billModalReadOnly ? null : billProductLandedCosts();
     container.innerHTML = billLineDrafts.map((line, index) => {
         const product = line.mode === 'product' ? billLineProduct(line) : null;
         // The product list only holds active products, so a line referencing one
         // that's since been deactivated has nothing to put in the select — fall
         // back to the description already stored for it rather than show blank.
         const productMissing = line.mode === 'product' && line.product_id && !product;
+        const variants = product ? (product.variants || []) : [];
+        const usesVariantGrid = !!product && variants.length > 0;
+
         const itemField = productMissing
             ? `<input type="text" class="form-input" value="${escapeHtml(line.description || '')}" disabled>`
             : line.mode === 'product'
-            ? `<select class="form-input bill-line-product" ${disabled}>${billLineProductOptions(line.product_id)}</select>
-               <select class="form-input bill-line-variant" ${disabled || !product ? 'disabled' : ''}>${billLineVariantOptions(product, line.variant_id)}</select>`
+            ? `<select class="form-input bill-line-product" ${disabled}>${billLineProductOptions(line.product_id)}</select>`
             : `<input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>`;
         const toggleTitle = line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection';
         const toggleIcon = line.mode === 'product' ? 'fa-pen-to-square' : 'fa-list-check';
         const toggle = billModalReadOnly ? '' :
             `<button type="button" class="bill-line-mode-toggle" data-index="${index}" title="${toggleTitle}" aria-label="${toggleTitle}"><i class="fa-solid ${toggleIcon}"></i></button>`;
+
+        // A resolvable product with variants replaces the quantity field with
+        // a per-variant grid below, and shows their running total here instead.
+        const qtyCell = usesVariantGrid
+            ? `<span class="bill-line-qty-total">${billLineTotalQty(line)}</span>`
+            : `<input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0" ${disabled}>`;
+
+        const newCost = product && landedCosts ? landedCosts.get(product.id) : null;
+        const costEffect = product && newCost != null
+            ? `<div class="bill-line-cost-effect" data-index="${index}">${billLineCostEffectHtml(product, newCost)}</div>` : '';
+        const extra = usesVariantGrid || costEffect
+            ? `<div class="bill-line-extra">${usesVariantGrid ? billLineVariantQtyGrid(line, variants, disabled) : ''}${costEffect}</div>`
+            : '';
+
         return `
         <div class="bill-line" data-index="${index}">
             <div class="bill-line-desc-cell">${itemField}${toggle}</div>
-            <input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0" ${disabled}>
+            ${qtyCell}
             <input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00" ${disabled}>
             <span class="bill-line-amount">${formatMoney(billLineAmount(line))}</span>
             ${billModalReadOnly ? '' : `<button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>`}
+            ${extra}
         </div>`;
     }).join('');
 
@@ -168,22 +268,33 @@ function renderBillLines() {
         const line = billLineDrafts[index];
         const updateAmount = () => {
             row.querySelector('.bill-line-amount').textContent = formatMoney(billLineAmount(line));
+            const qtyTotalEl = row.querySelector('.bill-line-qty-total');
+            if (qtyTotalEl) qtyTotalEl.textContent = billLineTotalQty(line);
             renderBillTotals();
+            updateCostEffects();
         };
 
         row.querySelector('.bill-line-description')?.addEventListener('input', e => { line.description = e.target.value; });
-        row.querySelector('.bill-line-quantity').addEventListener('input', e => { line.quantity = e.target.value; updateAmount(); });
+        row.querySelector('.bill-line-quantity')?.addEventListener('input', e => { line.quantity = e.target.value; updateAmount(); });
         row.querySelector('.bill-line-cost').addEventListener('input', e => { line.unit_cost = e.target.value; updateAmount(); });
+        row.querySelectorAll('.bill-line-variant-qty-input').forEach(input => {
+            input.addEventListener('input', e => {
+                line.variantQuantities[e.target.dataset.variantId] = e.target.value;
+                updateAmount();
+            });
+        });
         row.querySelector('.bill-line-product')?.addEventListener('change', e => {
             line.product_id = e.target.value || null;
             line.variant_id = null;
+            line.variantQuantities = {};
+            line.quantity = '';
             renderBillLines();
         });
-        row.querySelector('.bill-line-variant')?.addEventListener('change', e => { line.variant_id = e.target.value || null; });
         row.querySelector('.bill-line-mode-toggle')?.addEventListener('click', () => {
             line.mode = line.mode === 'product' ? 'text' : 'product';
             line.product_id = null;
             line.variant_id = null;
+            line.variantQuantities = {};
             line.description = '';
             renderBillLines();
         });
@@ -210,6 +321,51 @@ function renderBillTotals() {
     const totalEl = document.getElementById('billTotal');
     if (subtotalEl) subtotalEl.textContent = formatMoney(subtotal);
     if (totalEl) totalEl.textContent = formatMoney(subtotal - discount + tax + otherExpense);
+}
+
+// Groups a saved bill's flat items back into draft rows for editing: items on
+// a product that currently has variants collapse into one row per (product,
+// unit cost) with a variantQuantities map, so it reopens showing the same
+// per-variant grid it would if just entered. Everything else (text lines, a
+// variant-less product, or one whose product was since deactivated) stays one
+// row per item, as it always was.
+function billItemsToDrafts(items) {
+    const drafts = [];
+    const groups = new Map();
+
+    for (const item of items) {
+        const product = item.product_id ? billLineProduct({ product_id: item.product_id }) : null;
+        const hasVariants = !!(product && (product.variants || []).length);
+
+        if (hasVariants && item.variant_id) {
+            const key = `${item.product_id}|${item.unit_cost}`;
+            let draft = groups.get(key);
+            if (!draft) {
+                draft = {
+                    _key: item.id, mode: 'product', description: '',
+                    quantity: '', unit_cost: item.unit_cost,
+                    product_id: item.product_id, variant_id: null, variantQuantities: {},
+                };
+                groups.set(key, draft);
+                drafts.push(draft);
+            }
+            draft.variantQuantities[item.variant_id] = item.quantity;
+            continue;
+        }
+
+        drafts.push({
+            _key: item.id,
+            mode: item.product_id ? 'product' : 'text',
+            description: item.description || '',
+            quantity: item.quantity,
+            unit_cost: item.unit_cost,
+            product_id: item.product_id || null,
+            variant_id: item.variant_id || null,
+            variantQuantities: {},
+        });
+    }
+
+    return drafts;
 }
 
 async function openBillModal(billId) {
@@ -244,15 +400,7 @@ async function openBillModal(billId) {
         document.getElementById('billTax').value = bill.tax_amount || 0;
         document.getElementById('billOtherExpense').value = bill.other_expense_amount || 0;
         document.getElementById('billNotes').value = bill.notes || '';
-        billLineDrafts = (bill.items || []).map(item => ({
-            _key: item.id,
-            mode: item.product_id ? 'product' : 'text',
-            description: item.description || '',
-            quantity: item.quantity,
-            unit_cost: item.unit_cost,
-            product_id: item.product_id || null,
-            variant_id: item.variant_id || null,
-        }));
+        billLineDrafts = billItemsToDrafts(bill.items || []);
     } else {
         billModalReadOnly = false;
         document.getElementById('billModalTitle').textContent = 'New Bill';
@@ -308,10 +456,39 @@ function collectBillPayload() {
     const filled = billLineDrafts.filter(l => l.quantity !== '' || l.unit_cost !== '' || l.description || l.product_id);
     const items = [];
     for (const line of filled) {
-        const qty = parseFloat(line.quantity);
         const cost = parseFloat(line.unit_cost);
-        if (Number.isNaN(qty) || qty <= 0 || Number.isNaN(cost) || cost < 0) {
-            showToast('Every line needs a quantity above 0 and a unit cost', 'error');
+        if (Number.isNaN(cost) || cost < 0) {
+            showToast('Every line needs a unit cost', 'error');
+            return null;
+        }
+
+        // A resolvable product with variants expands into one item per variant
+        // that was given a quantity above 0 - the rest (left at their default 0)
+        // are simply not purchased on this bill.
+        if (billLineUsesVariantGrid(line)) {
+            const product = billLineProduct(line);
+            const picked = (product.variants || [])
+                .map(v => ({ variant: v, qty: parseFloat(line.variantQuantities[v.id]) || 0 }))
+                .filter(({ qty }) => qty > 0);
+            if (!picked.length) {
+                showToast(`Enter a quantity for at least one variant of ${product.name}`, 'error');
+                return null;
+            }
+            for (const { variant, qty } of picked) {
+                items.push({
+                    description: billLineVariantDescription(product, variant),
+                    quantity: qty,
+                    unit_cost: cost,
+                    product_id: product.id,
+                    variant_id: variant.id,
+                });
+            }
+            continue;
+        }
+
+        const qty = parseFloat(line.quantity);
+        if (Number.isNaN(qty) || qty <= 0) {
+            showToast('Every line needs a quantity above 0', 'error');
             return null;
         }
 
@@ -319,13 +496,9 @@ function collectBillPayload() {
         if (line.mode === 'product') {
             const product = billLineProduct(line);
             if (product) {
-                if ((product.variants || []).length && !line.variant_id) {
-                    showToast('Select a variant for every product line', 'error');
-                    return null;
-                }
+                // Resolvable, but has no variants to offer a grid for.
                 productId = product.id;
-                variantId = line.variant_id || null;
-                description = billLineDisplayDescription(line);
+                description = billLineVariantDescription(product, null);
             } else if (line.product_id) {
                 // References a product deactivated since the line was set — keep
                 // the existing reference and its already-stored label untouched.
@@ -337,13 +510,7 @@ function collectBillPayload() {
             }
         }
 
-        items.push({
-            description,
-            quantity: qty,
-            unit_cost: cost,
-            product_id: productId,
-            variant_id: variantId,
-        });
+        items.push({ description, quantity: qty, unit_cost: cost, product_id: productId, variant_id: variantId });
     }
     if (!items.length) { showToast('Add at least one line', 'error'); return null; }
 
@@ -361,6 +528,9 @@ function collectBillPayload() {
 
 // Shared by the Save button and Confirm Bill (which must persist edits before
 // posting them — otherwise a half-typed change would be silently dropped).
+// The cost-price preview shown while editing (see updateCostEffects) is purely
+// informational — it's only actually applied to the product when the bill is
+// confirmed (receive_bill lands it, unreceive_bill restores the prior price).
 async function persistBillPayload(payload) {
     try {
         if (editingBillId) {
@@ -396,6 +566,9 @@ async function billAction(billId, action, { confirm } = {}) {
     try {
         await apiJson(`/bills/${billId}/${action}`, { method: 'POST', fallback: `Failed to ${action} bill` });
         await loadBills();
+        // receive/unreceive (and cancel, which unreceives first) land or
+        // restore product cost_price server-side - refresh the local cache.
+        await loadProducts();
         return true;
     } catch (error) {
         console.error(`Error on bill ${action}:`, error);
@@ -691,9 +864,10 @@ function initBills() {
         billLineDrafts.push(emptyBillLine());
         renderBillLines();
     });
-    document.getElementById('billDiscount')?.addEventListener('input', renderBillTotals);
-    document.getElementById('billTax')?.addEventListener('input', renderBillTotals);
-    document.getElementById('billOtherExpense')?.addEventListener('input', renderBillTotals);
+    const onTotalsInputChanged = () => { renderBillTotals(); updateCostEffects(); };
+    document.getElementById('billDiscount')?.addEventListener('input', onTotalsInputChanged);
+    document.getElementById('billTax')?.addEventListener('input', onTotalsInputChanged);
+    document.getElementById('billOtherExpense')?.addEventListener('input', onTotalsInputChanged);
     document.getElementById('billForm')?.addEventListener('submit', (e) => {
         e.preventDefault();
         if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }

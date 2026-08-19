@@ -12,16 +12,19 @@ Receiving needs several writes to stay consistent — post the journal entry, ad
 stock, flip the status — so it is a Postgres function rather than a sequence of
 PostgREST calls. unreceive_bill is its exact reverse.
 """
+import math
 from datetime import date
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app import shopify
 from app.auth import get_org_id, require_auth
 from app.database import get_supabase
 from app.models import ApAgeingRow, Bill, BillCreate, BillUpdate
 from app.org_scope import org_table
+from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 
 router = APIRouter(prefix="/bills", tags=["bills"])
 
@@ -97,6 +100,71 @@ def _require_draft(bill: dict) -> None:
             status_code=400,
             detail=f"Only a draft bill can be edited (this one is {bill['status']})",
         )
+
+
+def _bill_variant_quantities(supabase, org_id: str, bill_id: str) -> List[tuple]:
+    """(inventory_item_id, quantity) per Shopify-linked variant this bill's
+    lines reference, summed across lines. variant_id is a soft link (no FK,
+    same convention as shopify_orders.line_items), so this can't be a
+    PostgREST embed - two queries instead."""
+    items = (
+        org_table(supabase, org_id, "finances_bill_items")
+        .select("variant_id, quantity")
+        .eq("bill_id", bill_id)
+        .not_.is_("variant_id", "null")
+        .execute()
+    ).data or []
+    if not items:
+        return []
+
+    qty_by_variant: Dict[str, float] = {}
+    for row in items:
+        qty_by_variant[row["variant_id"]] = qty_by_variant.get(row["variant_id"], 0) + row["quantity"]
+
+    variants = (
+        org_table(supabase, org_id, "shopify_variants")
+        .select("id, inventory_item_id")
+        .in_("id", list(qty_by_variant))
+        .execute()
+    ).data or []
+
+    return [
+        (v["inventory_item_id"], qty_by_variant[v["id"]])
+        for v in variants
+        if v.get("inventory_item_id")
+    ]
+
+
+async def _sync_shopify_stock(supabase, org_id: str, bill_id: str, sign: int) -> None:
+    """Applies (sign=1) or reverses (sign=-1) this bill's stock in Shopify's own
+    inventory too - variants.quantity is pulled from Shopify on every products
+    sync, so a purchase that only updated our DB would be silently wiped out by
+    the next one otherwise. No-op for a bill with nothing Shopify-linked on it."""
+    deltas = _bill_variant_quantities(supabase, org_id, bill_id)
+    if not deltas:
+        return
+    org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+    location_id = await shopify.get_primary_location_id(org_creds)
+    await shopify.adjust_inventory_levels(
+        # math.floor(qty + 0.5), not the builtin round() (banker's rounding on
+        # floats), to match apply_bill_stock's ROUND(agg.qty) - Postgres NUMERIC
+        # rounds .5 away from zero, so the two must agree or a fractional bill
+        # quantity (fabric by the metre) could round differently in each place.
+        [(item_id, sign * math.floor(qty + 0.5)) for item_id, qty in deltas], location_id, org_creds
+    )
+
+
+async def _unreceive_with_shopify_sync(supabase, org_id: str, bill_id: str, fail_detail: str) -> None:
+    """unreceive_bill plus the matching Shopify reversal - shared by the
+    /unreceive route and cancel_bill (which unreceives first). If the Shopify
+    call fails, re-receiving puts local state back rather than leaving the
+    bill un-received with its stock still sitting in Shopify."""
+    _rpc(supabase, "unreceive_bill", {"p_bill_id": bill_id})
+    try:
+        await _sync_shopify_stock(supabase, org_id, bill_id, sign=-1)
+    except Exception as e:
+        _rpc(supabase, "receive_bill", {"p_bill_id": bill_id})
+        raise HTTPException(status_code=502, detail=f"{fail_detail}: failed to update Shopify inventory ({e})")
 
 
 @router.get("/", response_model=List[Bill])
@@ -216,21 +284,28 @@ async def delete_bill(bill_id: str, org_id: str = Depends(get_org_id)):
 @router.post("/{bill_id}/receive", response_model=Bill)
 async def receive_bill(bill_id: str, org_id: str = Depends(get_org_id)):
     """Posts Dr Inventory/Expense per line, Dr Tax on Purchases, Cr the supplier
-    ledger — and adds the lines' stock. Idempotent."""
+    ledger — and adds the lines' stock, in both our DB and Shopify's. Idempotent.
+    If the Shopify push fails, the whole receive is rolled back rather than
+    leaving our stock and Shopify's disagreeing."""
     supabase = get_supabase()
     _get_bill_or_404(supabase, org_id, bill_id)
     _rpc(supabase, "receive_bill", {"p_bill_id": bill_id})
+    try:
+        await _sync_shopify_stock(supabase, org_id, bill_id, sign=1)
+    except Exception as e:
+        _rpc(supabase, "unreceive_bill", {"p_bill_id": bill_id})
+        raise HTTPException(status_code=502, detail=f"Bill not received: failed to update Shopify inventory ({e})")
     return _attach_items(supabase, org_id, [_get_bill_or_404(supabase, org_id, bill_id)])[0]
 
 
 @router.post("/{bill_id}/unreceive", response_model=Bill)
 async def unreceive_bill(bill_id: str, org_id: str = Depends(get_org_id)):
-    """Back to draft: unposts the journal entry and removes the stock again.
-    The supplier's balance moves with it, so what the bill leaves owing follows
-    automatically."""
+    """Back to draft: unposts the journal entry and removes the stock again, in
+    both our DB and Shopify's. The supplier's balance moves with it, so what
+    the bill leaves owing follows automatically."""
     supabase = get_supabase()
     _get_bill_or_404(supabase, org_id, bill_id)
-    _rpc(supabase, "unreceive_bill", {"p_bill_id": bill_id})
+    await _unreceive_with_shopify_sync(supabase, org_id, bill_id, "Bill not reverted")
     return _attach_items(supabase, org_id, [_get_bill_or_404(supabase, org_id, bill_id)])[0]
 
 
@@ -239,8 +314,8 @@ async def cancel_bill(bill_id: str, org_id: str = Depends(get_org_id)):
     supabase = get_supabase()
     bill = _get_bill_or_404(supabase, org_id, bill_id)
     if bill["status"] == "received":
-        # Unposts and reverses stock first.
-        _rpc(supabase, "unreceive_bill", {"p_bill_id": bill_id})
+        # Unposts and reverses stock (locally and in Shopify) first.
+        await _unreceive_with_shopify_sync(supabase, org_id, bill_id, "Bill not cancelled")
 
     org_table(supabase, org_id, "finances_bills").update({"status": "cancelled"}).eq("id", bill_id).execute()
     return _attach_items(supabase, org_id, [_get_bill_or_404(supabase, org_id, bill_id)])[0]

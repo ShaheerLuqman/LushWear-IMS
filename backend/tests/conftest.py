@@ -25,10 +25,18 @@ class FakeQuery:
         self._upserted = upserted
 
     def __getattr__(self, _name):
-        # select/eq/gte/lt/order/limit/range/is_/in_/not_ … all just continue the chain.
+        # select/eq/gte/lt/order/limit/range/is_/in_/… all just continue the chain.
         def _chain(*_args, **_kwargs):
             return self
         return _chain
+
+    @property
+    def not_(self):
+        # Real supabase-py exposes `not_` as a property (chained as
+        # `.not_.is_(...)`, not called), unlike every other filter here -
+        # __getattr__ alone would hand back the _chain function itself instead
+        # of continuing the chain.
+        return self
 
     def upsert(self, json, **_kwargs):
         if self._upserted is not None:

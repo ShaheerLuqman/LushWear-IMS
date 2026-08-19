@@ -162,6 +162,52 @@ async def fetch_all(
     return records, page_count
 
 
+async def get_primary_location_id(org_creds: OrgIntegrationSettings) -> int:
+    """The location inventory_levels/adjust.json posts to. Bills assume a
+    single location - the shop's first one - since there's no location picker
+    in Settings; a store with more than one would need one added here."""
+    store_url, access_token = _credentials(org_creds)
+    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/locations.json"
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        response = await client.get(url, headers=headers)
+    response.raise_for_status()
+    locations = response.json().get("locations", [])
+    if not locations:
+        raise HTTPException(status_code=502, detail="Shopify returned no inventory locations")
+    return locations[0]["id"]
+
+
+async def adjust_inventory_levels(
+    adjustments: List[tuple[int, int]], location_id: int, org_creds: OrgIntegrationSettings
+) -> None:
+    """Apply each (inventory_item_id, delta) adjustment at location_id, e.g. so
+    a received purchase bill's stock lands in Shopify too - otherwise the next
+    products sync (which pulls quantity from Shopify) would silently wipe out
+    the local-only addition. Raises on the first failure; callers roll back
+    whatever local state they already committed."""
+    if not adjustments:
+        return
+    store_url, access_token = _credentials(org_creds)
+    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/inventory_levels/adjust.json"
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for inventory_item_id, delta in adjustments:
+            if delta == 0:
+                continue
+            for attempt in range(_MAX_RATE_LIMIT_RETRIES):
+                response = await client.post(url, headers=headers, json={
+                    "location_id": location_id,
+                    "inventory_item_id": inventory_item_id,
+                    "available_adjustment": delta,
+                })
+                if response.status_code != 429:
+                    break
+                retry_after = float(response.headers.get("Retry-After", 0) or 0)
+                await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
+            response.raise_for_status()
+
+
 async def fetch_product_collections(
     product_ids: List[int], org_creds: OrgIntegrationSettings
 ) -> Dict[int, List[str]]:
