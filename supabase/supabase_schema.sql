@@ -1635,9 +1635,7 @@ $$;
 -- Party attributes on ledgers
 -- ---------------------------------------------------------------------------
 -- Nullable and only meaningful on party accounts; a Rent or Sales ledger simply
--- leaves them empty. is_party marks the accounts the bill supplier picker
--- offers, so it doesn't list every expense head.
-ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS is_party           BOOLEAN NOT NULL DEFAULT FALSE;
+-- leaves them empty.
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS phone              VARCHAR(50);
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS email              VARCHAR(255);
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS address            TEXT;

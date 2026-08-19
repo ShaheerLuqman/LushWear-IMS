@@ -27,10 +27,7 @@ const BILL_STATUS_LABELS = {
 };
 
 function partyLedgers() {
-    // Falls back to Liability accounts for orgs that haven't marked parties yet,
-    // so bills are usable before anyone edits their supplier ledgers.
-    const parties = ledgers.filter(l => l.is_party);
-    return parties.length ? parties : ledgers.filter(l => l.type === 'Liability');
+    return ledgers.filter(l => l.type === 'Liability');
 }
 
 function ledgerName(id) {

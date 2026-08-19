@@ -254,8 +254,7 @@ class LedgerBase(BaseModel):
 
     # Party fields (Phase 2). A supplier is a ledger rather than a separate
     # contact, so these live here; they stay empty on non-party accounts like
-    # Rent or Sales. is_party is what the bill supplier picker filters on.
-    is_party: bool = False
+    # Rent or Sales.
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None
@@ -274,7 +273,6 @@ class LedgerUpdate(BaseModel):
     include_in_cash_in_hand: Optional[bool] = None
     opening_balance: Optional[float] = None
     report_category: Optional[ReportCategory] = None
-    is_party: Optional[bool] = None
     phone: Optional[str] = None
     email: Optional[str] = None
     address: Optional[str] = None

@@ -272,7 +272,6 @@ function renderLedgerCards() {
 // contact, so these live on the ledger form; they stay empty on ordinary
 // accounts like Rent or Sales.
 const LEDGER_PARTY_FIELDS = [
-    ['IsParty', 'is_party', 'checkbox'],
     ['TaxNumber', 'tax_number', 'text'],
     ['Phone', 'phone', 'text'],
     ['Email', 'email', 'text'],
