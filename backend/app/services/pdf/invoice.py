@@ -227,7 +227,7 @@ def _load_invoice_shipper_defaults() -> Dict[str, str]:
                 data = json.load(f)
                 shipper = (data.get("shipper_information") or {})
                 return {
-                    "name": shipper.get("name") or "Lushwear",
+                    "name": shipper.get("name") or "KeeWee",
                     "contact": shipper.get("contact") or "03390153893",
                     "pickup_address": shipper.get("pickup_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
                     "return_address": shipper.get("return_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
@@ -235,7 +235,7 @@ def _load_invoice_shipper_defaults() -> Dict[str, str]:
     except Exception:
         pass
     return {
-        "name": "Lushwear",
+        "name": "KeeWee",
         "contact": "03390153893",
         "pickup_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
         "return_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",

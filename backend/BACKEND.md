@@ -1,4 +1,4 @@
-# LushWear IMS — Backend
+# KeeWee IMS — Backend
 
 A technical overview of the backend as it exists today, followed by a
 production-oriented review: what's implemented, where the risks are, and how to
@@ -19,7 +19,7 @@ improve it. Written for the current state of the `webapp-migration` branch.
 
 ## 1. What this backend is
 
-A **FastAPI** service that powers the LushWear Inventory Management System. It is
+A **FastAPI** service that powers the KeeWee Inventory Management System. It is
 a thin-but-busy API layer sitting between:
 
 - a **Vercel-hosted frontend** (static),

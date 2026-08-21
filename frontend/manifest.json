@@ -1,6 +1,6 @@
 {
-    "name": "LushWear Inventory Manager",
-    "short_name": "LushWear IMS",
+    "name": "KeeWee Inventory Manager",
+    "short_name": "KeeWee IMS",
     "start_url": "./index.html",
     "scope": "./",
     "display": "standalone",
@@ -8,9 +8,9 @@
     "theme_color": "#8b5cf6",
     "icons": [
         {
-            "src": "assets/Logo.png",
-            "sizes": "258x258",
-            "type": "image/png",
+            "src": "assets/KEEWEE.svg",
+            "sizes": "any",
+            "type": "image/svg+xml",
             "purpose": "any"
         }
     ],
@@ -21,9 +21,9 @@
             "url": "./?action=create-entry",
             "icons": [
                 {
-                    "src": "assets/Logo.png",
-                    "sizes": "258x258",
-                    "type": "image/png"
+                    "src": "assets/KEEWEE.svg",
+                    "sizes": "any",
+                    "type": "image/svg+xml"
                 }
             ]
         },
@@ -33,9 +33,9 @@
             "url": "./?action=bulk-entry",
             "icons": [
                 {
-                    "src": "assets/Logo.png",
-                    "sizes": "258x258",
-                    "type": "image/png"
+                    "src": "assets/KEEWEE.svg",
+                    "sizes": "any",
+                    "type": "image/svg+xml"
                 }
             ]
         }

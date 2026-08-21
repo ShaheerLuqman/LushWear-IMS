@@ -1,6 +1,6 @@
-# LushWear IMS — Backend API
+# KeeWee IMS — Backend API
 
-FastAPI backend for the LushWear Inventory Management System, deployed as a
+FastAPI backend for the KeeWee Inventory Management System, deployed as a
 Docker container on **Northflank**. Data lives in Supabase; PDFs are generated
 server-side; integrates with Shopify and PostEx.
 

@@ -7,7 +7,7 @@
     <meta http-equiv="Content-Security-Policy"
         content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src https://fonts.gstatic.com https://cdn.jsdelivr.net data:; connect-src 'self' http://127.0.0.1:8000 https:; img-src 'self' data: https:;">
     <title>Inventory Manager</title>
-    <link rel="icon" type="image/png" href="assets/Logo.png">
+    <link rel="icon" type="image/svg+xml" href="assets/KEEWEE.svg">
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#8b5cf6">
     <link
@@ -31,13 +31,13 @@
     <!-- Auth gate (before data load): email/password login, or first-run org+admin setup -->
     <div id="authGateRoot" class="auth-gate-root">
         <div class="auth-gate-card">
-            <img src="assets/Logo_Large.png" alt="" class="auth-gate-logo">
+            <img src="assets/KEEWEE.svg" alt="" class="auth-gate-logo">
             <h2 id="authGateTitle" class="auth-gate-title" style="display: none;">Log in</h2>
             <p id="authGateWaiting" class="auth-gate-waiting"><span class="auth-gate-spinner"></span>Connecting to server…</p>
             <form id="authGateForm" class="auth-gate-form" autocomplete="off" style="display: none;">
                 <div id="authGateOrgNameWrap" class="auth-gate-extra-field" style="display: none;">
                     <label class="auth-gate-label" for="authGateOrgName">Organization name</label>
-                    <input type="text" id="authGateOrgName" class="auth-gate-input" maxlength="200" placeholder="e.g. LushWear">
+                    <input type="text" id="authGateOrgName" class="auth-gate-input" maxlength="200" placeholder="e.g. KeeWee">
                 </div>
                 <div id="authGateNameWrap" class="auth-gate-extra-field" style="display: none;">
                     <label class="auth-gate-label" for="authGateName">Your name</label>
@@ -63,7 +63,7 @@
     <!-- Loading Screen -->
     <div id="loadingScreen" class="loading-screen" style="display: none;">
         <div class="loading-content">
-            <img src="assets/Logo_Large.png" alt="LUSHWEAR" class="loading-logo">
+            <img src="assets/KEEWEE.svg" alt="KEEWEE" class="loading-logo">
             <div class="loading-spinner"></div>
             <p>Loading your data...</p>
         </div>
@@ -71,9 +71,9 @@
     
     <!-- Install-as-desktop-app prompt -->
     <div id="installAppBanner" class="install-app-banner" style="display: none;">
-        <img src="assets/Logo.png" alt="" class="install-app-banner-icon">
+        <img src="assets/KEEWEE.svg" alt="" class="install-app-banner-icon">
         <div class="install-app-banner-text">
-            <p id="installAppBannerTitle" class="install-app-banner-title">Install LushWear IMS</p>
+            <p id="installAppBannerTitle" class="install-app-banner-title">Install KeeWee IMS</p>
             <p id="installAppBannerSubtitle" class="install-app-banner-subtitle">Add a desktop shortcut for quicker access</p>
         </div>
         <button type="button" id="installAppBtn" class="btn btn-primary">Install</button>
@@ -133,8 +133,8 @@
         <div class="sidebar-rail">
             <aside class="sidebar" id="sidebar">
                 <div class="logo">
-                    <img src="assets/Logo.png" alt="SoftLush" class="logo-img">
-                    <span class="logo-text">SoftLush</span>
+                    <img src="assets/KEEWEE.svg" alt="KeeWee" class="logo-img">
+                    <span class="logo-text">KeeWee</span>
                 </div>
                 <nav class="nav-menu">
                     <div class="nav-section" data-feature-section="orders">
@@ -148,7 +148,7 @@
                             <span class="nav-icon"><i data-lucide="package"></i></span>
                             <span class="nav-tooltip">Orders</span>
                         </button>
-                        <button class="nav-item" data-view="products" title="Products">
+                        <button class="nav-item" data-view="products" title="Products" style="display: none;">
                             <span class="nav-icon"><i data-lucide="shopping-bag"></i></span>
                             <span class="nav-tooltip">Products</span>
                         </button>
