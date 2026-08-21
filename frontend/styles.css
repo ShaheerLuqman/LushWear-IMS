@@ -3283,9 +3283,38 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     min-width: 0;
 }
 
-.bill-line-desc-cell .form-input {
+.bill-line-desc-cell .form-input,
+.bill-line-desc-cell .bill-line-product-btn {
     flex: 1;
     min-width: 0;
+}
+
+/* Overrides folio-dropdown-btn's own (smaller, bg-card) sizing so the product
+   picker matches the row's other fields (Qty, Cost) instead of looking like a
+   shrunk-down transplant from the transactions grid. */
+.bill-line .bill-line-product-btn {
+    padding: 10px 12px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    font-family: var(--font-primary);
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.bill-line .bill-line-product-btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--accent-primary);
+}
+
+.bill-line .bill-line-product-btn.open {
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+.bill-line-product-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
 }
 
 .bill-line-qty-total {

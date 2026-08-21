@@ -136,9 +136,88 @@ function billLineVariantDescription(product, variant) {
     return variant ? `${product.name} — ${variant.title}` : product.name;
 }
 
-function billLineProductOptions(selectedId) {
-    return '<option value="">Select product...</option>' +
-        products.map(p => `<option value="${p.id}" ${p.id === selectedId ? 'selected' : ''}>${escapeHtml(p.name)}</option>`).join('');
+// A searchable dropdown rather than a plain <select> — there can be enough
+// products that scanning a flat list to find one is slower than typing a few
+// letters. Reuses the folio-dropdown-* styling/behavior the ledger picker
+// (orders-grid.js's createFolioCellRenderer) already established.
+let closeOpenBillProductDropdown = null;
+
+function billProductSearchMatches(filter) {
+    const q = filter.trim().toLowerCase();
+    if (!q) return products;
+    return products.filter(p => p.name.toLowerCase().includes(q));
+}
+
+function openBillProductDropdown(button, line, index) {
+    if (closeOpenBillProductDropdown) closeOpenBillProductDropdown();
+
+    button.classList.add('open');
+    const panel = document.createElement('div');
+    panel.className = 'folio-dropdown-panel';
+
+    const searchInput = document.createElement('input');
+    searchInput.type = 'text';
+    searchInput.className = 'folio-dropdown-search';
+    searchInput.placeholder = 'Search products...';
+    panel.appendChild(searchInput);
+
+    const optionsList = document.createElement('div');
+    optionsList.className = 'folio-dropdown-options';
+    panel.appendChild(optionsList);
+
+    function renderOptions(filter) {
+        const matches = billProductSearchMatches(filter || '');
+        optionsList.innerHTML = '';
+        matches.forEach(p => {
+            const option = document.createElement('div');
+            option.className = 'folio-dropdown-option' + (p.id === line.product_id ? ' selected' : '');
+            option.textContent = p.name;
+            option.addEventListener('click', () => {
+                line.product_id = p.id;
+                line.variant_id = null;
+                line.variantQuantities = {};
+                line.quantity = '';
+                closeDropdown();
+                renderBillLines();
+            });
+            optionsList.appendChild(option);
+        });
+        if (!matches.length) {
+            const empty = document.createElement('div');
+            empty.className = 'folio-dropdown-empty';
+            empty.textContent = 'No products found';
+            optionsList.appendChild(empty);
+        }
+    }
+
+    function closeDropdown() {
+        if (panel.parentNode) panel.parentNode.removeChild(panel);
+        button.classList.remove('open');
+        document.removeEventListener('mousedown', outsideClickHandler);
+        closeOpenBillProductDropdown = null;
+    }
+    closeOpenBillProductDropdown = closeDropdown;
+
+    searchInput.addEventListener('input', e => renderOptions(e.target.value));
+    searchInput.addEventListener('keydown', e => { if (e.key === 'Escape') closeDropdown(); });
+    renderOptions();
+
+    document.body.appendChild(panel);
+    const rect = button.getBoundingClientRect();
+    panel.style.top = (rect.bottom + 2) + 'px';
+    panel.style.left = rect.left + 'px';
+    panel.style.minWidth = Math.max(rect.width, 220) + 'px';
+    setTimeout(() => searchInput.focus(), 0);
+
+    // mousedown, not click, so this fires (and tears the panel down) before
+    // whatever was clicked runs its own handler — including another row's
+    // Add line/Remove/product button, which would otherwise call
+    // renderBillLines() and orphan this panel (it lives on document.body,
+    // outside the #billLines container renderBillLines() replaces).
+    const outsideClickHandler = (e) => {
+        if (!panel.contains(e.target) && e.target !== button && !button.contains(e.target)) closeDropdown();
+    };
+    document.addEventListener('mousedown', outsideClickHandler);
 }
 
 // One quantity input per variant, defaulting to 0, so the whole size run of a
@@ -215,6 +294,9 @@ function updateCostEffects() {
 function renderBillLines() {
     const container = document.getElementById('billLines');
     if (!container) return;
+    // The dropdown panel lives on document.body, outside this container, so
+    // it would otherwise survive the innerHTML replace below as an orphan.
+    if (closeOpenBillProductDropdown) closeOpenBillProductDropdown();
 
     const disabled = billModalReadOnly ? 'disabled' : '';
     const landedCosts = billModalReadOnly ? null : billProductLandedCosts();
@@ -230,7 +312,10 @@ function renderBillLines() {
         const itemField = productMissing
             ? `<input type="text" class="form-input" value="${escapeHtml(line.description || '')}" disabled>`
             : line.mode === 'product'
-            ? `<select class="form-input bill-line-product" ${disabled}>${billLineProductOptions(line.product_id)}</select>`
+            ? `<button type="button" class="folio-dropdown-btn bill-line-product-btn" data-index="${index}" ${disabled}>
+                   <span class="folio-dropdown-text">${escapeHtml(product ? product.name : 'Search product...')}</span>
+                   <span class="folio-dropdown-arrow">▼</span>
+               </button>`
             : `<input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>`;
         const toggleTitle = line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection';
         const toggleIcon = line.mode === 'product' ? 'fa-pen-to-square' : 'fa-list-check';
@@ -283,12 +368,9 @@ function renderBillLines() {
                 updateAmount();
             });
         });
-        row.querySelector('.bill-line-product')?.addEventListener('change', e => {
-            line.product_id = e.target.value || null;
-            line.variant_id = null;
-            line.variantQuantities = {};
-            line.quantity = '';
-            renderBillLines();
+        row.querySelector('.bill-line-product-btn')?.addEventListener('click', e => {
+            e.stopPropagation();
+            openBillProductDropdown(e.currentTarget, line, index);
         });
         row.querySelector('.bill-line-mode-toggle')?.addEventListener('click', () => {
             line.mode = line.mode === 'product' ? 'text' : 'product';
@@ -438,6 +520,7 @@ function applyBillModalFooter(status) {
 }
 
 function closeBillModal() {
+    if (closeOpenBillProductDropdown) closeOpenBillProductDropdown();
     document.getElementById('billModal').classList.remove('active');
     editingBillId = null;
     billLineDrafts = [];
