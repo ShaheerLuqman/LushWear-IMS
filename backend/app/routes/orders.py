@@ -83,6 +83,34 @@ def _period_start_end(month: int, year: int):
     return start_utc.isoformat().replace('+00:00', 'Z'), end_utc.isoformat().replace('+00:00', 'Z')
 
 
+RECENT_ORDERS_MONTHS = 3
+
+
+def _period_containing(dt_pkt: datetime) -> Tuple[int, int]:
+    """(month, year) of the order period (22nd to next 21st) containing a PKT-aware datetime."""
+    if dt_pkt.day >= 22:
+        return dt_pkt.month, dt_pkt.year
+    month, year = dt_pkt.month - 1, dt_pkt.year
+    return (12, year - 1) if month == 0 else (month, year)
+
+
+def _shift_period(month: int, year: int, back: int) -> Tuple[int, int]:
+    """(month, year) of the period `back` periods before the given one."""
+    total = year * 12 + (month - 1) - back
+    return total % 12 + 1, total // 12
+
+
+def _recent_orders_cutoff_iso() -> str:
+    """UTC ISO instant for the start of the oldest period in "Recent Orders" (the last
+    RECENT_ORDERS_MONTHS periods) - the same 22nd-to-21st boundaries as the period filter,
+    not a raw calendar-months-back date, so a period's oldest order always matches between
+    the two views."""
+    month, year = _period_containing(datetime.now(PKT_TIMEZONE))
+    oldest_month, oldest_year = _shift_period(month, year, RECENT_ORDERS_MONTHS - 1)
+    start_iso, _ = _period_start_end(oldest_month, oldest_year)
+    return start_iso
+
+
 def _period_start_end_dates(month: int, year: int):
     """Return (start_date, end_date) as YYYY-MM-DD for the period (month 22 to next month 21 inclusive)."""
     start_date = f"{year}-{month:02d}-22"
@@ -118,31 +146,50 @@ def _reshape_delivery_status_latest(rows: List[dict]) -> List[dict]:
 
 @router.get("/", response_model=List[Order])
 async def get_all_orders(
-    month: int = Query(..., ge=1, le=12, description="Period month (1-12). Period is 22nd to next 21st."),
-    year: int = Query(..., ge=2000, le=2100, description="Period year."),
+    month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
+    year: int = Query(None, ge=2000, le=2100, description="Filter by period year."),
     org_id: str = Depends(get_org_id),
 ):
-    """Orders for a single month period (22nd to next 21st)."""
+    """Orders for a month period, or the last RECENT_ORDERS_MONTHS months (newest first) when no period is given ('Recent Orders')."""
     try:
         t_start = time.perf_counter()
         supabase = get_supabase()
 
-        start_iso, end_iso = _period_start_end(month, year)
-        period_orders = fetch_all(
+        if month is not None and year is not None:
+            start_iso, end_iso = _period_start_end(month, year)
+            period_orders = fetch_all(
+                lambda: org_table(supabase, org_id, "shopify_orders")
+                .select(ORDERS_LIST_SELECT)
+                .gte("order_receiving_date", start_iso)
+                .lt("order_receiving_date", end_iso)
+                .order("order_receiving_date", desc=True)
+                .order("order_number", desc=True)
+            )
+            period_orders = _reshape_delivery_status_latest(period_orders)
+            t_query = time.perf_counter()
+            logger.info(
+                "[get_all_orders] period=%s-%s query=%.2fs (rows=%d)",
+                month, year, t_query - t_start, len(period_orders),
+            )
+            return period_orders
+
+        # "Recent Orders": orders from the last RECENT_ORDERS_MONTHS periods, ranked by
+        # order_receiving_date (the actual recency the feature means, not insertion order).
+        cutoff_iso = _recent_orders_cutoff_iso()
+        recent = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select(ORDERS_LIST_SELECT)
-            .gte("order_receiving_date", start_iso)
-            .lt("order_receiving_date", end_iso)
+            .gte("order_receiving_date", cutoff_iso)
             .order("order_receiving_date", desc=True)
             .order("order_number", desc=True)
         )
-        period_orders = _reshape_delivery_status_latest(period_orders)
+        recent = _reshape_delivery_status_latest(recent)
         t_query = time.perf_counter()
         logger.info(
-            "[get_all_orders] period=%s-%s query=%.2fs (rows=%d)",
-            month, year, t_query - t_start, len(period_orders),
+            "[get_all_orders] recent since=%s query=%.2fs (rows=%d)",
+            cutoff_iso, t_query - t_start, len(recent),
         )
-        return period_orders
+        return recent
     except HTTPException:
         raise
     except Exception:

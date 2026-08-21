@@ -84,11 +84,11 @@ class TestOrders:
         assert "internal_debug_column" not in body
         assert body["total_amount"] == 2598.0
 
-    def test_period_is_required(self, make_client, order_row):
+    def test_period_is_optional_and_falls_back_to_recent_orders(self, make_client, order_row):
         client = make_client({"shopify_orders": [order_row]})
-        assert client.get("/api/orders/").status_code == 422
-        assert client.get("/api/orders/?month=6").status_code == 422
-        assert client.get("/api/orders/?year=2026").status_code == 422
+        for r in (client.get("/api/orders/"), client.get("/api/orders/?month=6"), client.get("/api/orders/?year=2026")):
+            assert r.status_code == 200
+            assert [o["order_number"] for o in r.json()] == [11308]
 
     def test_month_query_is_validated(self, make_client, order_row):
         client = make_client({"shopify_orders": [order_row]})

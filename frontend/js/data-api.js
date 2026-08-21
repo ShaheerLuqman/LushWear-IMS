@@ -103,44 +103,36 @@ function buildStaticPeriodOptions() {
     return options;
 }
 
-/** value ("month-year") of the current period - the default the dropdown resets to. */
-function getCurrentOrdersPeriodValue() {
-    const { month, year } = getCurrentOrdersPeriod();
-    return `${month}-${year}`;
-}
+/** Dropdown value for the "Recent Orders" option - orders across the last few periods. */
+const ALL_ORDERS_VALUE = '__all__';
 
 function populateOrdersPeriodFilterDropdown() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (!selectEl) return;
     const currentVal = selectEl.value;
-    const options = buildStaticPeriodOptions();
+    const options = [{ value: ALL_ORDERS_VALUE, label: 'Recent Orders' }, ...buildStaticPeriodOptions()];
     selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
-    if (currentVal && options.some((o) => o.value === currentVal)) {
-        selectEl.value = currentVal;
-    } else {
-        selectEl.value = getCurrentOrdersPeriodValue();
-    }
+    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : ALL_ORDERS_VALUE;
 }
 
-/** Loads orders for whichever period is currently selected in the period dropdown, falling
- * back to the current period when none is selected yet (e.g. initial load). Single entry
- * point for reloading orders - safe to call after any mutation without silently dropping
- * the user out of a selected past period back to "now". */
+/** Loads orders for whichever period is currently selected in the period dropdown, defaulting
+ * to "Recent Orders" when none is selected yet (e.g. initial load). Single entry point for
+ * reloading orders - safe to call after any mutation without silently dropping the user out
+ * of a selected past period back to "Recent Orders". */
 async function loadOrders() {
     const periodVal = document.getElementById('ordersPeriodFilter')?.value;
-    if (periodVal) {
+    if (periodVal && periodVal !== ALL_ORDERS_VALUE) {
         const [month, year] = periodVal.split('-');
         await loadOrdersForPeriod(Number(month), Number(year));
         return;
     }
 
-    const { month, year } = getCurrentOrdersPeriod();
     try {
-        orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders' });
+        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
 
         populateOrdersPeriodFilterDropdown();
         const selectEl = document.getElementById('ordersPeriodFilter');
-        if (selectEl) selectEl.value = getCurrentOrdersPeriodValue();
+        if (selectEl) selectEl.value = ALL_ORDERS_VALUE;
 
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
@@ -156,12 +148,29 @@ async function loadOrders() {
             orders = getSampleOrders();
             populateOrdersPeriodFilterDropdown();
             const sel = document.getElementById('ordersPeriodFilter');
-            if (sel) sel.value = getCurrentOrdersPeriodValue();
+            if (sel) sel.value = ALL_ORDERS_VALUE;
             if (ordersGridApi) {
                 ordersGridApi.setGridOption('rowData', orders);
                 setTimeout(() => updateFooterRow(), 0);
             }
         }
+    }
+}
+
+/** Load every order across all periods, newest first ("Recent Orders") from the API. */
+async function loadAllOrders() {
+    try {
+        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
+
+        if (ordersGridApi) {
+            ordersGridApi.setGridOption('rowData', orders);
+            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
+            setTimeout(() => updateFooterRow(), 0);
+        }
+    } catch (error) {
+        console.error('Error loading all orders:', error);
+        showToast('Failed to load orders', 'error');
+        if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
     }
 }
 
