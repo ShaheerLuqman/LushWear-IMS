@@ -316,7 +316,7 @@ function initInstallPrompt() {
     if (isMacSafari()) {
         const titleEl = document.getElementById('installAppBannerTitle');
         const subtitleEl = document.getElementById('installAppBannerSubtitle');
-        if (titleEl) titleEl.textContent = 'Install KeeWee IMS';
+        if (titleEl) titleEl.textContent = 'Install LushWear IMS';
         if (subtitleEl) subtitleEl.textContent = 'In the Safari menu bar: File → Add to Dock';
         if (installBtn) installBtn.style.display = 'none';
         showInstallBanner();
