@@ -50,16 +50,21 @@ function distinctCouriers(orderRows) {
     return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
+/** Default the courier filter to PostEx - for now, that's the only courier this report
+ * gets used for day to day. Falls back to "All couriers" once PostEx isn't in the list. */
 function populateCourierPaymentReportCourierFilter(orderRows) {
     const selectEl = document.getElementById('courierPaymentReportCourierFilter');
     if (!selectEl) return;
     const currentVal = selectEl.value;
+    const couriers = distinctCouriers(orderRows);
     const options = [
         { value: COURIER_FILTER_ALL, label: 'All couriers' },
-        ...distinctCouriers(orderRows).map((c) => ({ value: c, label: c })),
+        ...couriers.map((c) => ({ value: c, label: c })),
     ];
     selectEl.innerHTML = options.map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
-    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : COURIER_FILTER_ALL;
+    const postexCourier = couriers.find((c) => c.toLowerCase() === 'postex');
+    const defaultVal = postexCourier || COURIER_FILTER_ALL;
+    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : defaultVal;
 }
 
 /** Periods only (no "Recent Orders") - this page always looks at one period at a time,
