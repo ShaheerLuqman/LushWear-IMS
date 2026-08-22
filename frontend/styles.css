@@ -759,6 +759,11 @@ body:has(#ordersView.active) .header-actions {
     align-items: stretch;
 }
 
+/* Courier Resolution has 3 cards, not the dashboard's 5 */
+#courierResolutionView .stats-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .dashboard-collections-section {
     margin-bottom: 32px;
     width: 100%;
@@ -1596,16 +1601,32 @@ input[type="number"] {
 
 .bulk-update-actions {
     display: flex;
-    gap: 12px;
-    margin-top: 16px;
+    gap: 10px;
     flex-wrap: wrap;
 }
 
-/* Equal-width buttons in the Bulk update order modal */
+/* Buttons size to their label and wrap onto new lines as the modal narrows, instead of
+   the old fixed 200px chips (which overflowed once the courier-paid actions were added). */
 #bulkUpdateOrderForm .bulk-update-actions .btn {
-    flex: 0 0 200px;
-    width: 200px;
+    flex: 1 1 auto;
+    min-width: 130px;
     white-space: nowrap;
+}
+
+.bulk-update-action-group {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+.bulk-update-action-group-label {
+    display: block;
+    margin-bottom: 10px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
 }
 
 .bulk-update-results .bulk-update-results-title {

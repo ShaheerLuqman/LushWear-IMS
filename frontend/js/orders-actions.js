@@ -18,6 +18,9 @@ function initOrdersActions() {
     document.getElementById('bulkUpdateSetPieceReceived')?.addEventListener('click', bulkUpdatePieceReceived);
     document.getElementById('bulkUpdateSelectInGrid')?.addEventListener('click', bulkUpdateSelectInGrid);
     document.getElementById('bulkUpdateDeliveryChargesBtn')?.addEventListener('click', openBulkUpdateDeliveryChargesModal);
+    document.getElementById('bulkUpdateSetOrderSettled')?.addEventListener('click', () => submitBulkUpdateOrderSettled(true));
+    document.getElementById('bulkUpdateSetOrderUnsettled')?.addEventListener('click', () => submitBulkUpdateOrderSettled(false));
+    document.getElementById('courierResBulkSettleBtn')?.addEventListener('click', openBulkUpdateOrderModal);
 
     // Upload PostEx modal: file name display, upload button, close/cancel
     document.getElementById('ordersMoreActionUploadPostEx')?.addEventListener('click', openUploadPostExModal);

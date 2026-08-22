@@ -23,9 +23,11 @@ function openBulkUpdateOrderModal() {
     if (formEl) formEl.style.display = '';
     if (resultsEl) resultsEl.style.display = 'none';
     if (textarea) {
-        // Get selected orders and fill textarea with their order numbers
+        // Get selected orders and fill textarea with their order numbers - only when
+        // opened from the Orders view itself, so a stale selection left over from an
+        // earlier visit there doesn't silently prefill this modal from another page.
         let orderNumbersText = '';
-        if (ordersGridApi) {
+        if (currentView === 'orders' && ordersGridApi) {
             const selectedRows = ordersGridApi.getSelectedRows();
             if (selectedRows.length > 0) {
                 // Extract order numbers from selected rows, filter out footer row
@@ -336,6 +338,43 @@ document.getElementById('recalculateOrderCostsSubmit')?.addEventListener('click'
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();
 });
+
+/** Mark (or unmark) the pasted order numbers as settled (paid out by the courier) - shares
+ * the Bulk Update Order modal's textarea/results panel with the order-status actions above. */
+async function submitBulkUpdateOrderSettled(settled) {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const orderNumbers = parseOrderNumbersFromTextarea();
+    if (orderNumbers.length === 0) {
+        showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    const btn = document.getElementById(settled ? 'bulkUpdateSetOrderSettled' : 'bulkUpdateSetOrderUnsettled');
+    const originalText = btn?.textContent;
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="btn-loading-spinner"></span>' + originalText;
+    }
+    try {
+        const result = await apiJson('/orders/bulk-update-order-settled', {
+            method: 'POST',
+            body: { order_numbers: orderNumbers, is_order_settled: settled },
+            fallback: 'Bulk update failed'
+        });
+        showBulkUpdateResults(result);
+        loadOrders();
+        if (currentView === 'courierResolution') loadCourierResolution();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
 
 function parseOrderNumbersFromTextarea() {
     const textarea = document.getElementById('bulkUpdateOrderNumbers');

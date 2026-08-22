@@ -259,6 +259,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthDetail': 'Month Details',
         'products': 'Products',
         'loadSheetLogs': 'Load Sheet Logs',
+        'courierResolution': 'Courier Resolution',
         'settings': 'Settings'
     };
 
@@ -289,6 +290,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('ledgersHeaderWrap', viewName === 'ledgers');
     show('trialBalanceHeaderWrap', viewName === 'trialBalance');
     show('apAgeingHeaderWrap', viewName === 'apAgeing');
+    show('courierResolutionHeaderWrap', viewName === 'courierResolution', 'flex');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
@@ -333,6 +335,11 @@ function switchView(viewName, { skipReload = false } = {}) {
         loadApAgeing();
         setTimeout(() => {
             sizeGridColumns(apAgeingGridApi);
+        }, 100);
+    } else if (viewName === 'courierResolution') {
+        loadCourierResolution();
+        setTimeout(() => {
+            sizeGridColumns(courierResolutionGridApi);
         }, 100);
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail

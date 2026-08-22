@@ -184,6 +184,10 @@
                             <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
                             <span class="nav-tooltip">Load Sheet Logs</span>
                         </button>
+                        <button class="nav-item" data-view="courierResolution" title="Courier Resolution">
+                            <span class="nav-icon"><i data-lucide="truck"></i></span>
+                            <span class="nav-tooltip">Courier Resolution</span>
+                        </button>
                     </div>
                 </nav>
                 <div class="sidebar-lock-wrap">
@@ -293,6 +297,13 @@
                         <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
                         <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
+                    <div id="courierResolutionHeaderWrap" class="header-inline" style="display: none;">
+                        <label for="courierResolutionPeriodFilter" class="orders-period-filter-label">Period:</label>
+                        <select id="courierResolutionPeriodFilter" class="orders-period-filter" title="Filter by period (month 22 – next 21)"></select>
+                        <label for="courierResolutionCourierFilter" class="orders-period-filter-label">Courier:</label>
+                        <select id="courierResolutionCourierFilter" class="orders-period-filter" title="Filter by courier"></select>
+                        <button type="button" id="courierResBulkSettleBtn" class="btn btn-secondary header-toolbar-btn">Mark orders settled...</button>
+                    </div>
                 </div>
             </header>
 
@@ -373,6 +384,33 @@
 
                 <div id="apAgeingView" class="view">
                     <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
+                </div>
+
+                <!-- Courier Resolution View -->
+                <div id="courierResolutionView" class="view">
+                    <div class="stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Orders In Transit</span>
+                                <span class="stat-detail" id="courierResInTransitDetail"></span>
+                                <span class="stat-value" id="courierResInTransitCount">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Orders Resolved (Delivered/Returned)</span>
+                                <span class="stat-value" id="courierResResolvedCount">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Net Owed by Courier</span>
+                                <span class="stat-detail" id="courierResNetOwedDetail"></span>
+                                <span class="stat-value" id="courierResNetOwed">Rs 0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="courierResolutionGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Create / edit purchase bill -->
@@ -826,15 +864,33 @@
             <div class="modal-body">
                 <div id="bulkUpdateOrderForm">
                     <p class="modal-description">Enter order numbers, one per line:</p>
+                    <textarea id="bulkUpdateOrderNumbers" class="bulk-update-textarea" rows="6" placeholder="e.g. 2721&#10;2722&#10;2723"></textarea>
                     <p id="bulkUpdateOrderCount" class="bulk-update-order-count">0 orders</p>
-                    <textarea id="bulkUpdateOrderNumbers" class="bulk-update-textarea" rows="10" placeholder="e.g. 2721&#10;2722&#10;2723"></textarea>
-                    <div class="bulk-update-actions">
-                        <button type="button" id="bulkUpdateSetDelivered" class="btn btn-primary">Order status Delivered</button>
-                        <button type="button" id="bulkUpdateSetReturned" class="btn btn-secondary">Order status Returned</button>
-                        <button type="button" id="bulkUpdateSetCancelled" class="btn btn-secondary">Order status Cancelled</button>
-                        <button type="button" id="bulkUpdateSetPieceReceived" class="btn btn-secondary">Return Piece Received</button>
-                        <button type="button" id="bulkUpdateDeliveryChargesBtn" class="btn btn-secondary">Update delivery charges</button>
-                        <button type="button" id="bulkUpdateSelectInGrid" class="btn btn-secondary">Select Orders</button>
+
+                    <div class="bulk-update-action-group">
+                        <span class="bulk-update-action-group-label">Order status</span>
+                        <div class="bulk-update-actions">
+                            <button type="button" id="bulkUpdateSetDelivered" class="btn btn-primary">Delivered</button>
+                            <button type="button" id="bulkUpdateSetReturned" class="btn btn-secondary">Returned</button>
+                            <button type="button" id="bulkUpdateSetCancelled" class="btn btn-secondary">Cancelled</button>
+                            <button type="button" id="bulkUpdateSetPieceReceived" class="btn btn-secondary">Returned + Piece Received</button>
+                        </div>
+                    </div>
+
+                    <div class="bulk-update-action-group">
+                        <span class="bulk-update-action-group-label">Courier &amp; charges</span>
+                        <div class="bulk-update-actions">
+                            <button type="button" id="bulkUpdateSetOrderSettled" class="btn btn-success">Mark Order Settled</button>
+                            <button type="button" id="bulkUpdateSetOrderUnsettled" class="btn btn-secondary">Mark Order Unsettled</button>
+                            <button type="button" id="bulkUpdateDeliveryChargesBtn" class="btn btn-secondary">Update Delivery Charges</button>
+                        </div>
+                    </div>
+
+                    <div class="bulk-update-action-group">
+                        <span class="bulk-update-action-group-label">Grid</span>
+                        <div class="bulk-update-actions">
+                            <button type="button" id="bulkUpdateSelectInGrid" class="btn btn-secondary">Select in Grid</button>
+                        </div>
                     </div>
                 </div>
                 <div id="bulkUpdateOrderResults" class="bulk-update-results" style="display: none;">
@@ -1133,6 +1189,7 @@
     <script src="js/ledgers.js"></script>
     <script src="js/trial-balance.js"></script>
     <script src="js/bills.js"></script>
+    <script src="js/courier-resolution.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/delivery-status.js"></script>

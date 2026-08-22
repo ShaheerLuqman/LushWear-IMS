@@ -12,6 +12,7 @@ function initGrids() {
     initLedgerDetailGrid();
     initTrialBalance();
     initBills();
+    initCourierResolution();
 }
 
 // Size order mapping for variant sorting
@@ -627,6 +628,22 @@ function computeNetProfit(row) {
     return total - (delivery + tax + cost);
 }
 
+/** Amount the courier still owes for one order: total - (advance + delivery + tax), or
+ * -delivery for a returned order (a negative result means the shop owes the courier
+ * instead, e.g. a return handling fee). null when not delivered/returned or delivery_charge
+ * not yet recorded. Single source of truth for the receivable column/footer sum here and
+ * for the Courier Resolution page (courier-resolution.js) - keep both reading from here. */
+function computeReceivable(row) {
+    const status = (row.order_status || '').toLowerCase();
+    const delivery = parseFloat(row.delivery_charge) || 0;
+    if ((status !== 'delivered' && status !== 'returned') || delivery === 0) return null;
+    if (status === 'returned') return -delivery;
+    const total = parseFloat(row.total_amount) || 0;
+    const advance = parseFloat(row.advance_amount) || 0;
+    const tax = parseFloat(row.tax_amount) || 0;
+    return total - (advance + delivery + tax);
+}
+
 function initOrdersGrid() {
     const gridDiv = document.getElementById('ordersGrid');
     if (!gridDiv) return;
@@ -690,11 +707,7 @@ function initOrdersGrid() {
             // Calculate receivable per row (only for delivered or returned orders with delivery_charge set)
             if ((status === 'delivered' || status === 'returned') && rowDelivery > 0) {
                 total_amount_for_profit += rowTotal; // Track total for profit % calculation
-                if (status === 'returned') {
-                    receivable += -rowDelivery;
-                } else {
-                    receivable += rowTotal - (rowAdvance + rowDelivery + rowTax);
-                }
+                receivable += computeReceivable(row);
             }
             
             const rowNetProfit = computeNetProfit(row);

@@ -9,6 +9,17 @@
  * re-scanning the DOM on every grid refresh. */
 const REFRESH_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>';
 
+/** CSS class for an order_status badge - shared by the Orders grid and the Courier
+ * Resolution page so status colors never drift between the two. */
+function orderStatusBadgeClass(status) {
+    if (status === 'fulfilled') return 'grid-status-fulfilled';
+    if (status === 'delivered') return 'grid-status-delivered';
+    if (status === 'returned') return 'grid-status-returned';
+    if (status === 'cancelled') return 'grid-status-cancelled';
+    if (status === 'RFD' || status === 'ICA' || status === 'CNA') return 'grid-status-rfd';
+    return 'grid-status-unfulfilled'; // unfulfilled, legacy 'pending'
+}
+
 function buildOrdersGridColumns() {
     const textFilterContains = { filterOptions: ['contains'], defaultOption: 'contains' };
     const numberFilterExact = { filterOptions: ['equals'], defaultOption: 'equals', maxNumConditions: 1 };
@@ -86,16 +97,7 @@ function buildOrdersGridColumns() {
             cellRenderer: (params) => {
                 if (params.data && params.data.id === '__footer__') return '';
                 const status = params.value || '';
-                let cssClass = 'grid-status-unfulfilled';
-                if (status === 'fulfilled') cssClass = 'grid-status-fulfilled';
-                else if (status === 'delivered') cssClass = 'grid-status-delivered';
-                else if (status === 'returned') cssClass = 'grid-status-returned';
-                else if (status === 'cancelled') cssClass = 'grid-status-cancelled';
-                else if (status === 'RFD') cssClass = 'grid-status-rfd';
-                else if (status === 'ICA') cssClass = 'grid-status-rfd';
-                else if (status === 'CNA') cssClass = 'grid-status-rfd';
-                else if (status === 'pending') cssClass = 'grid-status-unfulfilled'; /* legacy */
-                return `<span class="grid-status-badge ${cssClass}">${escapeHtml(status)}</span>`;
+                return `<span class="grid-status-badge ${orderStatusBadgeClass(status)}">${escapeHtml(status)}</span>`;
             }
         },
         {

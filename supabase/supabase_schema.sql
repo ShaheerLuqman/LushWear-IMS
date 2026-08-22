@@ -245,6 +245,9 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     line_items               JSONB NOT NULL DEFAULT '[]',
     piece_received           TEXT NOT NULL DEFAULT 'Pending'
                                  CHECK (piece_received IN ('Pending', 'Done', 'Received')),
+    -- Whether the courier has actually paid out this order's receivable - independent
+    -- of advance_status, which is about the customer's advance, not the courier's payout.
+    is_order_settled         BOOLEAN NOT NULL DEFAULT false,
     replacement_of_order_no  INTEGER,
     created_at               TIMESTAMPTZ DEFAULT NOW(),
     updated_at               TIMESTAMPTZ DEFAULT NOW(),

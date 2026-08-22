@@ -118,6 +118,10 @@ class OrderBase(BaseModel):
     # Advance reconciliation status (computed): 1=no advance, 2=shopify only,
     # 3=transaction only, 4=both match, 5=both mismatch
     advance_status: int = 1
+    # Whether the courier has actually paid out this order's receivable (see
+    # bulk-update-order-settled) - separate from advance_status, which is about the
+    # customer's advance, not the courier's payout.
+    is_order_settled: bool = False
 
 class OrderCreate(OrderBase):
     # Narrower than OrderBase: new orders should never be inserted with a null
@@ -140,6 +144,7 @@ class OrderUpdate(BaseModel):
     cost_price: Optional[float] = None
     order_receiving_date: Optional[datetime] = None
     line_items: Optional[List[OrderLineItem]] = None
+    is_order_settled: Optional[bool] = None
 
 class Order(OrderBase):
     id: str

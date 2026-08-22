@@ -130,7 +130,7 @@ def _period_start_end_dates(month: int, year: int):
 ORDERS_LIST_SELECT = (
     "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
     "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
-    "order_receiving_date, line_items, advance_status, replacement_of_order_no, "
+    "order_receiving_date, line_items, advance_status, is_order_settled, replacement_of_order_no, "
     "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
 )
 
@@ -1407,6 +1407,47 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody, org_id: 
         return {
             "updated_count": len(updated_order_numbers),
             "piece_received": "Received",
+            "requested_count": len(body.order_numbers),
+            "updated_order_numbers": sorted(updated_order_numbers),
+            "not_found_order_numbers": not_found_order_numbers,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class BulkUpdateOrderSettledBody(BaseModel):
+    order_numbers: List[int]
+    is_order_settled: bool = True
+
+
+@router.post("/bulk-update-order-settled")
+async def bulk_update_order_settled(body: BulkUpdateOrderSettledBody, org_id: str = Depends(get_org_id)):
+    """Mark (or unmark) multiple orders as paid out by the courier, by order_number."""
+    if not body.order_numbers:
+        raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    try:
+        supabase = get_supabase()
+        update_data = {
+            "is_order_settled": body.is_order_settled,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+        response = (
+            org_table(supabase, org_id, "shopify_orders")
+            .update(update_data)
+            .in_("order_number", body.order_numbers)
+            .execute()
+        )
+        updated_rows = response.data or []
+        updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
+        requested_set = set(body.order_numbers)
+        updated_set = set(updated_order_numbers)
+        not_found_order_numbers = sorted(requested_set - updated_set)
+        return {
+            "updated_count": len(updated_order_numbers),
+            "is_order_settled": body.is_order_settled,
             "requested_count": len(body.order_numbers),
             "updated_order_numbers": sorted(updated_order_numbers),
             "not_found_order_numbers": not_found_order_numbers,
