@@ -12,7 +12,7 @@ function initGrids() {
     initLedgerDetailGrid();
     initTrialBalance();
     initBills();
-    initCourierResolution();
+    initCourierPaymentReport();
 }
 
 // Size order mapping for variant sorting
@@ -719,7 +719,7 @@ function computeNetProfit(row) {
  * -delivery for a returned order (a negative result means the shop owes the courier
  * instead, e.g. a return handling fee). null when not delivered/returned or delivery_charge
  * not yet recorded. Single source of truth for the receivable column/footer sum here and
- * for the Courier Resolution page (courier-resolution.js) - keep both reading from here. */
+ * for the Courier Payment Report page (courier-payment-report.js) - keep both reading from here. */
 function computeReceivable(row) {
     const status = (row.order_status || '').toLowerCase();
     const delivery = parseFloat(row.delivery_charge) || 0;

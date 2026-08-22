@@ -365,7 +365,7 @@ async function submitBulkUpdateOrderSettled(settled) {
         });
         showBulkUpdateResults(result);
         loadOrders();
-        if (currentView === 'courierResolution') loadCourierResolution();
+        if (currentView === 'courierPaymentReport') loadCourierPaymentReport();
     } catch (error) {
         showToast(error.message || 'Bulk update failed', 'error');
     } finally {

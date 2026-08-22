@@ -759,9 +759,23 @@ body:has(#ordersView.active) .header-actions {
     align-items: stretch;
 }
 
-/* Courier Resolution has 3 cards, not the dashboard's 5 */
-#courierResolutionView .stats-grid {
+/* Courier Payment Report has 3 cards, not the dashboard's 5. Content-area padding is
+   zeroed for this view (see the table-views override below) so the cards and the grid
+   below read as one continuous surface - no outer margin, no gap between the two, and
+   the cards themselves sit flush against each other and the table with no rounding. */
+#courierPaymentReportView .stats-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0;
+    margin-bottom: 0;
+}
+
+#courierPaymentReportView .stat-card {
+    border-radius: 0;
+    border-width: 1px 1px 1px 0;
+}
+
+#courierPaymentReportView .stat-card:first-child {
+    border-left-width: 1px;
 }
 
 .dashboard-collections-section {
@@ -973,7 +987,8 @@ body:has(#ordersView.active) .header-actions {
 #transactionsView,
 #billsView,
 #trialBalanceView,
-#apAgeingView {
+#apAgeingView,
+#courierPaymentReportView {
     overflow: hidden;
     gap: 0;
     min-height: 0;
@@ -983,7 +998,8 @@ body:has(#ordersView.active) .header-actions {
 #transactionsView.active,
 #billsView.active,
 #trialBalanceView.active,
-#apAgeingView.active {
+#apAgeingView.active,
+#courierPaymentReportView.active {
     height: 100%;
     width: 100%;
 }
@@ -995,7 +1011,9 @@ body:has(#ordersView.active) .header-actions {
 #trialBalanceGrid,
 #trialBalanceGrid.grid-container,
 #apAgeingGrid,
-#apAgeingGrid.grid-container {
+#apAgeingGrid.grid-container,
+#courierPaymentReportGrid,
+#courierPaymentReportGrid.grid-container {
     flex: 1;
     min-height: 0;
     height: 100%;
@@ -1013,6 +1031,7 @@ body:has(#ordersView.active) .header-actions {
 .content-area:has(#billsView.active),
 .content-area:has(#trialBalanceView.active),
 .content-area:has(#apAgeingView.active),
+.content-area:has(#courierPaymentReportView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
 body:has(#productsView.active) .content-area,
@@ -1020,7 +1039,8 @@ body:has(#ledgerDetailView.active) .content-area,
 body:has(#ledgersView.active) .content-area,
 body:has(#billsView.active) .content-area,
 body:has(#trialBalanceView.active) .content-area,
-body:has(#apAgeingView.active) .content-area {
+body:has(#apAgeingView.active) .content-area,
+body:has(#courierPaymentReportView.active) .content-area {
     padding: 0;
 }
 
@@ -1807,14 +1827,16 @@ input[type="number"] {
 }
 
 /* Fixed-size report box: header/cards stay put, only the order list scrolls. */
-#deliveryStatusReportModal .modal-content {
+#deliveryStatusReportModal .modal-content,
+#courierPaymentReportOrdersModal .modal-content {
     width: 860px;
     max-width: 95vw;
     height: 640px;
     max-height: 90vh;
 }
 
-#deliveryStatusReportModal .modal-body {
+#deliveryStatusReportModal .modal-body,
+#courierPaymentReportOrdersModal .modal-body {
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1822,11 +1844,13 @@ input[type="number"] {
     overflow: hidden;
 }
 
-#deliveryStatusReportModal .postex-mismatches-table-wrap {
+#deliveryStatusReportModal .postex-mismatches-table-wrap,
+#courierPaymentReportOrdersModal .postex-mismatches-table-wrap {
     margin: 0;
 }
 
-#deliveryStatusReportModal .postex-mismatches-table thead th {
+#deliveryStatusReportModal .postex-mismatches-table thead th,
+#courierPaymentReportOrdersModal .postex-mismatches-table thead th {
     position: sticky;
     top: 0;
     background: var(--bg-card);
@@ -1834,7 +1858,9 @@ input[type="number"] {
 }
 
 #deliveryStatusReportModal .modal-description,
-#deliveryStatusReportModal .modal-actions {
+#deliveryStatusReportModal .modal-actions,
+#courierPaymentReportOrdersModal .modal-description,
+#courierPaymentReportOrdersModal .modal-actions {
     flex-shrink: 0;
 }
 

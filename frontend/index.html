@@ -184,9 +184,9 @@
                             <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
                             <span class="nav-tooltip">Load Sheet Logs</span>
                         </button>
-                        <button class="nav-item" data-view="courierResolution" title="Courier Resolution">
+                        <button class="nav-item" data-view="courierPaymentReport" title="Courier Payment Report">
                             <span class="nav-icon"><i data-lucide="truck"></i></span>
-                            <span class="nav-tooltip">Courier Resolution</span>
+                            <span class="nav-tooltip">Courier Payment Report</span>
                         </button>
                     </div>
                 </nav>
@@ -297,12 +297,11 @@
                         <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
                         <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
-                    <div id="courierResolutionHeaderWrap" class="header-inline" style="display: none;">
-                        <label for="courierResolutionPeriodFilter" class="orders-period-filter-label">Period:</label>
-                        <select id="courierResolutionPeriodFilter" class="orders-period-filter" title="Filter by period (month 22 – next 21)"></select>
-                        <label for="courierResolutionCourierFilter" class="orders-period-filter-label">Courier:</label>
-                        <select id="courierResolutionCourierFilter" class="orders-period-filter" title="Filter by courier"></select>
-                        <button type="button" id="courierResBulkSettleBtn" class="btn btn-secondary header-toolbar-btn">Mark orders settled...</button>
+                    <div id="courierPaymentReportHeaderWrap" class="header-inline" style="display: none;">
+                        <label for="courierPaymentReportPeriodFilter" class="orders-period-filter-label">Period:</label>
+                        <select id="courierPaymentReportPeriodFilter" class="orders-period-filter" title="Filter by period (month 22 – next 21)"></select>
+                        <label for="courierPaymentReportCourierFilter" class="orders-period-filter-label">Courier:</label>
+                        <select id="courierPaymentReportCourierFilter" class="orders-period-filter" title="Filter by courier"></select>
                     </div>
                 </div>
             </header>
@@ -386,31 +385,31 @@
                     <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
-                <!-- Courier Resolution View -->
-                <div id="courierResolutionView" class="view">
+                <!-- Courier Payment Report View -->
+                <div id="courierPaymentReportView" class="view">
                     <div class="stats-grid">
                         <div class="stat-card">
                             <div class="stat-info">
                                 <span class="stat-label">Orders In Transit</span>
-                                <span class="stat-detail" id="courierResInTransitDetail"></span>
-                                <span class="stat-value" id="courierResInTransitCount">0</span>
+                                <span class="stat-detail" id="courierPayReportInTransitDetail"></span>
+                                <span class="stat-value" id="courierPayReportInTransitCount">0</span>
                             </div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-info">
                                 <span class="stat-label">Orders Resolved (Delivered/Returned)</span>
-                                <span class="stat-value" id="courierResResolvedCount">0</span>
+                                <span class="stat-value" id="courierPayReportResolvedCount">0</span>
                             </div>
                         </div>
                         <div class="stat-card">
                             <div class="stat-info">
                                 <span class="stat-label">Net Owed by Courier</span>
-                                <span class="stat-detail" id="courierResNetOwedDetail"></span>
-                                <span class="stat-value" id="courierResNetOwed">Rs 0.00</span>
+                                <span class="stat-detail" id="courierPayReportNetOwedDetail"></span>
+                                <span class="stat-value" id="courierPayReportNetOwed">Rs 0.00</span>
                             </div>
                         </div>
                     </div>
-                    <div id="courierResolutionGrid" class="ag-theme-alpine grid-container"></div>
+                    <div id="courierPaymentReportGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Create / edit purchase bill -->
@@ -1079,6 +1078,42 @@
         </div>
     </div>
 
+    <!-- Courier Payment Report: orders within one pickup-date + courier bundle -->
+    <div id="courierPaymentReportOrdersModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="courierPaymentReportOrdersModalTitle">Bundle orders</h2>
+                <button type="button" class="modal-close" id="closeCourierPaymentReportOrdersModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description" id="courierPaymentReportOrdersModalSummary"></p>
+                <div class="postex-mismatches-table-wrap">
+                    <table class="postex-mismatches-table">
+                        <thead>
+                            <tr>
+                                <th>Order #</th>
+                                <th>Courier</th>
+                                <th>Status</th>
+                                <th>Order Date</th>
+                                <th>Total</th>
+                                <th>Advance</th>
+                                <th>COD Collected</th>
+                                <th>Delivery Charge</th>
+                                <th>Tax</th>
+                                <th>Owed by Courier</th>
+                                <th>Settled</th>
+                            </tr>
+                        </thead>
+                        <tbody id="courierPaymentReportOrdersModalBody"></tbody>
+                    </table>
+                </div>
+                <div class="modal-actions" style="margin-top: 1rem;">
+                    <button type="button" id="closeCourierPaymentReportOrdersModalBtn" class="btn btn-primary">Close</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- Generate Load Sheet Modal -->
     <div id="generateLoadSheetModal" class="modal">
         <div class="modal-content">
@@ -1189,7 +1224,7 @@
     <script src="js/ledgers.js"></script>
     <script src="js/trial-balance.js"></script>
     <script src="js/bills.js"></script>
-    <script src="js/courier-resolution.js"></script>
+    <script src="js/courier-payment-report.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/delivery-status.js"></script>

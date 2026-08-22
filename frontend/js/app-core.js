@@ -199,7 +199,6 @@ function applyEditLockState() {
         'bulkUpdateSetPieceReceived',
         'bulkUpdateSetOrderSettled',
         'bulkUpdateSetOrderUnsettled',
-        'courierResBulkSettleBtn',
         'bulkUpdateCostPriceSubmit',
         'recalculateOrderCostsSubmit',
         'bulkUpdateDeliveryChargesConfirm',
