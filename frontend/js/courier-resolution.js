@@ -183,6 +183,12 @@ function initCourierResolutionGrid() {
             width: 120,
             valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
         },
+        {
+            headerName: 'Pickup Date',
+            field: 'courier_pickup_date',
+            width: 120,
+            valueFormatter: (params) => (params.value ? formatDateDDMMYYYY(params.value) : ''),
+        },
         { headerName: 'Total', field: 'total_amount', width: 110, type: 'rightAligned', valueFormatter: money },
         { headerName: 'Advance', field: 'advance_amount', width: 110, type: 'rightAligned', valueFormatter: money },
         {

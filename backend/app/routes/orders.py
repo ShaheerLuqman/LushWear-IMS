@@ -130,7 +130,7 @@ def _period_start_end_dates(month: int, year: int):
 ORDERS_LIST_SELECT = (
     "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
     "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
-    "order_receiving_date, line_items, advance_status, is_order_settled, replacement_of_order_no, "
+    "order_receiving_date, courier_pickup_date, line_items, advance_status, is_order_settled, replacement_of_order_no, "
     "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
 )
 
@@ -1494,6 +1494,35 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
 
+_TZ_OFFSET_NO_COLON_RE = re.compile(r"([+-]\d{2})(\d{2})$")
+
+
+def _courier_pickup_date_iso(delivery_status_data: dict) -> Optional[str]:
+    """Courier pickup date for the courier_pickup_date column. Prefers PostEx's own
+    order_pickup_date (their authoritative field, from dist.orderPickupDate) when present;
+    otherwise falls back to status_history's second entry (oldest-first) - the first entry
+    is the order being booked with the courier, the second is the courier actually
+    collecting it. Couriers Next never reports order_pickup_date, so it always uses the
+    history fallback. Returns None on missing/unparseable input rather than raising, so a
+    save never fails over this."""
+    data = delivery_status_data or {}
+    raw = data.get("order_pickup_date")
+    if not raw:
+        history = data.get("status_history") or []
+        raw = history[1].get("datetime") if len(history) >= 2 else None
+    if not raw:
+        return None
+    # PostEx timestamps look like "2026-06-15T21:08:08.000+0500" - a UTC offset with no
+    # colon, which datetime.fromisoformat() rejects on Python <3.11 ("Invalid isoformat
+    # string"). Insert the colon so it parses; Couriers Next's "YYYY-MM-DD HH:MM:SS" (no
+    # offset at all) is untouched and already parses fine.
+    s = _TZ_OFFSET_NO_COLON_RE.sub(r"\1:\2", str(raw).strip().replace("Z", "+00:00"))
+    try:
+        return datetime.fromisoformat(s).isoformat()
+    except (ValueError, TypeError):
+        return None
+
+
 def _parse_postex_dist(dist: dict, tracking_number: str) -> dict:
     """Normalize a PostEx `dist` object (from track-order or track-bulk-order's
     per-item trackingResponse) into our delivery_status_data shape."""
@@ -1609,6 +1638,9 @@ async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], o
     async def run(order_id: str, delivery_status_data: dict):
         order = orders_by_id[order_id]
         update_payload = {"delivery_status": delivery_status_data, "updated_at": now}
+        pickup_date = _courier_pickup_date_iso(delivery_status_data)
+        if pickup_date:
+            update_payload["courier_pickup_date"] = pickup_date
         derived_status = _derive_order_status_from_latest(delivery_status_data)
         if derived_status:
             update_payload["order_status"] = derived_status
@@ -1719,6 +1751,9 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                 "delivery_status": delivery_status_data,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }
+            pickup_date = _courier_pickup_date_iso(delivery_status_data)
+            if pickup_date:
+                update_payload["courier_pickup_date"] = pickup_date
             # Derive order_status from the LAST courier status instead of using a fixed priority.
             derived_status = _derive_order_status_from_latest(delivery_status_data)
             logger.info(f"[delivery-status] order_id={order_id} latest_status={delivery_status_data.get('latest_status')!r} derived_status={derived_status!r}")

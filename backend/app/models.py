@@ -114,6 +114,9 @@ class OrderBase(BaseModel):
     tax_amount: float = 0.0
     cost_price: float = 0.0
     order_receiving_date: datetime
+    # Date the courier picked up the parcel: PostEx's own orderPickupDate when available,
+    # else status_history's 2nd entry (oldest-first), since the 1st is booking, not pickup.
+    courier_pickup_date: Optional[datetime] = None
     line_items: Optional[List[OrderLineItem]] = None
     # Advance reconciliation status (computed): 1=no advance, 2=shopify only,
     # 3=transaction only, 4=both match, 5=both mismatch
@@ -143,6 +146,7 @@ class OrderUpdate(BaseModel):
     tax_amount: Optional[float] = None
     cost_price: Optional[float] = None
     order_receiving_date: Optional[datetime] = None
+    courier_pickup_date: Optional[datetime] = None
     line_items: Optional[List[OrderLineItem]] = None
     is_order_settled: Optional[bool] = None
 

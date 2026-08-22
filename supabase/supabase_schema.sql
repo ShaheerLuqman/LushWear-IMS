@@ -239,6 +239,10 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     order_receiving_date     TIMESTAMPTZ NOT NULL,
+    -- Date the courier picked up the parcel: PostEx's own orderPickupDate when available,
+    -- else status_history's second entry (oldest-first), since the first is booking, not
+    -- pickup. Null until a fetch supplies one or the other.
+    courier_pickup_date      TIMESTAMPTZ,
     -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
     -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
     -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.

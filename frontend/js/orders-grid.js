@@ -373,53 +373,140 @@ ProductsClearFiltersFloatingFilter.prototype.init = function (params) {
 ProductsClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
 ProductsClearFiltersFloatingFilter.prototype.onParentModelChanged = function () {};
 
-// Custom floating filter for Order Status: shows a <select> dropdown in the filter row
+// Order Status filtering: a checkbox popup (multiple statuses at once) rather than a
+// single-select dropdown. Two parts, like AG Grid's own filter/floating-filter split:
+// OrderStatusSetFilter is the real column filter (model: { values: [...] } - order_status
+// must be one of `values`; no model = no filtering), OrderStatusFloatingFilter is the
+// checkbox popup that drives it via api.setFilterModel().
 const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'cancelled', 'CNA', 'ICA'];
+function orderStatusDisplayLabel(v) {
+    return (v === 'RFD' || v === 'CNA' || v === 'ICA') ? v : (v.charAt(0).toUpperCase() + v.slice(1));
+}
+
+function OrderStatusSetFilter() {}
+OrderStatusSetFilter.prototype.init = function (params) { this.params = params; this.model = null; };
+OrderStatusSetFilter.prototype.getGui = function () {
+    if (!this.eGui) this.eGui = document.createElement('div'); // no popup UI - the floating filter is the only UI
+    return this.eGui;
+};
+OrderStatusSetFilter.prototype.doesFilterPass = function (params) {
+    if (!this.model) return true;
+    return this.model.values.indexOf((params.data && params.data.order_status) || '') !== -1;
+};
+OrderStatusSetFilter.prototype.isFilterActive = function () { return !!this.model; };
+OrderStatusSetFilter.prototype.getModel = function () { return this.model; };
+OrderStatusSetFilter.prototype.setModel = function (model) { this.model = model || null; };
+
 function OrderStatusFloatingFilter() {}
 OrderStatusFloatingFilter.prototype.init = function (params) {
     this.params = params;
+    const api = params.api;
+    const columnId = params.column.getColId();
+
     this.eGui = document.createElement('div');
     this.eGui.className = 'grid-floating-filter-wrap';
     this.eGui.style.width = '100%';
-    const select = document.createElement('select');
-    select.className = 'grid-floating-filter-select';
-    select.style.width = '100%';
-    const allOption = document.createElement('option');
-    allOption.value = '__all__';
-    allOption.textContent = 'All';
-    select.appendChild(allOption);
-    ORDER_STATUS_VALUES.forEach(function (v) {
-        const opt = document.createElement('option');
-        opt.value = v;
-        const display = (v === 'RFD' || v === 'CNA' || v === 'ICA') ? v : (v.charAt(0).toUpperCase() + v.slice(1));
-        opt.textContent = display;
-        select.appendChild(opt);
-    });
-    const api = params.api;
-    const columnId = params.column.getColId();
-    select.addEventListener('change', function () {
-        const val = select.value;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'grid-floating-filter-select';
+    btn.style.width = '100%';
+    btn.style.textAlign = 'left';
+    btn.textContent = 'All';
+    this.btn = btn;
+    this.eGui.appendChild(btn);
+
+    const menu = document.createElement('div');
+    menu.className = 'date-range-menu order-status-filter-menu';
+    menu.style.display = 'none';
+
+    const checkboxes = {};
+    const applySelection = () => {
+        const selected = ORDER_STATUS_VALUES.filter((v) => checkboxes[v].checked);
         const currentModel = api.getFilterModel() || {};
         const newModel = Object.assign({}, currentModel);
-        if (val === '__all__') {
+        if (selected.length === ORDER_STATUS_VALUES.length) {
             delete newModel[columnId];
         } else {
-            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
+            newModel[columnId] = { values: selected };
         }
         api.setFilterModel(newModel);
+        this.updateButtonLabel(selected);
+    };
+
+    const allRow = document.createElement('label');
+    allRow.className = 'order-status-filter-option order-status-filter-option--all';
+    const allCb = document.createElement('input');
+    allCb.type = 'checkbox';
+    allCb.checked = true;
+    const allLabel = document.createElement('span');
+    allLabel.textContent = 'All';
+    allRow.appendChild(allCb);
+    allRow.appendChild(allLabel);
+    menu.appendChild(allRow);
+    allCb.addEventListener('change', () => {
+        ORDER_STATUS_VALUES.forEach((v) => { checkboxes[v].checked = allCb.checked; });
+        applySelection();
     });
-    this.eGui.appendChild(select);
-    this.select = select;
+
+    ORDER_STATUS_VALUES.forEach((v) => {
+        const row = document.createElement('label');
+        row.className = 'order-status-filter-option';
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.checked = true;
+        const label = document.createElement('span');
+        label.textContent = orderStatusDisplayLabel(v);
+        row.appendChild(cb);
+        row.appendChild(label);
+        menu.appendChild(row);
+        checkboxes[v] = cb;
+        cb.addEventListener('change', () => {
+            allCb.checked = ORDER_STATUS_VALUES.every((sv) => checkboxes[sv].checked);
+            applySelection();
+        });
+    });
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.style.display === 'none') {
+            const rect = btn.getBoundingClientRect();
+            menu.style.display = 'block';
+            const left = rect.left + window.scrollX;
+            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
+            menu.style.top = `${rect.bottom + window.scrollY}px`;
+            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
+        } else {
+            menu.style.display = 'none';
+        }
+    });
+    this._outsideClickHandler = (e) => {
+        if (menu.style.display !== 'none' && !menu.contains(e.target) && e.target !== btn) {
+            menu.style.display = 'none';
+        }
+    };
+    document.addEventListener('click', this._outsideClickHandler);
+
+    document.body.appendChild(menu);
+    this.menu = menu;
+    this.checkboxes = checkboxes;
+    this.allCb = allCb;
+};
+OrderStatusFloatingFilter.prototype.updateButtonLabel = function (selected) {
+    this.btn.textContent = selected.length === ORDER_STATUS_VALUES.length ? 'All'
+        : selected.length === 0 ? 'None'
+        : `${selected.length} selected`;
 };
 OrderStatusFloatingFilter.prototype.getGui = function () { return this.eGui; };
 OrderStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
-    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
-        this.select.value = '__all__';
-    } else if (ORDER_STATUS_VALUES.indexOf(parentModel.filter) !== -1) {
-        this.select.value = parentModel.filter;
-    } else {
-        this.select.value = '__all__';
-    }
+    const selected = (parentModel && Array.isArray(parentModel.values)) ? parentModel.values : ORDER_STATUS_VALUES.slice();
+    ORDER_STATUS_VALUES.forEach((v) => { this.checkboxes[v].checked = selected.indexOf(v) !== -1; });
+    this.allCb.checked = selected.length === ORDER_STATUS_VALUES.length;
+    this.updateButtonLabel(selected);
+};
+OrderStatusFloatingFilter.prototype.destroy = function () {
+    if (this.menu && this.menu.parentNode) this.menu.parentNode.removeChild(this.menu);
+    document.removeEventListener('click', this._outsideClickHandler);
 };
 
 // Custom floating filter for Final Status: dropdown (OK, Warning, None, All)
@@ -769,6 +856,7 @@ function initOrdersGrid() {
             profit_percent: sums.total_amount_for_profit > 0 ? (sums.net_profit / sums.total_amount_for_profit) * 100 : null,
             piece_received: null,
             order_receiving_date: null,
+            courier_pickup_date: null,
             final_status: null
         };
         

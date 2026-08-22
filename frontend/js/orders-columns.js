@@ -87,12 +87,7 @@ function buildOrdersGridColumns() {
             headerName: 'Order Status',
             field: 'order_status',
             width: 130,
-            filter: 'agTextColumnFilter',
-            filterParams: {
-                filterOptions: ['equals'],
-                defaultOption: 'equals',
-                maxNumConditions: 1
-            },
+            filter: OrderStatusSetFilter,
             floatingFilterComponent: OrderStatusFloatingFilter,
             cellRenderer: (params) => {
                 if (params.data && params.data.id === '__footer__') return '';
@@ -472,6 +467,28 @@ function buildOrdersGridColumns() {
             },
             valueGetter: (params) => {
                 const date = params.data.order_receiving_date || params.data.created_at;
+                return date ? new Date(date) : null;
+            },
+            valueFormatter: (params) => {
+                if (params.value) {
+                    return formatDateDDMMYYYY(params.value);
+                }
+                return '';
+            }
+        },
+        {
+            headerName: 'Pickup Date',
+            field: 'courier_pickup_date',
+            width: 130,
+            floatingFilter: false,
+            filter: 'agDateColumnFilter',
+            filterParams: {
+                filterOptions: ['inRange'],
+                defaultOption: 'inRange',
+                browserDatePicker: true
+            },
+            valueGetter: (params) => {
+                const date = params.data.courier_pickup_date;
                 return date ? new Date(date) : null;
             },
             valueFormatter: (params) => {
