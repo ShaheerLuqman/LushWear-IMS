@@ -1,5 +1,5 @@
 // Courier Payment Report: what the courier still owes for delivered/returned orders,
-// bundled by the date the courier picked the parcel up and then by courier (mirrors how
+// grouped by the date the courier picked the parcel up and then by courier (mirrors how
 // couriers batch-settle - one payment per pickup run), plus which orders are still in
 // transit (no final courier outcome yet). Reads the same orders data as the Orders grid
 // and reuses its receivable formula (computeReceivable, in orders-grid.js) and status badge
@@ -8,8 +8,8 @@
 
 let courierPaymentReportGridApi = null;
 
-// Raw orders for the currently selected period (unfiltered by courier) - the courier
-// filter re-slices this in place rather than refetching, since it's a client-side facet.
+// Every order, unfiltered - courier/status/search/date-range are all client-side facets
+// re-sliced from this on every filter change, so changing a filter never refetches.
 let courierPaymentReportOrders = [];
 
 const COURIER_FILTER_ALL = '__all_couriers__';
@@ -21,25 +21,41 @@ const COURIER_FILTER_ALL = '__all_couriers__';
 const COURIER_RESOLVED_STATUSES = new Set(['delivered', 'returned']);
 const COURIER_IN_TRANSIT_STATUSES = new Set(['unfulfilled', 'fulfilled', 'rfd', 'cna', 'ica']);
 
-const NO_PICKUP_DATE_KEY = '__no_pickup_date__';
-
-/** The "no pickup date" bundle can span multiple couriers (that's the one thing it isn't
- * grouped by), so its date/courier columns need their own placeholder labels instead of
- * the normal per-bundle date/courier formatting. */
-function bundlePickupDateLabel(bundle) {
-    return bundle.pickupDateKey === NO_PICKUP_DATE_KEY ? 'No pickup date' : formatDateDDMMYYYY(bundle.pickupDate);
+function billPickupDateLabel(bill) {
+    return formatDateDDMMYYYY(bill.pickupDate);
 }
 
-function bundleCourierLabel(bundle) {
-    return bundle.pickupDateKey === NO_PICKUP_DATE_KEY ? 'Mixed couriers' : formatCourierForDisplay(bundle.courier);
+function billCourierLabel(bill) {
+    return formatCourierForDisplay(bill.courier);
 }
 
-const BUNDLE_STATUS_META = {
-    in_transit: { label: 'In Transit', cls: 'grid-status-unfulfilled' },
-    paid: { label: 'Paid', cls: 'grid-status-delivered' },
-    partially_paid: { label: 'Partially Paid', cls: 'grid-status-fulfilled' },
-    pending: { label: 'Pending', cls: 'grid-status-returned' },
+const BILL_STATUS_META = {
+    in_transit: { label: 'In Transit', cls: 'grid-status-unfulfilled', barColor: '#7c3aed' },
+    paid: { label: 'Paid', cls: 'grid-status-delivered', barColor: '#16a34a' },
+    partially_paid: { label: 'Partially Paid', cls: 'grid-status-fulfilled', barColor: '#ca8a04' },
+    unpaid: { label: 'Unpaid', cls: 'grid-status-returned', barColor: '#dc2626' },
 };
+
+/** Payment Progress stacked-bar segment colors - kept in sync with the matching
+ * .payment-progress__segment--* rules in styles.css (used there since the bar itself is
+ * built as an HTML string, not styled inline per segment). */
+const PAYMENT_PROGRESS_COLORS = {
+    advance: '#3b82f6',
+    received: '#16a34a',
+    deductibles: '#f59e0b',
+};
+
+/** Default pickup-date range shown on first load: the 1st of this month through today
+ * (local calendar, matching pickupDateKey's own convention) - a sensible "this month so
+ * far" starting point rather than an unbounded table. */
+function defaultCourierPaymentReportDateRange() {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, '0');
+    const yyyyMm = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
+    return { from: `${yyyyMm}-01`, to: `${yyyyMm}-${pad(now.getDate())}` };
+}
+
+let courierPaymentReportDateRange = defaultCourierPaymentReportDateRange();
 
 function distinctCouriers(orderRows) {
     const set = new Set();
@@ -67,26 +83,28 @@ function populateCourierPaymentReportCourierFilter(orderRows) {
     selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : defaultVal;
 }
 
-/** Periods only (no "Recent Orders") - this page always looks at one period at a time,
- * defaulting to the last fully-completed one rather than whatever's still in progress. */
-function populateCourierPaymentReportPeriodFilter() {
-    const selectEl = document.getElementById('courierPaymentReportPeriodFilter');
-    if (!selectEl) return;
-    const currentVal = selectEl.value;
-    const options = buildStaticPeriodOptions();
-    selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
-    const lastMonthVal = options[1]?.value || options[0]?.value;
-    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : lastMonthVal;
-}
-
+/** Courier + free-text search are per-order facets (applied before bundling and used for
+ * the summary cards too); pickup-date range and payment status are applied later since
+ * they depend on how orders get grouped/aggregated. */
 function courierPaymentReportFilteredOrders() {
     const courier = document.getElementById('courierPaymentReportCourierFilter')?.value;
-    if (!courier || courier === COURIER_FILTER_ALL) return courierPaymentReportOrders;
-    return courierPaymentReportOrders.filter((order) => (order.courier || '').trim() === courier);
+    const query = (document.getElementById('courierPaymentReportSearchFilter')?.value || '').trim().toLowerCase();
+
+    return courierPaymentReportOrders.filter((order) => {
+        if (courier && courier !== COURIER_FILTER_ALL && (order.courier || '').trim() !== courier) return false;
+        if (query) {
+            const courierMatch = (order.courier || '').toLowerCase().includes(query);
+            const orderNoMatch = String(order.order_number ?? '').toLowerCase().includes(query);
+            if (!courierMatch && !orderNoMatch) return false;
+        }
+        return true;
+    });
 }
 
 /** netOwed > 0 means the courier owes the shop overall; < 0 means the shop owes the
- * courier (e.g. return handling fees outweighing any COD collected). */
+ * courier (e.g. return handling fees outweighing any COD collected). Ignores the pickup-
+ * date range on purpose - these cards are the courier/search-scoped overview, while the
+ * date range only narrows which bills the table below shows. */
 function courierPaymentReportSummary(orderRows) {
     let inTransit = 0;
     let resolved = 0;
@@ -133,8 +151,8 @@ function renderCourierPaymentReportSummary(summary) {
 }
 
 /** Local calendar date of courier_pickup_date as a sortable YYYY-MM-DD key, or null when
- * not yet picked up - those orders can't be grouped by date yet, so buildCourierPaymentReportBundles
- * puts them in the separate "No pickup date" bundle instead. */
+ * not yet picked up - those orders are excluded from the grouped table entirely, since
+ * there's no date to group them by (buildCourierPaymentReportBills skips them). */
 function pickupDateKey(order) {
     if (!order.courier_pickup_date) return null;
     const d = new Date(order.courier_pickup_date);
@@ -142,34 +160,47 @@ function pickupDateKey(order) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
-/** Aggregate one bundle's orders into its money columns and status. Gross COD/Charges/
- * Taxes/Net Receivable/Received only accumulate over resolved orders in the bundle,
- * matching computeReceivable's own definition - in-transit orders still count toward
- * totalOrders/inTransitCount but contribute nothing to those money columns since their
- * outcome (and so their receivable) isn't known yet. */
-function aggregateCourierPaymentReportBundle(bundle) {
+/** Cash-on-delivery amount for one order: total minus advance, for every order
+ * regardless of status - unlike computeReceivable, this doesn't wait for (or exclude
+ * as 0 for returns) a final delivered/returned outcome, since it's just the raw
+ * customer-facing COD figure, not a courier settlement amount. */
+function computeCod(order) {
+    return (parseFloat(order.total_amount) || 0) - (parseFloat(order.advance_amount) || 0);
+}
+
+/** Aggregate one bill's orders into its money columns and status. Bill Value, Advance,
+ * Gross COD, Delivery Charges and Taxes are summed over every order in the bill (raw
+ * customer-facing/courier-cost figures, independent of outcome). Net Receivable/Received
+ * only accumulate over resolved orders, matching computeReceivable's own definition - an
+ * order's receivable isn't known until the courier has delivered or returned it. */
+function aggregateCourierPaymentReportBill(bill) {
+    let billValue = 0;
+    let advanceTotal = 0;
     let grossCod = 0;
     let charges = 0;
     let taxes = 0;
+    let returnedTotal = 0;
     let netReceivable = 0;
     let receivedAmount = 0;
     let resolvedCount = 0;
     let settledCount = 0;
     let inTransitCount = 0;
 
-    bundle.orders.forEach((order) => {
+    bill.orders.forEach((order) => {
         const status = (order.order_status || '').toLowerCase();
+        billValue += parseFloat(order.total_amount) || 0;
+        advanceTotal += parseFloat(order.advance_amount) || 0;
+        grossCod += computeCod(order);
+        charges += parseFloat(order.delivery_charge) || 0;
+        taxes += parseFloat(order.tax_amount) || 0;
+        if (status === 'returned') returnedTotal += parseFloat(order.total_amount) || 0;
+
         if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
             inTransitCount++;
             return;
         }
         if (!COURIER_RESOLVED_STATUSES.has(status)) return;
         resolvedCount++;
-        grossCod += status === 'returned'
-            ? 0
-            : (parseFloat(order.total_amount) || 0) - (parseFloat(order.advance_amount) || 0);
-        charges += parseFloat(order.delivery_charge) || 0;
-        taxes += parseFloat(order.tax_amount) || 0;
         const receivable = computeReceivable(order);
         if (receivable == null) return;
         netReceivable += receivable;
@@ -182,18 +213,21 @@ function aggregateCourierPaymentReportBundle(bundle) {
     let status;
     if (resolvedCount === 0) status = 'in_transit';
     else if (settledCount === resolvedCount) status = 'paid';
-    else if (settledCount === 0) status = 'pending';
+    else if (settledCount === 0) status = 'unpaid';
     else status = 'partially_paid';
 
     return {
-        ...bundle,
-        totalOrders: bundle.orders.length,
+        ...bill,
+        totalOrders: bill.orders.length,
         inTransitCount,
         resolvedCount,
         settledCount,
+        billValue,
+        advanceTotal,
         grossCod,
         charges,
         taxes,
+        returnedTotal,
         netReceivable,
         receivedAmount,
         remainingAmount: netReceivable - receivedAmount,
@@ -201,19 +235,18 @@ function aggregateCourierPaymentReportBundle(bundle) {
     };
 }
 
-/** Group orders by (pickup date, courier) into one bundle row each, newest pickup date
- * first. Orders with no pickup date yet (delivery status not fetched) go into a single
- * "No pickup date" bundle pinned at the very top instead, since they can't be placed on
- * the pickup-date timeline yet but still need to be visible somewhere on this page. */
-function buildCourierPaymentReportBundles(orderRows) {
+/** Group orders by (pickup date, courier) into one bill row each, newest pickup date
+ * first, restricted to the active pickup-date range. Orders with no pickup date yet
+ * (delivery status not fetched) are left out entirely - they can't be placed on the
+ * pickup-date timeline, but still count in the summary cards above. */
+function buildCourierPaymentReportBills(orderRows) {
+    const { from, to } = courierPaymentReportDateRange;
     const groups = new Map();
-    const noPickupDateOrders = [];
     orderRows.forEach((order) => {
         const dateKey = pickupDateKey(order);
-        if (!dateKey) {
-            noPickupDateOrders.push(order);
-            return;
-        }
+        if (!dateKey) return;
+        if (from && dateKey < from) return;
+        if (to && dateKey > to) return;
         const courier = (order.courier || '').trim() || 'Unknown';
         const key = `${dateKey}|${courier}`;
         if (!groups.has(key)) {
@@ -222,109 +255,363 @@ function buildCourierPaymentReportBundles(orderRows) {
         groups.get(key).orders.push(order);
     });
 
-    const bundles = [...groups.values()]
-        .map(aggregateCourierPaymentReportBundle)
+    return [...groups.values()]
+        .map(aggregateCourierPaymentReportBill)
         .sort((a, b) => b.pickupDate - a.pickupDate || a.courier.localeCompare(b.courier, undefined, { sensitivity: 'base' }));
+}
 
-    if (noPickupDateOrders.length > 0) {
-        bundles.unshift(aggregateCourierPaymentReportBundle({
-            pickupDate: null,
-            pickupDateKey: NO_PICKUP_DATE_KEY,
-            courier: null,
-            orders: noPickupDateOrders,
-        }));
-    }
+/** Payment Progress tracks Bill Value (the raw order total, before any advance/COD split)
+ * against three claims on it: the advance already collected up front, the amount the
+ * courier has actually paid back for settled orders, and the deductibles the courier/the
+ * bill itself keeps - delivery charges, taxes, and the full total of any returned orders
+ * (never coming back at all). Whatever's left over (billValue minus all three) is still
+ * outstanding. Shared by the bill grid's stacked bar and the detail screen's ring so both
+ * stay in sync. Each ratio is clamped independently, so in an edge case where one claim
+ * alone exceeds the bill value the segments can visually overrun 100% rather than
+ * silently under-report - that's rare enough in real data not to be worth normalizing away. */
+function paymentProgressStats(bill) {
+    const billValue = bill.billValue;
+    const advance = bill.advanceTotal;
+    const received = bill.receivedAmount;
+    const deductibles = bill.charges + bill.taxes + bill.returnedTotal;
+    const accountedFor = advance + received + deductibles;
+    const remaining = Math.max(0, billValue - accountedFor);
+    const ratio = (amount) => billValue > 0 ? Math.max(0, Math.min(100, Math.round((amount / billValue) * 100))) : 0;
+    return {
+        billValue,
+        advance,
+        received,
+        deductibles,
+        remaining,
+        pct: ratio(accountedFor),
+        advancePct: ratio(advance),
+        receivedPct: ratio(received),
+        deductiblesPct: ratio(deductibles),
+    };
+}
 
-    return bundles;
+/** Cumulative conic-gradient stops for the detail screen's pie (advance, then received,
+ * then deductibles, then whatever's left as "remaining"). Computed from running totals
+ * rather than the independently-clamped *Pct fields above, so the four slices always add
+ * up to exactly one full circle even in the edge case where those ratios would overrun. */
+function paymentProgressPieStops(stats) {
+    const { billValue, advance, received, deductibles } = stats;
+    const pct = (amount) => billValue > 0 ? (amount / billValue) * 100 : 0;
+    const advanceEnd = Math.min(100, pct(advance));
+    const receivedEnd = Math.min(100, advanceEnd + pct(received));
+    const deductiblesEnd = Math.min(100, receivedEnd + pct(deductibles));
+    return { advanceEnd, receivedEnd, deductiblesEnd };
+}
+
+function paymentProgressCellHtml(bill) {
+    const stats = paymentProgressStats(bill);
+    const meta = `Adv Rs ${formatMoney(stats.advance)} · Recv Rs ${formatMoney(stats.received)} · Ded Rs ${formatMoney(stats.deductibles)}`;
+    const tooltip = `Advance: Rs ${formatMoney(stats.advance)} · Received: Rs ${formatMoney(stats.received)} · `
+        + `Deductibles: Rs ${formatMoney(stats.deductibles)} · Remaining: Rs ${formatMoney(stats.remaining)}`;
+    return `
+        <div class="payment-progress">
+            <div class="payment-progress__row">
+                <span class="payment-progress__amounts">Rs ${formatMoney(stats.billValue)}</span>
+                <span class="payment-progress__pct">${stats.pct}%</span>
+            </div>
+            <div class="payment-progress__bar payment-progress__bar--stacked" title="${escapeHtml(tooltip)}">
+                <div class="payment-progress__segment payment-progress__segment--advance" style="width: ${stats.advancePct}%;"></div>
+                <div class="payment-progress__segment payment-progress__segment--received" style="width: ${stats.receivedPct}%;"></div>
+                <div class="payment-progress__segment payment-progress__segment--deductibles" style="width: ${stats.deductiblesPct}%;"></div>
+            </div>
+            <div class="payment-progress__meta">${escapeHtml(meta)}</div>
+        </div>`;
+}
+
+/** ag-grid cellRenderer wrapper for paymentProgressCellHtml. A returned HTML *string*
+ * gets set as innerHTML directly on ag-grid's own cell-value wrapper, which doesn't give
+ * the bar a reliable block-level container to size 100% width against (it ends up
+ * shrunk to content, not covering the column) - returning an actual DOM element instead
+ * (same fix as createCourierPaymentReportViewButton's .bill-cell-center) gives it one. */
+function createPaymentProgressCellElement(params) {
+    const wrapper = document.createElement('div');
+    wrapper.className = 'payment-progress-cell-wrap';
+    wrapper.innerHTML = paymentProgressCellHtml(params.data);
+    return wrapper;
 }
 
 function createCourierPaymentReportViewButton(params) {
-    const bundle = params.data;
+    const bill = params.data;
     const wrapper = document.createElement('div');
     wrapper.className = 'bill-cell-center';
-    if (!bundle) return wrapper;
+    if (!bill) return wrapper;
 
     const btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'bill-view-btn';
-    btn.innerHTML = '<i class="fa-solid fa-eye"></i><span>View Orders</span>';
-    btn.title = 'View orders in this bundle';
+    btn.innerHTML = '<i class="fa-solid fa-eye"></i><span>View Details</span>';
+    btn.title = 'View orders in this bill';
     btn.addEventListener('click', (e) => {
         e.stopPropagation();
-        showCourierPaymentReportOrdersModal(bundle);
+        openCourierPaymentReportBillDetail(bill);
     });
 
     wrapper.appendChild(btn);
     return wrapper;
 }
 
-function showCourierPaymentReportOrdersModal(bundle) {
-    const modal = document.getElementById('courierPaymentReportOrdersModal');
-    const title = document.getElementById('courierPaymentReportOrdersModalTitle');
-    const summary = document.getElementById('courierPaymentReportOrdersModalSummary');
-    const body = document.getElementById('courierPaymentReportOrdersModalBody');
-    if (!modal || !body) return;
+// The bill currently shown on the detail screen - guards the async shipping-info
+// fetch below against applying stale results after the user navigates to a different
+// bill (or back to the list) before that fetch resolves.
+let courierPaymentReportCurrentBill = null;
 
-    if (title) title.textContent = `${bundlePickupDateLabel(bundle)} — ${bundleCourierLabel(bundle)}`;
-    if (summary) {
-        summary.textContent = `${bundle.totalOrders} order${bundle.totalOrders === 1 ? '' : 's'}`
-            + (bundle.inTransitCount > 0 ? `, ${bundle.inTransitCount} still in transit` : '') + '.';
+function renderCourierPaymentReportDetailHeader(bill) {
+    const badge = document.getElementById('courierPaymentReportDetailStatusBadge');
+    if (badge) {
+        const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
+        badge.className = `grid-status-badge ${meta.cls}`;
+        badge.textContent = meta.label;
     }
+    const subtitle = document.getElementById('courierPaymentReportDetailSubtitle');
+    if (subtitle) {
+        subtitle.textContent = `${billPickupDateLabel(bill)} · ${billCourierLabel(bill)} · `
+            + `${bill.totalOrders} order${bill.totalOrders === 1 ? '' : 's'}`;
+    }
+}
 
-    body.innerHTML = bundle.orders.map((order) => {
+function renderCourierPaymentReportDetailStats(bill) {
+    const grid = document.getElementById('courierPaymentReportDetailStatsGrid');
+    if (!grid) return;
+    const netColor = bill.netReceivable < 0 ? 'var(--danger)' : 'var(--success)';
+    grid.innerHTML = `
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Total Orders</span>
+                <span class="stat-detail">${bill.resolvedCount} resolved${bill.inTransitCount > 0 ? ` · ${bill.inTransitCount} in transit` : ''}</span>
+                <span class="stat-value">${bill.totalOrders}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Bill Value</span>
+                <span class="stat-value">Rs ${formatMoney(bill.billValue)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Advance Received</span>
+                <span class="stat-value">Rs ${formatMoney(bill.advanceTotal)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Returned Orders</span>
+                <span class="stat-value">- Rs ${formatMoney(bill.returnedTotal)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Gross COD</span>
+                <span class="stat-value">Rs ${formatMoney(bill.grossCod)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Total Delivery Charges</span>
+                <span class="stat-value">- Rs ${formatMoney(bill.charges)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Total Taxes (SST)</span>
+                <span class="stat-value">- Rs ${formatMoney(bill.taxes)}</span>
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Net Receivable</span>
+                <span class="stat-value" style="color: ${netColor};">Rs ${formatMoney(bill.netReceivable)}</span>
+            </div>
+        </div>`;
+}
+
+function renderCourierPaymentReportDetailFinancialSummary(bill) {
+    const el = document.getElementById('courierPaymentReportDetailFinancialSummary');
+    if (!el) return;
+    const row = (label, value, opts = {}) => `
+        <div class="bill-detail-summary-row${opts.total ? ' bill-detail-summary-row--total' : ''}">
+            <span>${escapeHtml(label)}</span>
+            <span${opts.color ? ` style="color: ${opts.color};"` : ''}>${value}</span>
+        </div>`;
+    el.innerHTML = [
+        row('Bill Value', `Rs ${formatMoney(bill.billValue)}`),
+        row('Less: Advance Received', `- Rs ${formatMoney(bill.advanceTotal)}`),
+        row('Less: Returned Orders', `- Rs ${formatMoney(bill.returnedTotal)}`),
+        row('Gross COD', `Rs ${formatMoney(bill.grossCod)}`, { total: true }),
+        row('Less: Delivery Charges', `- Rs ${formatMoney(bill.charges)}`),
+        row('Less: Taxes (SST)', `- Rs ${formatMoney(bill.taxes)}`),
+        row('Net Receivable', `Rs ${formatMoney(bill.netReceivable)}`, { total: true, color: bill.netReceivable < 0 ? 'var(--danger)' : 'var(--success)' }),
+        row('Total Received', `Rs ${formatMoney(bill.receivedAmount)}`),
+        row('Remaining', `Rs ${formatMoney(bill.remainingAmount)}`, bill.remainingAmount > 0 ? { color: 'var(--danger)' } : {}),
+    ].join('');
+}
+
+function renderCourierPaymentReportDetailCourierSummary(bill) {
+    const titleEl = document.getElementById('courierPaymentReportDetailCourierSummaryTitle');
+    if (titleEl) titleEl.textContent = 'Courier Summary';
+    const el = document.getElementById('courierPaymentReportDetailCourierSummary');
+    if (!el) return;
+    const row = (label, value) => `
+        <div class="bill-detail-summary-row">
+            <span>${escapeHtml(label)}</span>
+            <span>${escapeHtml(String(value))}</span>
+        </div>`;
+    el.innerHTML = [
+        row('Courier', billCourierLabel(bill)),
+        row('Pickup Date', billPickupDateLabel(bill)),
+        row('Total Parcels', bill.totalOrders),
+        row('Resolved', bill.resolvedCount),
+        row('In Transit', bill.inTransitCount),
+        row('Settled', `${bill.settledCount} / ${bill.resolvedCount}`),
+    ].join('');
+}
+
+function renderCourierPaymentReportDetailProgressRing(bill) {
+    const el = document.getElementById('courierPaymentReportDetailProgressRing');
+    if (!el) return;
+    const stats = paymentProgressStats(bill);
+    const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
+    const { advanceEnd, receivedEnd, deductiblesEnd } = paymentProgressPieStops(stats);
+    const pieBackground = `conic-gradient(`
+        + `${PAYMENT_PROGRESS_COLORS.advance} 0% ${advanceEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.received} ${advanceEnd}% ${receivedEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.deductibles} ${receivedEnd}% ${deductiblesEnd}%, `
+        + `var(--danger) ${deductiblesEnd}% 100%)`;
+    const legendRow = (color, label, value) => `
+        <div class="progress-ring-legend__item">
+            <span class="progress-ring-legend__label"><span class="progress-ring-legend__dot" style="background: ${color};"></span>${label}</span>
+            <span class="progress-ring-legend__value">Rs ${formatMoney(value)}</span>
+        </div>`;
+    el.innerHTML = `
+        <div class="bill-detail-progress-ring-wrap">
+            <div class="progress-ring" style="background: ${pieBackground};">
+                <div class="progress-ring__inner">
+                    <span class="progress-ring__pct">${stats.pct}%</span>
+                    <span class="progress-ring__label">${meta.label}</span>
+                </div>
+            </div>
+            <div class="progress-ring-legend">
+                ${legendRow('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.advance, 'Advance', stats.advance)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.deductibles, 'Deductibles', stats.deductibles)}
+                ${legendRow('var(--danger)', 'Remaining', stats.remaining)}
+            </div>
+        </div>`;
+}
+
+function renderCourierPaymentReportDetailOrdersTable(bill) {
+    const countEl = document.getElementById('courierPaymentReportDetailOrdersCount');
+    if (countEl) countEl.textContent = String(bill.totalOrders);
+
+    const body = document.getElementById('courierPaymentReportDetailOrdersBody');
+    if (!body) return;
+
+    body.innerHTML = bill.orders.map((order) => {
         const status = order.order_status || '';
         const isResolved = COURIER_RESOLVED_STATUSES.has(status.toLowerCase());
         const receivable = isResolved ? computeReceivable(order) : null;
-        const cod = isResolved
-            ? (status.toLowerCase() === 'returned' ? 0 : (parseFloat(order.total_amount) || 0) - (parseFloat(order.advance_amount) || 0))
-            : null;
+        const cod = computeCod(order);
         const settledBadge = order.is_order_settled
             ? '<span class="grid-status-badge grid-status-delivered">Settled</span>'
             : '<span class="grid-status-badge grid-status-fulfilled">Unsettled</span>';
         return `
-        <tr>
+        <tr data-order-number="${escapeHtml(String(order.order_number ?? ''))}">
             <td>${escapeHtml(String(order.order_number ?? ''))}</td>
+            <td class="cpr-detail-customer-name">Loading…</td>
+            <td class="cpr-detail-customer-phone">Loading…</td>
+            <td class="cpr-detail-customer-city">Loading…</td>
             <td>${escapeHtml(getCourierDisplayName(order))}</td>
+            <td>${escapeHtml(order.tracking_number || '-')}</td>
             <td><span class="grid-status-badge ${orderStatusBadgeClass(status)}">${escapeHtml(status)}</span></td>
             <td>${order.order_receiving_date ? formatDateDDMMYYYY(order.order_receiving_date) : ''}</td>
             <td>${formatMoney(order.total_amount)}</td>
             <td>${formatMoney(order.advance_amount)}</td>
-            <td>${cod != null ? formatMoney(cod) : '-'}</td>
+            <td>${formatMoney(cod)}</td>
             <td>${formatMoney(order.delivery_charge)}</td>
             <td>${formatMoney(order.tax_amount)}</td>
             <td>${receivable != null ? formatMoney(receivable) : '-'}</td>
             <td>${isResolved ? settledBadge : '-'}</td>
         </tr>`;
     }).join('');
-
-    modal.classList.add('active');
 }
 
-function closeCourierPaymentReportOrdersModal() {
-    document.getElementById('courierPaymentReportOrdersModal')?.classList.remove('active');
+/** shopify_orders doesn't persist customer name/phone/city, so the orders table starts
+ * with "Loading…" placeholders and this patches them in once the live Shopify lookup
+ * (new /orders/shipping-info endpoint) resolves. Guarded by courierPaymentReportCurrentBill
+ * in case the user has since navigated to a different bill or back to the list. */
+async function fetchCourierPaymentReportShippingInfo(bill) {
+    const orderIds = bill.orders.map((o) => o.id).filter(Boolean);
+    const body = document.getElementById('courierPaymentReportDetailOrdersBody');
+    if (orderIds.length === 0) return;
+
+    let results;
+    try {
+        results = await apiJson('/orders/shipping-info', {
+            method: 'POST',
+            body: orderIds,
+            fallback: 'Failed to load customer details from Shopify',
+        });
+    } catch (error) {
+        console.error('Error loading shipping info:', error);
+        if (courierPaymentReportCurrentBill === bill && body) {
+            body.querySelectorAll('.cpr-detail-customer-name, .cpr-detail-customer-phone, .cpr-detail-customer-city')
+                .forEach((cell) => { cell.textContent = '-'; });
+        }
+        return;
+    }
+    if (courierPaymentReportCurrentBill !== bill || !body) return;
+
+    const byOrderNumber = new Map(results.map((r) => [String(r.order_number), r]));
+    bill.orders.forEach((order) => {
+        const info = byOrderNumber.get(String(order.order_number));
+        const row = body.querySelector(`tr[data-order-number="${CSS.escape(String(order.order_number ?? ''))}"]`);
+        if (!row) return;
+        row.querySelector('.cpr-detail-customer-name').textContent = info?.customer_name || '-';
+        row.querySelector('.cpr-detail-customer-phone').textContent = info?.phone || '-';
+        row.querySelector('.cpr-detail-customer-city').textContent = info?.city || '-';
+    });
 }
 
-/** Re-slice the already-fetched period data by the selected courier and redraw the
- * summary + bundle table - no refetch, since courier is a client-side facet on top of
- * the period. */
+function openCourierPaymentReportBillDetail(bill) {
+    courierPaymentReportCurrentBill = bill;
+    renderCourierPaymentReportDetailHeader(bill);
+    renderCourierPaymentReportDetailStats(bill);
+    renderCourierPaymentReportDetailFinancialSummary(bill);
+    renderCourierPaymentReportDetailCourierSummary(bill);
+    renderCourierPaymentReportDetailProgressRing(bill);
+    renderCourierPaymentReportDetailOrdersTable(bill);
+    switchView('courierPaymentReportDetail');
+    fetchCourierPaymentReportShippingInfo(bill);
+}
+
+/** Re-slice the already-fetched orders by courier/search/date-range/status and redraw the
+ * summary + bill table - no refetch, since all of those are client-side facets. */
 function renderCourierPaymentReportView() {
     const filtered = courierPaymentReportFilteredOrders();
     renderCourierPaymentReportSummary(courierPaymentReportSummary(filtered));
 
-    const bundles = buildCourierPaymentReportBundles(filtered);
+    let bills = buildCourierPaymentReportBills(filtered);
+    const statusFilter = document.getElementById('courierPaymentReportStatusFilter')?.value;
+    if (statusFilter && statusFilter !== 'all') {
+        bills = bills.filter((b) => b.status === statusFilter);
+    }
+
     if (courierPaymentReportGridApi) {
-        courierPaymentReportGridApi.setGridOption('rowData', bundles);
+        courierPaymentReportGridApi.setGridOption('rowData', bills);
     }
 }
 
 async function loadCourierPaymentReport() {
-    const periodVal = document.getElementById('courierPaymentReportPeriodFilter')?.value;
     if (courierPaymentReportGridApi) courierPaymentReportGridApi.showLoadingOverlay();
 
     try {
-        const [month, year] = (periodVal || '').split('-');
-        const query = (month && year) ? `?month=${month}&year=${year}` : '';
-        courierPaymentReportOrders = await apiJson(`/orders/${query}`, { fallback: 'Failed to load courier payment report data' });
+        courierPaymentReportOrders = await apiJson('/orders/', { fallback: 'Failed to load courier payment report data' });
     } catch (error) {
         console.error('Error loading courier payment report:', error);
         showToast('Failed to load courier payment report data', 'error');
@@ -337,6 +624,129 @@ async function loadCourierPaymentReport() {
     if (courierPaymentReportGridApi) courierPaymentReportGridApi.hideOverlay();
 }
 
+/** Pickup-date range popover, mirroring the Orders page's own date-range button
+ * (initOrdersDateRangeButton in navigation.js) but filtering courierPaymentReportOrders
+ * client-side instead of an ag-grid filter model. */
+function initCourierPaymentReportDateRangeButton() {
+    const triggerBtn = document.getElementById('courierPaymentReportDateRangeBtn');
+    if (!triggerBtn) return;
+
+    const menu = document.createElement('div');
+    menu.className = 'date-range-menu';
+    menu.style.display = 'none';
+
+    const fromField = document.createElement('div');
+    fromField.className = 'date-range-menu__field';
+    const fromLabel = document.createElement('label');
+    fromLabel.className = 'date-range-menu__label';
+    fromLabel.textContent = 'From';
+    const fromInput = document.createElement('input');
+    fromInput.type = 'text';
+    fromInput.placeholder = 'dd/mm/yyyy';
+    fromInput.className = 'grid-floating-filter-date';
+    fromField.appendChild(fromLabel);
+    fromField.appendChild(fromInput);
+
+    const toField = document.createElement('div');
+    toField.className = 'date-range-menu__field';
+    const toLabel = document.createElement('label');
+    toLabel.className = 'date-range-menu__label';
+    toLabel.textContent = 'To';
+    const toInput = document.createElement('input');
+    toInput.type = 'text';
+    toInput.placeholder = 'dd/mm/yyyy';
+    toInput.className = 'grid-floating-filter-date';
+    toField.appendChild(toLabel);
+    toField.appendChild(toInput);
+
+    const actionsRow = document.createElement('div');
+    actionsRow.className = 'date-range-menu__actions';
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'date-range-menu__btn date-range-menu__btn--clear';
+    clearBtn.textContent = 'Clear';
+    const applyBtn = document.createElement('button');
+    applyBtn.type = 'button';
+    applyBtn.className = 'date-range-menu__btn date-range-menu__btn--apply';
+    applyBtn.textContent = 'Apply';
+    actionsRow.appendChild(clearBtn);
+    actionsRow.appendChild(applyBtn);
+
+    menu.appendChild(fromField);
+    menu.appendChild(toField);
+    menu.appendChild(actionsRow);
+
+    const flatpickrOpts = { dateFormat: 'd/m/Y', allowInput: true, static: false };
+    const fromPicker = window.flatpickr ? window.flatpickr(fromInput, flatpickrOpts) : null;
+    const toPicker = window.flatpickr ? window.flatpickr(toInput, flatpickrOpts) : null;
+
+    function updateButtonLabel() {
+        const { from, to } = courierPaymentReportDateRange;
+        triggerBtn.textContent = (from || to)
+            ? `${from ? formatDateDDMMYYYY(from) : '…'} – ${to ? formatDateDDMMYYYY(to) : '…'}`
+            : 'Date range';
+    }
+
+    const clearRange = () => {
+        fromInput.value = '';
+        toInput.value = '';
+        if (fromPicker) fromPicker.clear();
+        if (toPicker) toPicker.clear();
+        courierPaymentReportDateRange = { from: null, to: null };
+        updateButtonLabel();
+    };
+
+    applyBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const rawFrom = (fromInput.value || '').trim();
+        const rawTo = (toInput.value || '').trim();
+        courierPaymentReportDateRange = {
+            from: rawFrom ? parseDDMMYYYYToYYYYMMDD(rawFrom) : null,
+            to: rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null,
+        };
+        updateButtonLabel();
+        renderCourierPaymentReportView();
+        menu.style.display = 'none';
+    });
+
+    clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        clearRange();
+        renderCourierPaymentReportView();
+        menu.style.display = 'none';
+    });
+
+    triggerBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu.style.display === 'none') {
+            const { from, to } = courierPaymentReportDateRange;
+            fromInput.value = from ? formatDateDDMMYYYY(from) : '';
+            toInput.value = to ? formatDateDDMMYYYY(to) : '';
+            if (fromPicker) fromPicker.setDate(fromInput.value || null, false);
+            if (toPicker) toPicker.setDate(toInput.value || null, false);
+
+            const rect = triggerBtn.getBoundingClientRect();
+            menu.style.display = 'block';
+            // Display first so offsetWidth is measurable, then centre on the button,
+            // clamped so the popup can't hang off either edge of the viewport.
+            const left = rect.left + window.scrollX + (rect.width - menu.offsetWidth) / 2;
+            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
+            menu.style.top = `${rect.bottom + window.scrollY}px`;
+            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
+        } else {
+            menu.style.display = 'none';
+        }
+    });
+
+    document.body.appendChild(menu);
+    updateButtonLabel();
+
+    // Exposed so the Clear Filters button can reset this popover's own input state too.
+    window._courierPaymentReportResetDateRange = () => {
+        clearRange();
+    };
+}
+
 function initCourierPaymentReportGrid() {
     const gridDiv = document.getElementById('courierPaymentReportGrid');
     if (!gridDiv) return;
@@ -344,65 +754,56 @@ function initCourierPaymentReportGrid() {
     const money = (params) => (params.value != null ? formatMoney(params.value) : '');
     const columnDefs = [
         {
-            headerName: 'Pickup Date', field: 'pickupDate', width: 130,
-            valueFormatter: (params) => bundlePickupDateLabel(params.data),
+            headerName: 'Date', field: 'pickupDate', width: 110, minWidth: 110,
+            valueFormatter: (params) => billPickupDateLabel(params.data),
         },
         {
-            headerName: 'Courier', field: 'courier', width: 140,
-            valueFormatter: (params) => bundleCourierLabel(params.data),
-        },
-        {
-            headerName: 'Total Orders',
-            field: 'totalOrders',
-            width: 170,
-            type: 'rightAligned',
+            headerName: 'Courier',
+            field: 'courier',
+            width: 130,
+            minWidth: 110,
+            valueFormatter: (params) => billCourierLabel(params.data),
             cellRenderer: (params) => {
-                const bundle = params.data;
-                const sub = bundle.inTransitCount > 0
-                    ? ` <span style="font-size: 11px; color: var(--text-muted);">(${bundle.inTransitCount} in transit)</span>`
-                    : '';
-                return `<span style="white-space: nowrap;">${bundle.totalOrders}${sub}</span>`;
+                const bill = params.data;
+                const label = billCourierLabel(bill);
+                const logo = COURIER_LOGOS[label.trim().toUpperCase()];
+                if (logo) {
+                    return `<span class="grid-courier-logo-wrap"><img src="${logo.src}" alt="${logo.alt}" class="grid-courier-logo ${logo.imgClass}"></span>`;
+                }
+                return escapeHtml(label);
             },
         },
-        { headerName: 'Gross COD', field: 'grossCod', width: 120, type: 'rightAligned', valueFormatter: money },
-        { headerName: 'Charges', field: 'charges', width: 110, type: 'rightAligned', valueFormatter: money },
-        { headerName: 'Taxes', field: 'taxes', width: 100, type: 'rightAligned', valueFormatter: money },
         {
-            headerName: 'Net Receivable',
-            field: 'netReceivable',
-            width: 150,
-            type: 'rightAligned',
-            cellRenderer: (params) => {
-                const val = parseFloat(params.value) || 0;
-                const color = val < 0 ? 'var(--danger)' : 'var(--success)';
-                const label = val < 0 ? `-Rs ${formatMoney(-val)}` : `Rs ${formatMoney(val)}`;
-                return `<span style="color: ${color}; font-weight: 600;">${label}</span>`;
-            },
+            headerName: 'Bill Value',
+            field: 'billValue',
+            width: 140,
+            minWidth: 130,
+            cellClass: 'ag-right-aligned-cell',
+            valueFormatter: money,
         },
-        { headerName: 'Received Amount', field: 'receivedAmount', width: 140, type: 'rightAligned', valueFormatter: money },
-        { headerName: 'Remaining Amount', field: 'remainingAmount', width: 150, type: 'rightAligned', valueFormatter: money },
         {
-            headerName: 'Paid Orders',
-            field: 'settledCount',
-            width: 120,
-            cellRenderer: (params) => {
-                const bundle = params.data;
-                return bundle.resolvedCount > 0 ? `${bundle.settledCount} / ${bundle.resolvedCount}` : '-';
-            },
+            headerName: 'Payment Progress',
+            colId: 'paymentProgress',
+            field: 'billValue',
+            width: 300,
+            minWidth: 240,
+            cellRenderer: createPaymentProgressCellElement,
         },
         {
             headerName: 'Status',
             field: 'status',
-            width: 140,
+            width: 130,
+            minWidth: 120,
             cellRenderer: (params) => {
-                const meta = BUNDLE_STATUS_META[params.value] || BUNDLE_STATUS_META.pending;
+                const meta = BILL_STATUS_META[params.value] || BILL_STATUS_META.unpaid;
                 return `<span class="grid-status-badge ${meta.cls}">${meta.label}</span>`;
             },
         },
         {
-            headerName: '',
+            headerName: 'Actions',
             colId: 'viewOrders',
             width: 130,
+            minWidth: 130,
             sortable: false,
             filter: false,
             cellRenderer: createCourierPaymentReportViewButton,
@@ -412,6 +813,7 @@ function initCourierPaymentReportGrid() {
     agGrid.createGrid(gridDiv, {
         columnDefs,
         rowData: [],
+        rowHeight: 74,
         defaultColDef: { sortable: true, resizable: true, filter: true, minWidth: 90 },
         pagination: false,
         domLayout: 'normal',
@@ -424,13 +826,31 @@ function initCourierPaymentReportGrid() {
 
 function initCourierPaymentReport() {
     initCourierPaymentReportGrid();
-    populateCourierPaymentReportPeriodFilter();
-    document.getElementById('courierPaymentReportPeriodFilter')?.addEventListener('change', () => loadCourierPaymentReport());
-    document.getElementById('courierPaymentReportCourierFilter')?.addEventListener('change', () => renderCourierPaymentReportView());
+    initCourierPaymentReportDateRangeButton();
 
-    document.getElementById('closeCourierPaymentReportOrdersModal')?.addEventListener('click', closeCourierPaymentReportOrdersModal);
-    document.getElementById('closeCourierPaymentReportOrdersModalBtn')?.addEventListener('click', closeCourierPaymentReportOrdersModal);
-    document.getElementById('courierPaymentReportOrdersModal')?.addEventListener('click', (e) => {
-        if (e.target.id === 'courierPaymentReportOrdersModal') closeCourierPaymentReportOrdersModal();
+    document.getElementById('courierPaymentReportCourierFilter')?.addEventListener('change', () => renderCourierPaymentReportView());
+    document.getElementById('courierPaymentReportStatusFilter')?.addEventListener('change', () => renderCourierPaymentReportView());
+    document.getElementById('courierPaymentReportSearchFilter')?.addEventListener('input', debounce(() => renderCourierPaymentReportView(), 250));
+
+    document.getElementById('courierPaymentReportClearFiltersBtn')?.addEventListener('click', () => {
+        const courierSelect = document.getElementById('courierPaymentReportCourierFilter');
+        if (courierSelect) courierSelect.value = COURIER_FILTER_ALL;
+        const statusSelect = document.getElementById('courierPaymentReportStatusFilter');
+        if (statusSelect) statusSelect.value = 'all';
+        const searchInput = document.getElementById('courierPaymentReportSearchFilter');
+        if (searchInput) searchInput.value = '';
+        if (typeof window._courierPaymentReportResetDateRange === 'function') window._courierPaymentReportResetDateRange();
+        renderCourierPaymentReportView();
+    });
+
+    // Same PostEx payment-reconciliation CSV as the Orders page's "Upload PostEx CSV"
+    // action (openUploadPostExModal, in ledgers.js) - surfaced here too since this page is
+    // where that reconciliation actually gets used.
+    document.getElementById('courierPaymentReportImportCsvBtn')?.addEventListener('click', () => openUploadPostExModal());
+
+    document.getElementById('courierPaymentReportDetailBackBtn')?.addEventListener('click', () => switchView('courierPaymentReport'));
+    // No backend PDF generation for this bill summary yet - just a placeholder for now.
+    document.getElementById('courierPaymentReportDetailDownloadBtn')?.addEventListener('click', () => {
+        showToast('PDF export is coming soon', 'info');
     });
 }

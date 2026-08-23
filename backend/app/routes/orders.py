@@ -25,7 +25,7 @@ from app.org_scope import org_table
 from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
 from app.services import postex
-from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
+from app.services.pdf.invoice import _build_invoice_order_context, _consignee_from_shopify_order, _generate_pdf_invoice
 from app.services.pdf.load_sheet import _generate_pdf_load_sheet
 from app.services.pdf.packaging_list import (
     _aggregate_packaging_items,
@@ -1923,6 +1923,62 @@ async def generate_invoice(request: Request, order_ids: List[str] = Body(..., em
     except Exception as e:
         logger.exception("Error generating invoice")
         raise HTTPException(status_code=500, detail="Error generating invoice")
+
+
+class OrderShippingInfo(BaseModel):
+    order_number: int
+    customer_name: str
+    phone: str
+    city: str
+
+
+@router.post("/shipping-info", response_model=List[OrderShippingInfo])
+@limiter.limit("10/minute")
+async def get_orders_shipping_info(request: Request, order_ids: List[str] = Body(..., embed=False), org_id: str = Depends(get_org_id)):
+    """Live Shopify shipping-address lookup (customer name/phone/city) for the Courier
+    Payment Report's bundle detail screen - shopify_orders doesn't persist these, so this
+    always hits Shopify directly (same fetch pattern as generate-invoice)."""
+    try:
+        if not order_ids:
+            raise HTTPException(status_code=400, detail="No orders selected")
+        if len(order_ids) > MAX_PDF_BATCH_ORDERS:
+            raise HTTPException(status_code=400, detail=f"Cannot look up shipping info for more than {MAX_PDF_BATCH_ORDERS} orders at once")
+        supabase = get_supabase()
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+        orders_response = org_table(supabase, org_id, "shopify_orders").select("order_number").in_("id", order_ids).execute()
+        orders = orders_response.data or []
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found")
+
+        fetch_sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+        async def _fetch_bounded(num: str):
+            if not num:
+                return None
+            async with fetch_sem:
+                try:
+                    return await _fetch_shopify_order_by_order_number(num, org_creds)
+                except Exception:
+                    return None
+
+        order_numbers = [str(o.get("order_number") or "").strip() for o in orders]
+        sp_orders = await asyncio.gather(*(_fetch_bounded(num) for num in order_numbers))
+
+        results = []
+        for order, sp_order in zip(orders, sp_orders):
+            if sp_order:
+                name, phone, _address = _consignee_from_shopify_order(sp_order)
+                addr = sp_order.get("shipping_address") or sp_order.get("billing_address") or {}
+                city = (addr.get("city") or "").strip() or "-"
+            else:
+                name, phone, city = "-", "-", "-"
+            results.append({"order_number": order.get("order_number"), "customer_name": name, "phone": phone, "city": city})
+        return results
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @router.post("/generate-packaging-list")

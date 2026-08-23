@@ -233,9 +233,14 @@ function initOrdersDateRangeButton() {
 
 function switchView(viewName, { skipReload = false } = {}) {
     currentView = viewName;
+    if (!NON_RESTORABLE_VIEWS.has(viewName)) {
+        try { localStorage.setItem(CURRENT_VIEW_KEY, viewName); } catch (e) { /* ignore */ }
+    }
 
-    // Update nav (ledgerDetail keeps the ledgers nav active)
-    const navView = viewName === 'ledgerDetail' ? 'ledgers' : viewName;
+    // Update nav (ledgerDetail/courierPaymentReportDetail keep their list's nav item active)
+    const navView = viewName === 'ledgerDetail' ? 'ledgers'
+        : viewName === 'courierPaymentReportDetail' ? 'courierPaymentReport'
+        : viewName;
     navItems.forEach(item => {
         item.classList.toggle('active', item.dataset.view === navView);
     });
@@ -258,8 +263,10 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
+        'orderFulfillment': 'Order Fulfillment',
         'loadSheetLogs': 'Load Sheet Logs',
         'courierPaymentReport': 'Courier Payment Report',
+        'courierPaymentReportDetail': 'Courier Payment Report',
         'settings': 'Settings'
     };
 
@@ -291,6 +298,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('trialBalanceHeaderWrap', viewName === 'trialBalance');
     show('apAgeingHeaderWrap', viewName === 'apAgeing');
     show('courierPaymentReportHeaderWrap', viewName === 'courierPaymentReport', 'flex');
+    show('orderFulfillmentHeaderWrap', viewName === 'orderFulfillment', 'flex');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
@@ -341,6 +349,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         setTimeout(() => {
             sizeGridColumns(courierPaymentReportGridApi);
         }, 100);
+    } else if (viewName === 'orderFulfillment') {
+        renderOrderFulfillmentView();
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail
         setTimeout(() => {

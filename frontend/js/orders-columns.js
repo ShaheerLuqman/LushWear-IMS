@@ -9,6 +9,13 @@
  * re-scanning the DOM on every grid refresh. */
 const REFRESH_ICON_SVG = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>';
 
+/** Couriers shown as a brand logo instead of text in the grid's Courier column, keyed by
+ * the uppercased display name. */
+const COURIER_LOGOS = {
+    POSTEX: { src: 'assets/postex_logo.png', alt: 'PostEx', imgClass: '' },
+    'COURIERS NEXT': { src: 'assets/courier_next_logo.png', alt: 'Couriers Next', imgClass: 'grid-courier-logo--couriersnext' }
+};
+
 /** CSS class for an order_status badge - shared by the Orders grid and the Courier
  * Resolution page so status colors never drift between the two. */
 function orderStatusBadgeClass(status) {
@@ -72,7 +79,16 @@ function buildOrdersGridColumns() {
             filter: 'agTextColumnFilter',
             filterParams: textFilterContains,
             filterValueGetter: (params) => (params.data && params.data.id === '__footer__') ? null : getCourierDisplayName(params.data || {}),
-            valueFormatter: (params) => (params.data && params.data.id === '__footer__') ? '' : getCourierDisplayName(params.data || {})
+            valueFormatter: (params) => (params.data && params.data.id === '__footer__') ? '' : getCourierDisplayName(params.data || {}),
+            cellRenderer: (params) => {
+                if (params.data && params.data.id === '__footer__') return '';
+                const name = getCourierDisplayName(params.data || {});
+                const logo = COURIER_LOGOS[name.trim().toUpperCase()];
+                if (logo) {
+                    return `<span class="grid-courier-logo-wrap"><img src="${logo.src}" alt="${logo.alt}" class="grid-courier-logo ${logo.imgClass}"></span>`;
+                }
+                return escapeHtml(name);
+            }
         },
         {
             headerName: 'Tracking #',

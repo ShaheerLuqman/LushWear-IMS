@@ -100,28 +100,30 @@
                 <h2>Change password</h2>
                 <button type="button" class="modal-close" id="changePasswordModalClose" aria-label="Close">&times;</button>
             </div>
-            <form id="changePasswordForm" class="modal-body password-change-form" autocomplete="off">
-                <div class="form-group">
-                    <label for="changePasswordCurrent">Current password</label>
-                    <input type="password" id="changePasswordCurrent" class="auth-gate-input"
-                        minlength="8" maxlength="128" required autocomplete="current-password">
-                </div>
-                <div class="form-group">
-                    <label for="changePasswordNew">New password</label>
-                    <input type="password" id="changePasswordNew" class="auth-gate-input"
-                        minlength="8" maxlength="128" required autocomplete="new-password">
-                </div>
-                <div class="form-group">
-                    <label for="changePasswordNewConfirm">Confirm new password</label>
-                    <input type="password" id="changePasswordNewConfirm" class="auth-gate-input"
-                        minlength="8" maxlength="128" required autocomplete="new-password">
-                </div>
-                <p id="changePasswordError" class="auth-gate-error" role="alert"></p>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="changePasswordCancelBtn">Cancel</button>
-                    <button type="submit" class="btn btn-primary" id="changePasswordSaveBtn">Save password</button>
-                </div>
-            </form>
+            <div class="modal-body">
+                <form id="changePasswordForm" class="password-change-form" autocomplete="off">
+                    <div class="form-group">
+                        <label for="changePasswordCurrent">Current password</label>
+                        <input type="password" id="changePasswordCurrent" class="auth-gate-input"
+                            minlength="8" maxlength="128" required autocomplete="current-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="changePasswordNew">New password</label>
+                        <input type="password" id="changePasswordNew" class="auth-gate-input"
+                            minlength="8" maxlength="128" required autocomplete="new-password">
+                    </div>
+                    <div class="form-group">
+                        <label for="changePasswordNewConfirm">Confirm new password</label>
+                        <input type="password" id="changePasswordNewConfirm" class="auth-gate-input"
+                            minlength="8" maxlength="128" required autocomplete="new-password">
+                    </div>
+                    <p id="changePasswordError" class="auth-gate-error" role="alert"></p>
+                </form>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" class="btn btn-secondary" id="changePasswordCancelBtn">Cancel</button>
+                <button type="submit" form="changePasswordForm" class="btn btn-primary" id="changePasswordSaveBtn">Save password</button>
+            </div>
         </div>
     </div>
 
@@ -155,6 +157,10 @@
                         <button class="nav-item" data-view="monthSummary" title="Month Summary">
                             <span class="nav-icon"><i data-lucide="calendar-days"></i></span>
                             <span class="nav-tooltip">Month Summary</span>
+                        </button>
+                        <button class="nav-item" data-view="orderFulfillment" title="Order Fulfillment">
+                            <span class="nav-icon"><i data-lucide="package-check"></i></span>
+                            <span class="nav-tooltip">Order Fulfillment</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="finance">
@@ -297,11 +303,26 @@
                         <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
                         <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
+                    <div id="orderFulfillmentHeaderWrap" class="header-inline" style="display: none;">
+                        <button type="button" id="orderFulfillmentExportBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export</button>
+                        <button type="button" id="orderFulfillmentRefreshBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
+                    </div>
                     <div id="courierPaymentReportHeaderWrap" class="header-inline" style="display: none;">
-                        <label for="courierPaymentReportPeriodFilter" class="orders-period-filter-label">Period:</label>
-                        <select id="courierPaymentReportPeriodFilter" class="orders-period-filter" title="Filter by period (month 22 – next 21)"></select>
-                        <label for="courierPaymentReportCourierFilter" class="orders-period-filter-label">Courier:</label>
+                        <button type="button" id="courierPaymentReportDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by pickup date range">Date range</button>
                         <select id="courierPaymentReportCourierFilter" class="orders-period-filter" title="Filter by courier"></select>
+                        <select id="courierPaymentReportStatusFilter" class="orders-period-filter" title="Filter by payment status">
+                            <option value="all">All Status</option>
+                            <option value="paid">Paid</option>
+                            <option value="partially_paid">Partially Paid</option>
+                            <option value="unpaid">Unpaid</option>
+                            <option value="in_transit">In Transit</option>
+                        </select>
+                        <div class="transaction-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
+                            <input id="courierPaymentReportSearchFilter" type="text" class="transaction-search-filter" placeholder="Search courier or order #..." autocomplete="off">
+                        </div>
+                        <button type="button" id="courierPaymentReportClearFiltersBtn" class="btn btn-secondary header-toolbar-btn">Clear Filters</button>
+                        <button type="button" id="courierPaymentReportImportCsvBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-upload"></i> Import Payment (CSV)</button>
                     </div>
                 </div>
             </header>
@@ -412,6 +433,183 @@
                     <div id="courierPaymentReportGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
+                <!-- Courier Payment Report: Bill Detail View -->
+                <div id="courierPaymentReportDetailView" class="view">
+                    <div class="bill-detail-scroll">
+                        <div class="bill-detail-header">
+                            <div class="bill-detail-header-top">
+                                <button type="button" id="courierPaymentReportDetailBackBtn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-arrow-left"></i> Back</button>
+                                <button type="button" id="courierPaymentReportDetailDownloadBtn" class="btn btn-secondary btn-sm"><i class="fa-solid fa-download"></i> Download Summary (PDF)</button>
+                            </div>
+                            <div class="bill-detail-title-row">
+                                <h2 id="courierPaymentReportDetailTitle" class="bill-detail-title">Bill Details</h2>
+                                <span id="courierPaymentReportDetailStatusBadge" class="grid-status-badge"></span>
+                            </div>
+                            <p id="courierPaymentReportDetailSubtitle" class="bill-detail-subtitle"></p>
+                        </div>
+
+                        <div class="stats-grid bill-detail-stats-grid" id="courierPaymentReportDetailStatsGrid"></div>
+
+                        <div class="bill-detail-summary-grid">
+                            <div class="bill-detail-card">
+                                <h3>Financial Summary</h3>
+                                <div id="courierPaymentReportDetailFinancialSummary"></div>
+                            </div>
+                            <div class="bill-detail-card">
+                                <h3 id="courierPaymentReportDetailCourierSummaryTitle">Courier Summary</h3>
+                                <div id="courierPaymentReportDetailCourierSummary"></div>
+                            </div>
+                            <div class="bill-detail-card">
+                                <h3>Payment Progress</h3>
+                                <div id="courierPaymentReportDetailProgressRing"></div>
+                            </div>
+                        </div>
+
+                        <div class="bill-detail-orders-section">
+                            <h3>Orders in this Bill (<span id="courierPaymentReportDetailOrdersCount">0</span>)</h3>
+                            <div class="postex-mismatches-table-wrap">
+                                <table class="postex-mismatches-table">
+                                    <thead>
+                                        <tr>
+                                            <th>Order #</th>
+                                            <th>Customer Name</th>
+                                            <th>Mobile</th>
+                                            <th>City</th>
+                                            <th>Courier</th>
+                                            <th>Tracking ID</th>
+                                            <th>Status</th>
+                                            <th>Order Date</th>
+                                            <th>Total</th>
+                                            <th>Advance</th>
+                                            <th>COD (Rs.)</th>
+                                            <th>Delivery Charge</th>
+                                            <th>Tax</th>
+                                            <th>Net Receivable</th>
+                                            <th>Settled</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="courierPaymentReportDetailOrdersBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Fulfillment View -->
+                <div id="orderFulfillmentView" class="view">
+                    <p class="fulfillment-subtitle">Manage and fulfill your unfulfilled orders</p>
+
+                    <div class="fulfillment-filters-bar">
+                        <div class="fulfillment-filter-group">
+                            <label for="fulfillmentCityFilter">City</label>
+                            <select id="fulfillmentCityFilter" class="form-input"></select>
+                        </div>
+                        <div class="fulfillment-filter-group">
+                            <label for="fulfillmentCityMode">Filter By City</label>
+                            <select id="fulfillmentCityMode" class="form-input">
+                                <option value="exclude">Exclude</option>
+                                <option value="include">Include</option>
+                            </select>
+                        </div>
+                        <div class="fulfillment-filter-group fulfillment-filter-group--chips">
+                            <label for="fulfillmentCityChipInput">&nbsp;</label>
+                            <div id="fulfillmentCityChips" class="fulfillment-chip-input">
+                                <input type="text" id="fulfillmentCityChipInput" class="fulfillment-chip-input__field" placeholder="Add city..." list="fulfillmentCityChipOptions" autocomplete="off">
+                                <datalist id="fulfillmentCityChipOptions"></datalist>
+                            </div>
+                        </div>
+                        <div class="fulfillment-filter-group">
+                            <label for="fulfillmentTagsFilter">Tags</label>
+                            <select id="fulfillmentTagsFilter" class="form-input">
+                                <option value="">All Tags</option>
+                            </select>
+                        </div>
+                        <div class="fulfillment-filter-group">
+                            <label for="fulfillmentDateRangeInput">Date Range</label>
+                            <div class="fulfillment-date-range-input-wrap">
+                                <i class="fa-regular fa-calendar"></i>
+                                <input type="text" id="fulfillmentDateRangeInput" class="fulfillment-date-range-input" placeholder="Select date range" readonly>
+                            </div>
+                        </div>
+                        <button type="button" id="fulfillmentClearFiltersBtn" class="btn btn-secondary fulfillment-clear-filters-btn">Clear Filters</button>
+                    </div>
+
+                    <div class="fulfillment-body">
+                        <div class="fulfillment-table-panel">
+                            <div class="fulfillment-table-toolbar">
+                                <label class="fulfillment-select-all">
+                                    <input type="checkbox" id="fulfillmentSelectAll">
+                                    <span id="fulfillmentSelectedCountLabel">0 selected</span>
+                                </label>
+                                <button type="button" id="fulfillmentClearSelectionBtn" class="fulfillment-link-btn">Clear Selection</button>
+                                <div class="fulfillment-table-toolbar-spacer"></div>
+                                <span id="fulfillmentTotalOrdersLabel" class="fulfillment-toolbar-stat">Total Orders: 0</span>
+                                <span id="fulfillmentUnfulfilledBadge" class="fulfillment-toolbar-badge">Unfulfilled: 0</span>
+                            </div>
+                            <div class="fulfillment-table-wrap">
+                                <table class="fulfillment-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="fulfillment-col-check"><input type="checkbox" id="fulfillmentHeaderCheckbox"></th>
+                                            <th>Order ID</th>
+                                            <th>Name</th>
+                                            <th>Complete Address</th>
+                                            <th>Mobile Number</th>
+                                            <th>Tags</th>
+                                            <th>City</th>
+                                            <th class="fulfillment-col-actions">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="fulfillmentTableBody"></tbody>
+                                </table>
+                            </div>
+                            <div class="fulfillment-pagination">
+                                <span id="fulfillmentPaginationLabel" class="fulfillment-pagination-label"></span>
+                                <div class="fulfillment-pagination-controls">
+                                    <button type="button" id="fulfillmentPrevPageBtn" class="btn btn-secondary btn-icon-sm"><i data-lucide="chevron-left"></i></button>
+                                    <div id="fulfillmentPageNumbers" class="fulfillment-page-numbers"></div>
+                                    <button type="button" id="fulfillmentNextPageBtn" class="btn btn-secondary btn-icon-sm"><i data-lucide="chevron-right"></i></button>
+                                    <select id="fulfillmentPageSize" class="form-input fulfillment-page-size">
+                                        <option value="10">10 / page</option>
+                                        <option value="25">25 / page</option>
+                                        <option value="50">50 / page</option>
+                                    </select>
+                                </div>
+                            </div>
+                        </div>
+
+                        <aside class="fulfillment-side-panel">
+                            <div id="fulfillmentSidePanelEmpty" class="fulfillment-side-panel-empty">
+                                <i data-lucide="package-check"></i>
+                                <p>Select one or more orders to fulfill them.</p>
+                            </div>
+                            <div id="fulfillmentSidePanelContent" class="fulfillment-side-panel-content" style="display: none;">
+                                <p id="fulfillmentSidePanelTitle" class="fulfillment-side-panel-title"></p>
+                                <p id="fulfillmentSidePanelOrderId" class="fulfillment-side-panel-order-id"></p>
+
+                                <label class="fulfillment-field-label">Select Courier</label>
+                                <div class="fulfillment-courier-select-wrap">
+                                    <button type="button" id="fulfillmentCourierSelectBtn" class="fulfillment-courier-select-btn">
+                                        <span id="fulfillmentCourierSelectLabel" class="fulfillment-courier-select-label">Select Courier</span>
+                                        <i data-lucide="chevron-down" class="fulfillment-courier-select-caret"></i>
+                                    </button>
+                                    <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
+                                </div>
+
+                                <div class="form-group fulfillment-tracking-group">
+                                    <label for="fulfillmentTrackingInput">Tracking Number (Optional)</label>
+                                    <input type="text" id="fulfillmentTrackingInput" class="form-input" placeholder="Enter tracking number">
+                                </div>
+
+                                <div class="fulfillment-side-panel-actions">
+                                    <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn"><i data-lucide="check-circle-2"></i> Fulfill Order</button>
+                                    <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+                        </aside>
+                    </div>
+                </div>
+
                 <!-- Create / edit purchase bill -->
                 <div id="billModal" class="modal">
                     <div class="modal-content bill-modal-content">
@@ -421,7 +619,7 @@
                         </div>
                         <div class="modal-body">
                             <form id="billForm" class="ledger-form" autocomplete="off">
-                                <div class="bill-form-row">
+                                <div class="bill-form-row bill-form-row-3col">
                                     <div class="form-group">
                                         <label for="billSupplier">Supplier *</label>
                                         <select id="billSupplier" class="form-input" required>
@@ -433,15 +631,17 @@
                                         <label for="billSupplierRef">Supplier's bill #</label>
                                         <input type="text" id="billSupplierRef" class="form-input" placeholder="e.g. INV-2291">
                                     </div>
-                                </div>
-                                <div class="form-group">
-                                    <label for="billDate">Bill date *</label>
-                                    <input type="date" id="billDate" class="form-input" required>
+                                    <div class="form-group">
+                                        <label for="billDate">Bill date *</label>
+                                        <input type="date" id="billDate" class="form-input" required>
+                                    </div>
                                 </div>
 
                                 <div class="bill-lines-wrap">
                                     <div class="bill-lines-header">
+                                        <span>Image</span>
                                         <span>Item</span>
+                                        <span></span>
                                         <span>Qty</span>
                                         <span>Unit cost</span>
                                         <span>Amount</span>
@@ -478,14 +678,13 @@
                                     <label for="billNotes">Notes</label>
                                     <input type="text" id="billNotes" class="form-input">
                                 </div>
-
-                                <div class="modal-actions form-actions">
-                                    <button type="button" id="billCancelBtn" class="btn btn-secondary">Cancel</button>
-                                    <button type="button" id="billRevertBtn" class="btn btn-secondary" style="display: none;">Revert to Draft</button>
-                                    <button type="button" id="billConfirmBtn" class="btn btn-primary" style="display: none;">Confirm Bill</button>
-                                    <button type="submit" id="billSaveBtn" class="btn btn-primary">Save draft</button>
-                                </div>
                             </form>
+                        </div>
+                        <div class="bill-modal-footer">
+                            <button type="button" id="billCancelBtn" class="btn btn-secondary">Cancel</button>
+                            <button type="button" id="billRevertBtn" class="btn btn-secondary" style="display: none;">Revert to Draft</button>
+                            <button type="button" id="billConfirmBtn" class="btn btn-primary" style="display: none;">Confirm Bill</button>
+                            <button type="submit" form="billForm" id="billSaveBtn" class="btn btn-primary">Save draft</button>
                         </div>
                     </div>
                 </div>
@@ -541,11 +740,11 @@
                                     <label for="createLedgerAddress">Address</label>
                                     <input type="text" id="createLedgerAddress" class="form-input">
                                 </div>
-                                <div class="modal-actions form-actions">
-                                    <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
-                                    <button type="submit" class="btn btn-primary">Create</button>
-                                </div>
                             </form>
+                        </div>
+                        <div class="modal-pinned-footer">
+                            <button type="button" id="createLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
+                            <button type="submit" form="createLedgerForm" id="createLedgerSubmitBtn" class="btn btn-primary">Create</button>
                         </div>
                     </div>
                 </div>
@@ -678,16 +877,16 @@
                                     <label for="editLedgerAddress">Address</label>
                                     <input type="text" id="editLedgerAddress" class="form-input">
                                 </div>
-                                <div class="modal-actions form-actions edit-ledger-actions">
-                                    <span id="editLedgerDeleteWrap" class="ledger-edit-delete-wrap" title="">
-                                        <button type="button" class="btn btn-danger ledger-edit-delete-btn" id="editLedgerDeleteBtn">Delete</button>
-                                    </span>
-                                    <div class="edit-ledger-actions-right">
-                                        <button type="button" id="editLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
-                                        <button type="submit" class="btn btn-primary">Save</button>
-                                    </div>
-                                </div>
                             </form>
+                        </div>
+                        <div class="modal-pinned-footer edit-ledger-actions">
+                            <span id="editLedgerDeleteWrap" class="ledger-edit-delete-wrap" title="">
+                                <button type="button" class="btn btn-danger ledger-edit-delete-btn" id="editLedgerDeleteBtn">Delete</button>
+                            </span>
+                            <div class="edit-ledger-actions-right">
+                                <button type="button" id="editLedgerCancelBtn" class="btn btn-secondary">Cancel</button>
+                                <button type="submit" form="editLedgerForm" id="editLedgerSubmitBtn" class="btn btn-primary">Save</button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -924,10 +1123,10 @@
                 <p id="packagingListOrderCount" class="bulk-update-order-count">0 orders</p>
                 <textarea id="packagingListOrderNumbers" class="bulk-update-textarea" rows="10" placeholder="e.g. 7848&#10;7871&#10;7887"></textarea>
                 <input type="file" id="packagingListPdfInput" accept="application/pdf,.pdf" multiple style="display: none;">
-                <div class="bulk-update-actions" style="margin-top: 16px;">
-                    <button type="button" id="packagingListUploadPdfBtn" class="btn btn-secondary">Upload PDFs</button>
-                    <button type="button" id="packagingListGenerateBtn" class="btn btn-primary">Generate packaging list</button>
-                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="packagingListUploadPdfBtn" class="btn btn-secondary">Upload PDFs</button>
+                <button type="button" id="packagingListGenerateBtn" class="btn btn-primary">Generate packaging list</button>
             </div>
         </div>
     </div>
@@ -945,10 +1144,10 @@
                     <label for="bulkUpdateDeliveryChargesValue">Delivery charges (Rs) *</label>
                     <input type="number" id="bulkUpdateDeliveryChargesValue" class="form-input" min="0" step="0.01" placeholder="0.00">
                 </div>
-                <div class="bulk-update-actions" style="margin-top: 16px;">
-                    <button type="button" id="bulkUpdateDeliveryChargesCancel" class="btn btn-secondary">Cancel</button>
-                    <button type="button" id="bulkUpdateDeliveryChargesConfirm" class="btn btn-primary">Confirm</button>
-                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="bulkUpdateDeliveryChargesCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="bulkUpdateDeliveryChargesConfirm" class="btn btn-primary">Confirm</button>
             </div>
         </div>
     </div>
@@ -968,10 +1167,10 @@
                     <label for="bulkUpdateCostPriceValue">New cost price (Rs) *</label>
                     <input type="number" id="bulkUpdateCostPriceValue" class="form-input" min="0" step="0.01" placeholder="0.00">
                 </div>
-                <div class="bulk-update-actions" style="margin-top: 16px;">
-                    <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
-                    <button type="button" id="bulkUpdateCostPriceSubmit" class="btn btn-primary">Update cost price</button>
-                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="bulkUpdateCostPriceSubmit" class="btn btn-primary">Update cost price</button>
             </div>
         </div>
     </div>
@@ -996,10 +1195,10 @@
                     <label for="recalculateOrderCostsCreatedAfter">Update orders created on or after *</label>
                     <input type="datetime-local" id="recalculateOrderCostsCreatedAfter" class="form-input" required>
                 </div>
-                <div class="bulk-update-actions" style="margin-top: 16px;">
-                    <button type="button" id="recalculateOrderCostsCancel" class="btn btn-secondary">Cancel</button>
-                    <button type="button" id="recalculateOrderCostsSubmit" class="btn btn-primary">Recalculate</button>
-                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="recalculateOrderCostsCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="recalculateOrderCostsSubmit" class="btn btn-primary">Recalculate</button>
             </div>
         </div>
     </div>
@@ -1024,10 +1223,10 @@
                     <label for="uploadPostExAssignmentNumber">Assignment Number (Folio)</label>
                     <input type="text" id="uploadPostExAssignmentNumber" class="form-input" placeholder="e.g. LW-1">
                 </div>
-                <div class="form-actions" style="margin-top: 16px;">
-                    <button type="button" id="uploadPostExModalCancel" class="btn btn-secondary">Cancel</button>
-                    <button type="button" id="uploadPostExModalUpload" class="btn btn-primary">Upload</button>
-                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="uploadPostExModalCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="uploadPostExModalUpload" class="btn btn-primary">Upload</button>
             </div>
         </div>
     </div>
@@ -1054,9 +1253,9 @@
                         <tbody id="postExAmountMismatchesBody"></tbody>
                     </table>
                 </div>
-                <div class="modal-actions" style="margin-top: 1rem;">
-                    <button type="button" id="closePostExAmountMismatchesBtn" class="btn btn-primary">Close</button>
-                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="closePostExAmountMismatchesBtn" class="btn btn-primary">Close</button>
             </div>
         </div>
     </div>
@@ -1071,45 +1270,9 @@
                 <p class="modal-description" id="deliveryStatusReportSummary"></p>
                 <div class="status-report-cards" id="deliveryStatusReportCards"></div>
                 <div class="status-report-detail" id="deliveryStatusReportDetail"></div>
-                <div class="modal-actions" style="margin-top: 1rem;">
-                    <button type="button" id="closeDeliveryStatusReportBtn" class="btn btn-primary">Close</button>
-                </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Courier Payment Report: orders within one pickup-date + courier bundle -->
-    <div id="courierPaymentReportOrdersModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2 id="courierPaymentReportOrdersModalTitle">Bundle orders</h2>
-                <button type="button" class="modal-close" id="closeCourierPaymentReportOrdersModal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p class="modal-description" id="courierPaymentReportOrdersModalSummary"></p>
-                <div class="postex-mismatches-table-wrap">
-                    <table class="postex-mismatches-table">
-                        <thead>
-                            <tr>
-                                <th>Order #</th>
-                                <th>Courier</th>
-                                <th>Status</th>
-                                <th>Order Date</th>
-                                <th>Total</th>
-                                <th>Advance</th>
-                                <th>COD Collected</th>
-                                <th>Delivery Charge</th>
-                                <th>Tax</th>
-                                <th>Owed by Courier</th>
-                                <th>Settled</th>
-                            </tr>
-                        </thead>
-                        <tbody id="courierPaymentReportOrdersModalBody"></tbody>
-                    </table>
-                </div>
-                <div class="modal-actions" style="margin-top: 1rem;">
-                    <button type="button" id="closeCourierPaymentReportOrdersModalBtn" class="btn btn-primary">Close</button>
-                </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="closeDeliveryStatusReportBtn" class="btn btn-primary">Close</button>
             </div>
         </div>
     </div>
@@ -1138,10 +1301,10 @@
                     <label for="loadSheetDeliveryCharge">Delivery charges</label>
                     <input type="number" id="loadSheetDeliveryCharge" class="form-input" placeholder="e.g. 150" min="0" step="0.01">
                 </div>
-                <div class="bulk-update-actions" style="margin-top: 16px;">
-                    <button type="button" id="loadSheetModalCancel" class="btn btn-secondary">Cancel</button>
-                    <button type="button" id="loadSheetModalConfirm" class="btn btn-primary">Generate &amp; Download PDF</button>
-                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="loadSheetModalCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="loadSheetModalConfirm" class="btn btn-primary">Generate &amp; Download PDF</button>
             </div>
         </div>
     </div>
@@ -1155,10 +1318,10 @@
             </div>
             <div class="modal-body">
                 <p class="app-confirm-message" id="appConfirmMessage"></p>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" id="appConfirmCancelBtn">Cancel</button>
-                    <button type="button" class="btn btn-primary" id="appConfirmOkBtn"></button>
-                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" class="btn btn-secondary" id="appConfirmCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="appConfirmOkBtn"></button>
             </div>
         </div>
     </div>
@@ -1225,6 +1388,7 @@
     <script src="js/trial-balance.js"></script>
     <script src="js/bills.js"></script>
     <script src="js/courier-payment-report.js"></script>
+    <script src="js/order-fulfillment.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/delivery-status.js"></script>

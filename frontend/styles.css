@@ -221,10 +221,6 @@ body {
     margin-bottom: 0;
 }
 
-.password-change-form .form-actions {
-    margin-top: 8px;
-}
-
 .app-container {
     display: flex;
     height: 100vh;
@@ -269,7 +265,7 @@ body {
 }
 
 .sidebar:hover {
-    width: 220px;
+    width: 240px;
     box-shadow: var(--shadow-lg);
 }
 
@@ -1032,6 +1028,7 @@ body:has(#ordersView.active) .header-actions {
 .content-area:has(#trialBalanceView.active),
 .content-area:has(#apAgeingView.active),
 .content-area:has(#courierPaymentReportView.active),
+.content-area:has(#courierPaymentReportDetailView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
 body:has(#productsView.active) .content-area,
@@ -1040,7 +1037,8 @@ body:has(#ledgersView.active) .content-area,
 body:has(#billsView.active) .content-area,
 body:has(#trialBalanceView.active) .content-area,
 body:has(#apAgeingView.active) .content-area,
-body:has(#courierPaymentReportView.active) .content-area {
+body:has(#courierPaymentReportView.active) .content-area,
+body:has(#courierPaymentReportDetailView.active) .content-area {
     padding: 0;
 }
 
@@ -1498,6 +1496,33 @@ input[type="number"] {
     border-top: 1px solid var(--border-color);
 }
 
+/* Same idea, generic: a modal's action row pinned outside its scrolling
+   .modal-body (a sibling of it, inside .modal-content's flex column) instead
+   of scrolling away with long content. Composes with a modal's own action-row
+   class (e.g. .bulk-update-actions, .edit-ledger-actions) where one already
+   supplies button layout - this only adds the pinning/spacing. */
+.modal-pinned-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Same idea for the bill modal: pinned below .modal-body (its scrolling line
+   items can get long) instead of scrolling away with the form. The Save
+   button submits #billForm via its form="" attribute since it's no longer a
+   descendant of it. */
+.bill-modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 16px 24px;
+    border-top: 1px solid var(--border-color);
+}
+
 .transaction-entry-mode {
     display: flex;
     gap: 4px;
@@ -1826,17 +1851,19 @@ input[type="number"] {
     background: var(--bg-tertiary);
 }
 
+#bulkUpdateOrderModal .modal-content {
+    max-width: 760px;
+}
+
 /* Fixed-size report box: header/cards stay put, only the order list scrolls. */
-#deliveryStatusReportModal .modal-content,
-#courierPaymentReportOrdersModal .modal-content {
+#deliveryStatusReportModal .modal-content {
     width: 860px;
     max-width: 95vw;
     height: 640px;
     max-height: 90vh;
 }
 
-#deliveryStatusReportModal .modal-body,
-#courierPaymentReportOrdersModal .modal-body {
+#deliveryStatusReportModal .modal-body {
     display: flex;
     flex-direction: column;
     min-height: 0;
@@ -1844,13 +1871,11 @@ input[type="number"] {
     overflow: hidden;
 }
 
-#deliveryStatusReportModal .postex-mismatches-table-wrap,
-#courierPaymentReportOrdersModal .postex-mismatches-table-wrap {
+#deliveryStatusReportModal .postex-mismatches-table-wrap {
     margin: 0;
 }
 
-#deliveryStatusReportModal .postex-mismatches-table thead th,
-#courierPaymentReportOrdersModal .postex-mismatches-table thead th {
+#deliveryStatusReportModal .postex-mismatches-table thead th {
     position: sticky;
     top: 0;
     background: var(--bg-card);
@@ -1858,9 +1883,7 @@ input[type="number"] {
 }
 
 #deliveryStatusReportModal .modal-description,
-#deliveryStatusReportModal .modal-actions,
-#courierPaymentReportOrdersModal .modal-description,
-#courierPaymentReportOrdersModal .modal-actions {
+#deliveryStatusReportModal .modal-actions {
     flex-shrink: 0;
 }
 
@@ -2941,6 +2964,29 @@ input[type="number"] {
     text-transform: capitalize;
 }
 
+/* Both courier logos have dark wordmark text on a transparent background, so a
+ * white chip keeps them legible against the dark theme's row background. */
+.grid-courier-logo-wrap {
+    display: inline-flex;
+    align-items: center;
+    background: #fff;
+    border-radius: 4px;
+    padding: 3px 6px;
+}
+
+.grid-courier-logo {
+    height: 14px;
+    width: auto;
+    display: block;
+}
+
+/* Couriers Next's logo stacks a circular icon above/beside the wordmark (near-square
+ * aspect ratio) rather than PostEx's wide wordmark, so it needs more height to stay
+ * legible at a comparable rendered width. */
+.grid-courier-logo--couriersnext {
+    height: 32px;
+}
+
 .grid-status-fulfilled {
     background: rgba(234, 179, 8, 0.15);
     color: #ca8a04;
@@ -2984,6 +3030,88 @@ input[type="number"] {
 .grid-status-rfd {
     background: rgba(59, 130, 246, 0.15);
     color: #2563eb;
+}
+
+/* Courier Payment Report: combined received/net-receivable bar (Payment Progress
+   column) - bar color is set inline per row from BILL_STATUS_META.barColor. */
+
+/* Real element wrapper (createPaymentProgressCellElement), not innerHTML on ag-grid's
+   own cell-value span - that span isn't a reliable block container to size against, so
+   the bar and its 100% widths below never actually filled the column. */
+.payment-progress-cell-wrap {
+    display: flex;
+    align-items: center;
+    width: 100%;
+}
+
+.payment-progress {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    gap: 3px;
+    width: 100%;
+    min-width: 0;
+}
+
+.payment-progress__row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    /* body's line-height: 1.6 leaves an oversized line box around 13px text, which reads
+       as extra space between this row and the bar below even though the flex gap is tight. */
+    line-height: 1.2;
+}
+
+.payment-progress__pct {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.payment-progress__bar {
+    height: 10px;
+    border-radius: 5px;
+    background: var(--bg-tertiary);
+    overflow: hidden;
+}
+
+/* Stacked: advance/received/deductibles segments sit side by side, left to right: the
+   unfilled remainder (still outstanding) is whatever's left of the bar's own background.
+   Colors are kept in sync with PAYMENT_PROGRESS_COLORS in courier-payment-report.js. */
+.payment-progress__bar--stacked {
+    display: flex;
+}
+
+.payment-progress__segment {
+    height: 100%;
+}
+
+.payment-progress__segment--advance {
+    background: #3b82f6;
+}
+
+.payment-progress__segment--received {
+    background: #16a34a;
+}
+
+.payment-progress__segment--deductibles {
+    background: #f59e0b;
+}
+
+.payment-progress__meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.2;
+}
+
+.payment-progress__waiting {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
 }
 
 .grid-variants-container {
@@ -3305,14 +3433,21 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 /* Purchase bills */
 .bill-modal-content {
-    max-width: 900px;
-    width: 95%;
+    width: 80vw;
+    height: 80vh;
+    max-width: 80vw;
+    max-height: 80vh;
 }
 
 .bill-form-row {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 12px;
+}
+
+/* Bill date sits alongside supplier + supplier ref rather than on its own row. */
+.bill-form-row-3col {
+    grid-template-columns: 1fr 1fr 1fr;
 }
 
 .bill-lines-wrap {
@@ -3322,25 +3457,61 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     margin: 8px 0 4px;
 }
 
-/* Column widths are shared with .bill-line so the header lines up with the
-   rows; the last track is the remove button. */
-.bill-lines-header,
-.bill-line {
-    display: grid;
-    grid-template-columns: minmax(260px, 1fr) 90px 110px 110px 32px;
-    gap: 8px;
-    align-items: center;
-}
-
+/* The header is one flat row of labels: Image, Item name, the mode toggle,
+   Qty, Unit cost, Amount, remove. .bill-line itself is NOT this same grid -
+   it's a 2-part flex row (image, then everything else - see below) so the
+   image can stretch down the full height of the product row plus its variant
+   rows, instead of being pinned to just the top row's height. Its own inner
+   columns (.bill-line-main, .bill-line-variant-row) add up to exactly the
+   header's width minus the Image column + gap, so both stay aligned. */
+/* Item is capped rather than left as a bare 1fr - in an 80vw modal that ate
+   almost all the row's width, dwarfing Qty/Cost/Amount next to it. The fr
+   share that would have gone to it goes to those three instead. */
 .bill-lines-header {
+    display: grid;
+    grid-template-columns: 140px minmax(270px, 510px) 38px minmax(54px, 0.6fr) minmax(68px, 0.75fr) minmax(68px, 0.75fr) 32px;
+    gap: 8px;
     font-size: 0.78rem;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--text-muted);
 }
 
+/* Qty / Unit cost / Amount - 4th, 5th and 6th of the header's 7 columns. */
+.bill-lines-header > span:nth-child(4),
+.bill-lines-header > span:nth-child(5),
+.bill-lines-header > span:nth-child(6) {
+    text-align: right;
+}
+
+.bill-line {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+}
+
 .bill-line + .bill-line {
     margin-top: 6px;
+}
+
+.bill-line-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* Shared by the product row itself and each variant row below it (see
+   .bill-line-extra / billLineVariantQtyGrid), so a variant's own qty/cost/
+   amount - and its title, under the product name above it - land in the same
+   columns instead of a separate side box. */
+.bill-line-main,
+.bill-line-variant-row {
+    display: grid;
+    grid-template-columns: minmax(270px, 510px) 38px minmax(54px, 0.6fr) minmax(68px, 0.75fr) minmax(68px, 0.75fr) 32px;
+    gap: 8px;
+    align-items: center;
 }
 
 .bill-line-amount {
@@ -3348,20 +3519,42 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-variant-numeric: tabular-nums;
 }
 
-/* Holds either the free-text description input or the product + variant
-   selects, whichever the line is in — all on one row, plus the toggle
-   between them. No align-items here: the toggle stretches (flex's default)
-   to whatever height the input/selects render at, rather than a guessed one. */
-.bill-line-desc-cell {
-    display: flex;
-    gap: 6px;
-    min-width: 0;
+.bill-line-quantity,
+.bill-line-cost,
+.bill-line-variant-qty-input,
+.bill-line-variant-cost-input {
+    text-align: right;
 }
 
-.bill-line-desc-cell .form-input,
-.bill-line-desc-cell .bill-line-product-btn {
-    flex: 1;
-    min-width: 0;
+/* Alone in its own column, and stretched (.bill-line's flex row default) to
+   the full height of the product row plus every variant row under it, rather
+   than capped to a small square pinned at the top - a product with several
+   variants gets a correspondingly bigger picture instead of empty space
+   beside them. */
+.bill-line-image-cell {
+    flex: 0 0 140px;
+    display: flex;
+}
+
+.bill-line-product-thumb {
+    width: 100%;
+    height: 100%;
+    min-height: 48px;
+    object-fit: cover;
+    border-radius: var(--radius-sm);
+}
+
+.bill-line-product-thumb-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    min-height: 48px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    font-size: 10px;
+    color: var(--text-muted);
+    text-align: center;
 }
 
 /* Overrides folio-dropdown-btn's own (smaller, bg-card) sizing so the product
@@ -3392,62 +3585,56 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     cursor: not-allowed;
 }
 
-.bill-line-qty-total {
-    text-align: center;
-    font-variant-numeric: tabular-nums;
-    color: var(--text-primary);
-}
-
-/* Falls into row 2 of the line's own grid (an implicit row under it) since
-   .bill-line only defines 5 explicit column tracks - spans all of them,
-   wide enough for a product's whole variant run rather than just the item
-   column's width. Holds the variant quantity grid, the cost-effect caption,
-   or both. */
+/* Sits below .bill-line-main in .bill-line-content's own column (see above),
+   as wide as the product name and everything right of it. Holds the variant
+   rows, the cost-effect caption, or both. */
 .bill-line-extra {
-    grid-column: 1 / -1;
     display: flex;
     flex-direction: column;
     gap: 6px;
 }
 
+/* No horizontal padding here - .bill-line-variant-row shares .bill-line's own
+   grid-template-columns (see above), and any padding on this wrapper would
+   shift every row's tracks out of line with the header/line above it. */
 .bill-line-variant-qtys {
     display: flex;
-    flex-wrap: wrap;
-    gap: 8px 14px;
-    padding: 8px 10px;
+    flex-direction: column;
+    padding: 2px 0;
     background: var(--bg-tertiary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
 }
 
-.bill-line-variant-qty {
-    display: flex;
-    align-items: center;
-    gap: 6px;
+.bill-line-variant-row {
+    padding: 2px 0;
+}
+
+.bill-line-variant-row + .bill-line-variant-row {
+    border-top: 1px solid var(--border-color);
+}
+
+/* Variant's own qty/cost inputs pick up .bill-line .form-input's colors and
+   border, but shrink the padding/font that rule sets - a product can have
+   many variants, so the row list needs to stay compact and scannable rather
+   than matching the line's own (larger) Qty/Cost inputs size for size. Same
+   specificity as .bill-line .form-input; wins on being declared after it. */
+.bill-line-variant-row .form-input {
+    padding: 5px 8px;
+    font-size: 12px;
 }
 
 .bill-line-variant-qty-label {
-    font-size: 0.8rem;
+    font-size: 0.78rem;
     color: var(--text-secondary);
-    white-space: nowrap;
+    padding-left: 10px;
 }
 
-.bill-line-variant-qty-input {
-    width: 56px;
-    padding: 6px 8px;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    min-width: 0;
-}
-
-.bill-line-variant-qty-input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+.bill-line-variant-amount {
+    text-align: right;
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
 }
 
 .bill-line-cost-effect {
@@ -3459,7 +3646,11 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .bill-line-cost-effect-down { color: var(--success); }
 
 .bill-line-mode-toggle {
-    flex: 0 0 38px;
+    width: 100%;
+    /* .bill-line-main's align-items:center would otherwise only center this at
+       its own (icon-sized) height - stretch it to match the product name
+       field/button beside it instead. */
+    align-self: stretch;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -3725,6 +3916,195 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
     padding: 8px 12px;
     margin-bottom: 4px;
+}
+
+/* Courier Payment Report: Bill Detail (drill-down from "View Details", same full-bleed
+   shell as Ledger Detail above, but the content is cards/tables rather than one grid, so
+   it needs its own scroll container instead of a single flex:1 grid). */
+#courierPaymentReportDetailView {
+    overflow: hidden;
+    gap: 0;
+    min-height: 0;
+    padding: 0;
+}
+
+#courierPaymentReportDetailView.active {
+    height: 100%;
+    width: 100%;
+    flex-direction: column;
+}
+
+.bill-detail-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    padding: 20px 32px 32px;
+}
+
+.bill-detail-header {
+    margin-bottom: 24px;
+}
+
+.bill-detail-header-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+}
+
+.bill-detail-title-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.bill-detail-title {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.bill-detail-subtitle {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.bill-detail-stats-grid {
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    margin-bottom: 24px;
+}
+
+/* This page packs more cards into the row than .stat-value's default 24px was sized
+   for (money strings like "Rs 312,450.00" plus the order-count card), so scale both
+   down here rather than shrinking .stat-value everywhere it's used (Dashboard etc.). */
+.bill-detail-stats-grid .stat-value {
+    font-size: 18px;
+}
+
+.bill-detail-stats-grid .stat-detail {
+    font-size: 12px;
+}
+
+.bill-detail-summary-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px;
+    margin-bottom: 24px;
+    align-items: start;
+}
+
+.bill-detail-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 20px 22px;
+}
+
+.bill-detail-card h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 14px;
+}
+
+.bill-detail-summary-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.bill-detail-summary-row--total {
+    margin-top: 6px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border-color);
+    font-weight: 700;
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.bill-detail-progress-ring-wrap {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+/* background (the 4-slice conic-gradient pie) is set inline per bill in
+   renderCourierPaymentReportDetailProgressRing, since it needs 4 dynamic color stops. */
+.progress-ring {
+    flex-shrink: 0;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.progress-ring__inner {
+    width: 86px;
+    height: 86px;
+    border-radius: 50%;
+    background: var(--bg-card);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.progress-ring__pct {
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.progress-ring__label {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.progress-ring-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    font-size: 13px;
+    min-width: 0;
+}
+
+.progress-ring-legend__item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.progress-ring-legend__label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-secondary);
+}
+
+.progress-ring-legend__dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.progress-ring-legend__value {
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.bill-detail-orders-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 12px;
 }
 
 #ledgerDetailGrid {
@@ -4054,10 +4434,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-size: 15px;
     color: var(--text-primary);
     line-height: 1.5;
-}
-
-.app-confirm-modal-content .form-actions {
-    margin-bottom: 0;
 }
 
 .delete-confirm-modal-content {
@@ -4621,6 +4997,653 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-muted, #999);
     font-variant-numeric: tabular-nums;
     text-align: right;
+}
+
+/* ============================================
+   Order Fulfillment view
+   ============================================ */
+
+.fulfillment-subtitle {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin: -8px 0 18px;
+}
+
+.fulfillment-filters-bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-end;
+    gap: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 16px 20px;
+    margin-bottom: 20px;
+}
+
+.fulfillment-filter-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 160px;
+}
+
+.fulfillment-filter-group label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .4px;
+}
+
+.fulfillment-filter-group--chips {
+    flex: 1;
+    min-width: 220px;
+}
+
+.fulfillment-chip-input {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    padding: 5px 8px;
+    min-height: 40px;
+    box-sizing: border-box;
+}
+
+.fulfillment-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(124, 92, 252, .15);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.fulfillment-chip button {
+    background: none;
+    border: none;
+    color: inherit;
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    padding: 0;
+}
+
+.fulfillment-chip-input__field {
+    border: none;
+    background: transparent;
+    outline: none;
+    flex: 1;
+    min-width: 90px;
+    font-size: 13px;
+    color: var(--text-primary);
+}
+
+.fulfillment-date-range-input-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    padding: 0 10px;
+    height: 40px;
+    color: var(--text-muted);
+}
+
+.fulfillment-date-range-input {
+    border: none;
+    background: transparent;
+    outline: none;
+    font-size: 13px;
+    color: var(--text-primary);
+    width: 150px;
+    cursor: pointer;
+}
+
+.fulfillment-clear-filters-btn {
+    height: 40px;
+}
+
+.fulfillment-body {
+    display: flex;
+    align-items: flex-start;
+    gap: 20px;
+}
+
+.fulfillment-table-panel {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.fulfillment-table-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border-color);
+    flex-wrap: wrap;
+}
+
+.fulfillment-select-all {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.fulfillment-link-btn {
+    background: none;
+    border: none;
+    color: var(--accent-primary);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    padding: 0;
+}
+
+.fulfillment-table-toolbar-spacer {
+    flex: 1;
+}
+
+.fulfillment-toolbar-stat {
+    font-size: 13px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.fulfillment-toolbar-badge {
+    background: rgba(124, 92, 252, .15);
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 4px 10px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.fulfillment-table-wrap {
+    overflow: auto;
+}
+
+.fulfillment-table {
+    width: 100%;
+    border-collapse: collapse;
+    min-width: 900px;
+}
+
+.fulfillment-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    background: var(--bg-tertiary);
+    position: sticky;
+    top: 0;
+    z-index: 5;
+}
+
+.fulfillment-table td {
+    padding: 12px 14px;
+    font-size: 13px;
+    color: var(--text-primary);
+    border-bottom: 1px solid var(--border-color);
+    vertical-align: middle;
+}
+
+.fulfillment-table tbody tr:hover {
+    background: var(--bg-tertiary);
+}
+
+.fulfillment-table tbody tr.fulfillment-row--selected {
+    background: rgba(124, 92, 252, .08);
+}
+
+.fulfillment-col-check {
+    width: 44px;
+}
+
+.fulfillment-col-actions {
+    width: 60px;
+    text-align: center;
+}
+
+.fulfillment-order-id {
+    font-weight: 700;
+    color: var(--accent-primary);
+    font-family: var(--font-mono);
+}
+
+.fulfillment-editable-cell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 260px;
+}
+
+.fulfillment-editable-text {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fulfillment-edit-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px;
+    display: inline-flex;
+    flex-shrink: 0;
+}
+
+.fulfillment-edit-btn:hover {
+    color: var(--accent-primary);
+}
+
+.fulfillment-edit-btn .lucide {
+    width: 13px;
+    height: 13px;
+}
+
+.fulfillment-edit-input {
+    border: 1px solid var(--border-focus);
+    border-radius: 4px;
+    padding: 4px 6px;
+    font-size: 13px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    width: 100%;
+}
+
+.fulfillment-tags-cell {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    position: relative;
+}
+
+.fulfillment-tag-badge {
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 8px;
+    border-radius: 999px;
+    white-space: nowrap;
+}
+
+.fulfillment-tag-vip { background: rgba(124, 92, 252, .15); color: #7c5cfc; }
+.fulfillment-tag-repeat { background: rgba(34, 197, 94, .15); color: #16a34a; }
+.fulfillment-tag-new { background: rgba(139, 92, 246, .15); color: #8b5cf6; }
+.fulfillment-tag-wholesale { background: rgba(234, 179, 8, .15); color: #ca8a04; }
+
+.fulfillment-tags-toggle {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px;
+    display: inline-flex;
+}
+
+.fulfillment-tags-toggle .lucide {
+    width: 13px;
+    height: 13px;
+}
+
+.fulfillment-tags-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    padding: 6px;
+    z-index: 40;
+    min-width: 140px;
+    display: none;
+}
+
+.fulfillment-tags-menu.open {
+    display: block;
+}
+
+.fulfillment-tags-menu label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    padding: 6px 8px;
+    border-radius: 6px;
+    cursor: pointer;
+    color: var(--text-primary);
+}
+
+.fulfillment-tags-menu label:hover {
+    background: var(--bg-tertiary);
+}
+
+.fulfillment-city-select {
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    padding: 5px 8px;
+    cursor: pointer;
+}
+
+.fulfillment-actions-cell {
+    position: relative;
+    text-align: center;
+}
+
+.fulfillment-kebab-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 4px 8px;
+    font-size: 16px;
+    border-radius: 6px;
+    line-height: 1;
+}
+
+.fulfillment-kebab-btn:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+}
+
+.fulfillment-actions-menu {
+    position: absolute;
+    right: 0;
+    top: 100%;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    min-width: 160px;
+    z-index: 40;
+    display: none;
+    overflow: hidden;
+}
+
+.fulfillment-actions-menu.open {
+    display: block;
+}
+
+.fulfillment-actions-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 9px 14px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.fulfillment-actions-menu button:hover {
+    background: var(--bg-tertiary);
+}
+
+.fulfillment-actions-menu__danger {
+    color: var(--danger);
+}
+
+.fulfillment-pagination {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 18px;
+    border-top: 1px solid var(--border-color);
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.fulfillment-pagination-label {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.fulfillment-pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.fulfillment-page-numbers {
+    display: flex;
+    gap: 4px;
+}
+
+.fulfillment-page-btn {
+    min-width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.fulfillment-page-btn:hover {
+    background: var(--bg-tertiary);
+}
+
+.fulfillment-page-btn.active {
+    background: var(--accent-primary);
+    border-color: var(--accent-primary);
+    color: #fff;
+    font-weight: 600;
+}
+
+.fulfillment-page-size {
+    height: 32px;
+    padding: 0 8px;
+    font-size: 12px;
+}
+
+.fulfillment-side-panel {
+    width: 300px;
+    flex-shrink: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    padding: 20px;
+    position: sticky;
+    top: 0;
+}
+
+.fulfillment-side-panel-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    gap: 12px;
+    color: var(--text-muted);
+    padding: 30px 10px;
+    font-size: 13px;
+}
+
+.fulfillment-side-panel-empty .lucide {
+    width: 32px;
+    height: 32px;
+    opacity: .5;
+}
+
+.fulfillment-side-panel-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin: 0;
+}
+
+.fulfillment-side-panel-order-id {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin: 2px 0 18px;
+}
+
+.fulfillment-field-label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    margin-bottom: 8px;
+}
+
+.fulfillment-courier-select-wrap {
+    position: relative;
+    margin-bottom: 16px;
+}
+
+.fulfillment-courier-select-btn {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    padding: 10px 12px;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.fulfillment-courier-select-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fulfillment-courier-select-caret {
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.fulfillment-courier-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 100%;
+    margin-top: 4px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 40;
+    display: none;
+    overflow: hidden;
+}
+
+.fulfillment-courier-menu.open {
+    display: block;
+}
+
+.fulfillment-courier-menu-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    font-size: 13px;
+    color: var(--text-primary);
+    cursor: pointer;
+}
+
+.fulfillment-courier-menu-item:hover {
+    background: var(--bg-tertiary);
+}
+
+.fulfillment-courier-logo-chip {
+    width: 30px;
+    height: 22px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: #fff;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.fulfillment-courier-logo-chip img {
+    max-width: 100%;
+    max-height: 14px;
+}
+
+.fulfillment-courier-monogram {
+    width: 24px;
+    height: 24px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #fff;
+    flex-shrink: 0;
+}
+
+.fulfillment-tracking-group {
+    margin-bottom: 20px;
+}
+
+.fulfillment-side-panel-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.fulfillment-fulfill-btn,
+.fulfillment-cancel-btn {
+    width: 100%;
+}
+
+@media (max-width: 1024px) {
+    .fulfillment-body {
+        flex-direction: column;
+    }
+
+    .fulfillment-side-panel {
+        width: 100%;
+        position: static;
+    }
 }
 
 .bulk-entry-line-text {

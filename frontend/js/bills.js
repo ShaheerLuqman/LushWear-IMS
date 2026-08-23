@@ -95,11 +95,12 @@ function emptyBillLine() {
         product_id: null,
         // variant_id + quantity are used for a text line, or a product line
         // whose product can't offer the per-variant grid (no variants, or a
-        // product deactivated since the line was set). variantQuantities is
-        // used instead once a product with variants is selected - see
-        // billLineUsesVariantGrid.
+        // product deactivated since the line was set). variantQuantities and
+        // variantCosts (variant_id -> qty / unit cost) are used instead once
+        // a product with variants is selected - see billLineUsesVariantGrid.
         variant_id: null,
         variantQuantities: {},
+        variantCosts: {},
     };
 }
 
@@ -124,6 +125,17 @@ function billLineTotalQty(line) {
 }
 
 function billLineAmount(line) {
+    if (billLineUsesVariantGrid(line)) {
+        const qtys = line.variantQuantities || {};
+        const costs = line.variantCosts || {};
+        let amount = 0;
+        for (const variantId of Object.keys(qtys)) {
+            const qty = parseFloat(qtys[variantId]) || 0;
+            const cost = parseFloat(costs[variantId]);
+            if (qty > 0 && !Number.isNaN(cost)) amount += qty * cost;
+        }
+        return Math.round(amount * 100) / 100;
+    }
     const qty = billLineTotalQty(line);
     const cost = parseFloat(line.unit_cost);
     if (!qty || Number.isNaN(cost)) return 0;
@@ -176,6 +188,10 @@ function openBillProductDropdown(button, line, index) {
                 line.product_id = p.id;
                 line.variant_id = null;
                 line.variantQuantities = {};
+                // Prefilled from the product's current cost so most purchases need no
+                // typing here at all - only a change in price needs editing per variant.
+                line.variantCosts = {};
+                (p.variants || []).forEach(v => { line.variantCosts[v.id] = p.cost_price ?? ''; });
                 line.quantity = '';
                 closeDropdown();
                 renderBillLines();
@@ -220,17 +236,36 @@ function openBillProductDropdown(button, line, index) {
     document.addEventListener('mousedown', outsideClickHandler);
 }
 
-// One quantity input per variant, defaulting to 0, so the whole size run of a
-// product can be entered in one go instead of one bill line per variant.
+// One row per variant, so the whole size run of a product can be entered in
+// one go instead of one bill line per variant, at its own cost instead of one
+// cost for the whole run. Each row reuses .bill-line-main's own column widths
+// (see .bill-line-variant-row in styles.css) so its qty/cost/amount sit
+// directly under the line's own Qty/Cost/Amount headers, and its title sits
+// in the same column as the product name above it, rather than a separate
+// side-by-side box - there's no whole-line qty/cost/total anymore once every
+// variant can carry its own (see the now-blank qtyCell/costCell in
+// renderBillLines for a variant-grid line). Quantity defaults to 0; cost
+// defaults to the product's current cost price (set when the product was
+// picked - see the dropdown option's click handler above) rather than 0,
+// since most purchases repeat the last price and only a change needs editing.
 function billLineVariantQtyGrid(line, variants, disabled) {
     const qtys = line.variantQuantities || {};
+    const costs = line.variantCosts || {};
     return `<div class="bill-line-variant-qtys">
-        ${variants.map(v => `
-            <label class="bill-line-variant-qty">
+        ${variants.map(v => {
+            const qty = parseFloat(qtys[v.id]) || 0;
+            const cost = parseFloat(costs[v.id]);
+            const amount = (qty > 0 && !Number.isNaN(cost)) ? formatMoney(qty * cost) : '';
+            return `
+            <div class="bill-line-variant-row" data-variant-id="${v.id}">
                 <span class="bill-line-variant-qty-label">${escapeHtml(v.title)}</span>
-                <input type="number" class="bill-line-variant-qty-input" data-variant-id="${v.id}" min="0" step="1" value="${qtys[v.id] ?? '0'}" ${disabled}>
-            </label>
-        `).join('')}
+                <span></span>
+                <input type="number" class="form-input bill-line-variant-qty-input" data-variant-id="${v.id}" min="0" step="1" placeholder="0" value="${qtys[v.id] ?? '0'}" ${disabled}>
+                <input type="number" class="form-input bill-line-variant-cost-input" data-variant-id="${v.id}" min="0" step="0.01" placeholder="0.00" value="${costs[v.id] ?? ''}" ${disabled}>
+                <span class="bill-line-variant-amount">${amount}</span>
+                <span></span>
+            </div>`;
+        }).join('')}
     </div>`;
 }
 
@@ -247,21 +282,32 @@ function billLandedCostExtra() {
 }
 
 // Landed cost per product referenced on this bill: the quantity-weighted
-// average of its own line(s) unit cost (a product can appear on more than one
-// line, e.g. bought at a different cost in a separate line), plus its even
-// share of the bill's tax/other-expense/discount.
+// average of its own line(s) unit cost - per-variant where the line has a
+// variant grid, since each variant can carry its own cost there, else the
+// line's single cost (a product can also appear on more than one line, e.g.
+// bought at a different cost in a separate line) - plus its even share of the
+// bill's tax/other-expense/discount.
 function billProductLandedCosts() {
     const extra = billLandedCostExtra();
     const byProduct = new Map();
-    for (const line of billLineDrafts) {
-        if (line.mode !== 'product' || !line.product_id) continue;
-        const qty = billLineTotalQty(line);
-        const cost = parseFloat(line.unit_cost) || 0;
-        if (qty <= 0) continue;
-        const agg = byProduct.get(line.product_id) || { qty: 0, costTotal: 0 };
+    const addQtyCost = (productId, qty, cost) => {
+        if (qty <= 0) return;
+        const agg = byProduct.get(productId) || { qty: 0, costTotal: 0 };
         agg.qty += qty;
         agg.costTotal += qty * cost;
-        byProduct.set(line.product_id, agg);
+        byProduct.set(productId, agg);
+    };
+    for (const line of billLineDrafts) {
+        if (line.mode !== 'product' || !line.product_id) continue;
+        if (billLineUsesVariantGrid(line)) {
+            const qtys = line.variantQuantities || {};
+            const costs = line.variantCosts || {};
+            for (const variantId of Object.keys(qtys)) {
+                addQtyCost(line.product_id, parseFloat(qtys[variantId]) || 0, parseFloat(costs[variantId]) || 0);
+            }
+        } else {
+            addQtyCost(line.product_id, billLineTotalQty(line), parseFloat(line.unit_cost) || 0);
+        }
     }
     const result = new Map();
     for (const [productId, agg] of byProduct) {
@@ -270,24 +316,77 @@ function billProductLandedCosts() {
     return result;
 }
 
-function billLineCostEffectHtml(product, newCost) {
+// newCost is already the qty-weighted average landed cost across every line
+// on this bill that references the product (see billProductLandedCosts) —
+// when it spans more than one line, the label says so, since that average is
+// what actually overwrites products.cost_price on receive (see
+// apply_bill_stock in the DB), not any single line's own unit cost.
+function billLineCostEffectHtml(product, newCost, lineCount) {
     const current = product.cost_price || 0;
     const diff = Math.round((newCost - current) * 100) / 100;
     const changeClass = diff > 0 ? 'bill-line-cost-effect-up' : diff < 0 ? 'bill-line-cost-effect-down' : '';
     const change = diff === 0 ? '' : ` <span class="${changeClass}">(${diff > 0 ? '+' : ''}${formatMoney(diff)})</span>`;
-    return `Cost price: Rs ${formatMoney(current)} → Rs ${formatMoney(newCost)}${change}`;
+    const label = lineCount > 1 ? `New avg cost (wtd across ${lineCount} entries)` : 'New cost price';
+    return `${label}: Rs ${formatMoney(current)} → Rs ${formatMoney(newCost)}${change}`;
+}
+
+// How many priced entries (bill lines, or variants within a variant-grid
+// line) with a positive quantity reference a given product — >1 means its
+// landed cost above is a blend across them, whether that's two separate
+// lines or just two variants on the same line costed differently.
+function billProductLineCounts() {
+    const counts = new Map();
+    const bump = (productId) => counts.set(productId, (counts.get(productId) || 0) + 1);
+    for (const line of billLineDrafts) {
+        if (line.mode !== 'product' || !line.product_id) continue;
+        if (billLineUsesVariantGrid(line)) {
+            Object.values(line.variantQuantities || {})
+                .forEach(qty => { if ((parseFloat(qty) || 0) > 0) bump(line.product_id); });
+        } else if (billLineTotalQty(line) > 0) {
+            bump(line.product_id);
+        }
+    }
+    return counts;
 }
 
 // Patches the per-line cost-price captions in place rather than a full
 // renderBillLines(), so typing into a quantity/cost/tax/discount field doesn't
-// blow away the input's focus and cursor position on every keystroke.
+// blow away the input's focus and cursor position on every keystroke. Walks
+// every line rather than just existing .bill-line-cost-effect elements,
+// because a line starts with no quantity - so renderBillLines() had nothing
+// to show a caption for yet - and the caption element (plus its .bill-line-extra
+// wrapper, for a line with no variant grid) has to be created the first time
+// a qty/cost value makes the line's landed cost computable.
 function updateCostEffects() {
     const landedCosts = billProductLandedCosts();
-    document.querySelectorAll('.bill-line-cost-effect').forEach(el => {
-        const line = billLineDrafts[parseInt(el.dataset.index, 10)];
+    const lineCounts = billProductLineCounts();
+    document.querySelectorAll('.bill-line').forEach(rowEl => {
+        const index = parseInt(rowEl.dataset.index, 10);
+        const line = billLineDrafts[index];
         const product = line && line.mode === 'product' ? billLineProduct(line) : null;
         const newCost = product ? landedCosts.get(product.id) : null;
-        el.innerHTML = (product && newCost != null) ? billLineCostEffectHtml(product, newCost) : '';
+        let el = rowEl.querySelector('.bill-line-cost-effect');
+        if (!product || newCost == null) {
+            if (el) el.innerHTML = '';
+            return;
+        }
+        if (!el) {
+            let extra = rowEl.querySelector('.bill-line-extra');
+            if (!extra) {
+                extra = document.createElement('div');
+                extra.className = 'bill-line-extra';
+                // .bill-line-content, not rowEl itself - .bill-line is a 2-part
+                // flex row (image, then content), so appending straight to it
+                // would add a stray third flex sibling instead of a new row
+                // under .bill-line-main inside the content column.
+                rowEl.querySelector('.bill-line-content').appendChild(extra);
+            }
+            el = document.createElement('div');
+            el.className = 'bill-line-cost-effect';
+            el.dataset.index = index;
+            extra.appendChild(el);
+        }
+        el.innerHTML = billLineCostEffectHtml(product, newCost, lineCounts.get(product.id) || 1);
     });
 }
 
@@ -300,6 +399,7 @@ function renderBillLines() {
 
     const disabled = billModalReadOnly ? 'disabled' : '';
     const landedCosts = billModalReadOnly ? null : billProductLandedCosts();
+    const lineCounts = billModalReadOnly ? null : billProductLineCounts();
     container.innerHTML = billLineDrafts.map((line, index) => {
         const product = line.mode === 'product' ? billLineProduct(line) : null;
         // The product list only holds active products, so a line referencing one
@@ -309,6 +409,18 @@ function renderBillLines() {
         const variants = product ? (product.variants || []) : [];
         const usesVariantGrid = !!product && variants.length > 0;
 
+        // Image is its own flex sibling of the rest of the line (see .bill-line
+        // in styles.css), stretched to the height of the product row plus its
+        // variant rows. Item name/toggle/Qty/Cost are columns of the inner
+        // .bill-line-main grid below, so - like qtyCell/costCell already do -
+        // every branch still has to render *something* (even an empty span)
+        // rather than '', or a missing element would shift every later column
+        // left into the wrong header.
+        const imageCell = `<div class="bill-line-image-cell">${product
+            ? (product.image_url
+                ? `<img class="bill-line-product-thumb" src="${escapeHtml(product.image_url)}" alt="">`
+                : `<div class="bill-line-product-thumb bill-line-product-thumb-empty">No Img</div>`)
+            : ''}</div>`;
         const itemField = productMissing
             ? `<input type="text" class="form-input" value="${escapeHtml(line.description || '')}" disabled>`
             : line.mode === 'product'
@@ -319,30 +431,46 @@ function renderBillLines() {
             : `<input type="text" class="form-input bill-line-description" value="${escapeHtml(line.description || '')}" placeholder="e.g. Cotton fabric" ${disabled}>`;
         const toggleTitle = line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection';
         const toggleIcon = line.mode === 'product' ? 'fa-pen-to-square' : 'fa-list-check';
-        const toggle = billModalReadOnly ? '' :
+        const toggle = billModalReadOnly ? '<span></span>' :
             `<button type="button" class="bill-line-mode-toggle" data-index="${index}" title="${toggleTitle}" aria-label="${toggleTitle}"><i class="fa-solid ${toggleIcon}"></i></button>`;
 
-        // A resolvable product with variants replaces the quantity field with
-        // a per-variant grid below, and shows their running total here instead.
+        // A resolvable product with variants replaces the quantity field with a
+        // per-variant grid below (one row per variant, aligned under these same
+        // Qty/Cost columns) - there's no single qty or cost for the whole product
+        // line anymore, so these cells are left blank rather than showing a total.
+        // Still an actual (empty) grid item though, not '' - .bill-line relies on
+        // DOM-order auto-placement across its column tracks, so dropping the
+        // element entirely would shift Amount and the remove button left into
+        // the Qty/Cost tracks instead of their own.
         const qtyCell = usesVariantGrid
-            ? `<span class="bill-line-qty-total">${billLineTotalQty(line)}</span>`
+            ? '<span></span>'
             : `<input type="number" class="form-input bill-line-quantity" value="${line.quantity}" min="0" step="0.001" placeholder="0" ${disabled}>`;
+
+        const costCell = usesVariantGrid
+            ? '<span></span>'
+            : `<input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00" ${disabled}>`;
 
         const newCost = product && landedCosts ? landedCosts.get(product.id) : null;
         const costEffect = product && newCost != null
-            ? `<div class="bill-line-cost-effect" data-index="${index}">${billLineCostEffectHtml(product, newCost)}</div>` : '';
+            ? `<div class="bill-line-cost-effect" data-index="${index}">${billLineCostEffectHtml(product, newCost, lineCounts.get(product.id) || 1)}</div>` : '';
         const extra = usesVariantGrid || costEffect
             ? `<div class="bill-line-extra">${usesVariantGrid ? billLineVariantQtyGrid(line, variants, disabled) : ''}${costEffect}</div>`
             : '';
 
         return `
         <div class="bill-line" data-index="${index}">
-            <div class="bill-line-desc-cell">${itemField}${toggle}</div>
-            ${qtyCell}
-            <input type="number" class="form-input bill-line-cost" value="${line.unit_cost}" min="0" step="0.01" placeholder="0.00" ${disabled}>
-            <span class="bill-line-amount">${formatMoney(billLineAmount(line))}</span>
-            ${billModalReadOnly ? '' : `<button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>`}
-            ${extra}
+            ${imageCell}
+            <div class="bill-line-content">
+                <div class="bill-line-main">
+                    ${itemField}
+                    ${toggle}
+                    ${qtyCell}
+                    ${costCell}
+                    <span class="bill-line-amount">${formatMoney(billLineAmount(line))}</span>
+                    ${billModalReadOnly ? '' : `<button type="button" class="bill-line-remove" data-index="${index}" aria-label="Remove line">&times;</button>`}
+                </div>
+                ${extra}
+            </div>
         </div>`;
     }).join('');
 
@@ -353,18 +481,29 @@ function renderBillLines() {
         const line = billLineDrafts[index];
         const updateAmount = () => {
             row.querySelector('.bill-line-amount').textContent = formatMoney(billLineAmount(line));
-            const qtyTotalEl = row.querySelector('.bill-line-qty-total');
-            if (qtyTotalEl) qtyTotalEl.textContent = billLineTotalQty(line);
+            row.querySelectorAll('.bill-line-variant-row').forEach(variantRow => {
+                const variantId = variantRow.dataset.variantId;
+                const qty = parseFloat(line.variantQuantities?.[variantId]) || 0;
+                const cost = parseFloat(line.variantCosts?.[variantId]);
+                variantRow.querySelector('.bill-line-variant-amount').textContent =
+                    (qty > 0 && !Number.isNaN(cost)) ? formatMoney(qty * cost) : '';
+            });
             renderBillTotals();
             updateCostEffects();
         };
 
         row.querySelector('.bill-line-description')?.addEventListener('input', e => { line.description = e.target.value; });
         row.querySelector('.bill-line-quantity')?.addEventListener('input', e => { line.quantity = e.target.value; updateAmount(); });
-        row.querySelector('.bill-line-cost').addEventListener('input', e => { line.unit_cost = e.target.value; updateAmount(); });
+        row.querySelector('.bill-line-cost')?.addEventListener('input', e => { line.unit_cost = e.target.value; updateAmount(); });
         row.querySelectorAll('.bill-line-variant-qty-input').forEach(input => {
             input.addEventListener('input', e => {
                 line.variantQuantities[e.target.dataset.variantId] = e.target.value;
+                updateAmount();
+            });
+        });
+        row.querySelectorAll('.bill-line-variant-cost-input').forEach(input => {
+            input.addEventListener('input', e => {
+                line.variantCosts[e.target.dataset.variantId] = e.target.value;
                 updateAmount();
             });
         });
@@ -377,6 +516,7 @@ function renderBillLines() {
             line.product_id = null;
             line.variant_id = null;
             line.variantQuantities = {};
+            line.variantCosts = {};
             line.description = '';
             renderBillLines();
         });
@@ -406,11 +546,11 @@ function renderBillTotals() {
 }
 
 // Groups a saved bill's flat items back into draft rows for editing: items on
-// a product that currently has variants collapse into one row per (product,
-// unit cost) with a variantQuantities map, so it reopens showing the same
-// per-variant grid it would if just entered. Everything else (text lines, a
-// variant-less product, or one whose product was since deactivated) stays one
-// row per item, as it always was.
+// a product that currently has variants collapse into one row per product,
+// with each variant's own saved unit_cost carried into variantCosts, so it
+// reopens showing the same per-variant qty+cost grid it would if just
+// entered. Everything else (text lines, a variant-less product, or one whose
+// product was since deactivated) stays one row per item, as it always was.
 function billItemsToDrafts(items) {
     const drafts = [];
     const groups = new Map();
@@ -420,18 +560,19 @@ function billItemsToDrafts(items) {
         const hasVariants = !!(product && (product.variants || []).length);
 
         if (hasVariants && item.variant_id) {
-            const key = `${item.product_id}|${item.unit_cost}`;
-            let draft = groups.get(key);
+            let draft = groups.get(item.product_id);
             if (!draft) {
                 draft = {
                     _key: item.id, mode: 'product', description: '',
-                    quantity: '', unit_cost: item.unit_cost,
-                    product_id: item.product_id, variant_id: null, variantQuantities: {},
+                    quantity: '', unit_cost: '',
+                    product_id: item.product_id, variant_id: null,
+                    variantQuantities: {}, variantCosts: {},
                 };
-                groups.set(key, draft);
+                groups.set(item.product_id, draft);
                 drafts.push(draft);
             }
             draft.variantQuantities[item.variant_id] = item.quantity;
+            draft.variantCosts[item.variant_id] = item.unit_cost;
             continue;
         }
 
@@ -444,6 +585,7 @@ function billItemsToDrafts(items) {
             product_id: item.product_id || null,
             variant_id: item.variant_id || null,
             variantQuantities: {},
+            variantCosts: {},
         });
     }
 
@@ -539,25 +681,28 @@ function collectBillPayload() {
     const filled = billLineDrafts.filter(l => l.quantity !== '' || l.unit_cost !== '' || l.description || l.product_id);
     const items = [];
     for (const line of filled) {
-        const cost = parseFloat(line.unit_cost);
-        if (Number.isNaN(cost) || cost < 0) {
-            showToast('Every line needs a unit cost', 'error');
-            return null;
-        }
-
         // A resolvable product with variants expands into one item per variant
         // that was given a quantity above 0 - the rest (left at their default 0)
-        // are simply not purchased on this bill.
+        // are simply not purchased on this bill - each at its own cost rather
+        // than one cost for the whole line.
         if (billLineUsesVariantGrid(line)) {
             const product = billLineProduct(line);
             const picked = (product.variants || [])
-                .map(v => ({ variant: v, qty: parseFloat(line.variantQuantities[v.id]) || 0 }))
+                .map(v => ({
+                    variant: v,
+                    qty: parseFloat(line.variantQuantities[v.id]) || 0,
+                    cost: parseFloat(line.variantCosts?.[v.id]),
+                }))
                 .filter(({ qty }) => qty > 0);
             if (!picked.length) {
                 showToast(`Enter a quantity for at least one variant of ${product.name}`, 'error');
                 return null;
             }
-            for (const { variant, qty } of picked) {
+            if (picked.some(({ cost }) => Number.isNaN(cost) || cost < 0)) {
+                showToast(`Enter a cost for every variant with a quantity on ${product.name}`, 'error');
+                return null;
+            }
+            for (const { variant, qty, cost } of picked) {
                 items.push({
                     description: billLineVariantDescription(product, variant),
                     quantity: qty,
@@ -567,6 +712,12 @@ function collectBillPayload() {
                 });
             }
             continue;
+        }
+
+        const cost = parseFloat(line.unit_cost);
+        if (Number.isNaN(cost) || cost < 0) {
+            showToast('Every line needs a unit cost', 'error');
+            return null;
         }
 
         const qty = parseFloat(line.quantity);

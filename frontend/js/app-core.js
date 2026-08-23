@@ -105,6 +105,12 @@ let orders = [];
 let transactionEntries = [];
 let transactionSelectedDate = null;
 let currentView = 'orders';
+/** localStorage so the last view survives a reload (dev live-reload, accidental
+ * refresh, etc.) - restored in runAuthGate's post-login boot. Detail views
+ * (ledgerDetail, monthDetail, courierPaymentReportDetail) need extra context
+ * beyond the view name, so they're excluded in switchView/restoreLastView. */
+const CURRENT_VIEW_KEY = 'lushwear_current_view';
+const NON_RESTORABLE_VIEWS = new Set(['ledgerDetail', 'monthDetail', 'courierPaymentReportDetail']);
 let productsGridApi = null;
 let ordersGridApi = null;
 let transactionsGridApi = null;
@@ -188,7 +194,9 @@ function applyEditLockState() {
     }
     const editButtons = [
         'createLedgerBtn',
+        'createLedgerSubmitBtn',
         'editLedgerDeleteBtn',
+        'editLedgerSubmitBtn',
         'bulkUpdateOrderBtn',
         'bulkUpdateCostPriceBtn',
         'recalculateOrderCostsBtn',
@@ -207,16 +215,6 @@ function applyEditLockState() {
         const el = document.getElementById(id);
         if (el) el.disabled = locked;
     });
-    const editLedgerForm = document.getElementById('editLedgerForm');
-    if (editLedgerForm) {
-        const submitBtn = editLedgerForm.querySelector('button[type="submit"]');
-        if (submitBtn) submitBtn.disabled = locked;
-    }
-    const createLedgerForm = document.getElementById('createLedgerForm');
-    if (createLedgerForm) {
-        const submitBtn = createLedgerForm.querySelector('button[type="submit"]');
-        if (submitBtn) submitBtn.disabled = locked;
-    }
 }
 
 // DOM Elements
@@ -661,6 +659,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initChangePasswordModal();
     initSettingsView();
     initInstallPrompt();
+    initOrderFulfillment();
 
     const impersonating = consumeImpersonationToken();
     let resumedAccount = impersonating ? null : await tryResumeSession();
@@ -695,7 +694,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     // a hidden/blocked view.
     const ordersEnabled = hasFeature('orders');
     const financeEnabled = hasFeature('finance');
-    const defaultView = ordersEnabled ? 'orders' : financeEnabled ? 'transactions' : 'settings';
+    let defaultView = ordersEnabled ? 'orders' : financeEnabled ? 'transactions' : 'settings';
+
+    // Resume the last view (e.g. after a dev reload) if it's still reachable for
+    // this org - the nav item is only in the DOM and visible when its feature section
+    // (applyFeatureVisibility, called above) is enabled.
+    try {
+        const lastView = localStorage.getItem(CURRENT_VIEW_KEY);
+        if (lastView && !NON_RESTORABLE_VIEWS.has(lastView)) {
+            const navItem = document.querySelector(`.nav-item[data-view="${lastView}"]`);
+            if (navItem && navItem.offsetParent !== null) defaultView = lastView;
+        }
+    } catch (e) { /* ignore */ }
 
     let dataLoaded = false;
 

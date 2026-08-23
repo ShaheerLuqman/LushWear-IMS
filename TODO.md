@@ -20,6 +20,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Keyboard shortcuts** — add shortcuts for common actions.
 - [ ] **Reduce base font size** — tighten the type scale app-wide.
 - [ ] **Refresh color theme** — update the UI's color palette.
+- [ ] **Consistent modal sizing** — make content modals (forms/reports/bill/transaction entry) 80vw/80vh; keep small confirm dialogs compact.
+- [ ] **Pin modal action buttons** — keep buttons fixed in view instead of scrolling with modal content.
 
 #### Full-stack
 

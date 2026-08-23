@@ -25,3 +25,20 @@ Coding conventions for this repo — follow them when writing or changing code.
 - Schema changes must go through versioned migrations (Supabase migrations or
   Alembic), not hand-edits to `supabase_schema.sql`. The live schema must stay
   reproducible, diffable, and reviewable.
+
+## Modals (frontend)
+- A modal's action buttons (Cancel/Save/etc.) must be pinned outside the
+  scrolling `.modal-body` — a sibling of it inside `.modal-content`'s flex
+  column — using the shared `.modal-pinned-footer` class, not left inside the
+  body/form where they scroll away with long content.
+- If a `type="submit"` button moves out of its `<form>` this way, give it
+  `form="theFormId"` so it still submits that form (see `createLedgerModal`,
+  `editLedgerModal`, `changePasswordModal`, `billModal` for the pattern).
+- When doing this, check for any JS that finds that button via
+  `someForm.querySelector('button[type="submit"]')` (rather than by id) —
+  moving the button out of the form breaks that lookup. Prefer explicit ids
+  referenced by id everywhere, including in bulk logic like edit-lock toggles.
+- A footer needing its own button layout (e.g. a delete button pinned left,
+  space-between) composes an existing layout class alongside
+  `.modal-pinned-footer` (see `.edit-ledger-actions`) rather than
+  reimplementing pinning.
