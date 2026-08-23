@@ -59,13 +59,18 @@ PRICE_REDUCTION_DISCOUNT_CODES = {
 
 
 def _resolve_line_item_cost(
-    name: str, product_id: Optional[str], costs_by_id: Dict[str, float], products_cost_map: Dict[str, float]
+    name: str, product_id: Optional[str], costs_by_id: Dict[str, float], products_cost_map: Dict[str, float],
+    variant_id: Optional[str] = None, costs_by_variant_id: Optional[Dict[str, float]] = None,
 ) -> float:
-    """Resolve one line item's unit cost_price: by product_id (reliable - survives product
-    renames), falling back to name matching (exact, then variant-suffix-stripped, then
-    substring) for items that didn't resolve to a product_id. `name` here is Shopify's
-    line-item `title` (bare product name, no variant), which is why the exact-match tier
-    usually suffices - the fallback tiers exist for older/renamed-product edge cases."""
+    """Resolve one line item's unit cost_price: by variant_id first (its own cost may
+    differ from the product's other variants - see shopify_variants.cost_price), else by
+    product_id (reliable - survives product renames), falling back to name matching
+    (exact, then variant-suffix-stripped, then substring) for items that didn't resolve
+    to a product_id. `name` here is Shopify's line-item `title` (bare product name, no
+    variant), which is why the exact-match tier usually suffices - the fallback tiers
+    exist for older/renamed-product edge cases."""
+    if variant_id and costs_by_variant_id and variant_id in costs_by_variant_id:
+        return costs_by_variant_id[variant_id]
     if product_id and product_id in costs_by_id:
         return costs_by_id[product_id]
     if not name:
@@ -421,7 +426,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 return await asyncio.to_thread(run)
 
         products_task = select_concurrently("shopify_products", "id, name, cost_price, shopify_product_id")
-        variants_task = select_concurrently("shopify_variants", "id, shopify_variant_id")
+        variants_task = select_concurrently("shopify_variants", "id, shopify_variant_id, cost_price")
         order_chunk_tasks = [
             select_concurrently("shopify_orders", existing_orders_select, "order_number", chunk)
             for chunk in order_chunks
@@ -444,9 +449,12 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 costs_by_id[p["id"]] = float(p["cost_price"])
 
         variant_id_by_shopify = {}   # shopify_variant_id -> variants.id
+        costs_by_variant_id = {}     # variants.id -> cost_price, preferred over costs_by_id
         for v in variants_data:
             if v.get("shopify_variant_id") is not None and v.get("id"):
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
+            if v.get("id") and v.get("cost_price") is not None:
+                costs_by_variant_id[v["id"]] = float(v["cost_price"])
 
         existing_orders_map = {}
         existing_orders_all = [row for chunk_rows in order_chunk_results for row in chunk_rows]
@@ -643,15 +651,19 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 except (TypeError, ValueError):
                     unit_price = 0.0
                 resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
+                resolved_variant_id = variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None
                 name = (item.get("title") or item.get("name") or "").strip()
                 rows.append({
-                    "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
+                    "variant_id": resolved_variant_id,
                     "product_id": resolved_product_id,
                     "name": name,
                     "variant_title": (item.get("variant_title") or "").strip() or "-",
                     "qty": qty,
                     "unit_price": unit_price,
-                    "cost_price": _resolve_line_item_cost(name, resolved_product_id, costs_by_id, products_cost_map),
+                    "cost_price": _resolve_line_item_cost(
+                        name, resolved_product_id, costs_by_id, products_cost_map,
+                        resolved_variant_id, costs_by_variant_id,
+                    ),
                 })
             return rows
 

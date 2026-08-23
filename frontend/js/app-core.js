@@ -199,7 +199,6 @@ function applyEditLockState() {
         'editLedgerSubmitBtn',
         'bulkUpdateOrderBtn',
         'bulkUpdateCostPriceBtn',
-        'recalculateOrderCostsBtn',
         'bulkUpdateDeliveryChargesBtn',
         'bulkUpdateSetDelivered',
         'bulkUpdateSetReturned',
@@ -208,8 +207,9 @@ function applyEditLockState() {
         'bulkUpdateSetOrderSettled',
         'bulkUpdateSetOrderUnsettled',
         'bulkUpdateCostPriceSubmit',
-        'recalculateOrderCostsSubmit',
         'bulkUpdateDeliveryChargesConfirm',
+        'editVariantCostsSave',
+        'editVariantCostsRecalcSubmit',
     ];
     editButtons.forEach((id) => {
         const el = document.getElementById(id);

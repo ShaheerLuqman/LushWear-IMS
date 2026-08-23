@@ -226,44 +226,103 @@ async function submitBulkUpdateCostPrice() {
     }
 }
 
-function openRecalculateOrderCostsModal() {
-    if (!productsGridApi) {
-        showToast('Products grid not ready', 'error');
+// Cost is per-variant for a product with variants; for one with none, this
+// falls back to a single row for the product itself, saved through the
+// product-level batch endpoint instead - same modal either way, opened from
+// the products grid's "More actions" menu (see createProductRowMenu in
+// orders-grid.js). Also holds "recalculate order costs" for this same
+// product, so both actions live in one place instead of two separate modals.
+function openEditVariantCostsModal(product) {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
         return;
     }
-    const selected = productsGridApi.getSelectedRows();
-    if (selected.length !== 1) {
-        showToast('Select exactly one product', 'error');
-        return;
-    }
-    const row = selected[0];
-    const idEl = document.getElementById('recalculateOrderCostsProductId');
-    const nameEl = document.getElementById('recalculateOrderCostsProductName');
-    const dtEl = document.getElementById('recalculateOrderCostsCreatedAfter');
-    if (idEl) idEl.value = row.id || '';
-    if (nameEl) nameEl.value = row.name || '';
+    const variants = sortVariantsBySize(product.variants || []);
+    const rows = variants.length
+        ? variants.map(v => ({ kind: 'variant', id: v.id, title: v.title, qty: v.quantity || 0, cost: v.cost_price ?? product.cost_price }))
+        : [{ kind: 'product', id: product.id, title: product.name, qty: null, cost: product.cost_price }];
+
+    document.getElementById('editVariantCostsTitle').textContent =
+        `${variants.length ? 'Edit variant costs' : 'Edit cost price'} — ${product.name}`;
+    document.getElementById('editVariantCostsList').innerHTML = rows.map(r => `
+        <div class="edit-variant-costs-row">
+            <span class="edit-variant-costs-title">${escapeHtml(r.title)}${r.qty != null ? ` <span class="edit-variant-costs-qty">(qty: ${r.qty})</span>` : ''}</span>
+            <input type="number" class="edit-variant-costs-input" data-kind="${r.kind}" data-id="${r.id}" min="0" step="0.01" placeholder="0.00" value="${r.cost ?? ''}">
+        </div>
+    `).join('');
+
+    document.getElementById('editVariantCostsRecalcProductId').value = product.id;
+    const dtEl = document.getElementById('editVariantCostsRecalcCreatedAfter');
     if (dtEl) {
         const n = new Date();
         n.setHours(0, 0, 0, 0);
         const pad = (x) => String(x).padStart(2, '0');
         dtEl.value = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}`;
     }
-    document.getElementById('recalculateOrderCostsModal')?.classList.add('active');
+
+    document.getElementById('editVariantCostsModal')?.classList.add('active');
 }
 
-function closeRecalculateOrderCostsModal() {
-    document.getElementById('recalculateOrderCostsModal')?.classList.remove('active');
+function closeEditVariantCostsModal() {
+    document.getElementById('editVariantCostsModal')?.classList.remove('active');
 }
 
-async function submitRecalculateOrderCosts() {
+async function submitEditVariantCosts() {
     if (!isEditingAllowed()) {
         showToast('Editing is locked', 'error');
         return;
     }
-    const idEl = document.getElementById('recalculateOrderCostsProductId');
-    const dtEl = document.getElementById('recalculateOrderCostsCreatedAfter');
-    const productId = idEl?.value?.trim();
-    const raw = dtEl?.value;
+    const inputs = document.querySelectorAll('#editVariantCostsList .edit-variant-costs-input');
+    const variantUpdates = [];
+    const productUpdates = [];
+    for (const input of inputs) {
+        const raw = input.value.trim();
+        const cost = raw === '' ? null : parseFloat(raw);
+        if (raw !== '' && (isNaN(cost) || cost < 0)) {
+            showToast('Enter a valid cost (0 or more) for every row', 'error');
+            return;
+        }
+        const update = { id: input.dataset.id, cost_price: cost };
+        (input.dataset.kind === 'product' ? productUpdates : variantUpdates).push(update);
+    }
+    if (!variantUpdates.length && !productUpdates.length) return;
+
+    const saveBtn = document.getElementById('editVariantCostsSave');
+    if (saveBtn) {
+        saveBtn.disabled = true;
+        saveBtn.textContent = 'Saving...';
+    }
+    try {
+        if (variantUpdates.length) {
+            await apiJson('/products/batch-update-variant-cost-prices', {
+                method: 'PUT', body: { updates: variantUpdates }, fallback: 'Failed to update variant costs'
+            });
+        }
+        if (productUpdates.length) {
+            await apiJson('/products/batch-update-cost-prices', {
+                method: 'PUT', body: { updates: productUpdates }, fallback: 'Failed to update cost price'
+            });
+        }
+        showToast('Cost price updated', 'success');
+        closeEditVariantCostsModal();
+        await loadProducts();
+    } catch (error) {
+        showToast(error.message || 'Failed to update cost price', 'error');
+    } finally {
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save';
+        }
+    }
+}
+
+async function submitEditVariantCostsRecalc() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const productId = document.getElementById('editVariantCostsRecalcProductId')?.value?.trim();
+    const raw = document.getElementById('editVariantCostsRecalcCreatedAfter')?.value;
     if (!productId) {
         showToast('No product selected', 'error');
         return;
@@ -277,10 +336,10 @@ async function submitRecalculateOrderCosts() {
         showToast('Invalid date and time', 'error');
         return;
     }
-    const submitBtn = document.getElementById('recalculateOrderCostsSubmit');
+    const submitBtn = document.getElementById('editVariantCostsRecalcSubmit');
     if (submitBtn) {
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Updating...';
+        submitBtn.textContent = 'Recalculating...';
     }
     try {
         const result = await apiJson('/products/recalculate-order-costs', {
@@ -288,7 +347,6 @@ async function submitRecalculateOrderCosts() {
             body: { product_id: productId, created_after: d.toISOString() },
             fallback: 'Failed to recalculate'
         });
-        closeRecalculateOrderCostsModal();
         const nums = result.updated_order_numbers;
         if (Array.isArray(nums) && nums.length) {
             console.log('[recalculate-order-costs] updated order_numbers:', nums);
@@ -299,7 +357,7 @@ async function submitRecalculateOrderCosts() {
     } finally {
         if (submitBtn) {
             submitBtn.disabled = false;
-            submitBtn.textContent = 'Recalculate';
+            submitBtn.textContent = 'Recalculate order costs';
         }
     }
 }
@@ -328,12 +386,14 @@ document.getElementById('closeBulkUpdateCostPriceModal')?.addEventListener('clic
 document.getElementById('bulkUpdateCostPriceCancel')?.addEventListener('click', closeBulkUpdateCostPriceModal);
 document.getElementById('bulkUpdateCostPriceSubmit')?.addEventListener('click', submitBulkUpdateCostPrice);
 
-document.getElementById('recalculateOrderCostsModal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'recalculateOrderCostsModal') closeRecalculateOrderCostsModal();
+// Edit variant costs modal (also holds the recalculate-order-costs action)
+document.getElementById('editVariantCostsModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'editVariantCostsModal') closeEditVariantCostsModal();
 });
-document.getElementById('closeRecalculateOrderCostsModal')?.addEventListener('click', closeRecalculateOrderCostsModal);
-document.getElementById('recalculateOrderCostsCancel')?.addEventListener('click', closeRecalculateOrderCostsModal);
-document.getElementById('recalculateOrderCostsSubmit')?.addEventListener('click', submitRecalculateOrderCosts);
+document.getElementById('closeEditVariantCostsModal')?.addEventListener('click', closeEditVariantCostsModal);
+document.getElementById('editVariantCostsCancel')?.addEventListener('click', closeEditVariantCostsModal);
+document.getElementById('editVariantCostsSave')?.addEventListener('click', submitEditVariantCosts);
+document.getElementById('editVariantCostsRecalcSubmit')?.addEventListener('click', submitEditVariantCostsRecalc);
 
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();

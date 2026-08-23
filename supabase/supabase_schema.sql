@@ -185,7 +185,9 @@ CREATE TABLE IF NOT EXISTS shopify_products (
     shopify_product_id  BIGINT UNIQUE,                 -- Shopify sync key
     name                VARCHAR(255) NOT NULL,
     price               DECIMAL(10, 2) DEFAULT 0.00,   -- Selling price (same across variants)
-    cost_price          DECIMAL(10, 2),                -- Cost price (same across variants)
+    -- Cost for a variant-less product, and the fallback/prefill for a variant with
+    -- no cost_price of its own yet (see shopify_variants.cost_price below).
+    cost_price          DECIMAL(10, 2),
     collection          VARCHAR(255),                  -- Collection name (e.g. from Shopify)
     image_url           TEXT,
     -- True while Shopify reports this product active; sync-shopify flips it false instead
@@ -208,6 +210,10 @@ CREATE TABLE IF NOT EXISTS shopify_variants (
     inventory_item_id   BIGINT,
     title               VARCHAR(255) NOT NULL,         -- e.g. "S", "M", "Red"
     quantity            INTEGER DEFAULT 0,
+    -- This variant's own cost. NULL until set (via a received purchase bill or the
+    -- Products page) - falls back to shopify_products.cost_price until then. See
+    -- supabase/migrations/20260823000000_variant_level_cost_price.sql.
+    cost_price          DECIMAL(10, 2),
     created_at          TIMESTAMPTZ DEFAULT NOW(),
     updated_at          TIMESTAMPTZ DEFAULT NOW()
 );
@@ -1699,6 +1705,9 @@ CREATE TABLE IF NOT EXISTS finances_bills (
     -- last overwrote it, so unreceive_bill can put each product's price back
     -- exactly. Set on receive, cleared on unreceive.
     cost_price_snapshot JSONB,
+    -- Variant-level sibling of cost_price_snapshot above: {variant_id: cost_price},
+    -- for bill items that reference a variant.
+    variant_cost_price_snapshot JSONB,
     created_by    UUID REFERENCES system_users(id),
     created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1782,13 +1791,17 @@ $$;
 
 -- Adds (p_sign = 1) or removes (p_sign = -1) this bill's stock.
 --
--- Receiving also lands each referenced product's cost_price: the
--- quantity-weighted average of its own line(s) unit cost on this bill, plus
--- an even share of the bill's tax/other-expense/discount spread across the
--- whole bill's quantity (the same figure the bill modal previews live before
--- it's confirmed). Each product's price beforehand is snapshotted onto the
+-- Receiving also lands cost_price: a bill item WITH a variant_id lands the
+-- quantity-weighted average of its own line(s) unit cost on that variant
+-- (shopify_variants.cost_price); an item with no variant_id (a variant-less
+-- product, or one deactivated since the line was set) still lands on the
+-- product itself (shopify_products.cost_price), as it always did. Either way
+-- it's plus an even share of the bill's tax/other-expense/discount spread
+-- across the whole bill's quantity (the same figure the bill modal previews
+-- live before it's confirmed). Each price beforehand is snapshotted onto the
 -- bill first, so un-receiving restores it exactly rather than leaving it at
--- whatever this bill set it to.
+-- whatever this bill set it to. See
+-- supabase/migrations/20260823000000_variant_level_cost_price.sql.
 CREATE OR REPLACE FUNCTION apply_bill_stock(p_bill_id UUID, p_sign INT)
 RETURNS void
 LANGUAGE plpgsql
@@ -1820,24 +1833,49 @@ BEGIN
               FROM finances_bills b WHERE b.id = p_bill_id;
         END IF;
 
+        -- Snapshot affected prices before changing them so unreceive_bill
+        -- (p_sign < 0) can put them back exactly. Variant-less lines snapshot
+        -- their product; variant lines snapshot their variant.
         UPDATE finances_bills
            SET cost_price_snapshot = (
                    SELECT jsonb_object_agg(p.id::text, p.cost_price)
                      FROM shopify_products p
                     WHERE p.id IN (
                         SELECT DISTINCT product_id FROM finances_bill_items
-                         WHERE bill_id = p_bill_id AND product_id IS NOT NULL
+                         WHERE bill_id = p_bill_id AND product_id IS NOT NULL AND variant_id IS NULL
+                    )
+               ),
+               variant_cost_price_snapshot = (
+                   SELECT jsonb_object_agg(v.id::text, v.cost_price)
+                     FROM shopify_variants v
+                    WHERE v.id IN (
+                        SELECT DISTINCT variant_id FROM finances_bill_items
+                         WHERE bill_id = p_bill_id AND variant_id IS NOT NULL
                     )
                )
          WHERE id = p_bill_id;
 
+        -- Variant lines land on their own variant - two variants of the same
+        -- product bought at different prices no longer get blended together.
+        UPDATE shopify_variants v
+           SET cost_price = ROUND(agg.avg_cost + v_extra, 2),
+               updated_at = NOW()
+          FROM (
+              SELECT variant_id, SUM(quantity * unit_cost) / SUM(quantity) AS avg_cost
+                FROM finances_bill_items
+               WHERE bill_id = p_bill_id AND variant_id IS NOT NULL AND quantity > 0
+               GROUP BY variant_id
+          ) agg
+         WHERE v.id = agg.variant_id;
+
+        -- Variant-less lines still land on the product, same as before.
         UPDATE shopify_products p
            SET cost_price = ROUND(agg.avg_cost + v_extra, 2),
                updated_at = NOW()
           FROM (
               SELECT product_id, SUM(quantity * unit_cost) / SUM(quantity) AS avg_cost
                 FROM finances_bill_items
-               WHERE bill_id = p_bill_id AND product_id IS NOT NULL AND quantity > 0
+               WHERE bill_id = p_bill_id AND product_id IS NOT NULL AND variant_id IS NULL AND quantity > 0
                GROUP BY product_id
           ) agg
          WHERE p.id = agg.product_id;
@@ -1853,7 +1891,19 @@ BEGIN
           ) snap
          WHERE p.id = snap.product_id::UUID;
 
-        UPDATE finances_bills SET cost_price_snapshot = NULL WHERE id = p_bill_id;
+        UPDATE shopify_variants v
+           SET cost_price = (snap.value #>> '{}')::NUMERIC,
+               updated_at = NOW()
+          FROM (
+              SELECT kv.key AS variant_id, kv.value
+                FROM (SELECT variant_cost_price_snapshot FROM finances_bills WHERE id = p_bill_id) b,
+                     jsonb_each(COALESCE(b.variant_cost_price_snapshot, '{}'::jsonb)) kv
+          ) snap
+         WHERE v.id = snap.variant_id::UUID;
+
+        UPDATE finances_bills
+           SET cost_price_snapshot = NULL, variant_cost_price_snapshot = NULL
+         WHERE id = p_bill_id;
     END IF;
 END;
 $$;

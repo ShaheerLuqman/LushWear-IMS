@@ -21,6 +21,9 @@ class VariantBase(BaseModel):
     title: str
     quantity: int = 0
     shopify_variant_id: Optional[int] = None
+    # This variant's own cost. NULL until set (via a received purchase bill or the
+    # Products page) - falls back to the product's own cost_price until then.
+    cost_price: Optional[float] = None
 
 class VariantCreate(VariantBase):
     product_id: Optional[str] = None  # Will be set when creating with product
@@ -29,6 +32,7 @@ class VariantUpdate(BaseModel):
     title: Optional[str] = None
     quantity: Optional[int] = None
     shopify_variant_id: Optional[int] = None
+    cost_price: Optional[float] = None
 
 class Variant(VariantBase):
     id: str
@@ -43,7 +47,7 @@ class Variant(VariantBase):
 class ProductBase(BaseModel):
     name: str
     price: float = 0.0  # Selling price (same across all variants)
-    cost_price: Optional[float] = None  # Cost price (same across all variants)
+    cost_price: Optional[float] = None  # Cost for a variant-less product, and the fallback for a variant with no cost_price of its own
     collection: Optional[str] = None  # Collection name
     image_url: Optional[str] = None
     shopify_product_id: Optional[int] = None
@@ -79,6 +83,13 @@ class ProductCostPriceUpdate(BaseModel):
 
 class ProductBatchCostPriceUpdate(BaseModel):
     updates: List[ProductCostPriceUpdate]
+
+class VariantCostPriceUpdate(BaseModel):
+    id: str
+    cost_price: Optional[float] = None
+
+class VariantBatchCostPriceUpdate(BaseModel):
+    updates: List[VariantCostPriceUpdate]
 
 
 class RecalculateOrderCostsByProductBody(BaseModel):

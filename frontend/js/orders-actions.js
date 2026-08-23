@@ -11,7 +11,6 @@ function initOrdersActions() {
 
     document.getElementById('bulkUpdateOrderBtn')?.addEventListener('click', openBulkUpdateOrderModal);
     document.getElementById('bulkUpdateCostPriceBtn')?.addEventListener('click', openBulkUpdateCostPriceModal);
-    document.getElementById('recalculateOrderCostsBtn')?.addEventListener('click', openRecalculateOrderCostsModal);
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));
@@ -170,20 +169,6 @@ function exitOrdersFullScreen() {
 // ============================================
 // Save Functions for Editable Cells
 // ============================================
-
-async function saveCostPrice(productId, costPrice) {
-    try {
-        await apiJson('/products/batch-update-cost-prices', {
-            method: 'PUT',
-            body: { updates: [{ id: productId, cost_price: costPrice }] },
-            fallback: 'Failed to update cost price'
-        });
-        showToast('Cost price updated', 'success');
-    } catch (error) {
-        console.error('Error saving cost price:', error);
-        showToast('Failed to save cost price', 'error');
-    }
-}
 
 async function saveProductCollection(productId, collection) {
     try {

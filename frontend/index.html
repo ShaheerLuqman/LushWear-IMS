@@ -238,9 +238,6 @@
                     <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
                         Bulk update cost price
                     </button>
-                    <button id="recalculateOrderCostsBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Recalculate order cost totals for orders containing the selected product">
-                        Recalculate order costs
-                    </button>
                     <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
                         <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded="false" title="More order actions">
                             <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
@@ -1175,30 +1172,35 @@
         </div>
     </div>
 
-    <!-- Recalculate order costs for selected product (products) -->
-    <div id="recalculateOrderCostsModal" class="modal">
+    <!-- Edit a product's per-variant cost prices, plus recalculating its orders' cost totals -->
+    <div id="editVariantCostsModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Recalculate order costs</h2>
-                <button type="button" class="modal-close" id="closeRecalculateOrderCostsModal" aria-label="Close">&times;</button>
+                <h2 id="editVariantCostsTitle">Edit variant costs</h2>
+                <button type="button" class="modal-close" id="closeEditVariantCostsModal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="modal-description">
-                    Refresh order cost totals from current product costs. Only orders on or after the date below that include this product are updated.
-                </p>
-                <input type="hidden" id="recalculateOrderCostsProductId" value="">
-                <div class="form-group" style="margin-top: 16px;">
-                    <label for="recalculateOrderCostsProductName">Selected product</label>
-                    <input type="text" id="recalculateOrderCostsProductName" class="form-input" readonly placeholder="Select one product in the grid">
-                </div>
-                <div class="form-group" style="margin-top: 16px;">
-                    <label for="recalculateOrderCostsCreatedAfter">Update orders created on or after *</label>
-                    <input type="datetime-local" id="recalculateOrderCostsCreatedAfter" class="form-input" required>
+                <p class="modal-description">Cost price per variant. Blank falls back to the product's own cost price.</p>
+                <div id="editVariantCostsList" class="edit-variant-costs-list"></div>
+
+                <div class="edit-variant-costs-recalc">
+                    <h3>Recalculate order costs</h3>
+                    <p class="modal-description">
+                        Refresh order cost totals from the costs above. Only orders on or after the date below that include this product are updated.
+                    </p>
+                    <input type="hidden" id="editVariantCostsRecalcProductId" value="">
+                    <div class="edit-variant-costs-recalc-row">
+                        <div class="form-group">
+                            <label for="editVariantCostsRecalcCreatedAfter">Update orders created on or after *</label>
+                            <input type="datetime-local" id="editVariantCostsRecalcCreatedAfter" class="form-input" required>
+                        </div>
+                        <button type="button" id="editVariantCostsRecalcSubmit" class="btn btn-secondary">Recalculate order costs</button>
+                    </div>
                 </div>
             </div>
-            <div class="bulk-update-actions modal-pinned-footer">
-                <button type="button" id="recalculateOrderCostsCancel" class="btn btn-secondary">Cancel</button>
-                <button type="button" id="recalculateOrderCostsSubmit" class="btn btn-primary">Recalculate</button>
+            <div class="modal-pinned-footer">
+                <button type="button" id="editVariantCostsCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="editVariantCostsSave" class="btn btn-primary">Save</button>
             </div>
         </div>
     </div>

@@ -3141,6 +3141,85 @@ input[type="number"] {
     border-color: rgba(245, 158, 11, 0.25);
 }
 
+.edit-variant-costs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    margin-top: 12px;
+}
+
+.edit-variant-costs-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.edit-variant-costs-title {
+    color: var(--text-primary);
+    font-size: 14px;
+}
+
+.edit-variant-costs-qty {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* Not inside a .form-group, so it needs its own field styling - .form-input
+   is only a marker class, all its usual styling comes from ".form-group
+   input/select" (see the note by .bill-line .form-input, same situation). */
+.edit-variant-costs-input {
+    width: 120px;
+    flex-shrink: 0;
+    text-align: right;
+    padding: 8px 10px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 14px;
+}
+
+.edit-variant-costs-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+/* Secondary action within editVariantCostsModal, below the cost rows - set off
+   with its own heading/divider since it's a separate action (recalculating
+   historical orders) from saving the costs above. */
+.edit-variant-costs-recalc {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border-color);
+}
+
+.edit-variant-costs-recalc h3 {
+    margin: 0 0 4px;
+    font-size: 15px;
+    color: var(--text-primary);
+}
+
+.edit-variant-costs-recalc-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+    margin-top: 12px;
+}
+
+.edit-variant-costs-recalc-row .form-group {
+    flex: 1;
+}
+
+.edit-variant-costs-recalc-row .btn {
+    flex-shrink: 0;
+    white-space: nowrap;
+}
+
 .grid-quantity-badge {
     display: inline-flex;
     align-items: center;
@@ -3628,6 +3707,14 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-size: 0.78rem;
     color: var(--text-secondary);
     padding-left: 10px;
+}
+
+/* Nested inside the label above, so it's what's about to land on this
+   specific variant's own cost_price - not blended with its siblings. */
+.bill-line-variant-cost-effect {
+    display: block;
+    font-size: 0.72rem;
+    color: var(--text-muted);
 }
 
 .bill-line-variant-amount {
@@ -4376,9 +4463,10 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: var(--bg-tertiary);
 }
 
-/* Row actions menu (triple dot) - shared by the transactions and bills grids */
+/* Row actions menu (triple dot) - shared by the transactions, bills and products grids */
 .transaction-menu-btn,
-.bill-menu-btn {
+.bill-menu-btn,
+.product-menu-btn {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -4398,20 +4486,24 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .transaction-menu-btn:hover,
 .transaction-menu-btn.open,
 .bill-menu-btn:hover,
-.bill-menu-btn.open {
+.bill-menu-btn.open,
+.product-menu-btn:hover,
+.product-menu-btn.open {
     opacity: 1;
     background: var(--bg-tertiary);
     color: var(--text-primary);
 }
 
 .transaction-menu-panel,
-.bill-menu-panel {
+.bill-menu-panel,
+.product-menu-panel {
     min-width: 160px;
     padding: 4px;
 }
 
 .transaction-menu-panel .folio-dropdown-option,
-.bill-menu-panel .folio-dropdown-option {
+.bill-menu-panel .folio-dropdown-option,
+.product-menu-panel .folio-dropdown-option {
     display: flex;
     align-items: center;
     gap: 8px;

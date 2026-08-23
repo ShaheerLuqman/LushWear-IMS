@@ -128,6 +128,79 @@ function parseDDMMYYYYToYYYYMMDD(str) {
     return `${yy}-${mm}-${dd}`;
 }
 
+// Row actions menu (triple dot) for a product row, mirroring
+// createBillRowMenu/createTransactionRowMenu's pattern: a menu scales to more
+// actions without another column reshuffle. Currently just the one action -
+// open editVariantCostsModal, which also handles the recalculate-order-costs
+// action for the same product.
+function createProductRowMenu(params) {
+    const product = params.data;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'bill-cell-center';
+    if (!product || !product.id) return wrapper;
+
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'product-menu-btn';
+    btn.innerHTML = '<i class="fa-solid fa-ellipsis"></i>';
+    btn.title = 'More actions';
+
+    let menu = null;
+
+    function closeMenu() {
+        if (menu && menu.parentNode) menu.parentNode.removeChild(menu);
+        menu = null;
+        btn.classList.remove('open');
+    }
+
+    function addOption({ label, icon, onClick }) {
+        const option = document.createElement('div');
+        option.className = 'folio-dropdown-option';
+        option.innerHTML = `<i class="fa-solid ${icon}"></i><span>${label}</span>`;
+        option.addEventListener('click', () => {
+            closeMenu();
+            onClick();
+        });
+        menu.appendChild(option);
+    }
+
+    function openMenu() {
+        if (menu) return;
+        btn.classList.add('open');
+
+        menu = document.createElement('div');
+        menu.className = 'folio-dropdown-panel product-menu-panel';
+
+        addOption({
+            label: (product.variants || []).length ? 'Update variant price' : 'Update cost price',
+            icon: 'fa-tag',
+            onClick: () => openEditVariantCostsModal(product)
+        });
+
+        document.body.appendChild(menu);
+        const rect = btn.getBoundingClientRect();
+        menu.style.top = (rect.bottom + 2) + 'px';
+        menu.style.left = Math.max(rect.right - menu.offsetWidth, 8) + 'px';
+
+        const closeHandler = (e) => {
+            if (!menu.contains(e.target) && e.target !== btn && !btn.contains(e.target)) {
+                closeMenu();
+                document.removeEventListener('mousedown', closeHandler);
+            }
+        };
+        document.addEventListener('mousedown', closeHandler);
+    }
+
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (menu) closeMenu();
+        else openMenu();
+    });
+
+    wrapper.appendChild(btn);
+    return wrapper;
+}
+
 function initProductsGrid() {
     const gridDiv = document.getElementById('productsGrid');
     if (!gridDiv) return;
@@ -164,7 +237,7 @@ function initProductsGrid() {
         {
             headerName: 'Product Name',
             field: 'name',
-            flex: 2,
+            flex: 1.8,
             filter: 'agTextColumnFilter',
             filterParams: {
                 filterOptions: ['contains', 'startsWith', 'endsWith'],
@@ -174,7 +247,7 @@ function initProductsGrid() {
         {
             headerName: 'Collection',
             field: 'collection',
-            width: 160,
+            width: 130,
             filter: 'agTextColumnFilter',
             filterParams: {
                 filterOptions: ['equals'],
@@ -211,7 +284,7 @@ function initProductsGrid() {
         {
             headerName: 'Price (Rs)',
             field: 'price',
-            width: 120,
+            width: 100,
             filter: 'agNumberColumnFilter',
             valueFormatter: (params) => {
                 const val = parseFloat(params.value) || 0;
@@ -221,7 +294,7 @@ function initProductsGrid() {
         {
             headerName: 'Variants',
             field: 'variants',
-            flex: 2,
+            flex: 3.2,
             filter: false,
             sortable: false,
             autoHeight: true,
@@ -232,17 +305,22 @@ function initProductsGrid() {
                     return '<span class="grid-variant-tag">No variants</span>';
                 }
                 const sortedVariants = sortVariantsBySize(variants);
+                // Falls back to the product's own cost_price for a variant with none of
+                // its own yet - same fallback used when prefilling a purchase bill line.
+                const fallbackCost = params.data?.cost_price;
                 return `<div class="grid-variants-container">${sortedVariants.map(v => {
                     const qty = v.quantity || 0;
                     const isLow = qty < 10;
-                    return `<span class="grid-variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}</span>`;
+                    const cost = v.cost_price ?? fallbackCost;
+                    const costText = cost != null ? ` @ ${formatAmount(cost)}` : '';
+                    return `<span class="grid-variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}${costText}</span>`;
                 }).join('')}</div>`;
             }
         },
         {
             headerName: 'Total Qty',
             field: 'total_quantity',
-            width: 120,
+            width: 100,
             filter: 'agNumberColumnFilter',
             cellRenderer: (params) => {
                 const qty = params.value || 0;
@@ -251,26 +329,12 @@ function initProductsGrid() {
             }
         },
         {
-            headerName: 'Cost Price (Rs)',
-            field: 'cost_price',
-            width: 140,
-            filter: 'agNumberColumnFilter',
-            editable: () => isEditingAllowed(),
-            cellStyle: { cursor: 'pointer' },
-            valueFormatter: (params) => {
-                const val = parseFloat(params.value) || 0;
-                return val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-            },
-            valueSetter: (params) => {
-                const newValue = parseFloat(params.newValue);
-                if (!isNaN(newValue) && newValue >= 0) {
-                    params.data.cost_price = newValue;
-                    // Save to backend
-                    saveCostPrice(params.data.id, newValue);
-                    return true;
-                }
-                return false;
-            }
+            headerName: 'More actions',
+            colId: 'moreActions',
+            width: 110,
+            filter: false,
+            sortable: false,
+            cellRenderer: createProductRowMenu
         }
     ];
 

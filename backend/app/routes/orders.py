@@ -406,9 +406,15 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                     pass
 
         variant_id_by_shopify: Dict[int, str] = {}   # shopify_variant_id -> variants.id
-        for v in (org_table(supabase, org_id, "shopify_variants").select("id, shopify_variant_id").execute().data or []):
+        costs_by_variant_id: Dict[str, float] = {}   # variants.id -> cost_price, preferred over costs_by_id
+        for v in (org_table(supabase, org_id, "shopify_variants").select("id, shopify_variant_id, cost_price").execute().data or []):
             if v.get("shopify_variant_id") is not None and v.get("id"):
                 variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
+            if v.get("id") and v.get("cost_price") is not None:
+                try:
+                    costs_by_variant_id[v["id"]] = float(v["cost_price"])
+                except (TypeError, ValueError):
+                    pass
 
         # existing orders map by order_number
         existing_orders_map: Dict[int, Dict[str, Any]] = {}
@@ -555,15 +561,19 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 except (TypeError, ValueError):
                     unit_price = 0.0
                 resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
+                resolved_variant_id = variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None
                 name = (item.get("title") or item.get("name") or "").strip()
                 rows.append({
-                    "variant_id": variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None,
+                    "variant_id": resolved_variant_id,
                     "product_id": resolved_product_id,
                     "name": name,
                     "variant_title": (item.get("variant_title") or "").strip() or "-",
                     "qty": qty,
                     "unit_price": unit_price,
-                    "cost_price": _resolve_line_item_cost(name, resolved_product_id, costs_by_id, products_cost_map),
+                    "cost_price": _resolve_line_item_cost(
+                        name, resolved_product_id, costs_by_id, products_cost_map,
+                        resolved_variant_id, costs_by_variant_id,
+                    ),
                 })
             return rows
 

@@ -3,7 +3,7 @@ from typing import List, Dict, Tuple
 from app.models import (
     ProductCreate, ProductUpdate, ProductWithVariants,
     ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
-    Variant, VariantCreate, VariantUpdate,
+    Variant, VariantCreate, VariantUpdate, VariantBatchCostPriceUpdate,
 )
 from app.auth import get_org_id
 from app.config import settings
@@ -305,6 +305,8 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
                     existing_variant = existing_variants_map[shopify_variant_id]
                     if variant_has_changed(variant_data, existing_variant):
                         variant_data["id"] = existing_variant["id"]
+                        # Preserve cost_price - it's set locally, Shopify has no notion of it
+                        variant_data["cost_price"] = existing_variant.get("cost_price")
                         variants_to_update.append(variant_data)
                 else:
                     # New variant
@@ -378,7 +380,10 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
 
 @router.put("/batch-update-cost-prices")
 async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
-    """Batch update cost prices for products"""
+    """Batch update cost prices for products - and cascades the same price onto every
+    variant of each product, since a product with variants no longer has one cost of
+    its own to just update (see batch_update_variant_cost_prices for editing a single
+    variant's cost individually, e.g. when its price genuinely differs from its siblings)."""
     try:
         supabase = get_supabase()
         current_time = datetime.now(timezone.utc).isoformat()
@@ -404,8 +409,64 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
                 response = org_table(supabase, org_id, "shopify_products").upsert(payload, on_conflict="id").execute()
                 updated_count = len(response.data or [])
 
+            existing_variants = (
+                org_table(supabase, org_id, "shopify_variants")
+                .select("id, title, product_id")
+                .in_("product_id", [p["id"] for p in existing])
+                .execute().data or []
+            )
+            if existing_variants:
+                variant_payload = [
+                    {
+                        "id": v["id"], "title": v["title"], "product_id": v["product_id"],
+                        "cost_price": cost_price_by_id[v["product_id"]], "updated_at": current_time,
+                    }
+                    for v in existing_variants
+                ]
+                org_table(supabase, org_id, "shopify_variants").upsert(variant_payload, on_conflict="id").execute()
+
         return {
             "message": f"Successfully updated {updated_count} product(s)",
+            "updated_count": updated_count
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.put("/batch-update-variant-cost-prices")
+async def batch_update_variant_cost_prices(batch_update: VariantBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
+    """Batch update cost prices for individual variants (see batch_update_cost_prices,
+    the product-level equivalent, for the same upsert-carries-NOT-NULL-columns reasoning -
+    title and product_id here play the role name does there)."""
+    try:
+        supabase = get_supabase()
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        cost_price_by_id = {update.id: update.cost_price for update in batch_update.updates}
+        updated_count = 0
+        if cost_price_by_id:
+            existing = (
+                org_table(supabase, org_id, "shopify_variants")
+                .select("id, title, product_id")
+                .in_("id", list(cost_price_by_id))
+                .execute().data or []
+            )
+            payload = [
+                {
+                    "id": v["id"], "title": v["title"], "product_id": v["product_id"],
+                    "cost_price": cost_price_by_id[v["id"]], "updated_at": current_time,
+                }
+                for v in existing
+            ]
+            if payload:
+                response = org_table(supabase, org_id, "shopify_variants").upsert(payload, on_conflict="id").execute()
+                updated_count = len(response.data or [])
+
+        return {
+            "message": f"Successfully updated {updated_count} variant(s)",
             "updated_count": updated_count
         }
     except HTTPException:
@@ -433,7 +494,9 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
         if not pname:
             raise HTTPException(status_code=400, detail="Product has no name")
 
-        # Cost lookup by product id (preferred) and by lowercased product name (fallback), both against line_items.
+        # Cost lookup by variant id (preferred - a line item's own variant may cost more
+        # or less than its product's other variants), else product id, else lowercased
+        # product name (fallback), all against line_items.
         costs: Dict[str, float] = {}
         costs_by_id: Dict[str, float] = {}
         for p in org_table(supabase, org_id, "shopify_products").select("id, name, cost_price").execute().data or []:
@@ -446,6 +509,14 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                 costs[k] = cost_val
             if p.get("id"):
                 costs_by_id[p["id"]] = cost_val
+
+        costs_by_variant_id: Dict[str, float] = {}
+        for v in org_table(supabase, org_id, "shopify_variants").select("id, cost_price").execute().data or []:
+            if v.get("id") and v.get("cost_price") is not None:
+                try:
+                    costs_by_variant_id[v["id"]] = float(v["cost_price"])
+                except (TypeError, ValueError):
+                    pass
 
         after = body.created_after.isoformat()
         now_iso = datetime.now(timezone.utc).isoformat()
@@ -494,7 +565,7 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             if _is_replacement_order(row):
                 new_cost = 0.0
             else:
-                # Cost by product_id (else name) × qty.
+                # Cost by variant_id (else product_id, else name) × qty.
                 new_cost = 0.0
                 for li in line_items:
                     if not isinstance(li, dict):
@@ -505,8 +576,11 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                         qty = 0
                     if qty <= 0:
                         continue
+                    vid = li.get("variant_id")
                     lid = li.get("product_id")
-                    if lid and lid in costs_by_id:
+                    if vid and vid in costs_by_variant_id:
+                        new_cost += costs_by_variant_id[vid] * qty
+                    elif lid and lid in costs_by_id:
                         new_cost += costs_by_id[lid] * qty
                     else:
                         base = (li.get("name") or "").strip().lower()
