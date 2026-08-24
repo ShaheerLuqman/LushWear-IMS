@@ -1,11 +1,8 @@
 // Order Fulfillment view - a bulk "select orders, pick a courier, fulfill" screen.
 //
-// Front-end only for now: orders are mock rows generated in-memory, and Fulfill/Edit/Remove
-// actions mutate that local state and re-render instead of calling the API. Wire these up to
-// real endpoints once the backend for this view exists.
-
-const FULFILLMENT_TAGS = ['VIP', 'Repeat', 'New', 'Wholesale'];
-const FULFILLMENT_CITIES = ['Lahore', 'Karachi', 'Faisalabad', 'Multan', 'Islamabad', 'Gujranwala', 'Rawalpindi', 'Sialkot'];
+// The order list itself is real (GET /orders/unfulfilled). Editing a row's address/mobile/tags/
+// city, and the Fulfill/Duplicate/Remove actions, still only mutate local state and re-render
+// instead of calling the API - wire those up to real endpoints once this view's write side exists.
 
 // Couriers actually integrated elsewhere in the app (orders-columns.js COURIER_LOGOS) get their
 // real logo; the rest are shown as plain monogram chips since no logo asset exists for them.
@@ -19,77 +16,76 @@ const FULFILLMENT_COURIERS = [
     { id: 'other', name: 'Other', monogram: '···', color: '#6d6d78' }
 ];
 
-const FULFILLMENT_SEED_ROWS = [
-    { name: 'Ayesha Khan', address: 'House 12, Street 5, Block B, DHA Phase 2', mobile: '0312-3456789', tags: ['VIP', 'Repeat'], city: 'Lahore' },
-    { name: 'Fatima Ali', address: 'Flat 3, 2nd Floor, Building 7, Clifton', mobile: '0300-9876543', tags: ['New'], city: 'Karachi' },
-    { name: 'Hina Malik', address: 'Street 10, House 45, Gulberg 3', mobile: '0321-1234567', tags: ['VIP', 'Wholesale'], city: 'Faisalabad' },
-    { name: 'Zainab Raza', address: 'House 98, Street 2, Model Town', mobile: '0333-5556677', tags: ['New'], city: 'Multan' },
-    { name: 'Sana Tariq', address: 'Apartment 15, 4th Floor, Emaar Tower', mobile: '0311-2223344', tags: ['Repeat', 'VIP'], city: 'Islamabad' },
-    { name: 'Maria Ahmed', address: 'Street 8, House 22, Johar Town', mobile: '0309-8765432', tags: ['New'], city: 'Lahore' },
-    { name: 'Nida Hussain', address: 'House 5, Lane 3, PECHS Block 6', mobile: '0322-4445566', tags: ['Wholesale'], city: 'Karachi' },
-    { name: 'Iqra Bashir', address: 'Street 1, House 33, Wapda Town', mobile: '0315-1357911', tags: ['Repeat'], city: 'Gujranwala' }
-];
-
-const FULFILLMENT_EXTRA_NAMES = [
-    'Mahnoor Sheikh', 'Bilal Aslam', 'Rabia Yousaf', 'Usman Ghani', 'Sadia Iqbal',
-    'Hamza Farooq', 'Amna Siddiqui', 'Talha Rasheed', 'Areeba Nasir', 'Junaid Akhtar',
-    'Laiba Zafar', 'Owais Malik', 'Sundas Riaz', 'Faizan Butt', 'Mehak Younis',
-    'Adeel Hashmi', 'Noor Fatima', 'Kamran Shah', 'Zoya Mehmood', 'Salman Qureshi'
-];
-
 let fulfillmentOrders = [];
+let fulfillmentLoading = false;
+let fulfillmentAllCities = [];
+let fulfillmentAllTags = [];
 let fulfillmentSelectedIds = new Set();
 let fulfillmentFilters = { city: '', cityMode: 'exclude', chipCities: [], tag: '', dateFrom: null, dateTo: null };
-let fulfillmentPage = 1;
-let fulfillmentPageSize = 10;
 let fulfillmentDatePicker = null;
 let fulfillmentOpenMenuOrderId = null; // tags or actions menu currently open, if any
 
-function buildFulfillmentMockOrders() {
-    const rows = FULFILLMENT_SEED_ROWS.map((seed, i) => ({ ...seed, addressLine2: '' }));
-    FULFILLMENT_EXTRA_NAMES.forEach((name, i) => {
-        const city = FULFILLMENT_CITIES[i % FULFILLMENT_CITIES.length];
-        const tagCount = (i % 3) + 1;
-        const tags = FULFILLMENT_TAGS.slice(0, tagCount).map((_, j) => FULFILLMENT_TAGS[(i + j) % FULFILLMENT_TAGS.length]);
-        rows.push({
-            name,
-            address: `House ${10 + i}, Street ${(i % 12) + 1}, ${city} Town`,
-            mobile: `03${10 + (i % 30)}-${1000000 + i * 137}`,
-            tags: [...new Set(tags)],
-            city
-        });
-    });
-    return rows.map((row, i) => ({
-        id: `fo-${i + 1}`,
-        order_number: 1001 + i,
-        name: row.name,
-        address: row.address,
-        mobile: row.mobile,
-        tags: row.tags,
-        city: row.city,
-        order_date: new Date(Date.now() - (rows.length - i) * 86400000)
-    }));
+/** Fetch the real unfulfilled-orders list and refresh the filter option lists derived from it. */
+async function fetchFulfillmentOrders() {
+    fulfillmentLoading = true;
+    renderFulfillmentTable();
+    let ok = true;
+    try {
+        const rows = await apiJson('/orders/unfulfilled', { fallback: 'Failed to fetch unfulfilled orders' });
+        fulfillmentOrders = rows.map(o => ({ ...o, order_date: new Date(o.order_date) }));
+    } catch (error) {
+        console.error('Error loading unfulfilled orders:', error);
+        showToast(error.message || 'Failed to load unfulfilled orders', 'error');
+        fulfillmentOrders = [];
+        ok = false;
+    } finally {
+        fulfillmentLoading = false;
+        renderFulfillmentFilterOptions();
+        renderFulfillmentTable();
+    }
+    return ok;
 }
 
-function initOrderFulfillment() {
-    fulfillmentOrders = buildFulfillmentMockOrders();
+/** Rebuild the city/tag filter dropdowns (and per-row edit option lists) from whatever
+ * cities/tags actually appear in fulfillmentOrders - real orders don't come from a fixed
+ * set of either, unlike the mock data this view used to show. */
+function renderFulfillmentFilterOptions() {
+    fulfillmentAllCities = [...new Set(fulfillmentOrders.map(o => o.city).filter(Boolean))].sort();
+    fulfillmentAllTags = [...new Set(fulfillmentOrders.flatMap(o => o.tags))].sort();
 
     const cityFilterEl = document.getElementById('fulfillmentCityFilter');
     if (cityFilterEl) {
-        cityFilterEl.innerHTML = '<option value="">All Cities</option>' + FULFILLMENT_CITIES.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        const current = cityFilterEl.value;
+        cityFilterEl.innerHTML = '<option value="">All Cities</option>' + fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
+        cityFilterEl.value = fulfillmentAllCities.includes(current) ? current : '';
+    }
+
+    const tagsFilterEl = document.getElementById('fulfillmentTagsFilter');
+    if (tagsFilterEl) {
+        const current = tagsFilterEl.value;
+        tagsFilterEl.innerHTML = '<option value="">All Tags</option>' + fulfillmentAllTags.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+        tagsFilterEl.value = fulfillmentAllTags.includes(current) ? current : '';
+    }
+
+    const chipOptionsEl = document.getElementById('fulfillmentCityChipOptions');
+    if (chipOptionsEl) {
+        chipOptionsEl.innerHTML = fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}">`).join('');
+    }
+}
+
+function initOrderFulfillment() {
+    const cityFilterEl = document.getElementById('fulfillmentCityFilter');
+    if (cityFilterEl) {
         cityFilterEl.addEventListener('change', () => {
             fulfillmentFilters.city = cityFilterEl.value;
-            fulfillmentPage = 1;
             renderFulfillmentTable();
         });
     }
 
     const tagsFilterEl = document.getElementById('fulfillmentTagsFilter');
     if (tagsFilterEl) {
-        tagsFilterEl.innerHTML = '<option value="">All Tags</option>' + FULFILLMENT_TAGS.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
         tagsFilterEl.addEventListener('change', () => {
             fulfillmentFilters.tag = tagsFilterEl.value;
-            fulfillmentPage = 1;
             renderFulfillmentTable();
         });
     }
@@ -98,14 +94,8 @@ function initOrderFulfillment() {
     if (cityModeEl) {
         cityModeEl.addEventListener('change', () => {
             fulfillmentFilters.cityMode = cityModeEl.value;
-            fulfillmentPage = 1;
             renderFulfillmentTable();
         });
-    }
-
-    const chipOptionsEl = document.getElementById('fulfillmentCityChipOptions');
-    if (chipOptionsEl) {
-        chipOptionsEl.innerHTML = FULFILLMENT_CITIES.map(c => `<option value="${escapeHtml(c)}">`).join('');
     }
 
     const chipInput = document.getElementById('fulfillmentCityChipInput');
@@ -114,9 +104,8 @@ function initOrderFulfillment() {
             if (e.key !== 'Enter') return;
             e.preventDefault();
             const val = chipInput.value.trim();
-            if (val && FULFILLMENT_CITIES.includes(val) && !fulfillmentFilters.chipCities.includes(val)) {
+            if (val && fulfillmentAllCities.includes(val) && !fulfillmentFilters.chipCities.includes(val)) {
                 fulfillmentFilters.chipCities.push(val);
-                fulfillmentPage = 1;
                 renderFulfillmentCityChips();
                 renderFulfillmentTable();
             }
@@ -133,7 +122,6 @@ function initOrderFulfillment() {
                 fulfillmentFilters.dateFrom = selectedDates[0] || null;
                 fulfillmentFilters.dateTo = selectedDates[1] || null;
                 if (selectedDates.length === 2) {
-                    fulfillmentPage = 1;
                     renderFulfillmentTable();
                 }
             }
@@ -147,7 +135,6 @@ function initOrderFulfillment() {
         if (tagsFilterEl) tagsFilterEl.value = '';
         if (fulfillmentDatePicker) fulfillmentDatePicker.clear();
         renderFulfillmentCityChips();
-        fulfillmentPage = 1;
         renderFulfillmentTable();
     });
 
@@ -159,25 +146,6 @@ function initOrderFulfillment() {
     });
     document.getElementById('fulfillmentClearSelectionBtn')?.addEventListener('click', () => {
         fulfillmentSelectedIds.clear();
-        renderFulfillmentTable();
-    });
-
-    document.getElementById('fulfillmentPrevPageBtn')?.addEventListener('click', () => {
-        if (fulfillmentPage > 1) {
-            fulfillmentPage--;
-            renderFulfillmentTable();
-        }
-    });
-    document.getElementById('fulfillmentNextPageBtn')?.addEventListener('click', () => {
-        const totalPages = Math.max(1, Math.ceil(getFulfillmentFilteredOrders().length / fulfillmentPageSize));
-        if (fulfillmentPage < totalPages) {
-            fulfillmentPage++;
-            renderFulfillmentTable();
-        }
-    });
-    document.getElementById('fulfillmentPageSize')?.addEventListener('change', (e) => {
-        fulfillmentPageSize = parseInt(e.target.value, 10) || 10;
-        fulfillmentPage = 1;
         renderFulfillmentTable();
     });
 
@@ -203,9 +171,8 @@ function initOrderFulfillment() {
     document.getElementById('orderFulfillmentExportBtn')?.addEventListener('click', () => {
         showToast('Export not implemented yet', 'info');
     });
-    document.getElementById('orderFulfillmentRefreshBtn')?.addEventListener('click', () => {
-        renderOrderFulfillmentView();
-        showToast('Refreshed', 'success');
+    document.getElementById('orderFulfillmentRefreshBtn')?.addEventListener('click', async () => {
+        if (await renderOrderFulfillmentView()) showToast('Refreshed', 'success');
     });
 
     document.addEventListener('click', () => {
@@ -228,7 +195,6 @@ function renderFulfillmentCityChips() {
         chip.innerHTML = `${escapeHtml(city)} <button type="button" aria-label="Remove ${escapeHtml(city)}">&times;</button>`;
         chip.querySelector('button').addEventListener('click', () => {
             fulfillmentFilters.chipCities = fulfillmentFilters.chipCities.filter(c => c !== city);
-            fulfillmentPage = 1;
             renderFulfillmentCityChips();
             renderFulfillmentTable();
         });
@@ -284,10 +250,7 @@ function getFulfillmentFilteredOrders() {
 }
 
 function toggleFulfillmentSelectAllVisible(checked) {
-    const filtered = getFulfillmentFilteredOrders();
-    const start = (fulfillmentPage - 1) * fulfillmentPageSize;
-    const pageRows = filtered.slice(start, start + fulfillmentPageSize);
-    pageRows.forEach(o => {
+    getFulfillmentFilteredOrders().forEach(o => {
         if (checked) fulfillmentSelectedIds.add(o.id);
         else fulfillmentSelectedIds.delete(o.id);
     });
@@ -303,13 +266,30 @@ function fulfillmentTagBadgeClass(tag) {
     }[tag] || 'fulfillment-tag-new';
 }
 
+const FULFILLMENT_RISK_ICONS = { trusted: 'shield-check', new: 'user-plus' }; // low/medium/high get a plain dot instead
+
+function renderFulfillmentRiskCell(order) {
+    const status = order.customer_status || { tier: 'new', label: 'New Customer', received: 0, total: 0 };
+    const icon = FULFILLMENT_RISK_ICONS[status.tier]
+        ? `<i data-lucide="${FULFILLMENT_RISK_ICONS[status.tier]}"></i>`
+        : '<span class="fulfillment-risk-dot"></span>';
+    const subtitle = status.total === 0 ? 'No previous orders' : `${status.received}/${status.total} orders delivered`;
+    return `
+        <div class="fulfillment-risk-badge fulfillment-risk-badge--${status.tier}">${icon}<span>${escapeHtml(status.label)}</span></div>
+        <div class="fulfillment-risk-sub">
+            <span>${escapeHtml(subtitle)}</span>
+            <i data-lucide="info" title="Based on this customer's past delivered vs. total orders"></i>
+        </div>
+    `;
+}
+
 function renderFulfillmentRow(order) {
     const checked = fulfillmentSelectedIds.has(order.id);
     const tagsHtml = order.tags.map(t => `<span class="fulfillment-tag-badge ${fulfillmentTagBadgeClass(t)}">${escapeHtml(t)}</span>`).join('');
-    const tagsMenuOptions = FULFILLMENT_TAGS.map(t => `
+    const tagsMenuOptions = fulfillmentAllTags.map(t => `
         <label><input type="checkbox" data-tag-toggle="${escapeHtml(t)}" ${order.tags.includes(t) ? 'checked' : ''}> ${escapeHtml(t)}</label>
     `).join('');
-    const cityOptions = FULFILLMENT_CITIES.map(c => `<option value="${escapeHtml(c)}" ${c === order.city ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
+    const cityOptions = fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}" ${c === order.city ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
 
     return `
         <tr data-order-id="${order.id}" class="${checked ? 'fulfillment-row--selected' : ''}">
@@ -336,6 +316,7 @@ function renderFulfillmentRow(order) {
                 </div>
             </td>
             <td><select class="fulfillment-city-select" data-city-select>${cityOptions}</select></td>
+            <td class="fulfillment-risk-cell">${renderFulfillmentRiskCell(order)}</td>
             <td class="fulfillment-actions-cell">
                 <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="More actions">&#8942;</button>
                 <div class="fulfillment-actions-menu">
@@ -438,36 +419,6 @@ function attachFulfillmentRowHandlers(tbody) {
     });
 }
 
-function renderFulfillmentPagination(totalCount) {
-    const totalPages = Math.max(1, Math.ceil(totalCount / fulfillmentPageSize));
-    fulfillmentPage = Math.min(fulfillmentPage, totalPages);
-    const start = totalCount === 0 ? 0 : (fulfillmentPage - 1) * fulfillmentPageSize + 1;
-    const end = Math.min(fulfillmentPage * fulfillmentPageSize, totalCount);
-
-    const label = document.getElementById('fulfillmentPaginationLabel');
-    if (label) label.textContent = `Showing ${start} to ${end} of ${totalCount} orders`;
-
-    const prevBtn = document.getElementById('fulfillmentPrevPageBtn');
-    const nextBtn = document.getElementById('fulfillmentNextPageBtn');
-    if (prevBtn) prevBtn.disabled = fulfillmentPage <= 1;
-    if (nextBtn) nextBtn.disabled = fulfillmentPage >= totalPages;
-
-    const pageNumbers = document.getElementById('fulfillmentPageNumbers');
-    if (pageNumbers) {
-        let html = '';
-        for (let p = 1; p <= totalPages; p++) {
-            html += `<button type="button" class="fulfillment-page-btn ${p === fulfillmentPage ? 'active' : ''}" data-page="${p}">${p}</button>`;
-        }
-        pageNumbers.innerHTML = html;
-        pageNumbers.querySelectorAll('[data-page]').forEach(btn => {
-            btn.addEventListener('click', () => {
-                fulfillmentPage = parseInt(btn.dataset.page, 10);
-                renderFulfillmentTable();
-            });
-        });
-    }
-}
-
 function renderFulfillmentSidePanel() {
     const empty = document.getElementById('fulfillmentSidePanelEmpty');
     const content = document.getElementById('fulfillmentSidePanelContent');
@@ -500,20 +451,21 @@ function renderFulfillmentTable() {
     if (totalOrdersLabel) totalOrdersLabel.textContent = `Total Orders: ${fulfillmentOrders.length}`;
     if (unfulfilledBadge) unfulfilledBadge.textContent = `Unfulfilled: ${fulfillmentOrders.length}`;
 
-    const start = (fulfillmentPage - 1) * fulfillmentPageSize;
-    const pageRows = filtered.slice(start, start + fulfillmentPageSize);
-
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
-        tbody.innerHTML = pageRows.length
-            ? pageRows.map(renderFulfillmentRow).join('')
-            : '<tr><td colspan="8" class="empty-state">No orders match these filters.</td></tr>';
-        attachFulfillmentRowHandlers(tbody);
-        if (window.lucide) lucide.createIcons();
+        if (fulfillmentLoading) {
+            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Loading unfulfilled orders…</td></tr>';
+        } else {
+            tbody.innerHTML = filtered.length
+                ? filtered.map(renderFulfillmentRow).join('')
+                : '<tr><td colspan="9" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
+            attachFulfillmentRowHandlers(tbody);
+            if (window.lucide) lucide.createIcons();
+        }
     }
 
-    const allSelected = pageRows.length > 0 && pageRows.every(o => fulfillmentSelectedIds.has(o.id));
-    const someSelected = !allSelected && pageRows.some(o => fulfillmentSelectedIds.has(o.id));
+    const allSelected = filtered.length > 0 && filtered.every(o => fulfillmentSelectedIds.has(o.id));
+    const someSelected = !allSelected && filtered.some(o => fulfillmentSelectedIds.has(o.id));
     [document.getElementById('fulfillmentHeaderCheckbox'), document.getElementById('fulfillmentSelectAll')].forEach(cb => {
         if (!cb) return;
         cb.checked = allSelected;
@@ -523,11 +475,9 @@ function renderFulfillmentTable() {
     const selectedCountLabel = document.getElementById('fulfillmentSelectedCountLabel');
     if (selectedCountLabel) selectedCountLabel.textContent = `${fulfillmentSelectedIds.size} selected`;
 
-    renderFulfillmentPagination(filtered.length);
     renderFulfillmentSidePanel();
 }
 
-function renderOrderFulfillmentView() {
-    fulfillmentPage = 1;
-    renderFulfillmentTable();
+async function renderOrderFulfillmentView() {
+    return fetchFulfillmentOrders();
 }

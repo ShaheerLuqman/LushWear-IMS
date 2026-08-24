@@ -32,7 +32,11 @@ from app.services.pdf.packaging_list import (
     _generate_pdf_packaging_list,
     _order_line_rows,
 )
-from app.services.shopify_orders import _fetch_shopify_order_by_order_number
+from app.services.shopify_orders import (
+    _fetch_shopify_customer_orders,
+    _fetch_shopify_order_by_order_number,
+    _fetch_shopify_unfulfilled_orders,
+)
 from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     SyncShopifyOrdersResult,
@@ -195,6 +199,189 @@ async def get_all_orders(
     except Exception:
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class CustomerStatus(BaseModel):
+    tier: str  # "new" | "trusted" | "low" | "medium" | "high"
+    label: str
+    received: int
+    total: int
+
+
+class UnfulfilledOrder(BaseModel):
+    id: str
+    order_number: int
+    name: str
+    address: str
+    mobile: str
+    tags: List[str]
+    city: str
+    order_date: datetime
+    customer_status: CustomerStatus
+
+
+def _customer_status_tier(received: int, total: int) -> Tuple[str, str]:
+    """Bucket a customer's delivery track record (received/total past orders, this order
+    excluded) into the Order Fulfillment view's risk tiers."""
+    if total == 0:
+        return "new", "New Customer"
+    ratio = received / total
+    if total >= 3 and ratio >= 0.999:
+        return "trusted", "Trusted"
+    if ratio >= 0.75:
+        return "low", "Low Risk"
+    if ratio >= 0.40:
+        return "medium", "Medium Risk"
+    return "high", "High Risk"
+
+
+@router.get("/unfulfilled", response_model=List[UnfulfilledOrder])
+async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
+    """Unfulfilled orders for the Order Fulfillment view, across all periods (this is an
+    action queue, not a period report). shopify_orders doesn't persist customer
+    name/address/phone/city/tags, so each row's shipping info is looked up live from
+    Shopify - same fetch pattern as /shipping-info and generate-invoice.
+
+    customer_status is this customer's delivery track record across their *other* orders.
+    Shopify's customer_id finds those other order numbers (Shopify has every order a
+    customer placed, not just the ones we've synced); our own delivery_status then says
+    which of the ones we do track were actually delivered - see _customer_status_tier."""
+    try:
+        t_start = time.perf_counter()
+        supabase = get_supabase()
+        rows = fetch_all(
+            lambda: org_table(supabase, org_id, "shopify_orders")
+            .select("id, order_number, order_receiving_date")
+            .eq("order_status", "unfulfilled")
+            .order("order_receiving_date", desc=True)
+        )
+        if not rows:
+            return []
+        t_db_rows = time.perf_counter()
+
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+        fetch_sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+        # One sweep for the store's most-recently-created unfulfilled Shopify orders (see
+        # _fetch_shopify_unfulfilled_orders), instead of looking each row up individually.
+        # Any row it misses (older than its cutoff, or Shopify's sync lagged) still gets
+        # picked up by the per-order fallback below.
+        sp_orders_list = await _fetch_shopify_unfulfilled_orders(org_creds)
+        sp_order_by_number: Dict[int, dict] = {}
+        for o in sp_orders_list:
+            try:
+                sp_order_by_number[int(o.get("order_number"))] = o
+            except (TypeError, ValueError):
+                continue
+        t_sweep = time.perf_counter()
+
+        async def _fetch_order_bounded(num: int):
+            async with fetch_sem:
+                try:
+                    return await _fetch_shopify_order_by_order_number(str(num), org_creds)
+                except Exception:
+                    return None
+
+        # Fallback for any DB row the sweep didn't cover (sync lag: DB still says unfulfilled,
+        # Shopify has moved on) - rare, so this costs ~nothing in the common case.
+        missing_rows = [row for row in rows if row["order_number"] not in sp_order_by_number]
+        if missing_rows:
+            fallback_sp_orders = await asyncio.gather(*(_fetch_order_bounded(row["order_number"]) for row in missing_rows))
+            for row, sp_order in zip(missing_rows, fallback_sp_orders):
+                if sp_order:
+                    sp_order_by_number[row["order_number"]] = sp_order
+        t_fallback = time.perf_counter()
+
+        shipping_info = []
+        customer_ids = set()
+        for row in rows:
+            sp_order = sp_order_by_number.get(row["order_number"])
+            if sp_order:
+                name, phone, address = _consignee_from_shopify_order(sp_order)
+                addr = sp_order.get("shipping_address") or sp_order.get("billing_address") or {}
+                city = (addr.get("city") or "").strip() or "-"
+                tags = [t.strip() for t in (sp_order.get("tags") or "").split(",") if t.strip()]
+                customer = sp_order.get("customer") or {}
+                customer_id = customer.get("id")
+                orders_count = customer.get("orders_count")
+            else:
+                name, phone, address, city, tags, customer_id, orders_count = "-", "-", "-", "-", [], None, None
+            # A customer whose lifetime order count (as of this order) is <=1 has no other
+            # orders to look up - skip the Shopify round trip and let them default to "New
+            # Customer" via an empty history below.
+            if customer_id is not None and (orders_count is None or orders_count > 1):
+                customer_ids.add(customer_id)
+            shipping_info.append((row, name, phone, address, city, tags, customer_id))
+
+        async def _fetch_customer_orders_bounded(customer_id: int):
+            async with fetch_sem:
+                try:
+                    return await _fetch_shopify_customer_orders(customer_id, org_creds)
+                except Exception:
+                    return []
+
+        customer_ids = list(customer_ids)
+        customer_orders_lists = await asyncio.gather(*(_fetch_customer_orders_bounded(cid) for cid in customer_ids))
+        t_customer_history = time.perf_counter()
+
+        order_numbers_by_customer: Dict[int, set] = {}
+        all_order_numbers = set()
+        for cid, customer_orders in zip(customer_ids, customer_orders_lists):
+            numbers = set()
+            for o in customer_orders:
+                try:
+                    numbers.add(int(o.get("order_number")))
+                except (TypeError, ValueError):
+                    continue
+            order_numbers_by_customer[cid] = numbers
+            all_order_numbers |= numbers
+
+        delivery_status_by_number: Dict[int, dict] = {}
+        if all_order_numbers:
+            history_rows = fetch_all(
+                lambda: org_table(supabase, org_id, "shopify_orders")
+                .select("order_number, delivery_status")
+                .in_("order_number", list(all_order_numbers))
+            )
+            for h in history_rows:
+                delivery_status_by_number[h["order_number"]] = h.get("delivery_status") or {}
+        t_history_query = time.perf_counter()
+
+        results = []
+        for row, name, phone, address, city, tags, customer_id in shipping_info:
+            history_numbers = order_numbers_by_customer.get(customer_id, set()) - {row["order_number"]}
+            total = sum(1 for n in history_numbers if n in delivery_status_by_number)
+            received = sum(1 for n in history_numbers if _delivery_status_indicates_delivered(delivery_status_by_number.get(n) or {}))
+            tier, label = _customer_status_tier(received, total)
+            results.append({
+                "id": row["id"],
+                "order_number": row["order_number"],
+                "name": name,
+                "address": address,
+                "mobile": phone,
+                "tags": tags,
+                "city": city,
+                "order_date": row["order_receiving_date"],
+                "customer_status": {"tier": tier, "label": label, "received": received, "total": total},
+            })
+
+        logger.info(
+            "[get_unfulfilled_orders] rows=%d db_query=%.2fs shopify_sweep=%.2fs(found=%d/%d) "
+            "fallback_fetch=%.2fs(n=%d) customer_history=%.2fs(fetched=%d,skipped=%d) "
+            "history_db_query=%.2fs(n=%d) total=%.2fs",
+            len(rows), t_db_rows - t_start, t_sweep - t_db_rows, len(sp_order_by_number), len(rows),
+            t_fallback - t_sweep, len(missing_rows), t_customer_history - t_fallback,
+            len(customer_ids), len(shipping_info) - len(customer_ids),
+            t_history_query - t_customer_history, len(all_order_numbers),
+            time.perf_counter() - t_start,
+        )
+        return results
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("unfulfilled orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
 
 @router.get("/sync-status")
 async def get_sync_status(org_id: str = Depends(get_org_id)):

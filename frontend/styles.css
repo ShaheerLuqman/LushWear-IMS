@@ -5124,6 +5124,38 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     letter-spacing: .4px;
 }
 
+/* .form-input on these <select>s is only a marker class with no rules of its own (see the
+   note by .bill-line .form-input) - style them directly instead, matching the height/
+   background/border look the chip-input and date-range fields next to them already use. */
+.fulfillment-filter-group select {
+    width: 100%;
+    height: 40px;
+    padding: 0 36px 0 12px;
+    background-color: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 13px;
+    cursor: pointer;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+}
+
+.fulfillment-filter-group select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 3px var(--accent-glow);
+}
+
+:root[data-theme="dark"] .fulfillment-filter-group select {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+}
+
 .fulfillment-filter-group--chips {
     flex: 1;
     min-width: 220px;
@@ -5203,13 +5235,16 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .fulfillment-body {
     display: flex;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 20px;
+    flex: 1;
+    min-height: 0;
 }
 
 .fulfillment-table-panel {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-lg);
@@ -5267,6 +5302,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .fulfillment-table-wrap {
+    flex: 1;
+    min-height: 0;
     overflow: auto;
 }
 
@@ -5387,6 +5424,66 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .fulfillment-tag-new { background: rgba(139, 92, 246, .15); color: #8b5cf6; }
 .fulfillment-tag-wholesale { background: rgba(234, 179, 8, .15); color: #ca8a04; }
 
+.fulfillment-th-risk .lucide {
+    width: 12px;
+    height: 12px;
+    vertical-align: -2px;
+    margin-left: 2px;
+    cursor: help;
+}
+
+.fulfillment-risk-cell {
+    min-width: 170px;
+}
+
+.fulfillment-risk-badge {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.fulfillment-risk-badge .lucide {
+    width: 14px;
+    height: 14px;
+    flex-shrink: 0;
+}
+
+.fulfillment-risk-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.fulfillment-risk-badge--trusted, .fulfillment-risk-badge--low { color: #16a34a; }
+.fulfillment-risk-badge--trusted .lucide { color: #16a34a; }
+.fulfillment-risk-badge--low .fulfillment-risk-dot { background: #16a34a; }
+.fulfillment-risk-badge--new { color: #2563eb; }
+.fulfillment-risk-badge--new .lucide { color: #2563eb; }
+.fulfillment-risk-badge--medium { color: #ca8a04; }
+.fulfillment-risk-badge--medium .fulfillment-risk-dot { background: #ca8a04; }
+.fulfillment-risk-badge--high { color: #dc2626; }
+.fulfillment-risk-badge--high .fulfillment-risk-dot { background: #dc2626; }
+
+.fulfillment-risk-sub {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 3px;
+    white-space: nowrap;
+}
+
+.fulfillment-risk-sub .lucide {
+    width: 11px;
+    height: 11px;
+    cursor: help;
+    flex-shrink: 0;
+}
+
 .fulfillment-tags-toggle {
     background: none;
     border: none;
@@ -5505,60 +5602,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--danger);
 }
 
-.fulfillment-pagination {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 18px;
-    border-top: 1px solid var(--border-color);
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.fulfillment-pagination-label {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.fulfillment-pagination-controls {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.fulfillment-page-numbers {
-    display: flex;
-    gap: 4px;
-}
-
-.fulfillment-page-btn {
-    min-width: 32px;
-    height: 32px;
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.fulfillment-page-btn:hover {
-    background: var(--bg-tertiary);
-}
-
-.fulfillment-page-btn.active {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: #fff;
-    font-weight: 600;
-}
-
-.fulfillment-page-size {
-    height: 32px;
-    padding: 0 8px;
-    font-size: 12px;
-}
-
 .fulfillment-side-panel {
     width: 300px;
     flex-shrink: 0;
@@ -5568,12 +5611,17 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     padding: 20px;
     position: sticky;
     top: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
 }
 
 .fulfillment-side-panel-empty {
+    flex: 1;
     display: flex;
     flex-direction: column;
     align-items: center;
+    justify-content: center;
     text-align: center;
     gap: 12px;
     color: var(--text-muted);
