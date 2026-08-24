@@ -3079,19 +3079,15 @@ input[type="number"] {
     overflow: hidden;
 }
 
-/* Stacked: advance/received/deductibles segments sit side by side, left to right: the
-   unfilled remainder (still outstanding) is whatever's left of the bar's own background.
-   Colors are kept in sync with PAYMENT_PROGRESS_COLORS in courier-payment-report.js. */
+/* Stacked: received/deductibles segments sit side by side, left to right: the unfilled
+   remainder (still outstanding) is whatever's left of the bar's own background. Colors
+   are kept in sync with PAYMENT_PROGRESS_COLORS in courier-payment-report.js. */
 .payment-progress__bar--stacked {
     display: flex;
 }
 
 .payment-progress__segment {
     height: 100%;
-}
-
-.payment-progress__segment--advance {
-    background: #3b82f6;
 }
 
 .payment-progress__segment--received {

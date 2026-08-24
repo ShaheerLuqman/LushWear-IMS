@@ -333,8 +333,10 @@ function switchView(viewName, { skipReload = false } = {}) {
         }, 100);
     } else if (viewName === 'bills') {
         // Ledgers back the supplier column and the line-account picker, so they
-        // have to be loaded before the grid renders.
-        loadLedgersList().then(loadBills);
+        // have to be loaded before the grid renders. The list itself rarely
+        // changes, so only fetch if it isn't already cached in memory - unlike
+        // Ledgers/Transactions, this view never shows a balance to go stale.
+        (ledgers.length ? Promise.resolve() : loadLedgersList()).then(loadBills);
         setTimeout(() => {
             sizeGridColumns(billsGridApi);
         }, 100);

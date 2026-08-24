@@ -504,6 +504,17 @@ function extractOrderNumberFromText(text) {
 }
 
 /**
+ * Multiple WhatsApp messages pasted together each carry their own
+ * "[date, time] Name:" prefix, e.g. "[20/08, 11:20 am] Shaheer: 03022552883".
+ * Strip that prefix so it isn't mistaken for part of the entry.
+ */
+function stripWhatsappPrefix(line) {
+    // The timestamp inside the brackets has its own colon ("11:20"), so the
+    // closing "]" must be matched first before looking for the name's colon.
+    return line.replace(/^\[[^\]]*\]\s*[^:]*:\s*/, '');
+}
+
+/**
  * Parse one line of bulk-entry text.
  *
  * Format: <AMOUNT> from <LEDGER> to <LEDGER> (<PARTICULARS>)
@@ -513,24 +524,25 @@ function extractOrderNumberFromText(text) {
  *   "3000 to Rent"                          rent paid in cash
  *   "5000 from Meezan Bank to Fabric Supp"  bank pays supplier, cash untouched
  *
- * Anything before the amount is ignored, so a pasted WhatsApp line keeps its
- * timestamp prefix.
+ * A pasted WhatsApp "[date, time] Name:" prefix is stripped first, but the
+ * amount must then lead the line directly — it isn't searched for elsewhere
+ * in the text, or an unrelated "<number> to/from" inside the particulars
+ * (e.g. "Order # 12739 To Habib metro") could be mistaken for the start.
  *
  * Returns { ok, errors: [str], lineNo, raw, cleaned, amount, particulars,
  *           entries: [{amount, description, from_account_id, to_account_id}] }
  */
 function parseBulkEntryLine(raw, lineNo) {
     const result = { ok: false, errors: [], lineNo, raw };
-    const line = String(raw || '').trim();
+    const line = stripWhatsappPrefix(String(raw || '').trim());
     if (!line) { result.blank = true; return result; }
 
-    // Start at the first "<amount> from|to", ignoring any pasted prefix.
-    const startMatch = line.match(/([0-9][0-9,]*(?:\.[0-9]+)?)\s+(from|to)\b/i);
-    if (!startMatch) {
+    // The amount must lead the (prefix-stripped) line, directly followed by "from"/"to".
+    if (!/^[0-9][0-9,]*(?:\.[0-9]+)?\s+(from|to)\b/i.test(line)) {
         result.errors.push('Expected "<amount> from <ledger> to <ledger>".');
         return result;
     }
-    const rest = line.slice(startMatch.index).trim();
+    const rest = line;
     result.cleaned = rest;
 
     // Optional trailing "(particulars)".

@@ -4,9 +4,35 @@
 // Ledger Functions
 // ============================================
 
+const LEDGERS_CACHE_KEY_PREFIX = 'lushwear_ledgers_cache_';
+
+function ledgersCacheKey() {
+    return currentOrgId ? `${LEDGERS_CACHE_KEY_PREFIX}${currentOrgId}` : null;
+}
+
+function saveLedgersCache() {
+    const key = ledgersCacheKey();
+    if (!key) return;
+    try { localStorage.setItem(key, JSON.stringify(ledgers)); } catch (e) { /* ignore */ }
+}
+
+// Seeds `ledgers` from the last successful fetch, so shape-only consumers (the
+// bill/order ledger pickers) aren't empty while the first real fetch is in
+// flight. Balances go stale here on purpose - loadLedgers()/loadLedgersList()
+// still hit the network wherever a view actually displays them.
+function hydrateLedgersFromCache() {
+    const key = ledgersCacheKey();
+    if (!key) return;
+    try {
+        const cached = JSON.parse(localStorage.getItem(key) || 'null');
+        if (Array.isArray(cached)) ledgers = cached;
+    } catch (e) { /* ignore */ }
+}
+
 async function loadLedgersList() {
     try {
         ledgers = await apiJson('/ledgers/', { fallback: 'Failed to load ledgers' });
+        saveLedgersCache();
     } catch (error) {
         console.error('Error loading ledgers:', error);
         ledgers = [];

@@ -115,6 +115,7 @@ let productsGridApi = null;
 let ordersGridApi = null;
 let transactionsGridApi = null;
 let ledgers = [];
+let currentOrgId = null;
 let ledgerEntries = [];
 let currentLedger = null;
 let ledgerDetailGridApi = null;
@@ -682,6 +683,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     } catch (e) {
         enabledFeatures = [];
     }
+    currentOrgId = account?.org_id || null;
+    // Shape-only consumers (bill/order ledger pickers) get last session's list
+    // immediately instead of waiting on a fetch - loadLedgers()/loadLedgersList()
+    // still hit the network for whichever view actually shows balances.
+    hydrateLedgersFromCache();
     applyFeatureVisibility();
     initUserMenu(account);
 

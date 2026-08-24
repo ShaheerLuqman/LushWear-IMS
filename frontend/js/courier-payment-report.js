@@ -40,7 +40,6 @@ const BILL_STATUS_META = {
  * .payment-progress__segment--* rules in styles.css (used there since the bar itself is
  * built as an HTML string, not styled inline per segment). */
 const PAYMENT_PROGRESS_COLORS = {
-    advance: '#3b82f6',
     received: '#16a34a',
     deductibles: '#f59e0b',
 };
@@ -176,7 +175,6 @@ function computeCod(order) {
 function aggregateCourierPaymentReportBill(bill) {
     let billValue = 0;
     let advanceTotal = 0;
-    let grossCod = 0;
     let charges = 0;
     let taxes = 0;
     let returnedTotal = 0;
@@ -188,9 +186,11 @@ function aggregateCourierPaymentReportBill(bill) {
 
     bill.orders.forEach((order) => {
         const status = (order.order_status || '').toLowerCase();
-        billValue += parseFloat(order.total_amount) || 0;
+        // Bill Value already nets out the advance (it's what the courier is actually
+        // handling), so nothing downstream needs to deduct advance again - advanceTotal
+        // is tracked only for reference (the "Advance Received" stat card).
+        billValue += computeCod(order);
         advanceTotal += parseFloat(order.advance_amount) || 0;
-        grossCod += computeCod(order);
         charges += parseFloat(order.delivery_charge) || 0;
         taxes += parseFloat(order.tax_amount) || 0;
         if (status === 'returned') returnedTotal += parseFloat(order.total_amount) || 0;
@@ -224,7 +224,10 @@ function aggregateCourierPaymentReportBill(bill) {
         settledCount,
         billValue,
         advanceTotal,
-        grossCod,
+        // Gross COD is Bill Value with the returned orders' full value backed out too -
+        // the running total after both deductions, not a separately-tracked figure, so
+        // it can't drift out of step with the Bill Value/Returned Orders shown above it.
+        grossCod: billValue - returnedTotal,
         charges,
         taxes,
         returnedTotal,
@@ -260,53 +263,49 @@ function buildCourierPaymentReportBills(orderRows) {
         .sort((a, b) => b.pickupDate - a.pickupDate || a.courier.localeCompare(b.courier, undefined, { sensitivity: 'base' }));
 }
 
-/** Payment Progress tracks Bill Value (the raw order total, before any advance/COD split)
- * against three claims on it: the advance already collected up front, the amount the
- * courier has actually paid back for settled orders, and the deductibles the courier/the
- * bill itself keeps - delivery charges, taxes, and the full total of any returned orders
- * (never coming back at all). Whatever's left over (billValue minus all three) is still
- * outstanding. Shared by the bill grid's stacked bar and the detail screen's ring so both
- * stay in sync. Each ratio is clamped independently, so in an edge case where one claim
- * alone exceeds the bill value the segments can visually overrun 100% rather than
- * silently under-report - that's rare enough in real data not to be worth normalizing away. */
+/** Payment Progress tracks Bill Value (already net of advance - see
+ * aggregateCourierPaymentReportBill) against two claims on it: the amount the courier has
+ * actually paid back for settled orders, and the deductibles the courier/the bill itself
+ * keeps - delivery charges, taxes, and the full total of any returned orders (never
+ * coming back at all). Whatever's left over (billValue minus both) is still outstanding.
+ * Shared by the bill grid's stacked bar and the detail screen's pie so both stay in sync.
+ * Each ratio is clamped independently, so in an edge case where one claim alone exceeds
+ * the bill value the segments can visually overrun 100% rather than silently
+ * under-report - that's rare enough in real data not to be worth normalizing away. */
 function paymentProgressStats(bill) {
     const billValue = bill.billValue;
-    const advance = bill.advanceTotal;
     const received = bill.receivedAmount;
     const deductibles = bill.charges + bill.taxes + bill.returnedTotal;
-    const accountedFor = advance + received + deductibles;
+    const accountedFor = received + deductibles;
     const remaining = Math.max(0, billValue - accountedFor);
     const ratio = (amount) => billValue > 0 ? Math.max(0, Math.min(100, Math.round((amount / billValue) * 100))) : 0;
     return {
         billValue,
-        advance,
         received,
         deductibles,
         remaining,
         pct: ratio(accountedFor),
-        advancePct: ratio(advance),
         receivedPct: ratio(received),
         deductiblesPct: ratio(deductibles),
     };
 }
 
-/** Cumulative conic-gradient stops for the detail screen's pie (advance, then received,
- * then deductibles, then whatever's left as "remaining"). Computed from running totals
- * rather than the independently-clamped *Pct fields above, so the four slices always add
- * up to exactly one full circle even in the edge case where those ratios would overrun. */
+/** Cumulative conic-gradient stops for the detail screen's pie (received, then
+ * deductibles, then whatever's left as "remaining"). Computed from running totals rather
+ * than the independently-clamped *Pct fields above, so the slices always add up to
+ * exactly one full circle even in the edge case where those ratios would overrun. */
 function paymentProgressPieStops(stats) {
-    const { billValue, advance, received, deductibles } = stats;
+    const { billValue, received, deductibles } = stats;
     const pct = (amount) => billValue > 0 ? (amount / billValue) * 100 : 0;
-    const advanceEnd = Math.min(100, pct(advance));
-    const receivedEnd = Math.min(100, advanceEnd + pct(received));
+    const receivedEnd = Math.min(100, pct(received));
     const deductiblesEnd = Math.min(100, receivedEnd + pct(deductibles));
-    return { advanceEnd, receivedEnd, deductiblesEnd };
+    return { receivedEnd, deductiblesEnd };
 }
 
 function paymentProgressCellHtml(bill) {
     const stats = paymentProgressStats(bill);
-    const meta = `Adv Rs ${formatMoney(stats.advance)} · Recv Rs ${formatMoney(stats.received)} · Ded Rs ${formatMoney(stats.deductibles)}`;
-    const tooltip = `Advance: Rs ${formatMoney(stats.advance)} · Received: Rs ${formatMoney(stats.received)} · `
+    const meta = `Recv Rs ${formatMoney(stats.received)} · Ded Rs ${formatMoney(stats.deductibles)}`;
+    const tooltip = `Received: Rs ${formatMoney(stats.received)} · `
         + `Deductibles: Rs ${formatMoney(stats.deductibles)} · Remaining: Rs ${formatMoney(stats.remaining)}`;
     return `
         <div class="payment-progress">
@@ -315,7 +314,6 @@ function paymentProgressCellHtml(bill) {
                 <span class="payment-progress__pct">${stats.pct}%</span>
             </div>
             <div class="payment-progress__bar payment-progress__bar--stacked" title="${escapeHtml(tooltip)}">
-                <div class="payment-progress__segment payment-progress__segment--advance" style="width: ${stats.advancePct}%;"></div>
                 <div class="payment-progress__segment payment-progress__segment--received" style="width: ${stats.receivedPct}%;"></div>
                 <div class="payment-progress__segment payment-progress__segment--deductibles" style="width: ${stats.deductiblesPct}%;"></div>
             </div>
@@ -440,7 +438,6 @@ function renderCourierPaymentReportDetailFinancialSummary(bill) {
         </div>`;
     el.innerHTML = [
         row('Bill Value', `Rs ${formatMoney(bill.billValue)}`),
-        row('Less: Advance Received', `- Rs ${formatMoney(bill.advanceTotal)}`),
         row('Less: Returned Orders', `- Rs ${formatMoney(bill.returnedTotal)}`),
         row('Gross COD', `Rs ${formatMoney(bill.grossCod)}`, { total: true }),
         row('Less: Delivery Charges', `- Rs ${formatMoney(bill.charges)}`),
@@ -476,10 +473,9 @@ function renderCourierPaymentReportDetailProgressRing(bill) {
     if (!el) return;
     const stats = paymentProgressStats(bill);
     const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
-    const { advanceEnd, receivedEnd, deductiblesEnd } = paymentProgressPieStops(stats);
+    const { receivedEnd, deductiblesEnd } = paymentProgressPieStops(stats);
     const pieBackground = `conic-gradient(`
-        + `${PAYMENT_PROGRESS_COLORS.advance} 0% ${advanceEnd}%, `
-        + `${PAYMENT_PROGRESS_COLORS.received} ${advanceEnd}% ${receivedEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.received} 0% ${receivedEnd}%, `
         + `${PAYMENT_PROGRESS_COLORS.deductibles} ${receivedEnd}% ${deductiblesEnd}%, `
         + `var(--danger) ${deductiblesEnd}% 100%)`;
     const legendRow = (color, label, value) => `
@@ -497,7 +493,6 @@ function renderCourierPaymentReportDetailProgressRing(bill) {
             </div>
             <div class="progress-ring-legend">
                 ${legendRow('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue)}
-                ${legendRow(PAYMENT_PROGRESS_COLORS.advance, 'Advance', stats.advance)}
                 ${legendRow(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received)}
                 ${legendRow(PAYMENT_PROGRESS_COLORS.deductibles, 'Deductibles', stats.deductibles)}
                 ${legendRow('var(--danger)', 'Remaining', stats.remaining)}
