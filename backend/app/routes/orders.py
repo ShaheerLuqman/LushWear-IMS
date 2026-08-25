@@ -412,7 +412,8 @@ async def upload_postex_csv(
     Upload a PostEx CSV file. Matches rows by ORDER_REF_NUMBER to orders and updates
     delivery_charge (from SHIPPING_CHARGES), tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX),
     courier (set to PostEx), tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
-    including exponential notation e.g. 2.63E+13), and optionally folio (from assignment_number).
+    including exponential notation e.g. 2.63E+13), optionally folio (from assignment_number),
+    and marks the order as settled (the CSV is PostEx's payout report).
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
@@ -471,6 +472,7 @@ async def upload_postex_csv(
                 "delivery_charge": r["delivery_charge"],
                 "tax_amount": r["tax_amount"],
                 "courier": "PostEx",
+                "is_order_settled": True,
                 "updated_at": current_time,
             }
             if r.get("tracking_number"):
@@ -512,7 +514,7 @@ async def upload_postex_csv(
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
 
         # Build response message with debugging info
-        message = f"Updated delivery charges, tax, courier (PostEx), and tracking for {updated_count} order(s)."
+        message = f"Updated delivery charges, tax, courier (PostEx), tracking, and marked settled for {updated_count} order(s)."
         if unmatched_order_numbers:
             message += f" {len(unmatched_order_numbers)} order number(s) from CSV did not match any orders."
             if len(unmatched_order_numbers) <= 10:
@@ -1251,6 +1253,20 @@ def _delivery_status_is_fresh(delivery_status_data: Optional[dict]) -> bool:
     return datetime.now(timezone.utc) - fetched_dt < DELIVERY_STATUS_CACHE_TTL
 
 
+def _merge_delivery_status_data(previous: Optional[dict], incoming: Optional[dict]) -> Optional[dict]:
+    """Merge a freshly-fetched delivery status onto whatever was on file - a blank
+    status_history or latest_status from the courier API (transient glitch, rate limit,
+    etc.) must not overwrite the real value already saved, field by field."""
+    if not incoming:
+        return previous
+    merged = dict(incoming)
+    if not merged.get("status_history") and previous and previous.get("status_history"):
+        merged["status_history"] = previous["status_history"]
+    if not merged.get("latest_status") and previous and previous.get("latest_status"):
+        merged["latest_status"] = previous["latest_status"]
+    return merged
+
+
 def _delivery_status_indicates_returned(delivery_status_data: dict) -> bool:
     """True if delivery status contains 'Return to KARACHI' (e.g. in latest_status or status_history)."""
     if not delivery_status_data:
@@ -1942,6 +1958,8 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         if not delivery_status_data:
             raise HTTPException(status_code=500, detail="Failed to fetch delivery status")
 
+        delivery_status_data = _merge_delivery_status_data(existing_delivery, delivery_status_data)
+
         # Persist fetched data and update order_status when save=true
         if save:
             update_payload = {
@@ -2038,12 +2056,19 @@ async def get_delivery_status_bulk(
             postex_by_tracking = await _fetch_postex_bulk([tn for _, tn in postex_orders], org_creds.postex_merchant_token)
             for order_id, tracking_number in postex_orders:
                 data = postex_by_tracking.get(tracking_number)
-                results[order_id] = data if data else {"error": "No PostEx record found for this tracking number"}
+                results[order_id] = (
+                    _merge_delivery_status_data(orders_by_id[order_id].get("delivery_status"), data)
+                    if data else {"error": "No PostEx record found for this tracking number"}
+                )
 
         if couriersnext_orders:
             couriersnext_by_tracking = await _fetch_couriersnext_bulk(couriersnext_orders)
             for order_id, tracking_number in couriersnext_orders:
-                results[order_id] = couriersnext_by_tracking[tracking_number]
+                data = couriersnext_by_tracking[tracking_number]
+                results[order_id] = (
+                    _merge_delivery_status_data(orders_by_id[order_id].get("delivery_status"), data)
+                    if "error" not in data else data
+                )
 
         if save:
             to_save = {oid: data for oid, data in results.items() if oid not in fresh_ids}

@@ -1985,14 +1985,39 @@ input[type="number"] {
     color: var(--text-secondary);
 }
 
+#deliveryStatusModal .modal-content {
+    max-width: 760px;
+}
+
 .delivery-status-info {
     margin-bottom: 24px;
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 4px 24px;
 }
 
 .info-row {
-    margin-bottom: 12px;
     padding: 8px 0;
     border-bottom: 1px solid var(--border-color);
+}
+
+.whatsapp-chat-link {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin-left: 6px;
+    border-radius: 50%;
+    color: #fff;
+    background: #25D366;
+    font-size: 12px;
+    vertical-align: middle;
+    transition: var(--transition);
+}
+
+.whatsapp-chat-link:hover {
+    filter: brightness(1.1);
 }
 
 .info-row:last-child {
@@ -4128,6 +4153,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .bill-detail-progress-ring-wrap {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     gap: 20px;
 }
 

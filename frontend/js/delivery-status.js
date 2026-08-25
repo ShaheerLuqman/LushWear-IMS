@@ -157,6 +157,17 @@ function exportCurrentGridToExcel() {
     showToast(`Excel exported (${sheetCount} sheet${sheetCount > 1 ? 's' : ''})`, 'success');
 }
 
+/** Merge freshly-fetched delivery status onto whatever was on file - an empty
+ * status_history from the API (transient courier hiccup, etc.) must not blow away
+ * history already on record. */
+function mergeDeliveryStatusData(previous, incoming) {
+    if (incoming && Array.isArray(incoming.status_history) && incoming.status_history.length > 0) return incoming;
+    if (previous && Array.isArray(previous.status_history) && previous.status_history.length > 0) {
+        return { ...incoming, status_history: previous.status_history };
+    }
+    return incoming;
+}
+
 /** Fetch delivery status for many orders in one request (PostEx orders are batched
  * server-side via track-bulk-order). Returns [{order_id, delivery_status} | {order_id, error}]. */
 async function fetchDeliveryStatusBulk(orderIds) {
@@ -198,7 +209,7 @@ async function fetchDeliveryStatusSelected() {
             const result = node.data && resultsById.get(node.data.id);
             if (!result) return;
             if (result.error) { failed++; return; }
-            const data = result.delivery_status;
+            const data = mergeDeliveryStatusData(node.data.delivery_status, result.delivery_status);
             const updatedRow = { ...node.data, delivery_status: data };
             const derivedStatus = deriveOrderStatusFromLatest(data);
             if (derivedStatus) {
@@ -278,7 +289,7 @@ async function autoFetchRecentDeliveryStatus() {
             ordersGridApi.forEachNode(node => {
                 const result = node.data && resultsById.get(node.data.id);
                 if (!result || result.error) return;
-                const data = result.delivery_status;
+                const data = mergeDeliveryStatusData(node.data.delivery_status, result.delivery_status);
                 const updated = { ...node.data, delivery_status: data };
                 const derivedStatus = deriveOrderStatusFromLatest(data);
                 if (derivedStatus) {
@@ -292,6 +303,31 @@ async function autoFetchRecentDeliveryStatus() {
         }
     } catch (err) {
         console.error('Auto delivery status fetch failed:', err);
+    }
+}
+
+/** Normalize a Pakistani phone number to E.164 digits (92XXXXXXXXXX, no "+") - handles
+ * the common local "03XXXXXXXXX" format Shopify addresses are usually entered in, as well
+ * as numbers already given with a "92" or "+92" country code. */
+function normalizePakPhone(phone) {
+    const digits = String(phone || '').replace(/\D/g, '');
+    if (!digits) return '';
+    if (digits.startsWith('0')) return '92' + digits.slice(1);
+    if (digits.startsWith('92')) return digits;
+    if (digits.startsWith('3')) return '92' + digits;
+    return digits;
+}
+
+/** shopify_orders doesn't persist customer phone, so it's looked up live from Shopify
+ * (same /orders/shipping-info endpoint the Courier Payment Report uses) alongside the
+ * courier delivery status. Errors are swallowed - the popup still works without a phone. */
+async function fetchOrderCustomerPhone(orderId) {
+    try {
+        const results = await apiJson('/orders/shipping-info', { method: 'POST', body: [orderId], fallback: 'Failed to load customer phone' });
+        return results?.[0]?.phone || '';
+    } catch (error) {
+        console.error('Error loading customer phone:', error);
+        return '';
     }
 }
 
@@ -326,30 +362,45 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     }
     
     modal.classList.add('active');
-    content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
-    
+    // Keep whatever's already shown (e.g. a previous fetch's data) visible while
+    // this one is in flight, instead of blanking the modal - only show the loading
+    // state on a genuinely first fetch, when there's nothing to preserve.
+    const hasExistingData = !!content.querySelector('.delivery-status-info');
+    const refreshBtn = content.querySelector('.delivery-status-btn');
+    if (hasExistingData && refreshBtn) {
+        refreshBtn.disabled = true;
+        refreshBtn.textContent = 'Refreshing...';
+    } else {
+        content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
+    }
+
     try {
         const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
-        const response = await fetch(url, {
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
-        });
+        const [response, phone] = await Promise.all([
+            fetch(url, {
+                method: 'GET',
+                headers: { 'Content-Type': 'application/json' }
+            }),
+            fetchOrderCustomerPhone(orderId)
+        ]);
 
         if (!response.ok) {
             const error = await response.json().catch(() => ({}));
             const detail = Array.isArray(error.detail) ? error.detail.join(' ') : (error.detail || 'Failed to fetch delivery status');
             throw new Error(detail);
         }
-        
+
         const data = await response.json();
-        displayDeliveryStatus(data, orderId);
+        let displayedData = data;
         // Update order in grid: Delivery, Piece With, order_status (backend already saved when save=true)
         if (ordersGridApi) {
             ordersGridApi.forEachNode(node => {
                 if (node.data && node.data.id === orderId) {
-                    const updated = { ...node.data, delivery_status: data };
+                    const merged = mergeDeliveryStatusData(node.data.delivery_status, data);
+                    displayedData = merged;
+                    const updated = { ...node.data, delivery_status: merged };
                     // Derive order_status from the LAST courier status, same as backend.
-                    const derivedStatus = deriveOrderStatusFromLatest(data);
+                    const derivedStatus = deriveOrderStatusFromLatest(merged);
                     if (derivedStatus) {
                         updated.order_status = derivedStatus;
                         if (derivedStatus === 'delivered' && (node.data.piece_received || '').trim().toLowerCase() === 'pending') {
@@ -360,13 +411,22 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
                 }
             });
         }
+        displayDeliveryStatus(displayedData, orderId, phone);
     } catch (error) {
         console.error('Error fetching delivery status:', error);
-        content.innerHTML = `<div class="error-message">Error: ${escapeHtml(error.message)}</div>`;
+        if (hasExistingData) {
+            showToast(error.message || 'Failed to fetch delivery status', 'error');
+            if (refreshBtn) {
+                refreshBtn.disabled = false;
+                refreshBtn.textContent = 'Refresh status';
+            }
+        } else {
+            content.innerHTML = `<div class="error-message">Error: ${escapeHtml(error.message)}</div>`;
+        }
     }
 }
 
-function displayDeliveryStatus(data, orderId) {
+function displayDeliveryStatus(data, orderId, phone) {
     const content = document.getElementById('deliveryStatusContent');
 
     let html = `
@@ -378,9 +438,17 @@ function displayDeliveryStatus(data, orderId) {
                 <strong>Tracking Number:</strong> ${escapeHtml(data.tracking_number || '')}
             </div>
     `;
-    
+
     if (data.customer_name) {
         html += `<div class="info-row"><strong>Customer Name:</strong> ${escapeHtml(data.customer_name)}</div>`;
+    }
+    if (phone) {
+        const waNumber = normalizePakPhone(phone);
+        const displayPhone = waNumber ? `+${waNumber}` : phone;
+        const waLink = waNumber
+            ? `<a href="https://web.whatsapp.com/send?phone=${waNumber}" target="_blank" rel="noopener noreferrer" class="whatsapp-chat-link" title="Chat on WhatsApp"><i class="fa-brands fa-whatsapp"></i></a>`
+            : '';
+        html += `<div class="info-row"><strong>Phone:</strong> ${escapeHtml(displayPhone)} ${waLink}</div>`;
     }
     if (data.recipient_name) {
         html += `<div class="info-row"><strong>Recipient Name:</strong> ${escapeHtml(data.recipient_name)}</div>`;

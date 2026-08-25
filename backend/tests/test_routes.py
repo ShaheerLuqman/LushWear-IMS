@@ -397,6 +397,7 @@ class TestPostexCsvUpload:
         assert written[0]["total_amount"] == 1000.0
         assert written[0]["order_receiving_date"] == "2026-07-18T13:23:08+00:00"
         assert written[0]["courier"] == "PostEx"
+        assert written[0]["is_order_settled"] is True
 
     def test_non_csv_file_is_rejected(self, make_client):
         client = make_client({"shopify_orders": []})

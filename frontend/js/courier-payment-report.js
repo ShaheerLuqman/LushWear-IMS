@@ -169,16 +169,17 @@ function computeCod(order) {
 
 /** Aggregate one bill's orders into its money columns and status. Bill Value, Advance,
  * Gross COD, Delivery Charges and Taxes are summed over every order in the bill (raw
- * customer-facing/courier-cost figures, independent of outcome). Net Receivable/Received
- * only accumulate over resolved orders, matching computeReceivable's own definition - an
- * order's receivable isn't known until the courier has delivered or returned it. */
+ * customer-facing/courier-cost figures, independent of outcome). Net Receivable is then
+ * Gross COD minus those Delivery Charges and Taxes - a bill-level total, not a sum of
+ * per-order receivables. Received only accumulates over resolved *and settled* orders
+ * (via computeReceivable, since that's the only place an order's own receivable is known),
+ * and Remaining is just Net Receivable minus that. */
 function aggregateCourierPaymentReportBill(bill) {
     let billValue = 0;
     let advanceTotal = 0;
     let charges = 0;
     let taxes = 0;
     let returnedTotal = 0;
-    let netReceivable = 0;
     let receivedAmount = 0;
     let resolvedCount = 0;
     let settledCount = 0;
@@ -201,13 +202,11 @@ function aggregateCourierPaymentReportBill(bill) {
         }
         if (!COURIER_RESOLVED_STATUSES.has(status)) return;
         resolvedCount++;
+        if (!order.is_order_settled) return;
         const receivable = computeReceivable(order);
         if (receivable == null) return;
-        netReceivable += receivable;
-        if (order.is_order_settled) {
-            settledCount++;
-            receivedAmount += receivable;
-        }
+        settledCount++;
+        receivedAmount += receivable;
     });
 
     let status;
@@ -215,6 +214,12 @@ function aggregateCourierPaymentReportBill(bill) {
     else if (settledCount === resolvedCount) status = 'paid';
     else if (settledCount === 0) status = 'unpaid';
     else status = 'partially_paid';
+
+    // Gross COD is Bill Value with the returned orders' full value backed out too - the
+    // running total after both deductions, not a separately-tracked figure, so it can't
+    // drift out of step with the Bill Value/Returned Orders shown above it.
+    const grossCod = billValue - returnedTotal;
+    const netReceivable = grossCod - charges - taxes;
 
     return {
         ...bill,
@@ -224,10 +229,7 @@ function aggregateCourierPaymentReportBill(bill) {
         settledCount,
         billValue,
         advanceTotal,
-        // Gross COD is Bill Value with the returned orders' full value backed out too -
-        // the running total after both deductions, not a separately-tracked figure, so
-        // it can't drift out of step with the Bill Value/Returned Orders shown above it.
-        grossCod: billValue - returnedTotal,
+        grossCod,
         charges,
         taxes,
         returnedTotal,
@@ -287,6 +289,7 @@ function paymentProgressStats(bill) {
         pct: ratio(accountedFor),
         receivedPct: ratio(received),
         deductiblesPct: ratio(deductibles),
+        remainingPct: ratio(remaining),
     };
 }
 
@@ -436,7 +439,7 @@ function renderCourierPaymentReportDetailFinancialSummary(bill) {
     const row = (label, value, opts = {}) => `
         <div class="bill-detail-summary-row${opts.total ? ' bill-detail-summary-row--total' : ''}">
             <span>${escapeHtml(label)}</span>
-            <span${opts.color ? ` style="color: ${opts.color};"` : ''}>${value}</span>
+            <span style="${opts.color ? `color: ${opts.color};` : ''}${opts.bold ? ' font-weight: 700;' : ''}">${value}</span>
         </div>`;
     el.innerHTML = [
         row('Bill Value', `Rs ${formatMoney(bill.billValue)}`),
@@ -444,9 +447,9 @@ function renderCourierPaymentReportDetailFinancialSummary(bill) {
         row('Gross COD', `Rs ${formatMoney(bill.grossCod)}`, { total: true }),
         row('Less: Delivery Charges', `- Rs ${formatMoney(bill.charges)}`),
         row('Less: Taxes (SST)', `- Rs ${formatMoney(bill.taxes)}`),
-        row('Net Receivable', `Rs ${formatMoney(bill.netReceivable)}`, { total: true, color: bill.netReceivable < 0 ? 'var(--danger)' : 'var(--success)' }),
+        row('Net Receivable', `Rs ${formatMoney(bill.netReceivable)}`, { total: true, color: 'var(--text-primary)' }),
         row('Total Received', `Rs ${formatMoney(bill.receivedAmount)}`),
-        row('Remaining', `Rs ${formatMoney(bill.remainingAmount)}`, bill.remainingAmount > 0 ? { color: 'var(--danger)' } : {}),
+        row('Remaining', `Rs ${formatMoney(bill.remainingAmount)}`, { color: '#7c3aed', bold: true }),
     ].join('');
 }
 
@@ -474,30 +477,29 @@ function renderCourierPaymentReportDetailProgressRing(bill) {
     const el = document.getElementById('courierPaymentReportDetailProgressRing');
     if (!el) return;
     const stats = paymentProgressStats(bill);
-    const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
     const { receivedEnd, deductiblesEnd } = paymentProgressPieStops(stats);
     const pieBackground = `conic-gradient(`
         + `${PAYMENT_PROGRESS_COLORS.received} 0% ${receivedEnd}%, `
         + `${PAYMENT_PROGRESS_COLORS.deductibles} ${receivedEnd}% ${deductiblesEnd}%, `
         + `var(--danger) ${deductiblesEnd}% 100%)`;
-    const legendRow = (color, label, value) => `
+    const legendRow = (color, label, value, pct) => `
         <div class="progress-ring-legend__item">
             <span class="progress-ring-legend__label"><span class="progress-ring-legend__dot" style="background: ${color};"></span>${label}</span>
-            <span class="progress-ring-legend__value">Rs ${formatMoney(value)}</span>
+            <span class="progress-ring-legend__value">Rs ${formatMoney(value)} <span style="color: var(--text-muted); font-weight: 400;">(${pct}%)</span></span>
         </div>`;
     el.innerHTML = `
         <div class="bill-detail-progress-ring-wrap">
             <div class="progress-ring" style="background: ${pieBackground};">
                 <div class="progress-ring__inner">
                     <span class="progress-ring__pct">${stats.pct}%</span>
-                    <span class="progress-ring__label">${meta.label}</span>
+                    <span class="progress-ring__label">Settled</span>
                 </div>
             </div>
             <div class="progress-ring-legend">
-                ${legendRow('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue)}
-                ${legendRow(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received)}
-                ${legendRow(PAYMENT_PROGRESS_COLORS.deductibles, 'Deductibles', stats.deductibles)}
-                ${legendRow('var(--danger)', 'Remaining', stats.remaining)}
+                ${legendRow('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue, 100)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received, stats.receivedPct)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.deductibles, 'Deductibles', stats.deductibles, stats.deductiblesPct)}
+                ${legendRow('var(--danger)', 'Remaining', stats.remaining, stats.remainingPct)}
             </div>
         </div>`;
 }
@@ -520,13 +522,10 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
         return `
         <tr data-order-number="${escapeHtml(String(order.order_number ?? ''))}">
             <td>${escapeHtml(String(order.order_number ?? ''))}</td>
+            <td>${escapeHtml(order.folio || '-')}</td>
             <td class="cpr-detail-customer-name">Loading…</td>
-            <td class="cpr-detail-customer-phone">Loading…</td>
-            <td class="cpr-detail-customer-city">Loading…</td>
-            <td>${escapeHtml(getCourierDisplayName(order))}</td>
             <td>${escapeHtml(order.tracking_number || '-')}</td>
             <td><span class="grid-status-badge ${orderStatusBadgeClass(status)}">${escapeHtml(status)}</span></td>
-            <td>${order.order_receiving_date ? formatDateDDMMYYYY(order.order_receiving_date) : ''}</td>
             <td>${formatMoney(order.total_amount)}</td>
             <td>${formatMoney(order.advance_amount)}</td>
             <td>${formatMoney(cod)}</td>
@@ -538,9 +537,9 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
     }).join('');
 }
 
-/** shopify_orders doesn't persist customer name/phone/city, so the orders table starts
- * with "Loading…" placeholders and this patches them in once the live Shopify lookup
- * (new /orders/shipping-info endpoint) resolves. Guarded by courierPaymentReportCurrentBill
+/** shopify_orders doesn't persist customer name, so the orders table starts with a
+ * "Loading…" placeholder and this patches it in once the live Shopify lookup (new
+ * /orders/shipping-info endpoint) resolves. Guarded by courierPaymentReportCurrentBill
  * in case the user has since navigated to a different bill or back to the list. */
 async function fetchCourierPaymentReportShippingInfo(bill) {
     const orderIds = bill.orders.map((o) => o.id).filter(Boolean);
@@ -557,7 +556,7 @@ async function fetchCourierPaymentReportShippingInfo(bill) {
     } catch (error) {
         console.error('Error loading shipping info:', error);
         if (courierPaymentReportCurrentBill === bill && body) {
-            body.querySelectorAll('.cpr-detail-customer-name, .cpr-detail-customer-phone, .cpr-detail-customer-city')
+            body.querySelectorAll('.cpr-detail-customer-name')
                 .forEach((cell) => { cell.textContent = '-'; });
         }
         return;
@@ -570,8 +569,6 @@ async function fetchCourierPaymentReportShippingInfo(bill) {
         const row = body.querySelector(`tr[data-order-number="${CSS.escape(String(order.order_number ?? ''))}"]`);
         if (!row) return;
         row.querySelector('.cpr-detail-customer-name').textContent = info?.customer_name || '-';
-        row.querySelector('.cpr-detail-customer-phone').textContent = info?.phone || '-';
-        row.querySelector('.cpr-detail-customer-city').textContent = info?.city || '-';
     });
 }
 
