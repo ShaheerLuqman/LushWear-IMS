@@ -304,7 +304,9 @@ function paymentProgressPieStops(stats) {
 
 function paymentProgressCellHtml(bill) {
     const stats = paymentProgressStats(bill);
-    const meta = `Recv Rs ${formatMoney(stats.received)} · Ded Rs ${formatMoney(stats.deductibles)}`;
+    const dot = (color, gapBefore) => `<span class="payment-progress__dot${gapBefore ? ' payment-progress__dot--gap' : ''}" style="background: ${color};"></span>`;
+    const meta = `${dot(PAYMENT_PROGRESS_COLORS.received)}Recv Rs ${formatMoney(stats.received)}`
+        + `${dot(PAYMENT_PROGRESS_COLORS.deductibles, true)}Ded Rs ${formatMoney(stats.deductibles)}`;
     const tooltip = `Received: Rs ${formatMoney(stats.received)} · `
         + `Deductibles: Rs ${formatMoney(stats.deductibles)} · Remaining: Rs ${formatMoney(stats.remaining)}`;
     return `
@@ -317,7 +319,7 @@ function paymentProgressCellHtml(bill) {
                 <div class="payment-progress__segment payment-progress__segment--received" style="width: ${stats.receivedPct}%;"></div>
                 <div class="payment-progress__segment payment-progress__segment--deductibles" style="width: ${stats.deductiblesPct}%;"></div>
             </div>
-            <div class="payment-progress__meta">${escapeHtml(meta)}</div>
+            <div class="payment-progress__meta">${meta}</div>
         </div>`;
 }
 
@@ -775,6 +777,15 @@ function initCourierPaymentReportGrid() {
             minWidth: 130,
             cellClass: 'ag-right-aligned-cell',
             valueFormatter: money,
+        },
+        {
+            headerName: 'Settled Orders',
+            colId: 'settledOrders',
+            field: 'settledCount',
+            width: 130,
+            minWidth: 120,
+            cellClass: 'ag-right-aligned-cell',
+            valueFormatter: (params) => `${params.data.settledCount} / ${params.data.totalOrders}`,
         },
         {
             headerName: 'Payment Progress',

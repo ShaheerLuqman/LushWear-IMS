@@ -315,6 +315,8 @@ body {
 .nav-menu {
     flex: 1;
     padding: 0 12px;
+    overflow-y: auto;
+    overflow-x: hidden;
 }
 
 /* Divider between nav groups instead of a text heading. .nav-section is full-width
@@ -334,7 +336,7 @@ body {
     justify-content: flex-start;
     position: relative;
     width: 100%;
-    padding: 14px 8px 14px 9px;
+    padding: 9px 8px 9px 9px;
     background: transparent;
     border: none;
     border-radius: var(--radius-md);
@@ -3102,6 +3104,20 @@ input[type="number"] {
     font-size: 11px;
     color: var(--text-muted);
     line-height: 1.2;
+}
+
+.payment-progress__dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 3px;
+    vertical-align: middle;
+    margin-top: -1px;
+}
+
+.payment-progress__dot--gap {
+    margin-left: 8px;
 }
 
 .payment-progress__waiting {

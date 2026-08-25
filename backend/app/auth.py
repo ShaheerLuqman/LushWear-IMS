@@ -23,7 +23,7 @@ import jwt
 from fastapi import Depends, Header, HTTPException
 
 _ALGORITHM = "HS256"
-_DEFAULT_TTL_HOURS = 24 * 7  # 7 days
+_DEFAULT_TTL_HOURS = 24 * 30  # 30 days
 
 # bcrypt cost factor. A short password is not meaningfully protected against
 # offline cracking by hash cost alone, so the real brute-force defense is the
