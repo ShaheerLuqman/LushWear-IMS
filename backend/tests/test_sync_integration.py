@@ -31,6 +31,7 @@ _FAKE_ORG_CREDS = OrgIntegrationSettings(
     shopify_refresh_token=None,
     shopify_token_expires_at=None,
     postex_merchant_token=None,
+    couriers_next_auth_key=None,
 )
 
 

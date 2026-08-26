@@ -27,6 +27,7 @@ from app.config import settings
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
+from app.services.shopify_orders import _customer_info_from_shopify_order
 
 logger = logging.getLogger("app.orders")
 
@@ -132,6 +133,19 @@ def _line_items_incomplete(line_items) -> bool:
         isinstance(li, dict) and (li.get("cost_price") is None or li.get("unit_price") is None)
         for li in line_items
     )
+
+
+CUSTOMER_INFO_FIELDS = ("customer_id", "customer_name", "customer_phone", "customer_address", "customer_city")
+
+
+def _apply_customer_fields(payload: dict, customer_info: Dict[str, Any], existing_order: Optional[dict] = None) -> None:
+    """Fill payload's customer_* columns from this sync's Shopify data, falling back to
+    whatever's already stored for any field Shopify didn't send (deleted customer, guest
+    checkout missing an address) - a re-sync can only add/refresh customer info, never
+    blank out what a previous sync already captured."""
+    for key in CUSTOMER_INFO_FIELDS:
+        new_val = customer_info.get(key)
+        payload[key] = new_val if new_val not in (None, "") else (existing_order.get(key) if existing_order else None)
 
 
 _OTHER_COURIER_TAG_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
@@ -402,7 +416,8 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             "id, order_number, order_status, delivery_charge, tax_amount, "
             "delivery_status, piece_received, courier, tracking_number, "
             "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
-            "replacement_of_order_no"
+            "replacement_of_order_no, customer_id, customer_name, customer_phone, "
+            "customer_address, customer_city"
         )
         shopify_order_numbers_list = list(shopify_order_numbers)
         order_chunks = [
@@ -740,6 +755,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 continue
 
             order_number = int(order_number)
+            customer_info = _customer_info_from_shopify_order(sp_order)
 
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
@@ -901,6 +917,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                             }
                             if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
                                 update_payload["replacement_of_order_no"] = replacement_of
+                            _apply_customer_fields(update_payload, customer_info, existing_order)
                             orders_to_update.append(update_payload)
                             continue
                     # Once an order has left "unfulfilled" (e.g. delivered/returned), do not overwrite totals/items/cost.
@@ -912,6 +929,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                             "replacement_of_order_no": replacement_of,
                             "updated_at": current_time,
                         }
+                        _apply_customer_fields(update_payload, customer_info, existing_order)
                         orders_to_update.append(update_payload)
                     else:
                         orders_to_skip.append(order_number)
@@ -1031,13 +1049,17 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                         or abs(float(existing_order.get("advance_amount") or 0)) > 0.01
                     )
 
+                _apply_customer_fields(order_data, customer_info, existing_order)
+                customer_info_changed = any(order_data[key] != existing_order.get(key) for key in CUSTOMER_INFO_FIELDS)
+
                 # Always update if courier or tracking_number changed, otherwise check other fields.
                 # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
                 # total_amount, so an already-cancelled order whose advance_amount was already 0 would
                 # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers
                 # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
-                # invisible to has_changed's skip mode once courier is assigned).
-                if courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+                # invisible to has_changed's skip mode once courier is assigned); customer_info_changed
+                # covers the same blind spot for a customer's name/phone/address/city/id.
+                if courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:
@@ -1045,6 +1067,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             else:
                 # First-time create: sync all fields from Shopify
                 order_data["created_at"] = current_time
+                _apply_customer_fields(order_data, customer_info)
                 orders_to_insert.append(order_data)
         t_diff_loop = time.perf_counter()
 

@@ -77,7 +77,9 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
     response = org_table(supabase, org_id, "finances_ledgers").insert({
         "name": name,
         "type": ledger.type,
-        "include_in_cash_in_hand": ledger.include_in_cash_in_hand,
+        # Only an Asset account can be cash-equivalent - never trust the client for this.
+        "include_in_cash_in_hand": ledger.include_in_cash_in_hand and ledger.type == "Asset",
+        "show_in_month_summary": ledger.show_in_month_summary,
         "opening_balance": ledger.opening_balance,
     }).execute()
     if not response.data:
@@ -123,6 +125,22 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
             raise HTTPException(status_code=400, detail="A ledger with this name already exists")
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
+
+    # Only an Asset account can be cash-equivalent. Resolve against the type this
+    # update leaves the ledger with - moving it off Asset must clear the flag even
+    # if the client didn't think to, and setting the flag while type is untouched
+    # must still be checked against whatever type is already on the row.
+    if "type" in payload:
+        if payload["type"] != "Asset":
+            payload["include_in_cash_in_hand"] = False
+    elif payload.get("include_in_cash_in_hand"):
+        current = (
+            org_table(supabase, org_id, "finances_ledgers")
+            .select("type").eq("id", ledger_id).limit(1).execute()
+        ).data
+        if not current or current[0]["type"] != "Asset":
+            payload["include_in_cash_in_hand"] = False
+
     if payload.get("include_in_cash_in_hand") and _system_key(supabase, org_id, ledger_id) == "cash":
         # Cash In Hand already counts this account once, via its own balance
         # (getPhysicalCashInHand in ledgers.js) — including it again here would

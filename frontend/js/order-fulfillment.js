@@ -24,6 +24,151 @@ let fulfillmentSelectedIds = new Set();
 let fulfillmentFilters = { city: '', cityMode: 'exclude', chipCities: [], tag: '', dateFrom: null, dateTo: null };
 let fulfillmentDatePicker = null;
 let fulfillmentOpenMenuOrderId = null; // tags or actions menu currently open, if any
+let fulfillmentCourierCities = []; // cities the currently-picked courier supports; empty until one is picked
+let fulfillmentCourierCitiesLoading = false;
+// The open courier-city dropdown's own closer, if one is open - that panel lives in
+// document.body (so it can escape the table's overflow:auto clipping), not inside the row
+// it belongs to, so re-rendering the table (tbody.innerHTML = ...) destroys the row's button
+// without it. Closed explicitly before every re-render so it can never get orphaned on screen.
+let fulfillmentOpenCourierCityCloser = null;
+
+/** Fetches the supported-city list for the courier just picked in the side panel
+ * (PostEx/Couriers Next only - see backend GET /orders/courier-cities) and clears
+ * any previously-picked courier city, since it may not be valid for the new courier. */
+async function loadFulfillmentCourierCities(courierId) {
+    fulfillmentCourierCitiesLoading = true;
+    fulfillmentCourierCities = [];
+    fulfillmentOrders.forEach(o => { o.courierCity = null; });
+    renderFulfillmentTable();
+    try {
+        const result = await apiJson(`/orders/courier-cities?courier=${encodeURIComponent(courierId)}`, {
+            fallback: 'Failed to fetch supported cities'
+        });
+        fulfillmentCourierCities = result.cities || [];
+    } catch (error) {
+        console.error('Error loading courier cities:', error);
+        showToast(error.message || 'Failed to fetch supported cities', 'error');
+        fulfillmentCourierCities = [];
+    } finally {
+        fulfillmentCourierCitiesLoading = false;
+        renderFulfillmentTable();
+    }
+}
+
+// Cap on rendered options in the courier-city search dropdown at once - the list can run to
+// 1000+ cities, and building that many DOM nodes on every keystroke is real, felt latency
+// (this is what made switching couriers slow, not the fetch itself). Narrows as you type.
+const FULFILLMENT_COURIER_CITY_MAX_OPTIONS = 100;
+
+/** Floating searchable dropdown for one row's courier-city field - same DOM/CSS pattern
+ * (.folio-dropdown-panel/-search/-options/-option) as the Transactions grid's ledger picker
+ * (createFolioCellRenderer in orders-grid.js), reused here instead of a native <select> or
+ * <datalist> since either would mean duplicating a 1000+-city list once per visible row. */
+function createFulfillmentCourierCityDropdown(order) {
+    const hasCities = fulfillmentCourierCities.length > 0;
+    const placeholder = fulfillmentCourierCitiesLoading ? 'Loading…' : (hasCities ? 'Select city' : '—');
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'folio-dropdown-btn fulfillment-courier-city-btn';
+    button.disabled = !hasCities;
+    button.innerHTML = `<span class="folio-dropdown-text">${escapeHtml(order.courierCity || placeholder)}</span><span class="folio-dropdown-arrow">▼</span>`;
+
+    let dropdownPanel = null;
+    let isOpen = false;
+
+    function closeDropdown() {
+        if (dropdownPanel && dropdownPanel.parentNode) dropdownPanel.parentNode.removeChild(dropdownPanel);
+        dropdownPanel = null;
+        isOpen = false;
+        button.classList.remove('open');
+        if (fulfillmentOpenCourierCityCloser === closeDropdown) fulfillmentOpenCourierCityCloser = null;
+    }
+
+    function selectOption(city) {
+        order.courierCity = city || null;
+        button.querySelector('.folio-dropdown-text').textContent = city || placeholder;
+        closeDropdown();
+    }
+
+    function renderOptions(optionsList, filter) {
+        const filterLower = filter.trim().toLowerCase();
+        const filtered = filterLower
+            ? fulfillmentCourierCities.filter(c => c.toLowerCase().includes(filterLower))
+            : fulfillmentCourierCities;
+
+        optionsList.innerHTML = '';
+        filtered.slice(0, FULFILLMENT_COURIER_CITY_MAX_OPTIONS).forEach(c => {
+            const option = document.createElement('div');
+            option.className = 'folio-dropdown-option' + (c === order.courierCity ? ' selected' : '');
+            option.textContent = c;
+            option.addEventListener('click', () => selectOption(c));
+            optionsList.appendChild(option);
+        });
+
+        if (filtered.length === 0) {
+            const noResults = document.createElement('div');
+            noResults.className = 'folio-dropdown-empty';
+            noResults.textContent = 'No cities found';
+            optionsList.appendChild(noResults);
+        } else if (filtered.length > FULFILLMENT_COURIER_CITY_MAX_OPTIONS) {
+            const more = document.createElement('div');
+            more.className = 'folio-dropdown-empty';
+            more.textContent = `${filtered.length - FULFILLMENT_COURIER_CITY_MAX_OPTIONS} more - keep typing to narrow down`;
+            optionsList.appendChild(more);
+        }
+    }
+
+    function openDropdown() {
+        if (isOpen || !hasCities) return;
+        // Only one of these floats in document.body at a time - close whichever other
+        // row's is currently open first (it wouldn't close on its own; see the flag's
+        // own comment above).
+        if (fulfillmentOpenCourierCityCloser) fulfillmentOpenCourierCityCloser();
+        isOpen = true;
+        fulfillmentOpenCourierCityCloser = closeDropdown;
+        button.classList.add('open');
+
+        dropdownPanel = document.createElement('div');
+        dropdownPanel.className = 'folio-dropdown-panel';
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'text';
+        searchInput.className = 'folio-dropdown-search';
+        searchInput.placeholder = 'Search cities...';
+        dropdownPanel.appendChild(searchInput);
+
+        const optionsList = document.createElement('div');
+        optionsList.className = 'folio-dropdown-options';
+        dropdownPanel.appendChild(optionsList);
+        renderOptions(optionsList, '');
+
+        document.body.appendChild(dropdownPanel);
+        const rect = button.getBoundingClientRect();
+        dropdownPanel.style.top = (rect.bottom + 2) + 'px';
+        dropdownPanel.style.left = rect.left + 'px';
+        dropdownPanel.style.minWidth = Math.max(rect.width, 200) + 'px';
+
+        searchInput.addEventListener('input', (e) => renderOptions(optionsList, e.target.value));
+        searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDropdown(); });
+        setTimeout(() => searchInput.focus(), 0);
+
+        const closeHandler = (e) => {
+            if (!dropdownPanel.contains(e.target) && !button.contains(e.target)) {
+                closeDropdown();
+                document.removeEventListener('mousedown', closeHandler);
+            }
+        };
+        document.addEventListener('mousedown', closeHandler);
+    }
+
+    button.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (isOpen) closeDropdown(); else openDropdown();
+    });
+
+    return button;
+}
 
 /** Fetch the real unfulfilled-orders list and refresh the filter option lists derived from it. */
 async function fetchFulfillmentOrders() {
@@ -222,6 +367,7 @@ function renderFulfillmentCourierMenu() {
                 : `<span class="fulfillment-courier-monogram" style="background:${courier.color}">${escapeHtml(courier.monogram)}</span>`;
             if (labelEl) labelEl.innerHTML = `${icon}${escapeHtml(courier.name)}`;
             menu.classList.remove('open');
+            loadFulfillmentCourierCities(courier.id);
         });
     });
 }
@@ -289,13 +435,11 @@ function renderFulfillmentRow(order) {
     const tagsMenuOptions = fulfillmentAllTags.map(t => `
         <label><input type="checkbox" data-tag-toggle="${escapeHtml(t)}" ${order.tags.includes(t) ? 'checked' : ''}> ${escapeHtml(t)}</label>
     `).join('');
-    const cityOptions = fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}" ${c === order.city ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('');
-
     return `
         <tr data-order-id="${order.id}" class="${checked ? 'fulfillment-row--selected' : ''}">
             <td class="fulfillment-col-check"><input type="checkbox" class="fulfillment-row-checkbox" ${checked ? 'checked' : ''}></td>
-            <td><span class="fulfillment-order-id">#${order.order_number}</span></td>
-            <td>${escapeHtml(order.name)}</td>
+            <td class="fulfillment-col-orderid"><span class="fulfillment-order-id">#${order.order_number}</span></td>
+            <td class="fulfillment-col-name" title="${escapeHtml(order.name)}">${escapeHtml(order.name)}</td>
             <td>
                 <div class="fulfillment-editable-cell" data-field="address">
                     <span class="fulfillment-editable-text" title="${escapeHtml(order.address)}">${escapeHtml(order.address)}</span>
@@ -315,7 +459,8 @@ function renderFulfillmentRow(order) {
                     <div class="fulfillment-tags-menu">${tagsMenuOptions}</div>
                 </div>
             </td>
-            <td><select class="fulfillment-city-select" data-city-select>${cityOptions}</select></td>
+            <td class="fulfillment-city-fixed" title="Entered by the customer">${escapeHtml(order.city)}</td>
+            <td class="fulfillment-courier-city-cell" data-courier-city-cell></td>
             <td class="fulfillment-risk-cell">${renderFulfillmentRiskCell(order)}</td>
             <td class="fulfillment-actions-cell">
                 <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="More actions">&#8942;</button>
@@ -387,10 +532,8 @@ function attachFulfillmentRowHandlers(tbody) {
             });
         });
 
-        tr.querySelector('[data-city-select]')?.addEventListener('change', (e) => {
-            order.city = e.target.value;
-            renderFulfillmentTable();
-        });
+        const courierCityCell = tr.querySelector('[data-courier-city-cell]');
+        if (courierCityCell) courierCityCell.appendChild(createFulfillmentCourierCityDropdown(order));
 
         tr.querySelector('[data-actions-toggle]')?.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -444,6 +587,10 @@ function renderFulfillmentSidePanel() {
 }
 
 function renderFulfillmentTable() {
+    // About to blow away tbody's rows - an open courier-city dropdown lives outside them
+    // (document.body), so it has to be closed explicitly or it's orphaned on screen.
+    if (fulfillmentOpenCourierCityCloser) fulfillmentOpenCourierCityCloser();
+
     const filtered = getFulfillmentFilteredOrders();
 
     const totalOrdersLabel = document.getElementById('fulfillmentTotalOrdersLabel');
@@ -454,11 +601,11 @@ function renderFulfillmentTable() {
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
         if (fulfillmentLoading) {
-            tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Loading unfulfilled orders…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading unfulfilled orders…</td></tr>';
         } else {
             tbody.innerHTML = filtered.length
                 ? filtered.map(renderFulfillmentRow).join('')
-                : '<tr><td colspan="9" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
+                : '<tr><td colspan="10" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
             attachFulfillmentRowHandlers(tbody);
             if (window.lucide) lucide.createIcons();
         }

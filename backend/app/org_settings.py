@@ -81,6 +81,7 @@ class OrgIntegrationSettings:
     shopify_refresh_token: Optional[str]
     shopify_token_expires_at: Optional[datetime]
     postex_merchant_token: Optional[str]
+    couriers_next_auth_key: Optional[str]
 
 
 def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
@@ -103,6 +104,7 @@ def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
         shopify_refresh_token=_decrypt(row.get("shopify_refresh_token")),
         shopify_token_expires_at=datetime.fromisoformat(expires_at) if expires_at else None,
         postex_merchant_token=_decrypt(row.get("postex_merchant_token")),
+        couriers_next_auth_key=_decrypt(row.get("couriers_next_auth_key")),
     )
 
 
@@ -158,6 +160,7 @@ def to_public_shape(settings: OrgIntegrationSettings) -> OrgIntegrationSettingsP
         shopify_api_version=settings.shopify_api_version,
         shopify_access_token_configured=bool(settings.shopify_access_token),
         postex_merchant_token_configured=bool(settings.postex_merchant_token),
+        couriers_next_auth_key_configured=bool(settings.couriers_next_auth_key),
     )
 
 
@@ -170,6 +173,7 @@ def upsert_org_integration_settings(
     shopify_refresh_token: Optional[str] = None,
     shopify_token_expires_at: Optional[datetime] = None,
     postex_merchant_token: Optional[str] = None,
+    couriers_next_auth_key: Optional[str] = None,
 ) -> None:
     """Admin-facing write path (Settings > Integrations UI, or a one-time
     backfill) - also called by ensure_valid_shopify_token() after a refresh.
@@ -198,4 +202,6 @@ def upsert_org_integration_settings(
         payload["shopify_token_expires_at"] = shopify_token_expires_at.isoformat()
     if postex_merchant_token is not None:
         payload["postex_merchant_token"] = _encrypt(postex_merchant_token)
+    if couriers_next_auth_key is not None:
+        payload["couriers_next_auth_key"] = _encrypt(couriers_next_auth_key)
     get_supabase().table("system_integration_settings").upsert(payload, on_conflict="org_id").execute()

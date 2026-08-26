@@ -551,6 +551,7 @@
                                             <th>Mobile Number</th>
                                             <th>Tags</th>
                                             <th>City</th>
+                                            <th class="fulfillment-th-courier-city">Courier City <i data-lucide="info" title="Select a courier in the side panel to populate this with its supported cities"></i></th>
                                             <th class="fulfillment-th-risk">Risk / Customer Status <i data-lucide="info" title="Based on this customer's past delivered vs. total orders"></i></th>
                                             <th class="fulfillment-col-actions">Actions</th>
                                         </tr>
@@ -700,9 +701,13 @@
                                     <input type="number" id="createLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
                                     <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
                                 </div>
-                                <label class="ledger-form-toggle">
+                                <label class="ledger-form-toggle" id="createLedgerCashInHandWrap">
                                     <input type="checkbox" id="createLedgerCashInHand">
                                     <span>Include in Cash In Hand</span>
+                                </label>
+                                <label class="ledger-form-toggle" id="createLedgerMonthSummaryWrap">
+                                    <input type="checkbox" id="createLedgerMonthSummary" checked>
+                                    <span>Show in Month Summary</span>
                                 </label>
                                 <div class="form-group">
                                     <label for="createLedgerTaxNumber">Tax number (NTN)</label>
@@ -837,9 +842,13 @@
                                     <input type="number" id="editLedgerOpeningBalance" class="form-input" placeholder="0.00" step="0.01">
                                     <span class="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
                                 </div>
-                                <label class="ledger-form-toggle">
+                                <label class="ledger-form-toggle" id="editLedgerCashInHandWrap">
                                     <input type="checkbox" id="editLedgerCashInHand">
                                     <span>Include in Cash In Hand</span>
+                                </label>
+                                <label class="ledger-form-toggle" id="editLedgerMonthSummaryWrap">
+                                    <input type="checkbox" id="editLedgerMonthSummary">
+                                    <span>Show in Month Summary</span>
                                 </label>
                                 <div class="form-group">
                                     <label for="editLedgerTaxNumber">Tax number (NTN)</label>
@@ -894,8 +903,17 @@
                 <!-- Month Detail View -->
                 <div id="monthDetailView" class="view">
                     <div class="month-detail-header">
-                        <button id="backToMonthSummaryBtn" class="btn btn-secondary"><i class="fa-solid fa-arrow-left"></i> Back to Month Summary</button>
-                        <h2 id="monthDetailTitle">Month Summary Details</h2>
+                        <div class="month-detail-header-left">
+                            <button id="backToMonthSummaryBtn" class="btn btn-secondary"><i class="fa-solid fa-arrow-left"></i> Back to Month Summary</button>
+                            <h2 id="monthDetailTitle">Month Summary Details</h2>
+                        </div>
+                        <div class="month-detail-hero" id="monthDetailHero" hidden>
+                            <div class="month-detail-hero-icon"><i class="fa-solid fa-arrow-trend-up"></i></div>
+                            <div class="month-detail-hero-info">
+                                <span class="month-detail-hero-label">Company Net Profit</span>
+                                <span class="month-detail-hero-value" id="monthDetailHeroValue">Rs 0</span>
+                            </div>
+                        </div>
                     </div>
                     <div class="month-detail-content" id="monthDetailContent">
                         <!-- Month detail content rendered by JS -->
@@ -1018,6 +1036,11 @@
                                     <label for="settingsPostexToken">PostEx merchant token</label>
                                     <input type="password" id="settingsPostexToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
                                     <span class="form-hint" id="settingsPostexTokenStatus"></span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsCouriersNextAuthKey">Couriers Next auth key</label>
+                                    <input type="password" id="settingsCouriersNextAuthKey" class="form-input" placeholder="Leave blank to keep current key" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
+                                    <span class="form-hint" id="settingsCouriersNextAuthKeyStatus"></span>
                                 </div>
                                 <p id="settingsIntegrationsError" class="auth-gate-error" role="alert"></p>
                                 <div class="form-actions">

@@ -318,16 +318,18 @@ function normalizePakPhone(phone) {
     return digits;
 }
 
-/** shopify_orders doesn't persist customer phone, so it's looked up live from Shopify
- * (same /orders/shipping-info endpoint the Courier Payment Report uses) alongside the
- * courier delivery status. Errors are swallowed - the popup still works without a phone. */
-async function fetchOrderCustomerPhone(orderId) {
+/** Customer name/phone (same /orders/shipping-info endpoint the Courier Payment Report
+ * uses - reads shopify_orders' stored customer_name/customer_phone, captured once at
+ * order-sync time, not a live Shopify lookup) alongside the courier delivery status.
+ * Errors are swallowed - the popup still works without this. */
+async function fetchOrderCustomerInfo(orderId) {
     try {
-        const results = await apiJson('/orders/shipping-info', { method: 'POST', body: [orderId], fallback: 'Failed to load customer phone' });
-        return results?.[0]?.phone || '';
+        const results = await apiJson('/orders/shipping-info', { method: 'POST', body: [orderId], fallback: 'Failed to load customer info' });
+        const info = results?.[0];
+        return { name: info?.customer_name || '', phone: info?.phone || '' };
     } catch (error) {
-        console.error('Error loading customer phone:', error);
-        return '';
+        console.error('Error loading customer info:', error);
+        return { name: '', phone: '' };
     }
 }
 
@@ -376,12 +378,12 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
 
     try {
         const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
-        const [response, phone] = await Promise.all([
+        const [response, customerInfo] = await Promise.all([
             fetch(url, {
                 method: 'GET',
                 headers: { 'Content-Type': 'application/json' }
             }),
-            fetchOrderCustomerPhone(orderId)
+            fetchOrderCustomerInfo(orderId)
         ]);
 
         if (!response.ok) {
@@ -411,7 +413,7 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
                 }
             });
         }
-        displayDeliveryStatus(displayedData, orderId, phone);
+        displayDeliveryStatus(displayedData, orderId, customerInfo);
     } catch (error) {
         console.error('Error fetching delivery status:', error);
         if (hasExistingData) {
@@ -426,8 +428,9 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     }
 }
 
-function displayDeliveryStatus(data, orderId, phone) {
+function displayDeliveryStatus(data, orderId, customerInfo) {
     const content = document.getElementById('deliveryStatusContent');
+    const { name, phone } = customerInfo || {};
 
     let html = `
         <div class="delivery-status-info">
@@ -439,8 +442,8 @@ function displayDeliveryStatus(data, orderId, phone) {
             </div>
     `;
 
-    if (data.customer_name) {
-        html += `<div class="info-row"><strong>Customer Name:</strong> ${escapeHtml(data.customer_name)}</div>`;
+    if (name) {
+        html += `<div class="info-row"><strong>Customer Name:</strong> ${escapeHtml(name)}</div>`;
     }
     if (phone) {
         const waNumber = normalizePakPhone(phone);

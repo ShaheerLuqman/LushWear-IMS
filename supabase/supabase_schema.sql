@@ -94,6 +94,8 @@ CREATE TABLE IF NOT EXISTS system_integration_settings (
     shopify_refresh_token     TEXT,
     shopify_token_expires_at  TIMESTAMPTZ,
     postex_merchant_token     TEXT,
+    -- CouriersNext's own auth_key - see 20260826000000_couriers_next_auth_key.sql.
+    couriers_next_auth_key    TEXT,
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -259,6 +261,17 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     -- of advance_status, which is about the customer's advance, not the courier's payout.
     is_order_settled         BOOLEAN NOT NULL DEFAULT false,
     replacement_of_order_no  INTEGER,
+    -- Customer identity + shipping-address snapshot for this order, captured once at
+    -- sync time (see app/services/shopify_sync.py's _apply_customer_fields) rather than
+    -- looked up live. customer_id (Shopify's numeric customer id) links this order to
+    -- that customer's other orders in this table - what the Order Fulfillment view's
+    -- customer-status history is computed from. A re-sync only adds/refreshes these from
+    -- a non-empty Shopify value; it never blanks out what a previous sync captured.
+    customer_id              BIGINT,
+    customer_name            TEXT,
+    customer_phone           TEXT,
+    customer_address         TEXT,
+    customer_city            TEXT,
     created_at               TIMESTAMPTZ DEFAULT NOW(),
     updated_at               TIMESTAMPTZ DEFAULT NOW(),
     CONSTRAINT orders_org_id_order_number_key UNIQUE (org_id, order_number)
@@ -413,6 +426,9 @@ ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS system_key         VARCHAR
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS is_cash_equivalent BOOLEAN NOT NULL DEFAULT FALSE;
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS enabled            BOOLEAN NOT NULL DEFAULT TRUE;
 ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS archived_at        TIMESTAMPTZ;
+-- Expense-ledger opt-out from Month Summary's per-ledger breakdown - see
+-- get_month_summary_expense_lines and 20260826040000_ledger_show_in_month_summary.sql.
+ALTER TABLE finances_ledgers ADD COLUMN IF NOT EXISTS show_in_month_summary BOOLEAN NOT NULL DEFAULT TRUE;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_system_key
     ON finances_ledgers (org_id, system_key) WHERE system_key IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledgers_org_code
@@ -608,6 +624,9 @@ CREATE INDEX IF NOT EXISTS idx_orders_order_receiving_date   ON shopify_orders(o
 -- Shopify sync links NNNN-R replacement orders back to their originals via this column.
 CREATE INDEX IF NOT EXISTS idx_orders_replacement_of_order_no ON shopify_orders(replacement_of_order_no);
 CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON shopify_orders(org_id);
+-- Groups an order with that same customer's other orders (Order Fulfillment view's
+-- customer-status history - see get_unfulfilled_orders).
+CREATE INDEX IF NOT EXISTS idx_orders_customer_id            ON shopify_orders(customer_id);
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
 --   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON shopify_orders USING GIN (delivery_status);
@@ -1494,9 +1513,11 @@ AS $$
     ORDER BY year DESC, month DESC;
 $$;
 
--- Dropped and recreated (not just CREATE OR REPLACE) because shopify_expense
--- and ad_expense were removed from the return columns, which Postgres won't
--- allow on a plain replace.
+-- Dropped and recreated (not just CREATE OR REPLACE) because the return
+-- columns keep changing shape, which Postgres won't allow on a plain replace.
+-- net_profit was replaced by cost_of_goods_sold/tax_total/gross_profit - the
+-- true bottom-line Net Profit is Gross Profit minus the per-ledger expense
+-- lines (get_month_summary_expense_lines), computed in the orders route.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
@@ -1515,7 +1536,9 @@ RETURNS TABLE(
     unfulfilled_orders_count INT,
     cancelled_orders_count INT,
     net_sales NUMERIC,
-    net_profit NUMERIC,
+    cost_of_goods_sold NUMERIC,
+    tax_total NUMERIC,
+    gross_profit NUMERIC,
     dc_charges_delivered NUMERIC,
     dc_charges_returned NUMERIC,
     dc_charges_total NUMERIC
@@ -1540,15 +1563,8 @@ AS $$
             COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('fulfilled', 'cna', 'rfd', 'ica'))::INT AS enroute_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'unfulfilled')::INT AS unfulfilled_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'cancelled')::INT AS cancelled_orders_count,
-            COALESCE(SUM(
-                CASE
-                    WHEN lower(trim(order_status)) = 'returned' AND delivery_charge IS NOT NULL AND delivery_charge <> 0
-                        THEN -delivery_charge
-                    WHEN lower(trim(order_status)) = 'delivered' AND delivery_charge IS NOT NULL AND delivery_charge <> 0
-                        THEN total_amount - (delivery_charge + COALESCE(tax_amount, 0) + COALESCE(cost_price, 0))
-                    ELSE 0
-                END
-            ), 0) AS net_profit,
+            COALESCE(SUM(cost_price) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS cost_of_goods_sold,
+            COALESCE(SUM(tax_amount) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS tax_total,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
@@ -1563,7 +1579,14 @@ AS $$
         ot.unfulfilled_orders_count,
         ot.cancelled_orders_count,
         (ot.total_gross_sale - ot.total_return_amount) AS net_sales,
-        ot.net_profit,
+        ot.cost_of_goods_sold,
+        ot.tax_total,
+        (
+            (ot.total_gross_sale - ot.total_return_amount)
+            - ot.cost_of_goods_sold
+            - (ot.dc_charges_delivered + ot.dc_charges_returned)
+            - ot.tax_total
+        ) AS gross_profit,
         ot.dc_charges_delivered,
         ot.dc_charges_returned,
         (ot.dc_charges_delivered + ot.dc_charges_returned) AS dc_charges_total
@@ -1596,6 +1619,7 @@ AS $$
            ON ce.to_account_id = l.id AND ce.org_id = p_org_id
     WHERE l.org_id = p_org_id
       AND l.type = 'Expense'
+      AND l.show_in_month_summary
     GROUP BY l.id, l.name
     ORDER BY l.name;
 $$;

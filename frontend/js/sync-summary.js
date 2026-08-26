@@ -170,11 +170,13 @@ async function openMonthDetail(month, year) {
     currentMonthDetail = { month, year };
     const container = document.getElementById('monthDetailContent');
     const titleEl = document.getElementById('monthDetailTitle');
+    const heroEl = document.getElementById('monthDetailHero');
     const monthName = getMonthName(month);
     const periodLabel = formatOrdersPeriodLabel(month, year);
 
     // Set title and show loading immediately, then navigate
     if (titleEl) titleEl.textContent = `${monthName} ${year} - ${periodLabel}`;
+    if (heroEl) heroEl.hidden = true;
     if (container) {
         container.innerHTML = `
             <div class="content-loading">
@@ -200,43 +202,77 @@ async function openMonthDetail(month, year) {
 function displayMonthDetail(data) {
     const container = document.getElementById('monthDetailContent');
     const titleEl = document.getElementById('monthDetailTitle');
-    
+    const heroEl = document.getElementById('monthDetailHero');
+    const heroValueEl = document.getElementById('monthDetailHeroValue');
+
     if (!container) return;
-    
+
     const monthName = getMonthName(data.month);
     const periodLabel = formatOrdersPeriodLabel(data.month, data.year);
-    
+
     if (titleEl) {
         titleEl.textContent = `${monthName} ${data.year} - ${periodLabel}`;
     }
-    
+
     const fmt = (n) => (typeof n === 'number' && !Number.isInteger(n))
         ? n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
         : (n ?? 0).toLocaleString('en-US');
+    const rs = (n) => `Rs ${fmt(n)}`;
+    const line = (label, valueHtml, modifiers = '') => {
+        const cls = modifiers.split(' ').filter(Boolean).map(m => ` month-detail-line--${m}`).join('');
+        return `<div class="month-detail-line${cls}"><span class="month-detail-line-label">${escapeHtml(label)}</span><span class="month-detail-line-value">${valueHtml}</span></div>`;
+    };
+    const statCard = (icon, color, value, label) => `
+        <div class="month-detail-stat-card">
+            <div class="month-detail-stat-icon month-detail-stat-icon--${color}"><i class="fa-solid ${icon}"></i></div>
+            <div class="month-detail-stat-info">
+                <span class="month-detail-stat-value">${value}</span>
+                <span class="month-detail-stat-label">${label}</span>
+            </div>
+        </div>`;
+    const sectionHeading = (icon, color, title) =>
+        `<h3 class="month-detail-section-heading"><span class="month-detail-section-icon month-detail-section-icon--${color}"><i class="fa-solid ${icon}"></i></span>${title}</h3>`;
+
+    const netSales = data.net_sales ?? 0;
+    const grossProfit = data.gross_profit ?? 0;
+    const netProfit = data.net_profit ?? 0;
+    const grossMargin = netSales !== 0 ? (grossProfit / netSales) * 100 : 0;
+
+    if (heroEl && heroValueEl) {
+        heroEl.hidden = false;
+        heroEl.classList.toggle('month-detail-hero--negative', netProfit < 0);
+        heroValueEl.textContent = rs(netProfit);
+    }
+
+    const soldCollections = (data.products_sold_by_collection || []).filter(row => (row.count || 0) > 0);
+    const collectionsTotal = soldCollections.reduce((acc, row) => ({
+        count: acc.count + (row.count || 0),
+        sum: acc.sum + (row.sum || 0),
+    }), { count: 0, sum: 0 });
 
     container.innerHTML = `
         <div class="month-detail-sections">
             <div class="month-detail-column">
                 <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">Sales</h3>
+                    ${sectionHeading('fa-chart-line', 'success', 'Profit &amp; Loss Summary')}
                     <div class="month-detail-lines">
-                        <div class="month-detail-line"><span class="month-detail-line-label">Total Gross Sale</span><span class="month-detail-line-value">Rs ${fmt(data.total_gross_sale)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Total Return Amount</span><span class="month-detail-line-value">Rs ${fmt(data.total_return_amount)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Net Sales</span><span class="month-detail-line-value">Rs ${fmt(data.net_sales)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Net Profit</span><span class="month-detail-line-value">Rs ${fmt(data.net_profit ?? 0)}</span></div>
+                        ${line('Metric', 'Amount (Rs)', 'head')}
+                        ${line('Total Gross Sale', rs(data.total_gross_sale))}
+                        ${line('Total Return Amount', rs(data.total_return_amount), 'deduction')}
+                        ${line('Net Sales', rs(netSales), 'subtotal')}
+                        ${line('Less: Cost of Goods Sold', rs(data.cost_of_goods_sold ?? 0), 'deduction')}
+                        ${line('Less: DC Charges / Delivery Expense', rs(data.dc_charges_total ?? 0), 'deduction')}
+                        ${line('Less: Tax', rs(data.tax_total ?? 0), 'deduction')}
+                        ${line('Gross Profit', rs(grossProfit), 'subtotal')}
+                        ${(data.expense_lines || []).map(l => line(`Less: ${l.name}`, rs(l.amount ?? 0), 'deduction')).join('')}
+                        ${line('Net Profit', rs(netProfit), netProfit < 0 ? 'final negative' : 'final')}
                     </div>
                 </section>
                 <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">Expenses</h3>
-                    <div class="month-detail-lines">
-                        ${(data.expense_lines || []).map(line => `
-                        <div class="month-detail-line"><span class="month-detail-line-label">${escapeHtml(line.name)}</span><span class="month-detail-line-value">Rs ${fmt(line.amount ?? 0)}</span></div>`).join('')}
-                    </div>
-                </section>
-                <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">Products Sold by Collection</h3>
+                    ${sectionHeading('fa-layer-group', 'info', 'Product Sales by Collection')}
                     <div class="month-detail-lines collection-breakdown">
-                        ${(data.products_sold_by_collection || []).map(row => `
+                        ${line('Collection', 'Units · Sales (Rs)', 'head')}
+                        ${soldCollections.map(row => `
                             <div class="collection-breakdown-group">
                                 <button type="button" class="month-detail-line collection-breakdown-toggle" ${(row.products || []).length ? '' : 'disabled'}>
                                     <span class="month-detail-line-label">
@@ -255,44 +291,59 @@ function displayMonthDetail(data) {
                                 </div>
                             </div>
                         `).join('')}
+                        ${line('Total', `${fmt(collectionsTotal.count)} units · Rs ${fmt(collectionsTotal.sum)}`, 'subtotal')}
                     </div>
                 </section>
             </div>
             <div class="month-detail-column">
                 <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">Orders</h3>
-                    <div class="month-detail-lines">
-                        <div class="month-detail-line"><span class="month-detail-line-label">Total Orders</span><span class="month-detail-line-value">${fmt(data.total_orders)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Delivered Orders</span><span class="month-detail-line-value">${fmt(data.delivered_orders_count)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Return Orders</span><span class="month-detail-line-value">${fmt(data.return_orders_count)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Cancelled Orders</span><span class="month-detail-line-value">${fmt(data.cancelled_orders_count ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Enroute Orders</span><span class="month-detail-line-value">${fmt(data.enroute_orders_count ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Unfulfilled Orders</span><span class="month-detail-line-value">${fmt(data.unfulfilled_orders_count ?? 0)}</span></div>
+                    ${sectionHeading('fa-clipboard-list', 'accent', 'Order &amp; Collection Snapshot')}
+                    <div class="month-detail-stats month-detail-stats--compact">
+                        ${statCard('fa-bag-shopping', 'accent', fmt(data.total_orders), 'Total Orders')}
+                        ${statCard('fa-truck', 'success', fmt(data.delivered_orders_count), 'Delivered Orders')}
+                        ${statCard('fa-rotate-left', 'danger', fmt(data.return_orders_count), 'Return Orders')}
+                        ${statCard('fa-circle-xmark', 'danger', fmt(data.cancelled_orders_count ?? 0), 'Cancelled Orders')}
+                        ${statCard('fa-location-dot', 'warning', fmt(data.enroute_orders_count ?? 0), 'Enroute Orders')}
+                        ${statCard('fa-box', 'accent', fmt(data.unfulfilled_orders_count ?? 0), 'Unfulfilled Orders')}
+                    </div>
+                    <div class="month-detail-dc-grid">
+                        <div class="month-detail-dc-box">
+                            <span class="month-detail-dc-label">DC Charges (Delivered)</span>
+                            <span class="month-detail-dc-value">${rs(data.dc_charges_delivered ?? 0)}</span>
+                        </div>
+                        <div class="month-detail-dc-box">
+                            <span class="month-detail-dc-label">DC Charges (Returned)</span>
+                            <span class="month-detail-dc-value">${rs(data.dc_charges_returned ?? 0)}</span>
+                        </div>
+                    </div>
+                    <div class="month-detail-stats month-detail-stats--compact month-detail-stats--single">
+                        ${statCard('fa-coins', 'accent', rs(data.dc_charges_total ?? 0), 'Total DC Charges')}
                     </div>
                 </section>
                 <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">DC Charges</h3>
+                    ${sectionHeading('fa-file-invoice-dollar', 'warning', 'Expense Summary')}
                     <div class="month-detail-lines">
-                        <div class="month-detail-line"><span class="month-detail-line-label">DC Charges (Delivered)</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_delivered ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">DC Charges (Returned)</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_returned ?? 0)}</span></div>
-                        <div class="month-detail-line"><span class="month-detail-line-label">Total DC Charges</span><span class="month-detail-line-value">Rs ${fmt(data.dc_charges_total ?? 0)}</span></div>
+                        ${line('Expense', 'Amount (Rs)', 'head')}
+                        ${(data.expense_lines || []).map(l => line(l.name, rs(l.amount ?? 0))).join('')}
+                        ${line('Total Expenses', rs(data.total_expenses ?? 0), 'subtotal')}
                     </div>
                 </section>
                 <section class="month-detail-section">
-                    <h3 class="month-detail-section-heading">Carrier Health</h3>
+                    ${sectionHeading('fa-truck-fast', 'accent', 'Carrier Health')}
                     <div class="month-detail-lines">
                         ${(data.carrier_health || []).map(row => {
                             const pct = row.total_count > 0 ? Math.round((row.delivered_count / row.total_count) * 100) : 0;
-                            return `
-                                <div class="month-detail-line">
-                                    <span class="month-detail-line-label">${escapeHtml(row.courier)}</span>
-                                    <span class="month-detail-line-value">${row.delivered_count}/${row.total_count} (${pct}%)</span>
-                                </div>
-                            `;
+                            return line(row.courier, `${row.delivered_count}/${row.total_count} (${pct}%)`);
                         }).join('')}
                     </div>
                 </section>
             </div>
+        </div>
+        <div class="month-detail-stats">
+            ${statCard('fa-sack-dollar', 'accent', rs(netSales), 'Net Sales')}
+            ${statCard('fa-arrow-trend-up', 'success', rs(grossProfit), 'Gross Profit')}
+            ${statCard('fa-money-bill-trend-up', netProfit < 0 ? 'danger' : 'success', rs(netProfit), 'Net Profit')}
+            ${statCard('fa-percent', 'warning', `${grossMargin.toFixed(2)}%`, 'Gross Profit Margin')}
         </div>
     `;
 }

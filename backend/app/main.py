@@ -2,6 +2,7 @@ import logging
 import os
 import time
 import uuid
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -16,6 +17,7 @@ from app.database import get_supabase
 from app.features import require_feature
 from app.logging_config import configure_logging
 from app.rate_limit import limiter
+from app.services.courier_cities import refresh_courier_cities_cache
 
 configure_logging()
 logger = logging.getLogger("app")
@@ -45,12 +47,24 @@ if IS_PROD:
     # via app.org_settings) are validated at sync time instead. See
     # ORGANIZATIONS_USERS_PLAN.md Phase 2.
 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    try:
+        await refresh_courier_cities_cache()
+    except Exception:
+        # Non-fatal: get_courier_cities falls back to a live per-request fetch for
+        # whichever courier this didn't manage to populate.
+        logger.exception("Failed to refresh courier cities cache on startup")
+    yield
+
+
 app = FastAPI(
     title="Inventory Management System",
     description="API for managing inventory",
     version="1.0.0",
     docs_url=None if IS_PROD else "/docs",
     redoc_url=None if IS_PROD else "/redoc",
+    lifespan=lifespan,
 )
 
 app.add_middleware(

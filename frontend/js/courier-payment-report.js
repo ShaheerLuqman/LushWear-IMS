@@ -36,12 +36,14 @@ const BILL_STATUS_META = {
     unpaid: { label: 'Unpaid', cls: 'grid-status-returned', barColor: '#dc2626' },
 };
 
-/** Payment Progress stacked-bar segment colors - kept in sync with the matching
- * .payment-progress__segment--* rules in styles.css (used there since the bar itself is
- * built as an HTML string, not styled inline per segment). */
+/** Bill detail pie-chart segment colors. "Remaining" matches the violet used for the
+ * same figure in renderCourierPaymentReportDetailFinancialSummary. */
 const PAYMENT_PROGRESS_COLORS = {
     received: '#16a34a',
-    deductibles: '#f59e0b',
+    returned: '#dc2626',
+    charges: '#f59e0b',
+    taxes: '#0ea5e9',
+    remaining: '#7c3aed',
 };
 
 /** Default pickup-date range shown on first load: the 1st of this month through today
@@ -100,10 +102,10 @@ function courierPaymentReportFilteredOrders() {
     });
 }
 
-/** netOwed > 0 means the courier owes the shop overall; < 0 means the shop owes the
- * courier (e.g. return handling fees outweighing any COD collected). Ignores the pickup-
- * date range on purpose - these cards are the courier/search-scoped overview, while the
- * date range only narrows which bills the table below shows. */
+/** netOwed is the sum of COD value (computeCod: total - advance) across unsettled orders
+ * only - a settled order has already been paid, so it no longer counts as owed. Ignores
+ * the pickup-date range on purpose - these cards are the courier/search-scoped overview,
+ * while the date range only narrows which bills the table below shows. */
 function courierPaymentReportSummary(orderRows) {
     let inTransit = 0;
     let resolved = 0;
@@ -117,8 +119,8 @@ function courierPaymentReportSummary(orderRows) {
             inTransitByStatus[order.order_status] = (inTransitByStatus[order.order_status] || 0) + 1;
         } else if (COURIER_RESOLVED_STATUSES.has(status)) {
             resolved++;
-            const receivable = computeReceivable(order);
-            if (receivable != null) netOwed += receivable;
+            if (order.is_order_settled) return;
+            netOwed += computeCod(order);
         }
     });
 
@@ -266,75 +268,78 @@ function buildCourierPaymentReportBills(orderRows) {
 }
 
 /** Payment Progress tracks Bill Value (already net of advance - see
- * aggregateCourierPaymentReportBill) against two claims on it: the amount the courier has
- * actually paid back for settled orders, and the deductibles the courier/the bill itself
- * keeps - delivery charges, taxes, and the full total of any returned orders (never
- * coming back at all). Whatever's left over (billValue minus both) is still outstanding.
- * Shared by the bill grid's stacked bar and the detail screen's pie so both stay in sync.
- * Each ratio is clamped independently, so in an edge case where one claim alone exceeds
- * the bill value the segments can visually overrun 100% rather than silently
- * under-report - that's rare enough in real data not to be worth normalizing away. */
+ * aggregateCourierPaymentReportBill) against four claims on it: the amount the courier has
+ * actually paid back for settled orders, and the three things the courier/the bill itself
+ * keeps instead - delivery charges, taxes, and the full total of any returned orders (never
+ * coming back at all). Whatever's left over (billValue minus all four) is still outstanding.
+ * Feeds the detail screen's pie. Each ratio is clamped independently, so in an edge case
+ * where one claim alone exceeds the bill value the segments can visually overrun 100%
+ * rather than silently under-report - that's rare enough in real data not to be worth
+ * normalizing away. */
 function paymentProgressStats(bill) {
     const billValue = bill.billValue;
     const received = bill.receivedAmount;
-    const deductibles = bill.charges + bill.taxes + bill.returnedTotal;
-    const accountedFor = received + deductibles;
+    const returned = bill.returnedTotal;
+    const charges = bill.charges;
+    const taxes = bill.taxes;
+    const accountedFor = received + returned + charges + taxes;
     const remaining = Math.max(0, billValue - accountedFor);
     const ratio = (amount) => billValue > 0 ? Math.max(0, Math.min(100, Math.round((amount / billValue) * 100))) : 0;
     return {
         billValue,
         received,
-        deductibles,
+        returned,
+        charges,
+        taxes,
         remaining,
         pct: ratio(accountedFor),
         receivedPct: ratio(received),
-        deductiblesPct: ratio(deductibles),
+        returnedPct: ratio(returned),
+        chargesPct: ratio(charges),
+        taxesPct: ratio(taxes),
         remainingPct: ratio(remaining),
     };
 }
 
-/** Cumulative conic-gradient stops for the detail screen's pie (received, then
- * deductibles, then whatever's left as "remaining"). Computed from running totals rather
- * than the independently-clamped *Pct fields above, so the slices always add up to
- * exactly one full circle even in the edge case where those ratios would overrun. */
+/** Cumulative conic-gradient stops for the detail screen's pie: received, then returned,
+ * then delivery charges, then taxes, then whatever's left as "remaining". Computed from
+ * running totals rather than the independently-clamped *Pct fields above, so the slices
+ * always add up to exactly one full circle even in the edge case where those ratios would
+ * overrun. */
 function paymentProgressPieStops(stats) {
-    const { billValue, received, deductibles } = stats;
+    const { billValue, received, returned, charges, taxes } = stats;
     const pct = (amount) => billValue > 0 ? (amount / billValue) * 100 : 0;
     const receivedEnd = Math.min(100, pct(received));
-    const deductiblesEnd = Math.min(100, receivedEnd + pct(deductibles));
-    return { receivedEnd, deductiblesEnd };
+    const returnedEnd = Math.min(100, receivedEnd + pct(returned));
+    const chargesEnd = Math.min(100, returnedEnd + pct(charges));
+    const taxesEnd = Math.min(100, chargesEnd + pct(taxes));
+    return { receivedEnd, returnedEnd, chargesEnd, taxesEnd };
 }
 
-function paymentProgressCellHtml(bill) {
-    const stats = paymentProgressStats(bill);
-    const dot = (color, gapBefore) => `<span class="payment-progress__dot${gapBefore ? ' payment-progress__dot--gap' : ''}" style="background: ${color};"></span>`;
-    const meta = `${dot(PAYMENT_PROGRESS_COLORS.received)}Recv Rs ${formatMoney(stats.received)}`
-        + `${dot(PAYMENT_PROGRESS_COLORS.deductibles, true)}Ded Rs ${formatMoney(stats.deductibles)}`;
-    const tooltip = `Received: Rs ${formatMoney(stats.received)} · `
-        + `Deductibles: Rs ${formatMoney(stats.deductibles)} · Remaining: Rs ${formatMoney(stats.remaining)}`;
+function settledOrdersCellHtml(bill) {
+    const { settledCount, totalOrders } = bill;
+    const pct = totalOrders > 0 ? Math.round((settledCount / totalOrders) * 100) : 0;
     return `
         <div class="payment-progress">
             <div class="payment-progress__row">
-                <span class="payment-progress__amounts">Rs ${formatMoney(stats.billValue)}</span>
-                <span class="payment-progress__pct">${stats.pct}%</span>
+                <span class="payment-progress__amounts">${settledCount} / ${totalOrders} Orders</span>
+                <span class="payment-progress__pct">${pct}%</span>
             </div>
-            <div class="payment-progress__bar payment-progress__bar--stacked" title="${escapeHtml(tooltip)}">
-                <div class="payment-progress__segment payment-progress__segment--received" style="width: ${stats.receivedPct}%;"></div>
-                <div class="payment-progress__segment payment-progress__segment--deductibles" style="width: ${stats.deductiblesPct}%;"></div>
+            <div class="payment-progress__bar">
+                <div class="payment-progress__segment payment-progress__segment--received" style="width: ${pct}%;"></div>
             </div>
-            <div class="payment-progress__meta">${meta}</div>
         </div>`;
 }
 
-/** ag-grid cellRenderer wrapper for paymentProgressCellHtml. A returned HTML *string*
+/** ag-grid cellRenderer wrapper for settledOrdersCellHtml. A returned HTML *string*
  * gets set as innerHTML directly on ag-grid's own cell-value wrapper, which doesn't give
  * the bar a reliable block-level container to size 100% width against (it ends up
  * shrunk to content, not covering the column) - returning an actual DOM element instead
  * (same fix as createCourierPaymentReportViewButton's .bill-cell-center) gives it one. */
-function createPaymentProgressCellElement(params) {
+function createSettledOrdersCellElement(params) {
     const wrapper = document.createElement('div');
     wrapper.className = 'payment-progress-cell-wrap';
-    wrapper.innerHTML = paymentProgressCellHtml(params.data);
+    wrapper.innerHTML = settledOrdersCellHtml(params.data);
     return wrapper;
 }
 
@@ -477,11 +482,13 @@ function renderCourierPaymentReportDetailProgressRing(bill) {
     const el = document.getElementById('courierPaymentReportDetailProgressRing');
     if (!el) return;
     const stats = paymentProgressStats(bill);
-    const { receivedEnd, deductiblesEnd } = paymentProgressPieStops(stats);
+    const { receivedEnd, returnedEnd, chargesEnd, taxesEnd } = paymentProgressPieStops(stats);
     const pieBackground = `conic-gradient(`
         + `${PAYMENT_PROGRESS_COLORS.received} 0% ${receivedEnd}%, `
-        + `${PAYMENT_PROGRESS_COLORS.deductibles} ${receivedEnd}% ${deductiblesEnd}%, `
-        + `var(--danger) ${deductiblesEnd}% 100%)`;
+        + `${PAYMENT_PROGRESS_COLORS.returned} ${receivedEnd}% ${returnedEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.charges} ${returnedEnd}% ${chargesEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.taxes} ${chargesEnd}% ${taxesEnd}%, `
+        + `${PAYMENT_PROGRESS_COLORS.remaining} ${taxesEnd}% 100%)`;
     const legendRow = (color, label, value, pct) => `
         <div class="progress-ring-legend__item">
             <span class="progress-ring-legend__label"><span class="progress-ring-legend__dot" style="background: ${color};"></span>${label}</span>
@@ -498,8 +505,10 @@ function renderCourierPaymentReportDetailProgressRing(bill) {
             <div class="progress-ring-legend">
                 ${legendRow('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue, 100)}
                 ${legendRow(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received, stats.receivedPct)}
-                ${legendRow(PAYMENT_PROGRESS_COLORS.deductibles, 'Deductibles', stats.deductibles, stats.deductiblesPct)}
-                ${legendRow('var(--danger)', 'Remaining', stats.remaining, stats.remainingPct)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.returned, 'Returned Orders', stats.returned, stats.returnedPct)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.charges, 'Delivery Charges', stats.charges, stats.chargesPct)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.taxes, 'Taxes (SST)', stats.taxes, stats.taxesPct)}
+                ${legendRow(PAYMENT_PROGRESS_COLORS.remaining, 'Remaining', stats.remaining, stats.remainingPct)}
             </div>
         </div>`;
 }
@@ -537,10 +546,13 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
     }).join('');
 }
 
-/** shopify_orders doesn't persist customer name, so the orders table starts with a
- * "Loading…" placeholder and this patches it in once the live Shopify lookup (new
- * /orders/shipping-info endpoint) resolves. Guarded by courierPaymentReportCurrentBill
- * in case the user has since navigated to a different bill or back to the list. */
+/** The main /orders/ list this report is built from omits customer_name (see
+ * ORDERS_LIST_SELECT - deliberately trimmed since that list can be hundreds/1000+ rows),
+ * so the orders table starts with a "Loading…" placeholder and this patches it in from a
+ * /orders/shipping-info lookup (a DB read of shopify_orders' stored customer_name, not a
+ * live Shopify call) scoped to just this bill's orders. Guarded by
+ * courierPaymentReportCurrentBill in case the user has since navigated to a different
+ * bill or back to the list. */
 async function fetchCourierPaymentReportShippingInfo(bill) {
     const orderIds = bill.orders.map((o) => o.id).filter(Boolean);
     const body = document.getElementById('courierPaymentReportDetailOrdersBody');
@@ -551,7 +563,7 @@ async function fetchCourierPaymentReportShippingInfo(bill) {
         results = await apiJson('/orders/shipping-info', {
             method: 'POST',
             body: orderIds,
-            fallback: 'Failed to load customer details from Shopify',
+            fallback: 'Failed to load customer details',
         });
     } catch (error) {
         console.error('Error loading shipping info:', error);
@@ -779,18 +791,9 @@ function initCourierPaymentReportGrid() {
             headerName: 'Settled Orders',
             colId: 'settledOrders',
             field: 'settledCount',
-            width: 130,
-            minWidth: 120,
-            cellClass: 'ag-right-aligned-cell',
-            valueFormatter: (params) => `${params.data.settledCount} / ${params.data.totalOrders}`,
-        },
-        {
-            headerName: 'Payment Progress',
-            colId: 'paymentProgress',
-            field: 'billValue',
             width: 300,
             minWidth: 240,
-            cellRenderer: createPaymentProgressCellElement,
+            cellRenderer: createSettledOrdersCellElement,
         },
         {
             headerName: 'Status',

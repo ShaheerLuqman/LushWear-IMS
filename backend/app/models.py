@@ -164,6 +164,14 @@ class OrderUpdate(BaseModel):
 class Order(OrderBase):
     id: str
     replacement_of_order_no: Optional[int] = None
+    # Customer identity + shipping-address snapshot, captured once at sync time from
+    # Shopify (see shopify_sync._apply_customer_fields) - not settable via
+    # OrderCreate/OrderUpdate, which is why these live here rather than on OrderBase.
+    customer_id: Optional[int] = None
+    customer_name: Optional[str] = None
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
+    customer_city: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -264,7 +272,13 @@ class TransactionEntryAuditLog(BaseModel):
 class LedgerBase(BaseModel):
     name: NonBlankStr
     type: LedgerType
+    # Only meaningful for type Asset - routes/ledger.py forces it False otherwise.
     include_in_cash_in_hand: bool = False
+    # Only meaningful for type Expense - what get_month_summary_expense_lines
+    # filters on. Defaults True so a newly created Expense ledger shows up
+    # without the user having to opt in (see the report_category rework this
+    # replaced, in supabase/migrations/20260819060000_month_summary_per_ledger_expenses.sql).
+    show_in_month_summary: bool = True
 
     # Party fields (Phase 2). A supplier is a ledger rather than a separate
     # contact, so these live here; they stay empty on non-party accounts like
@@ -285,6 +299,7 @@ class LedgerUpdate(BaseModel):
     name: Optional[str] = None
     type: Optional[LedgerType] = None
     include_in_cash_in_hand: Optional[bool] = None
+    show_in_month_summary: Optional[bool] = None
     opening_balance: Optional[float] = None
     phone: Optional[str] = None
     email: Optional[str] = None
@@ -626,6 +641,7 @@ class OrgIntegrationSettingsUpdate(BaseModel):
     shopify_access_token: Optional[NonBlankStr] = None
     shopify_api_version: Optional[NonBlankStr] = None
     postex_merchant_token: Optional[NonBlankStr] = None
+    couriers_next_auth_key: Optional[NonBlankStr] = None
 
 class OrgIntegrationSettingsPublic(BaseModel):
     """Secrets are never echoed back - only whether each is configured."""
@@ -633,6 +649,7 @@ class OrgIntegrationSettingsPublic(BaseModel):
     shopify_api_version: str
     shopify_access_token_configured: bool
     postex_merchant_token_configured: bool
+    couriers_next_auth_key_configured: bool
 
 class SuperadminOrgCreate(BaseModel):
     """POST /admin/organizations body - creates an org and its first admin

@@ -49,3 +49,7 @@ load_sheets/
 invoices/
 
 backups/
+
+# Local runtime cache (backend/app/services/courier_cities.py) - rebuilt on every
+# app restart, not meant to be committed
+backend/_cache/

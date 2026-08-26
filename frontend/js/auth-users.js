@@ -123,6 +123,8 @@ async function loadIntegrationsSection() {
         const tokenStatusEl = document.getElementById('settingsShopifyTokenStatus');
         const postexEl = document.getElementById('settingsPostexToken');
         const postexStatusEl = document.getElementById('settingsPostexTokenStatus');
+        const couriersNextEl = document.getElementById('settingsCouriersNextAuthKey');
+        const couriersNextStatusEl = document.getElementById('settingsCouriersNextAuthKeyStatus');
         if (storeUrlEl) storeUrlEl.value = settings.shopify_store_url || '';
         if (apiVersionEl) apiVersionEl.value = settings.shopify_api_version || '';
         if (tokenEl) tokenEl.placeholder = settings.shopify_access_token_configured
@@ -131,6 +133,9 @@ async function loadIntegrationsSection() {
         if (postexEl) postexEl.placeholder = settings.postex_merchant_token_configured
             ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
         if (postexStatusEl) postexStatusEl.textContent = settings.postex_merchant_token_configured ? 'Configured' : 'Not configured';
+        if (couriersNextEl) couriersNextEl.placeholder = settings.couriers_next_auth_key_configured
+            ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
+        if (couriersNextStatusEl) couriersNextStatusEl.textContent = settings.couriers_next_auth_key_configured ? 'Configured' : 'Not configured';
         return settings;
     } catch (ex) {
         showToast(ex.message || 'Failed to load integrations', 'error');
@@ -197,6 +202,7 @@ function initIntegrationsForm() {
         const apiVersion = document.getElementById('settingsShopifyApiVersion').value.trim();
         const token = document.getElementById('settingsShopifyAccessToken').value;
         const postexToken = document.getElementById('settingsPostexToken').value;
+        const couriersNextAuthKey = document.getElementById('settingsCouriersNextAuthKey').value;
         const body = {
             shopify_store_url: storeUrl || null,
             shopify_api_version: apiVersion || null,
@@ -204,6 +210,7 @@ function initIntegrationsForm() {
         // Blank means "leave unchanged" - only send a token field the admin actually typed.
         if (token) body.shopify_access_token = token;
         if (postexToken) body.postex_merchant_token = postexToken;
+        if (couriersNextAuthKey) body.couriers_next_auth_key = couriersNextAuthKey;
 
         const submitBtn = form.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.disabled = true;
@@ -211,6 +218,7 @@ function initIntegrationsForm() {
             await apiJson('/org-settings/', { method: 'PUT', body });
             document.getElementById('settingsShopifyAccessToken').value = '';
             document.getElementById('settingsPostexToken').value = '';
+            document.getElementById('settingsCouriersNextAuthKey').value = '';
             showToast('Integrations saved', 'success');
             await loadIntegrationsSection();
         } catch (ex) {

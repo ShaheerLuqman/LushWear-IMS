@@ -214,7 +214,9 @@ class TestMonthSummaryDetail:
             "unfulfilled_orders_count": 0,
             "cancelled_orders_count": 1,
             "net_sales": 1400.5,
-            "net_profit": 900.25,
+            "cost_of_goods_sold": 300.0,
+            "tax_total": 20.0,
+            "gross_profit": 900.25,
             "dc_charges_delivered": 180.0,
             "dc_charges_returned": 180.0,
             "dc_charges_total": 360.0,
@@ -238,9 +240,14 @@ class TestMonthSummaryDetail:
 
         # Totals come straight from the RPC row, not recomputed in Python.
         assert body["total_orders"] == 3
-        assert body["net_profit"] == 900.25
+        assert body["gross_profit"] == 900.25
         assert body["cancelled_orders_count"] == 1
         assert body["expense_lines"] == [{"name": "Rent", "amount": 10.0}]
+
+        # Net Profit is Gross Profit minus the summed expense lines - not an
+        # RPC column of its own.
+        assert body["total_expenses"] == 10.0
+        assert body["net_profit"] == 890.25
 
         # Collection breakdown is still computed in Python from the fetched
         # line_items - the cancelled order's 5 qty must not count.

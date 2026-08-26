@@ -8,7 +8,7 @@ logo path, which now comes from app.paths.ASSETS_DIR.
 import json
 from datetime import datetime
 from io import BytesIO
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -28,6 +28,8 @@ from reportlab.platypus import (
 
 from app.paths import ASSETS_DIR
 from app.services.pdf.packaging_list import _order_line_rows
+from app.services.shopify_orders import _consignee_from_shopify_order
+from app.services.shopify_orders import _format_shopify_address  # noqa: F401 (unused here; re-exported for test_invoice.py)
 
 
 def _shopify_latest_fulfillment_for_invoice(order: dict) -> Optional[dict]:
@@ -63,36 +65,6 @@ def _tracking_from_shopify_order(order: dict) -> Optional[str]:
     if tn and str(tn).strip():
         return str(tn).strip()
     return None
-
-
-def _format_shopify_address(addr: Optional[dict]) -> str:
-    if not addr:
-        return ""
-    parts = []
-    for key in ("address1", "address2", "city", "province", "zip", "country"):
-        v = addr.get(key)
-        if v is not None and str(v).strip():
-            parts.append(str(v).strip())
-    return ", ".join(parts)
-
-
-def _consignee_from_shopify_order(order: dict) -> Tuple[str, str, str]:
-    addr = order.get("shipping_address") or order.get("billing_address") or {}
-    name = (addr.get("name") or "").strip()
-    if not name:
-        fn = (addr.get("first_name") or "").strip()
-        ln = (addr.get("last_name") or "").strip()
-        name = f"{fn} {ln}".strip() or "-"
-    phone = (addr.get("phone") or "").strip()
-    if not phone:
-        phone = (order.get("phone") or "").strip()
-    if not phone:
-        cust = order.get("customer") or {}
-        phone = (cust.get("phone") or "").strip()
-    if not phone:
-        phone = (order.get("contact_email") or order.get("email") or "").strip()
-    address = _format_shopify_address(addr)
-    return name, phone or "-", address or "-"
 
 
 def _line_items_from_shopify_order(order: dict) -> List[Dict[str, Any]]:
@@ -201,12 +173,18 @@ def _build_invoice_order_context(db_order: dict, sp_order: Optional[dict]) -> di
         ctx["invoice_remarks"] = _invoice_remarks_from_shopify(sp_order)
         ctx["invoice_line_items"] = _line_items_from_shopify_order(sp_order)
     else:
+        # No live Shopify order to enrich from (fetch failed, or the order predates it) -
+        # fall back to the customer snapshot captured at sync time (see
+        # shopify_sync._apply_customer_fields) instead of leaving consignee info blank.
+        ctx["shipping_name"] = db_order.get("customer_name") or "-"
+        ctx["shipping_phone"] = db_order.get("customer_phone") or "-"
+        ctx["shipping_address"] = db_order.get("customer_address") or "-"
         ctx["invoice_order_ref"] = f"#{db_order.get('order_number')}"
         ctx["invoice_currency"] = "PKR"
         # Piece count = total units across lines (real qty from line_items, else legacy array length).
         pieces = sum(r["quantity"] for r in _order_line_rows(db_order))
         ctx["invoice_pieces"] = pieces if pieces > 0 else 1
-        ctx["invoice_destination"] = (db_order.get("destination") or "").strip() or "-"
+        ctx["invoice_destination"] = (db_order.get("destination") or "").strip() or (db_order.get("customer_city") or "").strip() or "-"
         ctx["invoice_origin"] = (db_order.get("origin") or "").strip() or default_origin
         ctx["invoice_return_city"] = (db_order.get("return_city") or "").strip() or default_origin
         ctx["invoice_remarks"] = (db_order.get("remarks") or "").strip() or "THIS ORDER IS 100% CONFIRMED"

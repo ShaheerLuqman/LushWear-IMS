@@ -30,6 +30,7 @@ async def update_org_settings(body: OrgIntegrationSettingsUpdate, org_id: str = 
         shopify_access_token=body.shopify_access_token,
         shopify_api_version=body.shopify_api_version,
         postex_merchant_token=body.postex_merchant_token,
+        couriers_next_auth_key=body.couriers_next_auth_key,
     )
     return await read_org_settings(org_id)
 

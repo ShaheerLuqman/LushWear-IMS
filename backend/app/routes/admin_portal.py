@@ -125,5 +125,6 @@ async def update_organization_integration_settings(org_id: str, body: OrgIntegra
         shopify_access_token=body.shopify_access_token,
         shopify_api_version=body.shopify_api_version,
         postex_merchant_token=body.postex_merchant_token,
+        couriers_next_auth_key=body.couriers_next_auth_key,
     )
     return to_public_shape(get_org_integration_settings(org_id))

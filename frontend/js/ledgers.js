@@ -188,7 +188,24 @@ const SYSTEM_LEDGER_LABELS = {
     orders: 'Orders',
     inventory: 'Inventory',
     tax_on_purchases: 'Tax on Purchases',
+    other_expenses: 'Other Expenses',
 };
+
+// Cash In Hand only makes sense on an Asset account; Show in Month Summary only
+// on an Expense one (see get_month_summary_expense_lines). Cash In Hand is also
+// force-unchecked when hidden, matching the backend, which always writes false
+// for a non-Asset ledger regardless of what's submitted.
+function updateLedgerTypeDependentFields(prefix) {
+    const type = document.getElementById(`${prefix}LedgerType`).value;
+    const isAsset = type === 'Asset';
+    const cashWrap = document.getElementById(`${prefix}LedgerCashInHandWrap`);
+    const cashInput = document.getElementById(`${prefix}LedgerCashInHand`);
+    if (cashWrap) cashWrap.style.display = isAsset ? '' : 'none';
+    if (cashInput && !isAsset) cashInput.checked = false;
+
+    const summaryWrap = document.getElementById(`${prefix}LedgerMonthSummaryWrap`);
+    if (summaryWrap) summaryWrap.style.display = type === 'Expense' ? '' : 'none';
+}
 
 function renderLedgerSystemNotice(ledger) {
     const el = document.getElementById('editLedgerSystemNotice');
@@ -332,7 +349,7 @@ function fillLedgerPartyFields(prefix, ledger) {
 
 let createLedgerOnCreateCallback = null;
 
-async function createLedger(name, type, includeInCashInHand, openingBalance, partyFields) {
+async function createLedger(name, type, includeInCashInHand, showInMonthSummary, openingBalance, partyFields) {
     if (findLedgerByName(name)) {
         showToast('A ledger with this name already exists', 'error');
         return;
@@ -344,6 +361,7 @@ async function createLedger(name, type, includeInCashInHand, openingBalance, par
                 name,
                 type,
                 include_in_cash_in_hand: !!includeInCashInHand,
+                show_in_month_summary: !!showInMonthSummary,
                 opening_balance: openingBalance || 0,
                 ...(partyFields || {})
             },
@@ -366,6 +384,8 @@ function openCreateLedgerModal(onCreated) {
     document.getElementById('createLedgerType').value = '';
     document.getElementById('createLedgerOpeningBalance').value = '';
     document.getElementById('createLedgerCashInHand').checked = false;
+    document.getElementById('createLedgerMonthSummary').checked = true;
+    updateLedgerTypeDependentFields('create');
     fillLedgerPartyFields('create', null);
     document.getElementById('createLedgerModal').classList.add('active');
 }
@@ -386,13 +406,13 @@ async function openEditLedgerModal(ledgerId) {
     try {
         const ledger = await apiJson(`/ledgers/${ledgerId}`, { fallback: 'Failed to load ledger' });
         editLedgerHasEntries = !!ledger.has_entries;
+        editLedgerIsSystem = !!ledger.system_key;
 
         const nameInput = document.getElementById('editLedgerName');
         const typeSelect = document.getElementById('editLedgerType');
         if (nameInput) {
             nameInput.value = ledger.name || '';
-            nameInput.removeAttribute('readonly');
-            nameInput.removeAttribute('disabled');
+            nameInput.toggleAttribute('readonly', editLedgerIsSystem);
         }
         if (typeSelect) typeSelect.value = ledger.type || '';
         editLedgerOriginalOpeningBalance = parseFloat(ledger.opening_balance) || 0;
@@ -402,10 +422,12 @@ async function openEditLedgerModal(ledgerId) {
         }
         const cashInHandCheckbox = document.getElementById('editLedgerCashInHand');
         if (cashInHandCheckbox) cashInHandCheckbox.checked = !!ledger.include_in_cash_in_hand;
+        const monthSummaryCheckbox = document.getElementById('editLedgerMonthSummary');
+        if (monthSummaryCheckbox) monthSummaryCheckbox.checked = ledger.show_in_month_summary !== false;
+        updateLedgerTypeDependentFields('edit');
         renderLedgerSystemNotice(ledger);
         fillLedgerPartyFields('edit', ledger);
 
-        editLedgerIsSystem = !!ledger.system_key;
         const cannotDelete = editLedgerHasEntries || editLedgerIsSystem;
         const deleteBtn = document.getElementById('editLedgerDeleteBtn');
         const deleteWrap = document.getElementById('editLedgerDeleteWrap');
@@ -437,6 +459,7 @@ async function saveEditLedger() {
     const name = (document.getElementById('editLedgerName').value || '').trim();
     const type = (document.getElementById('editLedgerType').value || '').trim();
     const includeInCashInHand = document.getElementById('editLedgerCashInHand').checked;
+    const showInMonthSummary = document.getElementById('editLedgerMonthSummary').checked;
     const openingBalance = parseFloat(document.getElementById('editLedgerOpeningBalance').value) || 0;
     if (!name || !type) {
         showToast('Name and type are required', 'error');
@@ -452,6 +475,7 @@ async function saveEditLedger() {
     const body = {
         name, type,
         include_in_cash_in_hand: includeInCashInHand,
+        show_in_month_summary: showInMonthSummary,
         ...readLedgerPartyFields('edit'),
     };
     if (openingBalance !== editLedgerOriginalOpeningBalance) body.opening_balance = openingBalance;
@@ -646,6 +670,7 @@ function initLedgerModals() {
             const name = document.getElementById('createLedgerName').value.trim();
             const type = document.getElementById('createLedgerType').value;
             const includeInCashInHand = document.getElementById('createLedgerCashInHand').checked;
+            const showInMonthSummary = document.getElementById('createLedgerMonthSummary').checked;
             const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
             if (!name) {
                 showToast('Enter a ledger name', 'error');
@@ -655,9 +680,11 @@ function initLedgerModals() {
                 showToast('Select a type', 'error');
                 return;
             }
-            createLedger(name, type, includeInCashInHand, openingBalance, readLedgerPartyFields('create'));
+            createLedger(name, type, includeInCashInHand, showInMonthSummary, openingBalance, readLedgerPartyFields('create'));
         });
     }
+    document.getElementById('createLedgerType')?.addEventListener('change', () => updateLedgerTypeDependentFields('create'));
+    document.getElementById('editLedgerType')?.addEventListener('change', () => updateLedgerTypeDependentFields('edit'));
     document.getElementById('closeCreateLedgerModal')?.addEventListener('click', closeCreateLedgerModal);
     document.getElementById('createLedgerCancelBtn')?.addEventListener('click', closeCreateLedgerModal);
     document.getElementById('createLedgerModal')?.addEventListener('click', (e) => {

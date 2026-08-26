@@ -356,12 +356,15 @@ async function loadOrgIntegrations(org) {
     const apiVersionEl = document.getElementById('adminShopifyApiVersion');
     const tokenEl = document.getElementById('adminShopifyAccessToken');
     const postexEl = document.getElementById('adminPostexToken');
+    const couriersNextEl = document.getElementById('adminCouriersNextAuthKey');
     storeUrlEl.value = '';
     apiVersionEl.value = '';
     tokenEl.value = '';
     postexEl.value = '';
+    couriersNextEl.value = '';
     tokenEl.placeholder = 'Loading…';
     postexEl.placeholder = 'Loading…';
+    couriersNextEl.placeholder = 'Loading…';
 
     try {
         const settings = await adminApiJson(`/admin/organizations/${org.id}/integration-settings`);
@@ -375,6 +378,10 @@ async function loadOrgIntegrations(org) {
             ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
         document.getElementById('adminPostexTokenStatus').textContent =
             settings.postex_merchant_token_configured ? 'Configured' : 'Not configured';
+        couriersNextEl.placeholder = settings.couriers_next_auth_key_configured
+            ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
+        document.getElementById('adminCouriersNextAuthKeyStatus').textContent =
+            settings.couriers_next_auth_key_configured ? 'Configured' : 'Not configured';
     } catch (ex) {
         showToast(ex.message || 'Failed to load integrations', 'error');
     }
@@ -392,12 +399,14 @@ function initIntegrationsForm() {
         const apiVersion = document.getElementById('adminShopifyApiVersion').value.trim();
         const token = document.getElementById('adminShopifyAccessToken').value;
         const postexToken = document.getElementById('adminPostexToken').value;
+        const couriersNextAuthKey = document.getElementById('adminCouriersNextAuthKey').value;
         const body = {
             shopify_store_url: storeUrl || null,
             shopify_api_version: apiVersion || null,
         };
         if (token) body.shopify_access_token = token;
         if (postexToken) body.postex_merchant_token = postexToken;
+        if (couriersNextAuthKey) body.couriers_next_auth_key = couriersNextAuthKey;
 
         const submitBtn = form.querySelector('button[type="submit"]');
         submitBtn.disabled = true;
