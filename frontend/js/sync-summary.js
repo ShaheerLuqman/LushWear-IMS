@@ -4,6 +4,19 @@
 // UI Updates
 // ============================================
 
+// Sums each variant's own cost_price (falling back to the product's cost_price,
+// same fallback used in bills.js/orders-grid.js) times its quantity.
+function productCostValue(p) {
+    const variants = p.variants || [];
+    if (variants.length === 0) {
+        return (parseFloat(p.cost_price) || 0) * (p.total_quantity || 0);
+    }
+    return variants.reduce((sum, v) => {
+        const cost = parseFloat(v.cost_price ?? p.cost_price) || 0;
+        return sum + cost * (v.quantity || 0);
+    }, 0);
+}
+
 function renderDashboardCollectionsBreakdown() {
     const container = document.getElementById('dashboardCollectionsGrid');
     if (!container) return;
@@ -12,14 +25,12 @@ function renderDashboardCollectionsBreakdown() {
     for (const p of products) {
         const raw = (p.collection != null ? String(p.collection) : '').trim();
         const label = raw || 'Uncategorized';
-        const price = parseFloat(p.price) || 0;
-        const qty = p.total_quantity || 0;
         if (!agg.has(label)) {
             agg.set(label, { count: 0, value: 0 });
         }
         const row = agg.get(label);
         row.count += 1;
-        row.value += price * qty;
+        row.value += productCostValue(p);
     }
 
     const rows = [...agg.entries()].map(([collection, data]) => ({ collection, ...data }));
@@ -56,7 +67,7 @@ async function updateDashboard() {
     );
     const totalProductsAndVariants = totalProducts + totalVariantRows;
     const totalStock = products.reduce((sum, p) => sum + (p.total_quantity || 0), 0);
-    const totalValue = products.reduce((sum, p) => sum + ((p.price || 0) * (p.total_quantity || 0)), 0);
+    const totalValue = products.reduce((sum, p) => sum + productCostValue(p), 0);
 
     document.getElementById('totalProducts').textContent = totalProducts;
     const productsVariantsEl = document.getElementById('totalProductsAndVariants');
