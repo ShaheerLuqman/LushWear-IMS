@@ -955,6 +955,11 @@ function initOrdersGrid() {
         }
     });
 
+    // Row highlight that follows the focused cell (click or arrow keys), kept
+    // separate from AG Grid's built-in hover/selection highlighting. Tracked by
+    // row id rather than index so it survives sorting/filtering.
+    let ordersFocusedRowId = null;
+
     const gridOptions = {
         columnDefs: columnDefs,
         rowData: [],
@@ -972,7 +977,11 @@ function initOrdersGrid() {
             suppressFloatingFilterButton: true,
             floatingFilterComponentParams: { suppressFilterButton: true }
         },
-        animateRows: true,
+        // Off (unlike the other grids): with it on, AG Grid transitions each
+        // row's transform/top over 0.4s as virtual scrolling recycles rows, so
+        // holding an arrow key visibly drags the row highlight behind the
+        // actual focused cell instead of snapping with it.
+        animateRows: false,
         pagination: false,
         domLayout: 'normal',
         suppressCellFocus: false,
@@ -981,8 +990,8 @@ function initOrdersGrid() {
         getRowId: (params) => params.data.id,
         getRowStyle: (params) => {
             if (params.data.id === '__footer__') {
-                return { 
-                    backgroundColor: 'var(--bg-secondary, #f5f5f5)', 
+                return {
+                    backgroundColor: 'var(--bg-secondary, #f5f5f5)',
                     borderTop: '2px solid var(--primary, #007bff)',
                     fontWeight: 'bold'
                 };
@@ -992,6 +1001,32 @@ function initOrdersGrid() {
                 return { opacity: '0.5', textDecoration: 'line-through' };
             }
             return null;
+        },
+        rowClassRules: {
+            'orders-row-focused': (params) => !!params.data && params.data.id === ordersFocusedRowId
+        },
+        onCellFocused: (params) => {
+            if (!params.api) return;
+            const prevId = ordersFocusedRowId;
+            const node = (!params.rowPinned && params.rowIndex != null)
+                ? params.api.getDisplayedRowAtIndex(params.rowIndex)
+                : null;
+            const nextId = (node && node.data && node.data.id !== '__footer__') ? node.id : null;
+            if (nextId === prevId) return;
+            ordersFocusedRowId = nextId;
+            // Toggle the class on the existing row DOM directly rather than
+            // api.redrawRows() - redrawing the just-focused row recreates its
+            // cell elements and drops the browser's DOM focus back to <body>,
+            // which is why arrow keys stopped moving the grid selection and
+            // scrolled the page instead.
+            if (prevId != null) {
+                const prevEl = gridDiv.querySelector(`.ag-row[row-id="${CSS.escape(String(prevId))}"]`);
+                if (prevEl) prevEl.classList.remove('orders-row-focused');
+            }
+            if (nextId != null) {
+                const nextEl = gridDiv.querySelector(`.ag-row[row-id="${CSS.escape(String(nextId))}"]`);
+                if (nextEl) nextEl.classList.add('orders-row-focused');
+            }
         },
         onGridReady: (params) => {
             ordersGridApi = params.api;

@@ -102,6 +102,9 @@ function applyFeatureVisibility() {
 // State
 let products = [];
 let orders = [];
+/** Period key ('__all__' or 'M-YYYY') that `orders`/the grid currently holds - lets
+ * hydrateOrdersFromCache() skip repainting when it's already showing that period. */
+let ordersLoadedPeriodKey = null;
 let transactionEntries = [];
 let transactionSelectedDate = null;
 let currentView = 'orders';

@@ -55,10 +55,11 @@ function initOrdersPeriodFilter() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (selectEl) {
         selectEl.addEventListener('change', async () => {
-            // Only an explicit period change shows the grid's loading overlay - other
-            // reloads (sync, mutations elsewhere) keep the existing rows visible until the
-            // new data lands instead of flashing to a blank/spinner state.
-            if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+            // An explicit period change shows the grid's loading overlay only when that period
+            // isn't cached - a cache hit paints instantly instead (see hydrateOrdersFromCache).
+            // Other reloads (sync, mutations elsewhere) keep the existing rows visible until
+            // the new data lands instead of flashing to a blank/spinner state.
+            if (ordersGridApi && !ordersHasCachedOrders(selectEl.value)) ordersGridApi.showLoadingOverlay();
             try {
                 if (selectEl.value === ALL_ORDERS_VALUE) {
                     await loadAllOrders();

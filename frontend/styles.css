@@ -2461,6 +2461,20 @@ input[type="number"] {
     background-color: var(--ag-row-hover-color) !important;
 }
 
+/* Orders grid: row highlight that follows the focused cell (click or arrow
+   keys) via orders-row-focused (see initOrdersGrid) - kept visually distinct
+   from hover (tint + left accent bar) and made to win over the dark theme's
+   !important hover rule above by matching its selector weight. */
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.orders-row-focused {
+    background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    box-shadow: inset 3px 0 0 0 var(--accent-primary);
+}
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.orders-row-focused,
+:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.orders-row-focused:hover {
+    background-color: color-mix(in srgb, var(--accent-primary) 22%, var(--grid-bg)) !important;
+    box-shadow: inset 3px 0 0 0 var(--accent-primary);
+}
+
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header {
     font-size: 12px;
     font-weight: 600;

@@ -106,6 +106,69 @@ function buildStaticPeriodOptions() {
 /** Dropdown value for the "Recent Orders" option - orders across the last few periods. */
 const ALL_ORDERS_VALUE = '__all__';
 
+const ORDERS_CACHE_KEY_PREFIX = 'lushwear_orders_cache_';
+const ORDERS_FETCH_RETRIES = 3;
+const ORDERS_FETCH_RETRY_DELAY_MS = 5000;
+
+function ordersCacheKey(periodKey) {
+    return currentOrgId ? `${ORDERS_CACHE_KEY_PREFIX}${currentOrgId}_${periodKey}` : null;
+}
+
+function saveOrdersCache(periodKey) {
+    const key = ordersCacheKey(periodKey);
+    if (!key) return;
+    try { localStorage.setItem(key, JSON.stringify(orders)); } catch (e) { /* ignore */ }
+}
+
+function ordersHasCachedOrders(periodKey) {
+    const key = ordersCacheKey(periodKey);
+    return !!key && localStorage.getItem(key) != null;
+}
+
+// Paints the grid from the last successful fetch for `periodKey` so switching into it isn't
+// blank while the real fetch is in flight. No-op if `orders` already holds this period's data
+// (e.g. a reload after a mutation), so it never flickers stale rows over fresh ones.
+function hydrateOrdersFromCache(periodKey) {
+    if (periodKey === ordersLoadedPeriodKey) return;
+    const key = ordersCacheKey(periodKey);
+    if (!key) return;
+    try {
+        const cached = JSON.parse(localStorage.getItem(key) || 'null');
+        if (!Array.isArray(cached)) return;
+        orders = cached;
+        ordersLoadedPeriodKey = periodKey;
+        if (ordersGridApi) {
+            ordersGridApi.setGridOption('rowData', orders);
+            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
+            setTimeout(() => updateFooterRow(), 0);
+        }
+    } catch (e) { /* ignore */ }
+}
+
+// Shared fetch behind loadOrders()/loadAllOrders()/loadOrdersForPeriod(): paints cached rows
+// for `periodKey` immediately, then fetches fresh data. A failed attempt retries a few times
+// (the backend/network hiccup is usually transient) before giving up; the stale rows - cached
+// or from the last successful fetch - stay on screen throughout, never cleared to blank.
+async function fetchOrdersForPeriodKey(periodKey, url, fallback) {
+    hydrateOrdersFromCache(periodKey);
+    for (let attempt = 1; attempt <= ORDERS_FETCH_RETRIES; attempt++) {
+        try {
+            orders = await apiJson(url, { fallback });
+            ordersLoadedPeriodKey = periodKey;
+            saveOrdersCache(periodKey);
+            if (ordersGridApi) {
+                ordersGridApi.setGridOption('rowData', orders);
+                ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
+                setTimeout(() => updateFooterRow(), 0);
+            }
+            return;
+        } catch (error) {
+            if (attempt === ORDERS_FETCH_RETRIES) throw error;
+            await new Promise((resolve) => setTimeout(resolve, ORDERS_FETCH_RETRY_DELAY_MS));
+        }
+    }
+}
+
 function populateOrdersPeriodFilterDropdown() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (!selectEl) return;
@@ -128,19 +191,11 @@ async function loadOrders() {
     }
 
     try {
-        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
+        await fetchOrdersForPeriodKey(ALL_ORDERS_VALUE, '/orders/', 'Failed to fetch orders');
 
         populateOrdersPeriodFilterDropdown();
         const selectEl = document.getElementById('ordersPeriodFilter');
         if (selectEl) selectEl.value = ALL_ORDERS_VALUE;
-
-        if (ordersGridApi) {
-            ordersGridApi.setGridOption('rowData', orders);
-            // advance_status isn't a column field, so a delta rowData update won't
-            // re-render the Advance cell when only the status changed. Force it.
-            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
-            setTimeout(() => updateFooterRow(), 0);
-        }
     } catch (error) {
         console.error('Error loading orders:', error);
         showToast('Failed to load orders', 'error');
@@ -160,34 +215,20 @@ async function loadOrders() {
 /** Load every order across all periods, newest first ("Recent Orders") from the API. */
 async function loadAllOrders() {
     try {
-        orders = await apiJson('/orders/', { fallback: 'Failed to fetch orders' });
-
-        if (ordersGridApi) {
-            ordersGridApi.setGridOption('rowData', orders);
-            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
-            setTimeout(() => updateFooterRow(), 0);
-        }
+        await fetchOrdersForPeriodKey(ALL_ORDERS_VALUE, '/orders/', 'Failed to fetch orders');
     } catch (error) {
         console.error('Error loading all orders:', error);
         showToast('Failed to load orders', 'error');
-        if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
     }
 }
 
 /** Load orders for a specific period from the API. */
 async function loadOrdersForPeriod(month, year) {
     try {
-        orders = await apiJson(`/orders/?month=${month}&year=${year}`, { fallback: 'Failed to fetch orders for period' });
-
-        if (ordersGridApi) {
-            ordersGridApi.setGridOption('rowData', orders);
-            ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
-            setTimeout(() => updateFooterRow(), 0);
-        }
+        await fetchOrdersForPeriodKey(`${month}-${year}`, `/orders/?month=${month}&year=${year}`, 'Failed to fetch orders for period');
     } catch (error) {
         console.error('Error loading orders for period:', error);
         showToast('Failed to load orders for period', 'error');
-        if (ordersGridApi) ordersGridApi.setGridOption('rowData', []);
     }
 }
 
