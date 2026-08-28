@@ -30,6 +30,7 @@ it got from `get_org_integration_settings()` before using them.
 import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -46,7 +47,29 @@ _DEFAULT_SHOPIFY_API_VERSION = "2024-07"
 # Refresh a bit before actual expiry so a call in flight doesn't race the token dying.
 _TOKEN_REFRESH_BUFFER = timedelta(minutes=5)
 
+# Postgres trims trailing zeros from fractional seconds, so a timestamptz can come
+# back with any number of them ("...:56.50761+00:00"). datetime.fromisoformat()
+# accepts only 3 or 6 digits on Python <3.11, so the count is normalized to 6 before
+# parsing - same class of fix as routes/orders.py's _TZ_OFFSET_NO_COLON_RE.
+_FRACTIONAL_SECONDS_RE = re.compile(r"\.(\d{1,6})(?=[+-]\d{2}:?\d{2}$|Z$|$)")
+# Python <3.11 also rejects a UTC offset written without a colon ("+0500").
+_TZ_OFFSET_NO_COLON_RE = re.compile(r"([+-]\d{2})(\d{2})$")
+
 _runtime_key: Optional[bytes] = None
+
+
+def _parse_timestamp(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    normalized = _TZ_OFFSET_NO_COLON_RE.sub(
+        r"\1:\2", str(value).strip().replace("Z", "+00:00")
+    )
+    normalized = _FRACTIONAL_SECONDS_RE.sub(lambda m: "." + m.group(1).ljust(6, "0"), normalized)
+    try:
+        return datetime.fromisoformat(normalized)
+    except ValueError:
+        logger.warning("Unparseable timestamp %r - treating as unset", value)
+        return None
 
 
 def _get_fernet() -> Fernet:
@@ -140,13 +163,12 @@ def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
         or []
     )
     row = rows[0] if rows else {}
-    expires_at = row.get("shopify_token_expires_at")
     return OrgIntegrationSettings(
         shopify_store_url=row.get("shopify_store_url"),
         shopify_access_token=_decrypt(row.get("shopify_access_token")),
         shopify_api_version=row.get("shopify_api_version") or _DEFAULT_SHOPIFY_API_VERSION,
         shopify_refresh_token=_decrypt(row.get("shopify_refresh_token")),
-        shopify_token_expires_at=datetime.fromisoformat(expires_at) if expires_at else None,
+        shopify_token_expires_at=_parse_timestamp(row.get("shopify_token_expires_at")),
         couriers=_decode_couriers(row),
     )
 

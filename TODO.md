@@ -42,6 +42,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Resolve "Best Sellers"-tagged products' real collection** — 6 products stuck on `Best Sellers` instead of their real category.
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
 - [ ] **Shopify webhooks** — trigger order reconciliation on webhook events, not just polling.
+- [ ] **Shopify REST → GraphQL** — migrate Shopify API calls to GraphQL before REST is retired.
 
 #### Couriers
 - [ ] **Couriers Next status lag** — `TrackOrder.php` shows stale status vs `CurrentStatus.php`; ask their team before fixing.

@@ -143,3 +143,38 @@ class TestCourierCredentialsBlob:
         settings = org_settings.get_org_integration_settings("test-org")
         assert settings.postex_merchant_token == "pk_secret"
         assert settings.couriers_next_auth_key == "cn_secret"
+
+
+class TestTimestampParsing:
+    """Postgres trims trailing zeros from fractional seconds, so a timestamptz can
+    come back with any digit count - datetime.fromisoformat() accepts only 3 or 6 on
+    Python <3.11 (see app/org_settings.py's _parse_timestamp)."""
+
+    @pytest.mark.parametrize("raw,expected_microsecond", [
+        ("2026-08-28T01:13:56.50761+00:00", 507610),   # 5 digits - crashed before the fix
+        ("2026-08-28T01:13:56.5+00:00", 500000),       # pads, not left-fills
+        ("2026-08-28T01:13:56.507+00:00", 507000),
+        ("2026-08-28T01:13:56.507610+00:00", 507610),
+        ("2026-08-28T01:13:56+00:00", 0),
+        ("2026-08-28T01:13:56.50761Z", 507610),
+        ("2026-08-28T01:13:56.1234+0500", 123400),     # offset without a colon
+    ])
+    def test_fractional_second_digit_counts_all_parse(self, raw, expected_microsecond):
+        parsed = org_settings._parse_timestamp(raw)
+        assert parsed is not None
+        assert parsed.microsecond == expected_microsecond
+
+    @pytest.mark.parametrize("raw", [None, "", "garbage"])
+    def test_unusable_values_read_as_unset_rather_than_raising(self, raw):
+        assert org_settings._parse_timestamp(raw) is None
+
+    def test_expiry_with_odd_precision_does_not_break_settings_read(self, make_client):
+        """The regression: this raised ValueError from every call site that reads
+        integration settings (orders, products, bills, sync, both settings routes)."""
+        client = make_client({"system_integration_settings": [{
+            "org_id": "test-org",
+            "shopify_api_version": "2024-07",
+            "shopify_token_expires_at": "2026-08-28T01:13:56.50761+00:00",
+        }]})
+        r = client.get("/api/org-settings/")
+        assert r.status_code == 200
