@@ -1,15 +1,22 @@
-"""PostEx CSV parsing.
+"""PostEx CSV parsing and order booking.
 
-Extracted verbatim from routes/orders.py. The column mapping is deliberately
-fuzzy: PostEx exports vary in header spelling ("WH_INCOME_TAX (2%)" vs
-"WH INCOME TAX (2%)"), and Excel mangles long tracking numbers into exponential
-notation, so both are normalised here rather than at the call site.
+Two unrelated halves against the same courier. The CSV parsing below was extracted
+verbatim from routes/orders.py - its column mapping is deliberately fuzzy, since
+PostEx exports vary in header spelling ("WH_INCOME_TAX (2%)" vs "WH INCOME TAX (2%)")
+and Excel mangles long tracking numbers into exponential notation, so both are
+normalised here rather than at the call site. The booking section at the bottom is
+the live Create Order API behind the Order Fulfillment view.
 """
 
 import csv
 import io
+import logging
 import re
 from typing import Any, Dict, List, Optional, Tuple
+
+import httpx
+
+logger = logging.getLogger("app.postex")
 
 
 def parse_float(val: Any, default: float = 0.0) -> float:
@@ -156,3 +163,107 @@ def parse_rows(content: bytes) -> Tuple[List[dict], List[str]]:
         })
         order_numbers.append(order_number)
     return rows, order_numbers
+
+
+# ==================== ORDER BOOKING ====================
+#
+# Booking (this section) is the write side of the Order Fulfillment view - it creates a
+# real shipment PostEx will pick up. CSV parsing above is the unrelated read side, used
+# after the fact to reconcile what PostEx actually charged.
+
+_BASE_URL = "https://api.postex.pk/services/integration/api/order"
+_TIMEOUT = 60.0
+# PostEx answers every call with a string statusCode, not an HTTP-level one - a booking
+# that fails validation still comes back 200 with a non-"200" statusCode in the body
+# (same convention _fetch_postex_bulk already relies on in routes/orders.py).
+_SUCCESS_STATUS = "200"
+
+
+class PostexBookingError(Exception):
+    """PostEx refused to book one order. Carries PostEx's own statusMessage so the
+    fulfillment endpoint can report per-order why it failed rather than a generic 502."""
+
+
+def normalize_phone(value: Optional[str]) -> Optional[str]:
+    """Coerce a phone number to the 03xxxxxxxxx form create-order documents as mandatory.
+
+    Shopify stores whatever the customer typed, so the same number arrives as
+    "+92 300 1234567", "0092...", "92...", or already-correct "0300-1234567". PostEx
+    rejects anything but the local 11-digit form. Returns None when the digits cannot
+    be a Pakistani mobile number, so the caller reports it rather than booking a parcel
+    the rider can never deliver.
+    """
+    if not value:
+        return None
+    digits = re.sub(r"\D", "", value)
+    for prefix in ("0092", "92"):
+        if digits.startswith(prefix) and len(digits) == len(prefix) + 10:
+            digits = "0" + digits[len(prefix):]
+            break
+    if len(digits) == 10 and digits.startswith("3"):
+        digits = "0" + digits
+    return digits if len(digits) == 11 and digits.startswith("03") else None
+
+
+async def create_order(
+    client: httpx.AsyncClient,
+    merchant_token: str,
+    *,
+    order_ref_number: str,
+    customer_name: str,
+    customer_phone: str,
+    delivery_address: str,
+    city_name: str,
+    invoice_payment: float,
+    items: int,
+    order_detail: Optional[str] = None,
+) -> str:
+    """Book one shipment and return its PostEx tracking number.
+
+    invoice_payment is what the rider collects on delivery, so it must already be net
+    of any advance the customer paid - a fully-prepaid order books at 0, not at its
+    order value. PostEx rounds to whole rupees, hence the int().
+
+    Raises PostexBookingError when PostEx declines (unserviceable city, duplicate
+    orderRefNumber, bad phone); the caller books the remaining orders regardless.
+    """
+    payload = {
+        "cityName": city_name,
+        "customerName": customer_name,
+        "customerPhone": customer_phone,
+        "deliveryAddress": delivery_address,
+        "invoiceDivision": 0,
+        "invoicePayment": int(round(invoice_payment)),
+        "items": items,
+        "orderRefNumber": order_ref_number,
+        # Only forward bookings go through this screen; a return/replacement is still
+        # raised in PostEx's own portal. pickupAddressCode is likewise omitted, which
+        # makes PostEx use the account's default warehouse.
+        "orderType": "Normal",
+    }
+    if order_detail:
+        payload["orderDetail"] = order_detail
+
+    try:
+        response = await client.post(
+            f"{_BASE_URL}/v3/create-order",
+            headers={"token": merchant_token, "Content-Type": "application/json"},
+            json=payload,
+        )
+    except httpx.HTTPError as exc:
+        raise PostexBookingError(f"Could not reach PostEx: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise PostexBookingError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
+
+    if str(body.get("statusCode")) != _SUCCESS_STATUS:
+        raise PostexBookingError(body.get("statusMessage") or f"PostEx rejected the order (HTTP {response.status_code})")
+
+    tracking_number = (body.get("dist") or {}).get("trackingNumber")
+    if not tracking_number:
+        # Booked but unusable: without a tracking number nothing downstream (status
+        # polling, the CSV reconcile) can ever match this parcel back to the order.
+        raise PostexBookingError("PostEx accepted the order but returned no tracking number")
+    return str(tracking_number)

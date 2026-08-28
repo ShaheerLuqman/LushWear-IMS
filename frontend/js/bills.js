@@ -9,6 +9,10 @@
 let billsGridApi = null;
 let apAgeingGridApi = null;
 let bills = [];
+const BILL_STATUSES = ['draft', 'received', 'cancelled'];
+// Multi-select checkbox filter (grid-filters.js); its selection goes to the API as repeated
+// ?status= params. null while nothing is narrowed, which reads as "every status".
+let billsStatusFilterControl = null;
 let apAgeingAsOf = null;
 let editingBillId = null;
 // Line rows live here while the modal is open rather than being read back out
@@ -68,10 +72,15 @@ function supplierCellRenderer(params) {
 async function loadBills() {
     if (billsGridApi) billsGridApi.showLoadingOverlay();
     try {
-        const status = document.getElementById('billsStatusFilter')?.value || '';
-        bills = await apiJson(`/bills/${status ? `?status=${status}` : ''}`, {
-            fallback: 'Failed to load bills'
-        });
+        const statuses = billsStatusFilterControl?.getSelected();
+        if (statuses && statuses.length === 0) {
+            bills = []; // every status unticked - nothing can match, so skip the round trip
+        } else {
+            const query = statuses ? `?${statuses.map((s) => `status=${encodeURIComponent(s)}`).join('&')}` : '';
+            bills = await apiJson(`/bills/${query}`, {
+                fallback: 'Failed to load bills'
+            });
+        }
     } catch (error) {
         console.error('Error loading bills:', error);
         showToast('Failed to load bills', 'error');
@@ -1146,7 +1155,12 @@ function initBills() {
     initApAgeingGrid();
 
     document.getElementById('createBillBtn')?.addEventListener('click', () => openBillModal());
-    document.getElementById('billsStatusFilter')?.addEventListener('change', loadBills);
+    billsStatusFilterControl = createCheckboxFilterControl('billsStatusFilter', {
+        allLabel: 'All statuses',
+        getValues: () => BILL_STATUSES,
+        displayLabel: (v) => v.charAt(0).toUpperCase() + v.slice(1),
+        onChange: () => loadBills()
+    });
     document.getElementById('closeBillModal')?.addEventListener('click', closeBillModal);
     document.getElementById('billCancelBtn')?.addEventListener('click', closeBillModal);
     document.getElementById('addBillLineBtn')?.addEventListener('click', () => {

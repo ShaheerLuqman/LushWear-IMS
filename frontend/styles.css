@@ -2590,6 +2590,9 @@ input[type="number"] {
     border-radius: var(--radius-sm);
     cursor: pointer;
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .grid-floating-filter-select:hover {
@@ -2729,6 +2732,36 @@ input[type="number"] {
 }
 .date-range-menu .date-range-menu__btn--apply:focus {
     box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Toolbar/filter-bar checkbox filter (grid-filters.js) standing in for a <select>. The button
+   keeps the replaced select's own class, so it only needs the bits a <button> lacks. */
+/* Sized by the button inside it, which keeps the replaced <select>'s own width rules - the
+   wrapper must not shrink past that in a flex toolbar. */
+.checkbox-filter-control {
+    display: inline-flex;
+    flex-shrink: 0;
+}
+/* Carries a chevron like the <select> it replaces, so it still reads as a dropdown. The
+   fulfillment filter bar overrides the sizing/colors but reuses this same chevron. */
+.checkbox-filter-control__btn {
+    text-align: left;
+    appearance: none;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding-right: 32px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
+}
+
+:root[data-theme="dark"] .checkbox-filter-control__btn {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    background-size: 12px 8px;
 }
 
 /* Order Status checkbox filter popup (reuses .date-range-menu for the panel) */
@@ -5383,10 +5416,20 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     letter-spacing: .4px;
 }
 
+/* The multi-select filters (grid-filters.js) replace their <select> with a button inside a
+   wrapper, which has to fill the column-flex group the same way a bare field would. */
+.fulfillment-filter-group .checkbox-filter-control {
+    display: flex;
+    width: 100%;
+}
+
 /* .form-input on these <select>s is only a marker class with no rules of its own (see the
    note by .bill-line .form-input) - style them directly instead, matching the height/
-   background/border look the chip-input and date-range fields next to them already use. */
-.fulfillment-filter-group select {
+   background/border look the chip-input and date-range fields next to them already use.
+   The multi-select filters render a <button> in place of their <select>, so it has to match
+   here rather than inherit anything from the element name. */
+.fulfillment-filter-group select,
+.fulfillment-filter-group .checkbox-filter-control__btn {
     width: 100%;
     height: 40px;
     padding: 0 36px 0 12px;
@@ -5399,19 +5442,22 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     cursor: pointer;
     appearance: none;
     -webkit-appearance: none;
+    /* Repeated for the bare <select>, which has no chevron of its own. */
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 12px center;
     background-size: 12px 8px;
 }
 
-.fulfillment-filter-group select:focus {
+.fulfillment-filter-group select:focus,
+.fulfillment-filter-group .checkbox-filter-control__btn:focus {
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-:root[data-theme="dark"] .fulfillment-filter-group select {
+:root[data-theme="dark"] .fulfillment-filter-group select,
+:root[data-theme="dark"] .fulfillment-filter-group .checkbox-filter-control__btn {
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
 }
 

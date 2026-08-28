@@ -1,8 +1,9 @@
 // Order Fulfillment view - a bulk "select orders, pick a courier, fulfill" screen.
 //
-// The order list itself is real (GET /orders/unfulfilled). Editing a row's address/mobile/tags/
-// city, and the Fulfill/Duplicate/Remove actions, still only mutate local state and re-render
-// instead of calling the API - wire those up to real endpoints once this view's write side exists.
+// The order list (GET /orders/unfulfilled) and Fulfill (POST /orders/fulfill, which books
+// real shipments with the courier) are both live. Editing a row's address/mobile/tags/city
+// and the Duplicate/Remove actions still only mutate local state - those edits are NOT sent
+// to the courier, which books from what is stored on the order.
 
 // Couriers actually integrated elsewhere in the app (orders-columns.js COURIER_LOGOS) get their
 // real logo; the rest are shown as plain monogram chips since no logo asset exists for them.
@@ -21,9 +22,16 @@ let fulfillmentLoading = false;
 let fulfillmentAllCities = [];
 let fulfillmentAllTags = [];
 let fulfillmentSelectedIds = new Set();
-let fulfillmentFilters = { city: '', cityMode: 'exclude', chipCities: [], tag: '', dateFrom: null, dateTo: null };
+// cities/tags are null while nothing narrows them (every value ticked), which reads as "no filter".
+let fulfillmentFilters = { cities: null, cityMode: 'exclude', chipCities: [], tags: null, dateFrom: null, dateTo: null };
+
+// Multi-select checkbox filters (grid-filters.js) replacing the old single-select dropdowns.
+let fulfillmentCityFilterControl = null;
+let fulfillmentTagsFilterControl = null;
 let fulfillmentDatePicker = null;
 let fulfillmentOpenMenuOrderId = null; // tags or actions menu currently open, if any
+let fulfillmentSelectedCourier = null; // the courier picked in the side panel, or null
+let fulfillmentFulfilling = false; // a booking request is in flight - guards against double-submit
 let fulfillmentCourierCities = []; // cities the currently-picked courier supports; empty until one is picked
 let fulfillmentCourierCitiesLoading = false;
 // The open courier-city dropdown's own closer, if one is open - that panel lives in
@@ -177,7 +185,16 @@ async function fetchFulfillmentOrders() {
     let ok = true;
     try {
         const rows = await apiJson('/orders/unfulfilled', { fallback: 'Failed to fetch unfulfilled orders' });
-        fulfillmentOrders = rows.map(o => ({ ...o, order_date: new Date(o.order_date) }));
+        // courierCity is picked in the UI and lives nowhere on the server, so it has to be
+        // carried across a refresh by hand - otherwise refreshing (or the reload after a
+        // partial fulfillment) silently blanks every picked city while the courier still
+        // reads as selected.
+        const courierCityByOrderId = new Map(fulfillmentOrders.filter(o => o.courierCity).map(o => [o.id, o.courierCity]));
+        fulfillmentOrders = rows.map(o => ({
+            ...o,
+            order_date: new Date(o.order_date),
+            courierCity: courierCityByOrderId.get(o.id) || null,
+        }));
     } catch (error) {
         console.error('Error loading unfulfilled orders:', error);
         showToast(error.message || 'Failed to load unfulfilled orders', 'error');
@@ -198,19 +215,8 @@ function renderFulfillmentFilterOptions() {
     fulfillmentAllCities = [...new Set(fulfillmentOrders.map(o => o.city).filter(Boolean))].sort();
     fulfillmentAllTags = [...new Set(fulfillmentOrders.flatMap(o => o.tags))].sort();
 
-    const cityFilterEl = document.getElementById('fulfillmentCityFilter');
-    if (cityFilterEl) {
-        const current = cityFilterEl.value;
-        cityFilterEl.innerHTML = '<option value="">All Cities</option>' + fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join('');
-        cityFilterEl.value = fulfillmentAllCities.includes(current) ? current : '';
-    }
-
-    const tagsFilterEl = document.getElementById('fulfillmentTagsFilter');
-    if (tagsFilterEl) {
-        const current = tagsFilterEl.value;
-        tagsFilterEl.innerHTML = '<option value="">All Tags</option>' + fulfillmentAllTags.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-        tagsFilterEl.value = fulfillmentAllTags.includes(current) ? current : '';
-    }
+    fulfillmentCityFilterControl?.refresh();
+    fulfillmentTagsFilterControl?.refresh();
 
     const chipOptionsEl = document.getElementById('fulfillmentCityChipOptions');
     if (chipOptionsEl) {
@@ -219,21 +225,23 @@ function renderFulfillmentFilterOptions() {
 }
 
 function initOrderFulfillment() {
-    const cityFilterEl = document.getElementById('fulfillmentCityFilter');
-    if (cityFilterEl) {
-        cityFilterEl.addEventListener('change', () => {
-            fulfillmentFilters.city = cityFilterEl.value;
+    fulfillmentCityFilterControl = createCheckboxFilterControl('fulfillmentCityFilter', {
+        allLabel: 'All Cities',
+        getValues: () => fulfillmentAllCities,
+        onChange: (selected) => {
+            fulfillmentFilters.cities = selected.length === fulfillmentAllCities.length ? null : selected;
             renderFulfillmentTable();
-        });
-    }
+        }
+    });
 
-    const tagsFilterEl = document.getElementById('fulfillmentTagsFilter');
-    if (tagsFilterEl) {
-        tagsFilterEl.addEventListener('change', () => {
-            fulfillmentFilters.tag = tagsFilterEl.value;
+    fulfillmentTagsFilterControl = createCheckboxFilterControl('fulfillmentTagsFilter', {
+        allLabel: 'All Tags',
+        getValues: () => fulfillmentAllTags,
+        onChange: (selected) => {
+            fulfillmentFilters.tags = selected.length === fulfillmentAllTags.length ? null : selected;
             renderFulfillmentTable();
-        });
-    }
+        }
+    });
 
     const cityModeEl = document.getElementById('fulfillmentCityMode');
     if (cityModeEl) {
@@ -274,10 +282,10 @@ function initOrderFulfillment() {
     }
 
     document.getElementById('fulfillmentClearFiltersBtn')?.addEventListener('click', () => {
-        fulfillmentFilters = { city: '', cityMode: 'exclude', chipCities: [], tag: '', dateFrom: null, dateTo: null };
-        if (cityFilterEl) cityFilterEl.value = '';
+        fulfillmentFilters = { cities: null, cityMode: 'exclude', chipCities: [], tags: null, dateFrom: null, dateTo: null };
+        fulfillmentCityFilterControl?.reset();
+        fulfillmentTagsFilterControl?.reset();
         if (cityModeEl) cityModeEl.value = 'exclude';
-        if (tagsFilterEl) tagsFilterEl.value = '';
         if (fulfillmentDatePicker) fulfillmentDatePicker.clear();
         renderFulfillmentCityChips();
         renderFulfillmentTable();
@@ -304,14 +312,7 @@ function initOrderFulfillment() {
         renderFulfillmentTable();
     });
 
-    document.getElementById('fulfillmentFulfillBtn')?.addEventListener('click', () => {
-        const courierLabel = document.getElementById('fulfillmentCourierSelectLabel')?.textContent || '';
-        if (!courierLabel || courierLabel === 'Select Courier') {
-            showToast('Select a courier first', 'error');
-            return;
-        }
-        showToast(`Fulfillment isn't wired up to the backend yet (${fulfillmentSelectedIds.size} order(s), ${courierLabel})`, 'info');
-    });
+    document.getElementById('fulfillmentFulfillBtn')?.addEventListener('click', fulfillSelectedOrders);
 
     document.getElementById('orderFulfillmentExportBtn')?.addEventListener('click', () => {
         showToast('Export not implemented yet', 'info');
@@ -360,6 +361,7 @@ function renderFulfillmentCourierMenu() {
         item.addEventListener('click', (e) => {
             e.stopPropagation();
             const courier = FULFILLMENT_COURIERS.find(c => c.id === item.dataset.courierId);
+            fulfillmentSelectedCourier = courier;
             if (!courier) return;
             const labelEl = document.getElementById('fulfillmentCourierSelectLabel');
             const icon = courier.logo
@@ -378,8 +380,8 @@ function closeFulfillmentOpenMenus() {
 
 function getFulfillmentFilteredOrders() {
     return fulfillmentOrders.filter(o => {
-        if (fulfillmentFilters.city && o.city !== fulfillmentFilters.city) return false;
-        if (fulfillmentFilters.tag && !o.tags.includes(fulfillmentFilters.tag)) return false;
+        if (fulfillmentFilters.cities && !fulfillmentFilters.cities.includes(o.city)) return false;
+        if (fulfillmentFilters.tags && !fulfillmentFilters.tags.some((t) => o.tags.includes(t))) return false;
         if (fulfillmentFilters.chipCities.length > 0) {
             const inChips = fulfillmentFilters.chipCities.includes(o.city);
             if (fulfillmentFilters.cityMode === 'exclude' && inChips) return false;
@@ -560,6 +562,92 @@ function attachFulfillmentRowHandlers(tbody) {
             });
         });
     });
+}
+
+/** Books every selected order with the picked courier via POST /orders/fulfill.
+ *
+ * Confirms first: unlike everything else on this screen, this creates real shipments the
+ * courier will come and collect, so an accidental click must not dispatch a table full of
+ * parcels. The backend books orders one at a time and reports each outcome separately, so
+ * a partial success is the normal case to render, not an edge case - successfully booked
+ * orders are dropped from the list and the failures stay put with their reasons. */
+async function fulfillSelectedOrders() {
+    if (fulfillmentFulfilling) return;
+    if (!fulfillmentSelectedCourier) {
+        showToast('Select a courier first', 'error');
+        return;
+    }
+
+    const selectedOrders = fulfillmentOrders.filter(o => fulfillmentSelectedIds.has(o.id));
+    if (selectedOrders.length === 0) {
+        showToast('Select at least one order', 'error');
+        return;
+    }
+
+    // The courier books to its own city list, not the customer-entered one, so a row
+    // without a courier city picked cannot be sent.
+    const missingCity = selectedOrders.filter(o => !o.courierCity);
+    if (missingCity.length > 0) {
+        showToast(
+            `Pick a courier city for ${missingCity.length === 1 ? `order #${missingCity[0].order_number}` : `${missingCity.length} orders`} first`,
+            'error'
+        );
+        return;
+    }
+
+    const confirmed = confirm(
+        `Book ${selectedOrders.length} order(s) with ${fulfillmentSelectedCourier.name}?\n\n` +
+        `This creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`
+    );
+    if (!confirmed) return;
+
+    const fulfillBtn = document.getElementById('fulfillmentFulfillBtn');
+    fulfillmentFulfilling = true;
+    if (fulfillBtn) {
+        fulfillBtn.disabled = true;
+        fulfillBtn.textContent = 'Booking…';
+    }
+
+    try {
+        const result = await apiJson('/orders/fulfill', {
+            method: 'POST',
+            body: {
+                courier: fulfillmentSelectedCourier.id,
+                orders: selectedOrders.map(o => ({ order_id: o.id, courier_city: o.courierCity }))
+            },
+            fallback: 'Failed to fulfill orders'
+        });
+
+        const booked = new Set(result.results.filter(r => r.ok).map(r => r.order_id));
+        fulfillmentOrders = fulfillmentOrders.filter(o => !booked.has(o.id));
+        booked.forEach(id => fulfillmentSelectedIds.delete(id));
+
+        const failures = result.results.filter(r => !r.ok);
+        if (failures.length === 0) {
+            showToast(`Booked ${result.booked_count} order(s) with ${fulfillmentSelectedCourier.name}`, 'success');
+        } else {
+            // Only the first couple of reasons - a long failure list is unreadable as a toast,
+            // and each failed row stays on screen to be retried anyway.
+            const detail = failures.slice(0, 2).map(f => `#${f.order_number}: ${f.error}`).join('; ');
+            showToast(
+                `Booked ${result.booked_count}, failed ${result.failed_count}. ${detail}${failures.length > 2 ? '…' : ''}`,
+                result.booked_count > 0 ? 'info' : 'error'
+            );
+        }
+
+        renderFulfillmentFilterOptions();
+        renderFulfillmentTable();
+    } catch (error) {
+        console.error('Error fulfilling orders:', error);
+        showToast(error.message || 'Failed to fulfill orders', 'error');
+    } finally {
+        fulfillmentFulfilling = false;
+        if (fulfillBtn) {
+            fulfillBtn.disabled = false;
+            fulfillBtn.innerHTML = '<i data-lucide="check-circle-2"></i> Fulfill Order';
+            if (window.lucide) lucide.createIcons();
+        }
+    }
 }
 
 function renderFulfillmentSidePanel() {

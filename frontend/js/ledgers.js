@@ -909,9 +909,9 @@ async function syncShopifyOrders() {
     }
 }
 
-/** Fetches the server's last-sync time on startup and schedules the first auto-sync relative
- *  to it (rather than always syncing immediately), so multiple tabs/devices don't each force
- *  a fresh sync on load when another one already ran recently. */
+/** Always syncs on app load, regardless of how recently the last sync ran, then lets
+ *  syncShopifyOrders' reschedule resume the normal interval from that point. The server's
+ *  last-sync time is fetched first only so the "Synced X ago" label isn't blank meanwhile. */
 async function initOrdersAutoSync() {
     try {
         const status = await apiJson('/orders/sync-status', { fallback: 'Failed to fetch sync status' });
@@ -923,12 +923,7 @@ async function initOrdersAutoSync() {
         console.error('Error fetching orders sync status:', error);
     }
 
-    const elapsed = lastOrdersSyncAt ? Date.now() - lastOrdersSyncAt : Infinity;
-    if (elapsed >= ORDERS_AUTO_SYNC_INTERVAL_MS) {
-        await syncShopifyOrders();
-    } else {
-        scheduleOrdersAutoSync(ORDERS_AUTO_SYNC_INTERVAL_MS - elapsed);
-    }
+    await syncShopifyOrders();
 }
 
 function scheduleOrdersAutoSync(delayMs = ORDERS_AUTO_SYNC_INTERVAL_MS) {

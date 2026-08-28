@@ -12,7 +12,10 @@ let courierPaymentReportGridApi = null;
 // re-sliced from this on every filter change, so changing a filter never refetches.
 let courierPaymentReportOrders = [];
 
-const COURIER_FILTER_ALL = '__all_couriers__';
+// Multi-select checkbox filters (grid-filters.js) replacing the old single-select dropdowns.
+// getSelected() is null until the user narrows the list, which reads as "no filter".
+let courierPaymentReportCourierFilter = null;
+let courierPaymentReportStatusFilter = null;
 
 // RFD/CNA/ICA (return-to-forwarder, consignee unavailable, incomplete address) are
 // courier-reported problem states, not a final outcome - they count as still in transit,
@@ -67,32 +70,24 @@ function distinctCouriers(orderRows) {
     return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
-/** Default the courier filter to PostEx - for now, that's the only courier this report
- * gets used for day to day. Falls back to "All couriers" once PostEx isn't in the list. */
-function populateCourierPaymentReportCourierFilter(orderRows) {
-    const selectEl = document.getElementById('courierPaymentReportCourierFilter');
-    if (!selectEl) return;
-    const currentVal = selectEl.value;
-    const couriers = distinctCouriers(orderRows);
-    const options = [
-        { value: COURIER_FILTER_ALL, label: 'All couriers' },
-        ...couriers.map((c) => ({ value: c, label: c })),
-    ];
-    selectEl.innerHTML = options.map((o) => `<option value="${escapeHtml(o.value)}">${escapeHtml(o.label)}</option>`).join('');
-    const postexCourier = couriers.find((c) => c.toLowerCase() === 'postex');
-    const defaultVal = postexCourier || COURIER_FILTER_ALL;
-    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : defaultVal;
-}
+/** Payment status of a bundled bill, in the order buildCourierPaymentReportBills assigns them. */
+const COURIER_PAYMENT_STATUSES = ['paid', 'partially_paid', 'unpaid', 'in_transit'];
+const COURIER_PAYMENT_STATUS_LABELS = {
+    paid: 'Paid',
+    partially_paid: 'Partially Paid',
+    unpaid: 'Unpaid',
+    in_transit: 'In Transit'
+};
 
 /** Courier + free-text search are per-order facets (applied before bundling and used for
  * the summary cards too); pickup-date range and payment status are applied later since
  * they depend on how orders get grouped/aggregated. */
 function courierPaymentReportFilteredOrders() {
-    const courier = document.getElementById('courierPaymentReportCourierFilter')?.value;
+    const couriers = courierPaymentReportCourierFilter?.getSelected();
     const query = (document.getElementById('courierPaymentReportSearchFilter')?.value || '').trim().toLowerCase();
 
     return courierPaymentReportOrders.filter((order) => {
-        if (courier && courier !== COURIER_FILTER_ALL && (order.courier || '').trim() !== courier) return false;
+        if (couriers && !couriers.includes((order.courier || '').trim())) return false;
         if (query) {
             const courierMatch = (order.courier || '').toLowerCase().includes(query);
             const orderNoMatch = String(order.order_number ?? '').toLowerCase().includes(query);
@@ -603,9 +598,9 @@ function renderCourierPaymentReportView() {
     renderCourierPaymentReportSummary(courierPaymentReportSummary(filtered));
 
     let bills = buildCourierPaymentReportBills(filtered);
-    const statusFilter = document.getElementById('courierPaymentReportStatusFilter')?.value;
-    if (statusFilter && statusFilter !== 'all') {
-        bills = bills.filter((b) => b.status === statusFilter);
+    const statuses = courierPaymentReportStatusFilter?.getSelected();
+    if (statuses) {
+        bills = bills.filter((b) => statuses.includes(b.status));
     }
 
     if (courierPaymentReportGridApi) {
@@ -625,7 +620,7 @@ async function loadCourierPaymentReport() {
         return;
     }
 
-    populateCourierPaymentReportCourierFilter(courierPaymentReportOrders);
+    courierPaymentReportCourierFilter?.refresh();
     renderCourierPaymentReportView();
     if (courierPaymentReportGridApi) courierPaymentReportGridApi.hideOverlay();
 }
@@ -834,15 +829,30 @@ function initCourierPaymentReport() {
     initCourierPaymentReportGrid();
     initCourierPaymentReportDateRangeButton();
 
-    document.getElementById('courierPaymentReportCourierFilter')?.addEventListener('change', () => renderCourierPaymentReportView());
-    document.getElementById('courierPaymentReportStatusFilter')?.addEventListener('change', () => renderCourierPaymentReportView());
+    // Defaults to PostEx alone - for now, that's the only courier this report gets used for
+    // day to day. Falls back to every courier once PostEx isn't in the list.
+    courierPaymentReportCourierFilter = createCheckboxFilterControl('courierPaymentReportCourierFilter', {
+        allLabel: 'All couriers',
+        getValues: () => distinctCouriers(courierPaymentReportOrders),
+        defaultSelected: (couriers) => {
+            const postex = couriers.find((c) => c.toLowerCase() === 'postex');
+            return postex ? [postex] : couriers;
+        },
+        onChange: () => renderCourierPaymentReportView()
+    });
+
+    courierPaymentReportStatusFilter = createCheckboxFilterControl('courierPaymentReportStatusFilter', {
+        allLabel: 'All Status',
+        getValues: () => COURIER_PAYMENT_STATUSES,
+        displayLabel: (v) => COURIER_PAYMENT_STATUS_LABELS[v],
+        onChange: () => renderCourierPaymentReportView()
+    });
+
     document.getElementById('courierPaymentReportSearchFilter')?.addEventListener('input', debounce(() => renderCourierPaymentReportView(), 250));
 
     document.getElementById('courierPaymentReportClearFiltersBtn')?.addEventListener('click', () => {
-        const courierSelect = document.getElementById('courierPaymentReportCourierFilter');
-        if (courierSelect) courierSelect.value = COURIER_FILTER_ALL;
-        const statusSelect = document.getElementById('courierPaymentReportStatusFilter');
-        if (statusSelect) statusSelect.value = 'all';
+        courierPaymentReportCourierFilter?.reset();
+        courierPaymentReportStatusFilter?.reset();
         const searchInput = document.getElementById('courierPaymentReportSearchFilter');
         if (searchInput) searchInput.value = '';
         if (typeof window._courierPaymentReportResetDateRange === 'function') window._courierPaymentReportResetDateRange();

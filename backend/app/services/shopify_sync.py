@@ -151,6 +151,16 @@ def _apply_customer_fields(payload: dict, customer_info: Dict[str, Any], existin
 _OTHER_COURIER_TAG_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
 
 
+def has_settled_tag(tags_raw) -> bool:
+    """Whether Shopify's `tags` carry the "Settled" tag written by shopify.mark_order_settled.
+
+    A COD payout and a customer advance both leave financial_status "paid", so without
+    this the settlement would be read back as money the customer paid up front - see the
+    advance derivation below. `tags_raw` is Shopify's own comma-separated `tags` string."""
+    tags_str = tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")
+    return any(tag.strip().lower() == shopify.SETTLED_TAG.lower() for tag in tags_str.split(","))
+
+
 def _delivery_charge_from_other_tags(courier: Optional[str], tags_raw) -> Optional[float]:
     """Courier "Other" has no tracking API. Shopify's free-text tracking-number field for
     it turned out to get inconsistently formatted by the fulfillment flow ("Bykea 300",
@@ -575,6 +585,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             cancelled_at_raw = order.get("cancelled_at")
             fulfillment_dt = None
             for f in order.get("fulfillments") or []:
+                # A cancelled fulfillment never shipped, so it can't make a later
+                # order cancellation a "return".
+                if f.get("status") == "cancelled":
+                    continue
                 ct = f.get("created_at")
                 if ct:
                     parsed = _parse_iso(ct)
@@ -805,17 +819,22 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             else:
                 total_amount = total_line_items_price + shopify_tax
 
+            # A courier payout is marked paid in Shopify too (see shopify.mark_order_settled),
+            # so "paid" alone can't mean the customer paid up front - only an untagged one can.
+            settled_payout = has_settled_tag(sp_order.get("tags"))
+            financial_status = financial_status_peek
+            paid_in_advance = financial_status == "paid" and not settled_payout
+
             if has_price_reduction_discount_code:
                 # Code-based discounts reduce selling price instead of being treated as advance.
                 total_amount = max(0.0, total_amount - total_discounts)
-                financial_status = financial_status_peek
-                advance_amount = total_amount if financial_status == "paid" else 0.0
+                advance_amount = total_amount if paid_in_advance else 0.0
+            elif paid_in_advance:
+                advance_amount = total_amount
             else:
-                financial_status = financial_status_peek
-                if financial_status == "paid":
-                    advance_amount = total_amount
-                else:
-                    advance_amount = total_discounts
+                # Includes a settled payout: that money came from the courier, so whatever
+                # advance the customer paid is still only what the discount field records.
+                advance_amount = total_discounts
 
             # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
             # cancelled order - mirror that instead of carrying forward a stale amount.

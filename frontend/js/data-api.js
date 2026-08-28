@@ -17,7 +17,6 @@ async function loadProducts() {
         if (productsGridApi) {
             productsGridApi.setGridOption('rowData', products);
         }
-        refreshCollectionFilterValues();
     } catch (error) {
         console.error('Error loading products:', error);
         showToast('Failed to load products', 'error');

@@ -1,3 +1,5 @@
+import asyncio
+
 import pytest
 
 from app.services import postex
@@ -121,3 +123,100 @@ class TestParseRows:
             postex.parse_rows(b"FOO,BAR\n1,2\n")
         with pytest.raises(postex.CsvFormatError, match="SHIPPING_CHARGES"):
             postex.parse_rows(b"ORDER_REF_NUMBER\n4807\n")
+
+
+class TestNormalizePhone:
+    @pytest.mark.parametrize("raw,expected", [
+        ("03001234567", "03001234567"),
+        ("0300-1234567", "03001234567"),      # customer-typed separators
+        ("+92 300 1234567", "03001234567"),   # what Shopify usually stores
+        ("923001234567", "03001234567"),
+        ("00923001234567", "03001234567"),
+        ("3001234567", "03001234567"),        # leading zero dropped by a spreadsheet
+    ])
+    def test_coerces_to_postex_local_format(self, raw, expected):
+        assert postex.normalize_phone(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", None, "12345", "+92 21 35678901", "0300123456789"])
+    def test_rejects_what_cannot_be_a_mobile_number(self, raw):
+        # None means "don't book this parcel", not "send it anyway".
+        assert postex.normalize_phone(raw) is None
+
+
+class TestCreateOrder:
+    """create_order is async; driven with plain asyncio.run since this repo has no
+    pytest-asyncio (same convention as test_auth.py's TestRequireRole)."""
+
+    BOOKING = {
+        "order_ref_number": "4807",
+        "customer_name": "Ayesha Khan",
+        "customer_phone": "03001234567",
+        "delivery_address": "12 Main Boulevard, Gulberg",
+        "city_name": "Lahore",
+        "invoice_payment": 4500.0,
+        "items": 2,
+    }
+
+    @staticmethod
+    def _client(monkeypatch, response_json, captured=None):
+        class _Response:
+            status_code = 200
+
+            def json(self):
+                return response_json
+
+        class _Client:
+            async def post(self, url, headers=None, json=None):
+                if captured is not None:
+                    captured.update({"url": url, "headers": headers, "json": json})
+                return _Response()
+
+        return _Client()
+
+    def test_returns_the_tracking_number_and_sends_the_documented_shape(self, monkeypatch):
+        captured = {}
+        client = self._client(monkeypatch, {
+            "statusCode": "200",
+            "statusMessage": "ORDER HAS BEEN CREATED",
+            "dist": {"trackingNumber": "CX123456789012"},
+        }, captured)
+
+        tracking = asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
+
+        assert tracking == "CX123456789012"
+        assert captured["headers"]["token"] == "tok"
+        assert captured["url"].endswith("/v3/create-order")
+        assert captured["json"]["orderRefNumber"] == "4807"
+        assert captured["json"]["cityName"] == "Lahore"
+        assert captured["json"]["orderType"] == "Normal"
+        assert captured["json"]["items"] == 2
+
+    def test_invoice_payment_is_rounded_to_whole_rupees(self):
+        captured = {}
+        client = self._client(None, {"statusCode": "200", "dist": {"trackingNumber": "CX1"}}, captured)
+
+        asyncio.run(postex.create_order(client, "tok", **{**self.BOOKING, "invoice_payment": 4499.6}))
+
+        assert captured["json"]["invoicePayment"] == 4500
+
+    def test_optional_fields_are_omitted_rather_than_sent_empty(self):
+        captured = {}
+        client = self._client(None, {"statusCode": "200", "dist": {"trackingNumber": "CX1"}}, captured)
+
+        asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
+
+        assert "orderDetail" not in captured["json"]
+        assert "pickupAddressCode" not in captured["json"]
+
+    def test_a_rejection_raises_with_postex_own_message(self):
+        client = self._client(None, {"statusCode": "422", "statusMessage": "City is not serviceable"})
+
+        with pytest.raises(postex.PostexBookingError, match="City is not serviceable"):
+            asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
+
+    def test_a_success_without_a_tracking_number_is_still_an_error(self):
+        # Booked but unmatchable downstream - must not be recorded as fulfilled.
+        client = self._client(None, {"statusCode": "200", "dist": {}})
+
+        with pytest.raises(postex.PostexBookingError):
+            asyncio.run(postex.create_order(client, "tok", **self.BOOKING))

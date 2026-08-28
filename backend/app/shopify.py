@@ -9,6 +9,9 @@ from fastapi import HTTPException
 from app.org_settings import OrgIntegrationSettings
 
 PAGE_LIMIT = 250
+
+# Marks a COD order whose courier payout has arrived - see mark_order_settled().
+SETTLED_TAG = "Settled"
 _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
 
@@ -206,6 +209,106 @@ async def adjust_inventory_levels(
                 retry_after = float(response.headers.get("Retry-After", 0) or 0)
                 await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
             response.raise_for_status()
+
+
+async def create_fulfillment(
+    shopify_order_id: int, tracking_number: str, tracking_company: str, org_creds: OrgIntegrationSettings
+) -> None:
+    """Mark a Shopify order fulfilled with the courier's tracking number, so the store
+    (and the customer's shipping notification) reflect a parcel that has actually been
+    booked - called after the courier API hands back a tracking number.
+
+    Since API 2024-07 a fulfillment is created against the order's *fulfillment orders*,
+    not the order itself, so this looks those up first. Only the ones still open are
+    fulfillable; an order with none (already fulfilled, or cancelled) is left alone
+    rather than treated as an error, since the booking it belongs to did succeed.
+    """
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        response = await client.get(f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
+        response.raise_for_status()
+        fulfillment_orders = [
+            fo for fo in response.json().get("fulfillment_orders", [])
+            if fo.get("status") in ("open", "in_progress", "scheduled")
+        ]
+        if not fulfillment_orders:
+            return
+
+        response = await client.post(f"{base}/fulfillments.json", headers=headers, json={
+            "fulfillment": {
+                "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
+                "tracking_info": {"number": tracking_number, "company": tracking_company},
+                "notify_customer": True,
+            }
+        })
+        response.raise_for_status()
+
+
+async def mark_order_settled(
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, record_payment: bool = True
+) -> bool:
+    """Tag a Shopify order "Settled" and record the courier's payout against it, so the
+    store stops showing a COD order as unpaid once the money has actually arrived.
+
+    The tag is what keeps this distinguishable from a customer advance: both land as
+    financial_status "paid", so without it the sync would read a courier settlement as
+    money the customer paid up front (see shopify_sync's advance derivation).
+
+    Payment is recorded as a `capture` against the pending `sale` the checkout created -
+    that parent_id is what Shopify's own "Mark as paid" does, and without it the
+    transaction is rejected ("sale is not a valid transaction"). Shopify stores the
+    result back as a successful `sale`, so the kind here does not match what you read
+    off the order afterwards. Orders with no pending sale (nothing left owing, or
+    manually created outside checkout) are tagged only.
+
+    `record_payment=False` tags only. A returned order is settled once the courier has
+    reconciled it, but the customer never paid - recording its outstanding balance would
+    invent money that never arrived. The tag still matters there: it stops the sync
+    reading a later "paid" as a customer advance.
+
+    Returns True if the order was marked paid, False if it was only tagged.
+    """
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        response = await client.get(f"{base}/orders/{shopify_order_id}.json", headers=headers,
+                                    params={"fields": "id,tags,total_outstanding"})
+        response.raise_for_status()
+        order = response.json()["order"]
+
+        tags = [t.strip() for t in (order.get("tags") or "").split(",") if t.strip()]
+        if not any(t.lower() == SETTLED_TAG.lower() for t in tags):
+            response = await client.put(f"{base}/orders/{shopify_order_id}.json", headers=headers,
+                                        json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [SETTLED_TAG])}})
+            response.raise_for_status()
+
+        outstanding = float(order.get("total_outstanding") or 0)
+        if not record_payment or outstanding <= 0:
+            return False
+
+        response = await client.get(f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers)
+        response.raise_for_status()
+        pending = next((t for t in response.json().get("transactions", [])
+                        if t.get("kind") == "sale" and t.get("status") == "pending"), None)
+        if not pending:
+            return False
+
+        response = await client.post(f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers, json={
+            "transaction": {
+                "kind": "capture",
+                "status": "success",
+                "amount": f"{outstanding:.2f}",
+                "gateway": pending.get("gateway"),
+                "parent_id": pending["id"],
+            }
+        })
+        response.raise_for_status()
+        return True
 
 
 async def fetch_product_collections(

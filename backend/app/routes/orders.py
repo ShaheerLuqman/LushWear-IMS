@@ -22,7 +22,7 @@ from app.money import money
 from app.order_pdf import extract_order_numbers
 from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
-from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
+from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
 from app.services import postex
 from app.services.courier_cities import get_courier_cities
@@ -39,6 +39,7 @@ from app.services.shopify_orders import (
 )
 from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
+    has_settled_tag,
     SyncShopifyOrdersResult,
     _cost_from_line_items,
     _delivery_charge_from_other_tags,
@@ -52,6 +53,10 @@ from app.services.shopify_sync import (
 from app.timezones import PKT_TIMEZONE
 
 logger = logging.getLogger("app.orders")
+
+# Shopify's source_name for orders created from a draft (replacements, manual orders):
+# they never went through checkout, so they have no transaction to settle against.
+DRAFT_ORDER_SOURCE = "shopify_draft_order"
 router = APIRouter(prefix="/orders", tags=["orders"])
 
 # Backstop on user-supplied PDF batch endpoints (invoice/packaging-list/load-sheet) -
@@ -367,6 +372,238 @@ async def get_courier_supported_cities(courier: str, org_id: str = Depends(get_o
         raise HTTPException(status_code=500, detail="Failed to fetch supported cities")
 
 
+class FulfillOrderRequest(BaseModel):
+    order_id: str
+    courier_city: str
+
+
+class FulfillOrdersBody(BaseModel):
+    courier: str
+    orders: List[FulfillOrderRequest]
+
+
+class FulfillOrderResult(BaseModel):
+    order_id: str
+    order_number: Optional[int] = None
+    ok: bool
+    tracking_number: Optional[str] = None
+    error: Optional[str] = None
+
+
+class FulfillOrdersResult(BaseModel):
+    booked_count: int
+    failed_count: int
+    results: List[FulfillOrderResult]
+
+
+# Only PostEx books through the app so far; the rest of the frontend's courier list
+# still has to be fulfilled in that courier's own portal.
+_FULFILL_COURIER_NAMES = {"postex": "PostEx"}
+
+
+@router.post("/fulfill", response_model=FulfillOrdersResult)
+async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_id)):
+    """Book the selected orders with the courier and record the tracking numbers.
+
+    Bookings run sequentially, not gathered like the read-side Shopify sweeps: each
+    one creates a real shipment, so a mid-flight failure must leave a knowable number
+    of parcels behind, and PostEx rate-limits create-order far more tightly than its
+    read APIs. One order failing (unserviceable city, duplicate ref number, bad phone)
+    never aborts the rest - each order's outcome comes back in `results` so the UI can
+    show exactly which ones need attention.
+
+    The parcel is booked before anything is written locally, so a DB failure can leave
+    a booked shipment unrecorded, but never the reverse: an order marked fulfilled here
+    always has a real parcel behind it.
+    """
+    if body.courier not in _FULFILL_COURIER_NAMES:
+        raise HTTPException(status_code=400, detail=f"Fulfillment is not supported for courier '{body.courier}' yet.")
+    if not body.orders:
+        raise HTTPException(status_code=400, detail="No orders selected.")
+
+    org_creds = get_org_integration_settings(org_id)
+    if not org_creds.postex_merchant_token:
+        raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization. Set them in Settings > Integrations.")
+
+    supabase = get_supabase()
+    requested = {o.order_id: o for o in body.orders}
+    rows = (
+        org_table(supabase, org_id, "shopify_orders")
+        .select("id, order_number, order_status, tracking_number, total_amount, advance_amount, line_items, "
+                "customer_name, customer_phone, customer_address")
+        .in_("id", list(requested))
+        .execute()
+        .data
+        or []
+    )
+    rows_by_id = {r["id"]: r for r in rows}
+
+    courier_name = _FULFILL_COURIER_NAMES[body.courier]
+    results: List[FulfillOrderResult] = []
+    booked: List[Tuple[dict, str]] = []
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for order_id, request in requested.items():
+            row = rows_by_id.get(order_id)
+            if not row:
+                results.append(FulfillOrderResult(order_id=order_id, ok=False, error="Order not found"))
+                continue
+            order_number = row["order_number"]
+            # Re-checked against the DB rather than trusting the client's list, which can
+            # be minutes stale - without this a double-submit books the same parcel twice.
+            if row.get("order_status") != "unfulfilled" or row.get("tracking_number"):
+                results.append(FulfillOrderResult(
+                    order_id=order_id, order_number=order_number, ok=False, error="Already fulfilled",
+                ))
+                continue
+
+            missing = [
+                label for label, value in (
+                    ("customer name", row.get("customer_name")),
+                    ("phone", row.get("customer_phone")),
+                    ("address", row.get("customer_address")),
+                    ("courier city", request.courier_city),
+                ) if not (value or "").strip()
+            ]
+            if missing:
+                results.append(FulfillOrderResult(
+                    order_id=order_id, order_number=order_number, ok=False,
+                    error=f"Missing {', '.join(missing)}",
+                ))
+                continue
+
+            # PostEx only accepts 03xxxxxxxxx, while Shopify stores whatever the customer
+            # typed - rejected here so it reads as a fixable data problem rather than
+            # PostEx's own generic validation error.
+            customer_phone = postex.normalize_phone(row["customer_phone"])
+            if not customer_phone:
+                results.append(FulfillOrderResult(
+                    order_id=order_id, order_number=order_number, ok=False,
+                    error=f"Invalid phone number ({row['customer_phone']})",
+                ))
+                continue
+
+            line_items = row.get("line_items") or []
+            try:
+                tracking_number = await postex.create_order(
+                    client,
+                    org_creds.postex_merchant_token,
+                    order_ref_number=str(order_number),
+                    customer_name=row["customer_name"].strip(),
+                    customer_phone=customer_phone,
+                    delivery_address=row["customer_address"].strip(),
+                    city_name=request.courier_city.strip(),
+                    # What the rider collects: the order value less whatever the customer
+                    # already paid, so a fully-prepaid order books at 0 rather than being
+                    # charged twice.
+                    invoice_payment=max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0)),
+                    items=sum(int(li.get("qty") or 0) for li in line_items) or 1,
+                    order_detail=", ".join(
+                        f"{li.get('name')} x{li.get('qty')}" for li in line_items if li.get("name")
+                    )[:250] or None,
+                )
+            except postex.PostexBookingError as exc:
+                results.append(FulfillOrderResult(
+                    order_id=order_id, order_number=order_number, ok=False, error=str(exc),
+                ))
+                continue
+
+            try:
+                org_table(supabase, org_id, "shopify_orders").update({
+                    "courier": courier_name,
+                    "tracking_number": tracking_number,
+                    "order_status": "fulfilled",
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                }).eq("id", order_id).execute()
+            except Exception:
+                # The parcel exists at PostEx regardless, so surface the tracking number
+                # instead of losing it with the exception.
+                logger.exception("Order %s booked with %s (%s) but the local update failed",
+                                 order_number, courier_name, tracking_number)
+                results.append(FulfillOrderResult(
+                    order_id=order_id, order_number=order_number, ok=False, tracking_number=tracking_number,
+                    error=f"Booked as {tracking_number}, but saving it locally failed - record it manually.",
+                ))
+                continue
+
+            booked.append((row, tracking_number))
+            results.append(FulfillOrderResult(
+                order_id=order_id, order_number=order_number, ok=True, tracking_number=tracking_number,
+            ))
+
+    if booked:
+        await _push_fulfillments_to_shopify(booked, courier_name, org_id, org_creds)
+
+    return FulfillOrdersResult(
+        booked_count=sum(1 for r in results if r.ok),
+        failed_count=sum(1 for r in results if not r.ok),
+        results=results,
+    )
+
+
+async def _push_fulfillments_to_shopify(
+    booked: List[Tuple[dict, str]], courier_name: str, org_id: str, org_creds: OrgIntegrationSettings
+) -> None:
+    """Mirror successful bookings into Shopify so the store shows them fulfilled with
+    tracking, and the customer gets the shipping notification.
+
+    Best-effort by design: every failure is logged and swallowed, because the courier
+    booking it reflects has already happened and must not be reported back as failed.
+    A miss here is recoverable - the next Shopify sync reconciles it - whereas a parcel
+    booked twice is not.
+    """
+    try:
+        org_creds = await ensure_valid_shopify_token(org_id, org_creds)
+    except Exception:
+        logger.exception("Could not refresh the Shopify token - skipping fulfillment push for %d order(s)", len(booked))
+        return
+
+    for row, tracking_number in booked:
+        try:
+            sp_order = await _fetch_shopify_order_by_order_number(str(row["order_number"]), org_creds)
+            if not sp_order:
+                logger.warning("Order %s not found in Shopify - skipping fulfillment push", row["order_number"])
+                continue
+            await shopify.create_fulfillment(sp_order["id"], tracking_number, courier_name, org_creds)
+        except Exception:
+            logger.exception("Shopify fulfillment push failed for order %s (booked as %s)",
+                             row["order_number"], tracking_number)
+
+
+async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) -> None:
+    """Mirror settled orders into Shopify: tag them "Settled" and record the courier's
+    payout, so the store reflects money that has actually been received.
+
+    Best-effort by design, same as _push_fulfillments_to_shopify: the payout is already
+    recorded locally and must not be reported back as failed because Shopify was
+    unreachable. A miss here is recoverable by re-settling the order.
+    """
+    if not order_numbers:
+        return
+    try:
+        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+    except Exception:
+        logger.exception("Could not refresh the Shopify token - skipping settlement push for %d order(s)", len(order_numbers))
+        return
+    if not (org_creds.shopify_store_url and org_creds.shopify_access_token):
+        return
+
+    for order_number in order_numbers:
+        try:
+            sp_order = await _fetch_shopify_order_by_order_number(str(order_number), org_creds)
+            if not sp_order:
+                logger.warning("Order %s not found in Shopify - skipping settlement push", order_number)
+                continue
+            # Replacement orders come from draft orders, which carry no checkout
+            # transaction to capture against - tag those instead of posting a payment
+            # Shopify would reject (see shopify.mark_order_settled).
+            await shopify.mark_order_settled(
+                sp_order["id"], org_creds,
+                record_payment=sp_order.get("source_name") != DRAFT_ORDER_SOURCE)
+        except Exception:
+            logger.exception("Shopify settlement push failed for order %s", order_number)
+
+
 @router.get("/sync-status")
 async def get_sync_status(org_id: str = Depends(get_org_id)):
     try:
@@ -496,6 +733,7 @@ async def upload_postex_csv(
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
+            await _push_settlements_to_shopify(matched_order_numbers, org_id)
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), tracking, and marked settled for {updated_count} order(s)."
@@ -661,6 +899,10 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             cancelled_at_raw = order.get("cancelled_at")
             fulfillment_dt = None
             for f in order.get("fulfillments") or []:
+                # A cancelled fulfillment never shipped, so it can't make a later
+                # order cancellation a "return".
+                if f.get("status") == "cancelled":
+                    continue
                 ct = f.get("created_at")
                 parsed = _parse_iso_local(ct)
                 if parsed and (fulfillment_dt is None or parsed > fulfillment_dt):
@@ -815,11 +1057,14 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             )
             total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
             financial_status = (sp_order.get("financial_status") or "").strip().lower()
+            # A settled COD payout is marked paid in Shopify too, so only an untagged
+            # "paid" means the customer paid up front (same rule as shopify_sync's).
+            paid_in_advance = financial_status == "paid" and not has_settled_tag(sp_order.get("tags"))
             if has_price_reduction_discount_code:
                 total_amount = max(0.0, total_amount - total_discounts)
-                advance_amount = total_amount if financial_status == "paid" else 0.0
+                advance_amount = total_amount if paid_in_advance else 0.0
             else:
-                advance_amount = total_amount if financial_status == "paid" else total_discounts
+                advance_amount = total_amount if paid_in_advance else total_discounts
 
             # Shopify zeroes a cancelled order's total - mirror that instead of carrying
             # forward a stale amount (see the same rule in shopify_sync._sync_shopify_orders).
@@ -1639,6 +1884,10 @@ async def bulk_update_order_settled(body: BulkUpdateOrderSettledBody, org_id: st
         )
         updated_rows = response.data or []
         updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
+        # Only settling pushes to Shopify - un-settling can't retract a payment already
+        # recorded there, so that stays a local-only correction.
+        if body.is_order_settled:
+            await _push_settlements_to_shopify(updated_order_numbers, org_id)
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)

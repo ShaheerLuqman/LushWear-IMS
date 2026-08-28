@@ -169,7 +169,7 @@ async def _unreceive_with_shopify_sync(supabase, org_id: str, bill_id: str, fail
 
 @router.get("/", response_model=List[Bill])
 async def list_bills(
-    status: Optional[str] = Query(None, description="draft | received | cancelled"),
+    status: Optional[List[str]] = Query(None, description="draft | received | cancelled; repeat to match any of several"),
     supplier_id: Optional[str] = Query(None),
     org_id: str = Depends(get_org_id),
 ):
@@ -181,7 +181,7 @@ async def list_bills(
         .order("bill_number", desc=True)
     )
     if status:
-        query = query.eq("status", status)
+        query = query.in_("status", status)
     if supplier_id:
         query = query.eq("supplier_id", supplier_id)
     return _attach_items(supabase, org_id, query.execute().data or [])

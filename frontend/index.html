@@ -275,12 +275,7 @@
                         <button id="transactionCreateEntryBtn" class="btn btn-primary btn-sm" title="Create a new transaction entry"><i class="fa-solid fa-plus"></i> New Transaction</button>
                     </div>
                     <div id="billsHeaderWrap" class="header-inline" style="display: none;">
-                        <select id="billsStatusFilter" class="orders-period-filter">
-                            <option value="">All statuses</option>
-                            <option value="draft">Draft</option>
-                            <option value="received">Received</option>
-                            <option value="cancelled">Cancelled</option>
-                        </select>
+                        <select id="billsStatusFilter" class="orders-period-filter" title="Filter by bill status"></select>
                         <button id="createBillBtn" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> New Bill</button>
                     </div>
                     <div id="ledgersHeaderWrap" class="header-inline" style="display: none;">
@@ -307,13 +302,7 @@
                     <div id="courierPaymentReportHeaderWrap" class="header-inline" style="display: none;">
                         <button type="button" id="courierPaymentReportDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by pickup date range">Date range</button>
                         <select id="courierPaymentReportCourierFilter" class="orders-period-filter" title="Filter by courier"></select>
-                        <select id="courierPaymentReportStatusFilter" class="orders-period-filter" title="Filter by payment status">
-                            <option value="all">All Status</option>
-                            <option value="paid">Paid</option>
-                            <option value="partially_paid">Partially Paid</option>
-                            <option value="unpaid">Unpaid</option>
-                            <option value="in_transit">In Transit</option>
-                        </select>
+                        <select id="courierPaymentReportStatusFilter" class="orders-period-filter" title="Filter by payment status"></select>
                         <div class="transaction-search-wrap">
                             <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
                             <input id="courierPaymentReportSearchFilter" type="text" class="transaction-search-filter" placeholder="Search courier or order #..." autocomplete="off">
@@ -514,9 +503,7 @@
                         </div>
                         <div class="fulfillment-filter-group">
                             <label for="fulfillmentTagsFilter">Tags</label>
-                            <select id="fulfillmentTagsFilter" class="form-input">
-                                <option value="">All Tags</option>
-                            </select>
+                            <select id="fulfillmentTagsFilter" class="form-input"></select>
                         </div>
                         <div class="fulfillment-filter-group">
                             <label for="fulfillmentDateRangeInput">Date Range</label>
@@ -1388,6 +1375,7 @@
          app-core.js patches window.fetch and must come first. -->
     <script src="js/app-core.js"></script>
     <script src="js/auth-users.js"></script>
+    <script src="js/grid-filters.js"></script>
     <script src="js/orders-columns.js"></script>
     <script src="js/orders-grid.js"></script>
     <script src="js/orders-actions.js"></script>

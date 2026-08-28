@@ -248,20 +248,7 @@ function initProductsGrid() {
             headerName: 'Collection',
             field: 'collection',
             width: 130,
-            filter: 'agTextColumnFilter',
-            filterParams: {
-                filterOptions: ['equals'],
-                defaultOption: 'equals',
-                maxNumConditions: 1,
-                textMatcher: ({ filterOption, value, filterText }) => {
-                    if (filterOption !== 'equals') return value === filterText;
-                    // Sentinel for "empty collection" so AG Grid doesn't treat it as no filter
-                    if (filterText === '__empty__') {
-                        return (value === '' || value == null);
-                    }
-                    return value === filterText;
-                }
-            },
+            filter: CollectionSetFilter,
             floatingFilterComponent: CollectionFloatingFilter,
             valueGetter: (params) => {
                 const v = params.data?.collection;
@@ -437,314 +424,62 @@ ProductsClearFiltersFloatingFilter.prototype.init = function (params) {
 ProductsClearFiltersFloatingFilter.prototype.getGui = function () { return this.eGui; };
 ProductsClearFiltersFloatingFilter.prototype.onParentModelChanged = function () {};
 
-// Order Status filtering: a checkbox popup (multiple statuses at once) rather than a
-// single-select dropdown. Two parts, like AG Grid's own filter/floating-filter split:
-// OrderStatusSetFilter is the real column filter (model: { values: [...] } - order_status
-// must be one of `values`; no model = no filtering), OrderStatusFloatingFilter is the
-// checkbox popup that drives it via api.setFilterModel().
 const ORDER_STATUS_VALUES = ['unfulfilled', 'fulfilled', 'delivered', 'RFD', 'returned', 'cancelled', 'CNA', 'ICA'];
 function orderStatusDisplayLabel(v) {
     return (v === 'RFD' || v === 'CNA' || v === 'ICA') ? v : (v.charAt(0).toUpperCase() + v.slice(1));
 }
 
-function OrderStatusSetFilter() {}
-OrderStatusSetFilter.prototype.init = function (params) { this.params = params; this.model = null; };
-OrderStatusSetFilter.prototype.getGui = function () {
-    if (!this.eGui) this.eGui = document.createElement('div'); // no popup UI - the floating filter is the only UI
-    return this.eGui;
-};
-OrderStatusSetFilter.prototype.doesFilterPass = function (params) {
-    if (!this.model) return true;
-    return this.model.values.indexOf((params.data && params.data.order_status) || '') !== -1;
-};
-OrderStatusSetFilter.prototype.isFilterActive = function () { return !!this.model; };
-OrderStatusSetFilter.prototype.getModel = function () { return this.model; };
-OrderStatusSetFilter.prototype.setModel = function (model) { this.model = model || null; };
+const OrderStatusSetFilter = makeCheckboxSetFilter((row) => row.order_status || '');
+const OrderStatusFloatingFilter = makeCheckboxFloatingFilter(() => ORDER_STATUS_VALUES, orderStatusDisplayLabel);
 
-function OrderStatusFloatingFilter() {}
-OrderStatusFloatingFilter.prototype.init = function (params) {
-    this.params = params;
-    const api = params.api;
-    const columnId = params.column.getColId();
+// Courier options come from the loaded orders rather than a fixed list: couriers vary by period,
+// and an "Other" courier row shows its tracking number as the name.
+const CourierSetFilter = makeCheckboxSetFilter((row) => getCourierDisplayName(row));
+const CourierFloatingFilter = makeCheckboxFloatingFilter(() => {
+    const names = new Set();
+    (orders || []).forEach((o) => { if (o.id !== '__footer__') names.add(getCourierDisplayName(o)); });
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+});
 
-    this.eGui = document.createElement('div');
-    this.eGui.className = 'grid-floating-filter-wrap';
-    this.eGui.style.width = '100%';
-
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'grid-floating-filter-select';
-    btn.style.width = '100%';
-    btn.style.textAlign = 'left';
-    btn.textContent = 'All';
-    this.btn = btn;
-    this.eGui.appendChild(btn);
-
-    const menu = document.createElement('div');
-    menu.className = 'date-range-menu order-status-filter-menu';
-    menu.style.display = 'none';
-
-    const checkboxes = {};
-    const applySelection = () => {
-        const selected = ORDER_STATUS_VALUES.filter((v) => checkboxes[v].checked);
-        const currentModel = api.getFilterModel() || {};
-        const newModel = Object.assign({}, currentModel);
-        if (selected.length === ORDER_STATUS_VALUES.length) {
-            delete newModel[columnId];
-        } else {
-            newModel[columnId] = { values: selected };
-        }
-        api.setFilterModel(newModel);
-        this.updateButtonLabel(selected);
-    };
-
-    const allRow = document.createElement('label');
-    allRow.className = 'order-status-filter-option order-status-filter-option--all';
-    const allCb = document.createElement('input');
-    allCb.type = 'checkbox';
-    allCb.checked = true;
-    const allLabel = document.createElement('span');
-    allLabel.textContent = 'All';
-    allRow.appendChild(allCb);
-    allRow.appendChild(allLabel);
-    menu.appendChild(allRow);
-    allCb.addEventListener('change', () => {
-        ORDER_STATUS_VALUES.forEach((v) => { checkboxes[v].checked = allCb.checked; });
-        applySelection();
-    });
-
-    ORDER_STATUS_VALUES.forEach((v) => {
-        const row = document.createElement('label');
-        row.className = 'order-status-filter-option';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.checked = true;
-        const label = document.createElement('span');
-        label.textContent = orderStatusDisplayLabel(v);
-        row.appendChild(cb);
-        row.appendChild(label);
-        menu.appendChild(row);
-        checkboxes[v] = cb;
-        cb.addEventListener('change', () => {
-            allCb.checked = ORDER_STATUS_VALUES.every((sv) => checkboxes[sv].checked);
-            applySelection();
-        });
-    });
-
-    btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (menu.style.display === 'none') {
-            const rect = btn.getBoundingClientRect();
-            menu.style.display = 'block';
-            const left = rect.left + window.scrollX;
-            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
-            menu.style.top = `${rect.bottom + window.scrollY}px`;
-            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
-        } else {
-            menu.style.display = 'none';
-        }
-    });
-    this._outsideClickHandler = (e) => {
-        if (menu.style.display !== 'none' && !menu.contains(e.target) && e.target !== btn) {
-            menu.style.display = 'none';
-        }
-    };
-    document.addEventListener('click', this._outsideClickHandler);
-
-    document.body.appendChild(menu);
-    this.menu = menu;
-    this.checkboxes = checkboxes;
-    this.allCb = allCb;
-};
-OrderStatusFloatingFilter.prototype.updateButtonLabel = function (selected) {
-    this.btn.textContent = selected.length === ORDER_STATUS_VALUES.length ? 'All'
-        : selected.length === 0 ? 'None'
-        : `${selected.length} selected`;
-};
-OrderStatusFloatingFilter.prototype.getGui = function () { return this.eGui; };
-OrderStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
-    const selected = (parentModel && Array.isArray(parentModel.values)) ? parentModel.values : ORDER_STATUS_VALUES.slice();
-    ORDER_STATUS_VALUES.forEach((v) => { this.checkboxes[v].checked = selected.indexOf(v) !== -1; });
-    this.allCb.checked = selected.length === ORDER_STATUS_VALUES.length;
-    this.updateButtonLabel(selected);
-};
-OrderStatusFloatingFilter.prototype.destroy = function () {
-    if (this.menu && this.menu.parentNode) this.menu.parentNode.removeChild(this.menu);
-    document.removeEventListener('click', this._outsideClickHandler);
-};
-
-// Custom floating filter for Final Status: dropdown (OK, Warning, None, All)
 const FINAL_STATUS_VALUES = ['OK', 'Warning', 'None'];
-function FinalStatusFloatingFilter() {}
-FinalStatusFloatingFilter.prototype.init = function (params) {
-    this.params = params;
-    this.eGui = document.createElement('div');
-    this.eGui.className = 'grid-floating-filter-wrap';
-    this.eGui.style.width = '100%';
-    const select = document.createElement('select');
-    select.className = 'grid-floating-filter-select';
-    select.style.width = '100%';
-    const allOption = document.createElement('option');
-    allOption.value = '__all__';
-    allOption.textContent = 'All';
-    select.appendChild(allOption);
-    FINAL_STATUS_VALUES.forEach(function (v) {
-        const opt = document.createElement('option');
-        opt.value = v;
-        opt.textContent = v;
-        select.appendChild(opt);
-    });
-    const api = params.api;
-    const columnId = params.column.getColId();
-    select.addEventListener('change', function () {
-        const val = select.value;
-        const currentModel = api.getFilterModel() || {};
-        const newModel = Object.assign({}, currentModel);
-        if (val === '__all__') {
-            delete newModel[columnId];
-        } else {
-            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
-        }
-        api.setFilterModel(newModel);
-    });
-    this.eGui.appendChild(select);
-    this.select = select;
-};
-FinalStatusFloatingFilter.prototype.getGui = function () { return this.eGui; };
-FinalStatusFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
-    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
-        this.select.value = '__all__';
-    } else if (FINAL_STATUS_VALUES.indexOf(parentModel.filter) !== -1) {
-        this.select.value = parentModel.filter;
-    } else {
-        this.select.value = '__all__';
-    }
-};
 
-// Custom floating filter for Collection (products): dropdown like Order Status, but
-// its options are the distinct collection values actually on the loaded products
-// (not a fixed list) - refreshCollectionFilterValues() rebuilds them after each
-// loadProducts(), since products (and this filter) load after the grid itself does.
-function collectionValuesFromProducts() {
-    const values = new Set(['']);
-    (products || []).forEach((p) => values.add(p.collection || ''));
-    return ['', ...Array.from(values).filter((v) => v !== '').sort((a, b) => a.localeCompare(b))];
+/** Health indicator for one order row, shown in the Status column and filtered on by
+ * FinalStatusSetFilter - single source of truth for both, so the column and its filter
+ * can't drift apart. */
+function computeFinalStatus(row) {
+    const status = (row.order_status || '').toLowerCase();
+    if (status === 'cancelled') return 'None';
+
+    const delivery = parseFloat(row.delivery_charge) || 0;
+    // Green only when the courier side is fully settled: delivered with a delivery charge, or
+    // returned with a delivery charge and the piece back in hand.
+    if (status === 'delivered' && delivery > 0) return 'OK';
+    if (status === 'returned' && delivery > 0 && (row.piece_received || '').trim() === 'Received') return 'OK';
+
+    return 'Warning';
 }
 
-const collectionFloatingFilterInstances = [];
+const FinalStatusSetFilter = makeCheckboxSetFilter(computeFinalStatus);
+const FinalStatusFloatingFilter = makeCheckboxFloatingFilter(() => FINAL_STATUS_VALUES);
 
-function refreshCollectionFilterValues() {
-    const values = collectionValuesFromProducts();
-    collectionFloatingFilterInstances.forEach((instance) => instance.setValues(values));
-}
+// Collection options (products) come from the distinct values on the loaded products rather
+// than a fixed list; '' is always offered, shown as '—', for products with no collection.
+const CollectionSetFilter = makeCheckboxSetFilter((row) => row.collection || '');
+const CollectionFloatingFilter = makeCheckboxFloatingFilter(
+    () => {
+        const values = new Set(['']);
+        (products || []).forEach((p) => values.add(p.collection || ''));
+        return ['', ...Array.from(values).filter((v) => v !== '').sort((a, b) => a.localeCompare(b))];
+    },
+    (v) => (v === '' ? '—' : v)
+);
 
-function CollectionFloatingFilter() {}
-CollectionFloatingFilter.prototype.init = function (params) {
-    this.params = params;
-    this.values = collectionValuesFromProducts();
-    this.eGui = document.createElement('div');
-    this.eGui.className = 'grid-floating-filter-wrap';
-    this.eGui.style.width = '100%';
-    const select = document.createElement('select');
-    select.className = 'grid-floating-filter-select';
-    select.style.width = '100%';
-    const api = params.api;
-    const columnId = params.column.getColId();
-    select.addEventListener('change', function () {
-        const val = select.value;
-        const currentModel = api.getFilterModel() || {};
-        const newModel = Object.assign({}, currentModel);
-        if (val === '__all__') {
-            delete newModel[columnId];
-        } else {
-            // Use sentinel for empty so AG Grid doesn't treat it as "no filter"
-            const filterVal = (val === '') ? '__empty__' : val;
-            newModel[columnId] = { filterType: 'text', type: 'equals', filter: filterVal };
-        }
-        api.setFilterModel(newModel);
-    });
-    this.eGui.appendChild(select);
-    this.select = select;
-    this.setValues(this.values);
-    collectionFloatingFilterInstances.push(this);
-};
-CollectionFloatingFilter.prototype.setValues = function (values) {
-    this.values = values;
-    const current = this.select.value || '__all__';
-    this.select.innerHTML = '';
-    const allOption = document.createElement('option');
-    allOption.value = '__all__';
-    allOption.textContent = 'All';
-    this.select.appendChild(allOption);
-    values.forEach(function (v) {
-        const opt = document.createElement('option');
-        opt.value = v;
-        opt.textContent = v === '' ? '—' : v;
-        this.select.appendChild(opt);
-    }, this);
-    // Keep the current selection if it's still a valid option, else fall back to "All".
-    this.select.value = (current === '__all__' || values.indexOf(current) !== -1) ? current : '__all__';
-};
-CollectionFloatingFilter.prototype.getGui = function () { return this.eGui; };
-CollectionFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
-    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null) {
-        this.select.value = '__all__';
-    } else if (parentModel.filter === '__empty__') {
-        this.select.value = '';
-    } else if (this.values.indexOf(parentModel.filter) !== -1) {
-        this.select.value = parentModel.filter;
-    } else {
-        this.select.value = '__all__';
-    }
-};
-
-// Custom floating filter for Piece Received: dropdown in the filter row
 const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];
-function PieceReceivedFloatingFilter() {}
-PieceReceivedFloatingFilter.prototype.init = function (params) {
-    this.params = params;
-    this.eGui = document.createElement('div');
-    this.eGui.className = 'grid-floating-filter-wrap';
-    this.eGui.style.width = '100%';
-    const select = document.createElement('select');
-    select.className = 'grid-floating-filter-select';
-    select.style.width = '100%';
-    const allOption = document.createElement('option');
-    allOption.value = '__all__';
-    allOption.textContent = 'All';
-    select.appendChild(allOption);
-    PIECE_RECEIVED_VALUES.forEach(function (v) {
-        const opt = document.createElement('option');
-        opt.value = v;
-        opt.textContent = v;
-        select.appendChild(opt);
-    });
-    const api = params.api;
-    const columnId = params.column.getColId();
-    select.addEventListener('change', function () {
-        const val = select.value;
-        const currentModel = api.getFilterModel() || {};
-        const newModel = Object.assign({}, currentModel);
-        if (val === '__all__') {
-            delete newModel[columnId];
-        } else {
-            newModel[columnId] = { filterType: 'text', type: 'equals', filter: val };
-        }
-        api.setFilterModel(newModel);
-    });
-    this.eGui.appendChild(select);
-    this.select = select;
-};
-PieceReceivedFloatingFilter.prototype.getGui = function () { return this.eGui; };
-PieceReceivedFloatingFilter.prototype.onParentModelChanged = function (parentModel) {
-    if (!parentModel || parentModel.filter === undefined || parentModel.filter === null || parentModel.filter === '') {
-        this.select.value = '__all__';
-    } else if (PIECE_RECEIVED_VALUES.indexOf(parentModel.filter) !== -1) {
-        this.select.value = parentModel.filter;
-    } else {
-        this.select.value = '__all__';
-    }
-};
+const PieceReceivedSetFilter = makeCheckboxSetFilter((row) => {
+    const stored = (row.piece_received || '').trim();
+    return PIECE_RECEIVED_VALUES.includes(stored) ? stored : 'Pending';
+});
+const PieceReceivedFloatingFilter = makeCheckboxFloatingFilter(() => PIECE_RECEIVED_VALUES);
 
 // Maps an order's advance_status code to a colored indicator + tooltip.
 // Codes (kept in sync with backend app/advance_status.py):
@@ -920,7 +655,6 @@ function initOrdersGrid() {
             profit_percent: sums.total_amount_for_profit > 0 ? (sums.net_profit / sums.total_amount_for_profit) * 100 : null,
             piece_received: null,
             order_receiving_date: null,
-            courier_pickup_date: null,
             final_status: null
         };
         

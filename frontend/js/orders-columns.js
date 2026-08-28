@@ -76,9 +76,8 @@ function buildOrdersGridColumns() {
             headerName: 'Courier',
             field: 'courier',
             width: 100,
-            filter: 'agTextColumnFilter',
-            filterParams: textFilterContains,
-            filterValueGetter: (params) => (params.data && params.data.id === '__footer__') ? null : getCourierDisplayName(params.data || {}),
+            filter: CourierSetFilter,
+            floatingFilterComponent: CourierFloatingFilter,
             valueFormatter: (params) => (params.data && params.data.id === '__footer__') ? '' : getCourierDisplayName(params.data || {}),
             cellRenderer: (params) => {
                 if (params.data && params.data.id === '__footer__') return '';
@@ -404,12 +403,7 @@ function buildOrdersGridColumns() {
             headerName: 'Piece Received',
             field: 'piece_received',
             width: 120,
-            filter: 'agTextColumnFilter',
-            filterParams: {
-                filterOptions: ['equals'],
-                defaultOption: 'equals',
-                maxNumConditions: 1
-            },
+            filter: PieceReceivedSetFilter,
             floatingFilterComponent: PieceReceivedFloatingFilter,
             editable: () => isEditingAllowed(),
             cellStyle: { cursor: 'pointer' },
@@ -493,67 +487,15 @@ function buildOrdersGridColumns() {
             }
         },
         {
-            headerName: 'Pickup Date',
-            field: 'courier_pickup_date',
-            width: 130,
-            floatingFilter: false,
-            filter: 'agDateColumnFilter',
-            filterParams: {
-                filterOptions: ['inRange'],
-                defaultOption: 'inRange',
-                browserDatePicker: true
-            },
-            valueGetter: (params) => {
-                const date = params.data.courier_pickup_date;
-                return date ? new Date(date) : null;
-            },
-            valueFormatter: (params) => {
-                if (params.value) {
-                    return formatDateDDMMYYYY(params.value);
-                }
-                return '';
-            }
-        },
-        {
             headerName: 'Status',
             field: 'final_status',
             width: 110,
-            filter: 'agTextColumnFilter',
-            filterParams: {
-                filterOptions: ['equals'],
-                defaultOption: 'equals',
-                maxNumConditions: 1
-            },
+            filter: FinalStatusSetFilter,
             floatingFilterComponent: FinalStatusFloatingFilter,
             sortable: true,
             valueGetter: (params) => {
                 if (params.data && params.data.id === '__footer__') return null;
-                const order = params.data;
-                const status = (order.order_status || '').toLowerCase();
-                const pieceReceived = (order.piece_received || '').trim();
-                
-                // None for cancelled orders
-                if (status === 'cancelled') {
-                    return 'None';
-                }
-                
-                const delivery = parseFloat(order.delivery_charge) || 0;
-                
-                // Green (OK) only in 2 scenarios (no receivable condition):
-                // 1. Order is delivered AND delivery_charge is non-zero
-                // 2. Order is returned AND delivery_charge is non-zero AND piece_received is "Received"
-                if (status === 'delivered') {
-                    if (delivery > 0) {
-                        return 'OK';
-                    }
-                } else if (status === 'returned') {
-                    if (delivery > 0 && pieceReceived === 'Received') {
-                        return 'OK';
-                    }
-                }
-                
-                // Default: all orders are yellow (Warning)
-                return 'Warning';
+                return computeFinalStatus(params.data);
             },
             cellRenderer: (params) => {
                 if (params.data && params.data.id === '__footer__') return '';

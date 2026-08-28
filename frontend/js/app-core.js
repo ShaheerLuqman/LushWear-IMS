@@ -126,10 +126,10 @@ let updateFooterRow = null; // Will be set in initOrdersGrid
 let loadSheetRiderNames = [];
 /** Next assignment number for load sheet (format LW-N). Updated when load sheet logs are fetched. */
 let nextLoadSheetAssignmentNumber = 1;
-// Auto-sync orders 5 minutes after the last sync (server-tracked via /orders/sync-status,
-// not per-tab); timer is reset whenever a sync (manual or auto) completes. The backend's
-// lock (sync_status.in_progress, capped at _SYNC_LOCK_STALE_AFTER=5min in orders.py) keeps
-// overlapping tabs/devices from ever syncing concurrently.
+// Orders sync once on app load, then every 5 minutes; the timer is reset whenever a sync
+// completes. The backend's lock (sync_status.in_progress, capped at
+// _SYNC_LOCK_STALE_AFTER=5min in orders.py) keeps overlapping tabs/devices from ever
+// syncing concurrently - a load-time sync racing another tab's gets already_syncing back.
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
 let lastOrdersSyncAt = null; // ms epoch
