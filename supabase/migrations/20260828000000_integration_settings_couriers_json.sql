@@ -1,0 +1,12 @@
+-- Courier credentials move from one column per courier (postex_merchant_token,
+-- couriers_next_auth_key) into a single `couriers` blob, so onboarding a new courier
+-- no longer needs a schema migration. The blob holds the whole courier JSON encrypted
+-- as one Fernet ciphertext (app/org_settings.py), which is why this is TEXT and not
+-- JSONB - Postgres never sees the JSON, so it can't be queried or indexed on.
+--
+-- The old columns are deliberately NOT dropped here: their values are encrypted with
+-- SETTINGS_ENCRYPTION_KEY, so only the app layer can re-encrypt them into the blob.
+-- Run `python -m scripts.backfill_courier_settings` (which reads and rewrites through
+-- app/org_settings.py) with this migration applied, then drop the old columns in a
+-- follow-up migration once every environment is backfilled.
+ALTER TABLE system_integration_settings ADD COLUMN IF NOT EXISTS couriers TEXT;

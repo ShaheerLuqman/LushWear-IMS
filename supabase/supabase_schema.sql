@@ -78,6 +78,8 @@ CREATE INDEX IF NOT EXISTS idx_org_memberships_org_id ON system_org_memberships(
 -- encrypted at the app layer (Fernet, app/org_settings.py, SETTINGS_ENCRYPTION_KEY)
 -- before being stored here - never plaintext, since these are third-party
 -- secrets belonging to external clients, not this app's own credentials.
+-- Courier credentials live together in the encrypted `couriers` blob rather than
+-- a column per courier.
 -- See supabase/migrations/20260730110000_org_integration_settings_table.sql.
 -- ============================================================================
 
@@ -93,9 +95,11 @@ CREATE TABLE IF NOT EXISTS system_integration_settings (
     -- and is refreshed via shopify_refresh_token; see app/org_settings.py.
     shopify_refresh_token     TEXT,
     shopify_token_expires_at  TIMESTAMPTZ,
-    postex_merchant_token     TEXT,
-    -- CouriersNext's own auth_key - see 20260826000000_couriers_next_auth_key.sql.
-    couriers_next_auth_key    TEXT,
+    -- Every courier's credentials as one Fernet-encrypted JSON blob keyed by courier
+    -- id, so onboarding a courier needs no migration. TEXT, not JSONB: the whole JSON
+    -- is a single ciphertext, so Postgres can neither query nor index inside it.
+    -- See 20260828000000_integration_settings_couriers_json.sql.
+    couriers                  TEXT,
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

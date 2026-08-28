@@ -13,12 +13,11 @@ makes a restart double as a cache refresh, exactly as intended.
 """
 import json
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 import httpx
 
-from app.database import get_supabase
-from app.org_settings import OrgIntegrationSettings, get_org_integration_settings
+from app.org_settings import OrgIntegrationSettings, any_org_courier_credential
 from app.paths import CACHE_DIR
 
 logger = logging.getLogger("app.courier_cities")
@@ -104,24 +103,6 @@ async def _fetch_couriers_next_cities() -> List[str]:
     return sorted(names)
 
 
-def _first_postex_merchant_token() -> Optional[str]:
-    """Any one org's PostEx token - see the module docstring for why any org's
-    works to populate the shared cache."""
-    rows = (
-        get_supabase()
-        .table("system_integration_settings")
-        .select("org_id")
-        .not_.is_("postex_merchant_token", "null")
-        .limit(1)
-        .execute()
-        .data
-        or []
-    )
-    if not rows:
-        return None
-    return get_org_integration_settings(rows[0]["org_id"]).postex_merchant_token
-
-
 async def refresh_courier_cities_cache() -> None:
     """Refetches both couriers' city lists and persists them to CACHE_FILE - called
     once at app startup. Not called on a per-request timer past that; get_courier_cities
@@ -131,7 +112,7 @@ async def refresh_courier_cities_cache() -> None:
     if cn_cities:
         _cache["couriers_next"] = cn_cities
 
-    token = _first_postex_merchant_token()
+    token = any_org_courier_credential("postex")
     if token:
         postex_cities = await _fetch_postex_delivery_cities(token)
         if postex_cities:

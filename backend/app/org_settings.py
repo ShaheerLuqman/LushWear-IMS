@@ -5,11 +5,19 @@ and the PostEx call sites in `app/routes/orders.py` all receive credentials as a
 parameter instead of reading a global `settings.*` value, same chokepoint
 principle as `app.org_scope` applies to business-table org_id filtering.
 
-`shopify_access_token`/`postex_merchant_token` are encrypted at rest via
+`shopify_access_token` and the courier credentials are encrypted at rest via
 Fernet (SETTINGS_ENCRYPTION_KEY) - these are third-party secrets belonging to
 external clients (a leaked Shopify token exposes a client's whole store), not
 just this app's own credentials, so they get a higher bar than the app's own
 password hashes.
+
+Courier credentials live in one `couriers` blob keyed by courier id rather than a
+column per courier, so onboarding a courier needs no schema migration. The whole
+JSON is encrypted as a single ciphertext, which means Postgres cannot filter on it -
+`any_org_courier_credential()` exists for the one caller that needs to search
+across orgs. Reads fall back to the pre-blob columns (see
+20260828000000_integration_settings_couriers_json.sql) so an un-backfilled row
+keeps working; writes only ever go to the blob.
 
 Shopify's Admin API now rejects non-expiring offline tokens for Public apps
 created on/after 2026-04-01 - `shopify_access_token` expires at
@@ -19,6 +27,7 @@ display routes) must call `ensure_valid_shopify_token()` on the credentials
 it got from `get_org_integration_settings()` before using them.
 """
 
+import json
 import logging
 import os
 from dataclasses import dataclass
@@ -73,6 +82,31 @@ def _decrypt(value: Optional[str]) -> Optional[str]:
         return None
 
 
+# Courier id -> the credential key inside that courier's blob entry, and the
+# pre-blob column the value used to live in. Adding a courier means adding a row
+# here; the database itself needs no change.
+_COURIER_CREDENTIALS = {
+    "postex": "merchant_token",
+    "couriers_next": "auth_key",
+}
+
+
+def _decode_couriers(row: dict) -> dict:
+    """Courier credentials for one settings row as {courier_id: {key: value}}.
+    The `couriers` blob is the only source - a row that predates it reads as
+    nothing configured until scripts/backfill_courier_settings.py has run."""
+    blob = _decrypt(row.get("couriers"))
+    if not blob:
+        return {}
+    try:
+        return json.loads(blob)
+    except ValueError:
+        # Same reasoning as _decrypt's InvalidToken branch: a corrupt blob
+        # reads as "not configured" rather than 500ing every call site.
+        logger.warning("Undecodable couriers blob - treating as not configured")
+        return {}
+
+
 @dataclass
 class OrgIntegrationSettings:
     shopify_store_url: Optional[str]
@@ -80,8 +114,18 @@ class OrgIntegrationSettings:
     shopify_api_version: str
     shopify_refresh_token: Optional[str]
     shopify_token_expires_at: Optional[datetime]
-    postex_merchant_token: Optional[str]
-    couriers_next_auth_key: Optional[str]
+    couriers: dict
+
+    def courier_credential(self, courier: str) -> Optional[str]:
+        return (self.couriers.get(courier) or {}).get(_COURIER_CREDENTIALS[courier])
+
+    @property
+    def postex_merchant_token(self) -> Optional[str]:
+        return self.courier_credential("postex")
+
+    @property
+    def couriers_next_auth_key(self) -> Optional[str]:
+        return self.courier_credential("couriers_next")
 
 
 def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
@@ -103,9 +147,32 @@ def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
         shopify_api_version=row.get("shopify_api_version") or _DEFAULT_SHOPIFY_API_VERSION,
         shopify_refresh_token=_decrypt(row.get("shopify_refresh_token")),
         shopify_token_expires_at=datetime.fromisoformat(expires_at) if expires_at else None,
-        postex_merchant_token=_decrypt(row.get("postex_merchant_token")),
-        couriers_next_auth_key=_decrypt(row.get("couriers_next_auth_key")),
+        couriers=_decode_couriers(row),
     )
+
+
+def any_org_courier_credential(courier: str) -> Optional[str]:
+    """Any one org's credential for `courier`, for callers populating data that
+    isn't org-specific (app/services/courier_cities.py's shared city cache).
+
+    The blob is opaque to Postgres, so unlike the pre-blob columns this can't be a
+    `.not_.is_(column, "null")` filter - rows are decrypted here until one has the
+    credential. Bounded by stopping at the first hit, and only ever reached at
+    startup for a courier the cache hasn't populated."""
+    rows = (
+        get_supabase()
+        .table("system_integration_settings")
+        .select("*")
+        .execute()
+        .data
+        or []
+    )
+    key = _COURIER_CREDENTIALS[courier]
+    for row in rows:
+        value = (_decode_couriers(row).get(courier) or {}).get(key)
+        if value:
+            return value
+    return None
 
 
 async def ensure_valid_shopify_token(org_id: str, settings: OrgIntegrationSettings) -> OrgIntegrationSettings:
@@ -179,7 +246,12 @@ def upsert_org_integration_settings(
     backfill) - also called by ensure_valid_shopify_token() after a refresh.
     Only touches the fields actually passed - an omitted field keeps whatever
     is already stored, so an admin can update just the PostEx token without
-    re-entering the Shopify credentials."""
+    re-entering the Shopify credentials.
+
+    Courier credentials are still named per courier here (the API and both
+    Settings UIs speak that shape); this is where they are folded into the
+    single `couriers` blob. Setting one courier's credential re-encrypts the
+    whole blob, so the others are read back first to avoid dropping them."""
     payload = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
     if shopify_store_url is not None:
         payload["shopify_store_url"] = shopify_store_url
@@ -200,8 +272,11 @@ def upsert_org_integration_settings(
         payload["shopify_refresh_token"] = _encrypt(shopify_refresh_token)
     if shopify_token_expires_at is not None:
         payload["shopify_token_expires_at"] = shopify_token_expires_at.isoformat()
-    if postex_merchant_token is not None:
-        payload["postex_merchant_token"] = _encrypt(postex_merchant_token)
-    if couriers_next_auth_key is not None:
-        payload["couriers_next_auth_key"] = _encrypt(couriers_next_auth_key)
+    courier_updates = {"postex": postex_merchant_token, "couriers_next": couriers_next_auth_key}
+    if any(v is not None for v in courier_updates.values()):
+        couriers = get_org_integration_settings(org_id).couriers
+        for courier, value in courier_updates.items():
+            if value is not None:
+                couriers.setdefault(courier, {})[_COURIER_CREDENTIALS[courier]] = value
+        payload["couriers"] = _encrypt(json.dumps(couriers))
     get_supabase().table("system_integration_settings").upsert(payload, on_conflict="org_id").execute()
