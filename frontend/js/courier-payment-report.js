@@ -116,7 +116,7 @@ function courierPaymentReportSummary(orderRows, bills) {
         }
     });
 
-    const netOwed = bills.reduce((sum, bill) => sum + bill.remainingAmount, 0);
+    const netOwed = roundMoney(bills.reduce((sum, bill) => sum + bill.remainingAmount, 0));
     return { inTransit, resolved, netOwed, inTransitByStatus };
 }
 
@@ -154,6 +154,14 @@ function pickupDateKey(order) {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+/** Money sums accumulate binary-float error, which leaves a derived figure that should be
+ * exactly zero sitting at a residue like -5.5e-17 - and that formats as "-0.00" on an
+ * otherwise fully-settled bill. Rounding each bill total to paisa before it's displayed or
+ * summed keeps that out of both the grid and the Net Owed card. */
+function roundMoney(value) {
+    return Math.round(value * 100) / 100;
+}
+
 /** Cash-on-delivery amount for one order: total minus advance, for every order
  * regardless of status - unlike computeReceivable, this doesn't wait for (or exclude
  * as 0 for returns) a final delivered/returned outcome, since it's just the raw
@@ -169,8 +177,8 @@ function computeCod(order) {
  * per-order receivables. Received only accumulates over resolved *and settled* orders
  * (via computeReceivable, since that's the only place an order's own receivable is known),
  * and Remaining is just Net Receivable minus that. Only *settled* returns are backed out
- * of Gross COD - an unsettled return isn't reconciled with the courier yet, so its value
- * has to stay in Remaining rather than being written off in advance. */
+ * of Gross COD, at their COD value - an unsettled return isn't reconciled with the courier
+ * yet, so its value has to stay in Remaining rather than being written off in advance. */
 function aggregateCourierPaymentReportBill(bill) {
     let billValue = 0;
     let advanceTotal = 0;
@@ -191,7 +199,7 @@ function aggregateCourierPaymentReportBill(bill) {
         advanceTotal += parseFloat(order.advance_amount) || 0;
         charges += parseFloat(order.delivery_charge) || 0;
         taxes += parseFloat(order.tax_amount) || 0;
-        if (status === 'returned' && order.is_order_settled) returnedTotal += parseFloat(order.total_amount) || 0;
+        if (status === 'returned' && order.is_order_settled) returnedTotal += computeCod(order);
 
         if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
             inTransitCount++;
@@ -212,9 +220,11 @@ function aggregateCourierPaymentReportBill(bill) {
     else if (settledCount === 0) status = 'unpaid';
     else status = 'partially_paid';
 
-    // Gross COD is Bill Value with the settled returned orders' full value backed out too -
-    // the running total after both deductions, not a separately-tracked figure, so it can't
-    // drift out of step with the Bill Value/Returned Orders shown above it.
+    // Gross COD is Bill Value with the settled returned orders backed out too - the running
+    // total after both deductions, not a separately-tracked figure, so it can't drift out of
+    // step with the Bill Value/Returned Orders shown above it. Both sides are COD (net of
+    // advance), since deducting a return's full total from a Bill Value that already excludes
+    // the advance would back the advance out twice.
     const grossCod = billValue - returnedTotal;
     const netReceivable = grossCod - charges - taxes;
 
@@ -224,15 +234,15 @@ function aggregateCourierPaymentReportBill(bill) {
         inTransitCount,
         resolvedCount,
         settledCount,
-        billValue,
-        advanceTotal,
-        grossCod,
-        charges,
-        taxes,
-        returnedTotal,
-        netReceivable,
-        receivedAmount,
-        remainingAmount: netReceivable - receivedAmount,
+        billValue: roundMoney(billValue),
+        advanceTotal: roundMoney(advanceTotal),
+        grossCod: roundMoney(grossCod),
+        charges: roundMoney(charges),
+        taxes: roundMoney(taxes),
+        returnedTotal: roundMoney(returnedTotal),
+        netReceivable: roundMoney(netReceivable),
+        receivedAmount: roundMoney(receivedAmount),
+        remainingAmount: roundMoney(netReceivable - receivedAmount),
         status,
     };
 }
