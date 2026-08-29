@@ -117,3 +117,77 @@ class TestHasSettledTag:
     def test_detects_the_settled_tag(self, tags, expected):
         from app.services.shopify_sync import has_settled_tag
         assert has_settled_tag(tags) is expected
+
+
+class _StubFulfillment:
+    """Stand-in for the order/fulfillment_orders/fulfillments endpoints create_fulfillment uses."""
+
+    def __init__(self, tags="Confirmed", fulfillment_orders=None):
+        self.order = {"id": 1, "tags": tags}
+        self.fulfillment_orders = (
+            fulfillment_orders if fulfillment_orders is not None else [{"id": 55, "status": "open"}]
+        )
+        self.puts = []
+        self.fulfillments = []
+
+    def handler(self, request):
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/orders/1.json"):
+            return httpx.Response(200, json={"order": self.order})
+        if request.method == "PUT" and path.endswith("/orders/1.json"):
+            body = json.loads(request.content)["order"]
+            self.puts.append(body)
+            self.order["tags"] = body["tags"]
+            return httpx.Response(200, json={"order": self.order})
+        if request.method == "GET" and path.endswith("/fulfillment_orders.json"):
+            return httpx.Response(200, json={"fulfillment_orders": self.fulfillment_orders})
+        if request.method == "POST" and path.endswith("/fulfillments.json"):
+            body = json.loads(request.content)["fulfillment"]
+            self.fulfillments.append(body)
+            return httpx.Response(201, json={"fulfillment": body})
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    install = _StubShopify.install
+
+
+class TestCreateFulfillment:
+    def test_tags_the_order_with_the_courier_and_sends_the_tracking_number(self, monkeypatch):
+        stub = _StubFulfillment().install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+
+        assert stub.puts[0]["tags"] == "Confirmed, PostEx"
+        tracking = stub.fulfillments[0]["tracking_info"]
+        assert tracking == {"number": "CX123", "company": "PostEx"}
+
+    def test_courier_tag_uses_the_courier_name_it_was_booked_with(self, monkeypatch):
+        stub = _StubFulfillment().install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CN9", "Couriers Next", _creds()))
+
+        assert stub.puts[0]["tags"] == "Confirmed, Couriers Next"
+
+    def test_an_existing_courier_tag_is_not_duplicated(self, monkeypatch):
+        # Case-insensitive, so a re-run cannot produce "PostEx, postex".
+        stub = _StubFulfillment(tags="Confirmed, postex").install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+
+        assert stub.puts == []
+
+    def test_other_tags_survive(self, monkeypatch):
+        stub = _StubFulfillment(tags="Confirmed, Settled, VIP").install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+
+        assert stub.puts[0]["tags"] == "Confirmed, Settled, VIP, PostEx"
+
+    def test_an_order_with_nothing_left_to_fulfill_is_still_tagged(self, monkeypatch):
+        # The tag says who carries the parcel, which is true whether or not this call
+        # was the one that created the fulfillment.
+        stub = _StubFulfillment(fulfillment_orders=[{"id": 55, "status": "closed"}]).install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+
+        assert stub.puts[0]["tags"] == "Confirmed, PostEx"
+        assert stub.fulfillments == []

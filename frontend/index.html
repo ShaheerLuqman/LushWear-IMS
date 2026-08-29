@@ -566,9 +566,13 @@
                                     <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
                                 </div>
 
-                                <div class="form-group fulfillment-tracking-group">
-                                    <label for="fulfillmentTrackingInput">Tracking Number (Optional)</label>
-                                    <input type="text" id="fulfillmentTrackingInput" class="form-input" placeholder="Enter tracking number">
+                                <!-- The courier assigns the tracking number at booking time, so there is
+                                     deliberately no tracking-number field here. A pickup location is required:
+                                     PostEx rejects a booking that names no pickup address, and Couriers Next
+                                     needs the shipper profile the parcel ships under. -->
+                                <div class="form-group fulfillment-pickup-group" id="fulfillmentPickupGroup" style="display: none;">
+                                    <label for="fulfillmentPickupSelect">Pickup Location</label>
+                                    <select id="fulfillmentPickupSelect" class="form-input"></select>
                                 </div>
 
                                 <div class="fulfillment-side-panel-actions">

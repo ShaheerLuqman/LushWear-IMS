@@ -414,6 +414,86 @@ class TestPostexCsvUpload:
         )
         assert r.status_code == 400
 
+    def test_replacement_order_refs_stay_out_of_the_integer_filter(self, make_client):
+        """order_number is an INTEGER column, so the "4446-R" forms
+        normalize_order_number emits cannot go into the .in_() filter - Postgres would
+        reject the whole query. They are dropped from it and reported unmatched."""
+        import app.routes.orders as orders_module
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        # The fake query builder accepts any filter, so pin the argument on the real
+        # class the fixture built rather than trusting the chain to reject bad types.
+        fake_query_cls = type(orders_module.get_supabase().table("shopify_orders"))
+        captured = []
+        fake_query_cls.in_ = lambda self, column, values: (
+            captured.append((column, values)), self)[1]
+        try:
+            csv_bytes = b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n100,200\n4446-R,150\n"
+            r = client.post(
+                "/api/orders/upload-postex-csv",
+                files={"file": ("postex.csv", csv_bytes, "text/csv")},
+            )
+        finally:
+            del fake_query_cls.in_
+
+        assert r.status_code == 200
+        assert ("order_number", [100]) in captured
+        body = r.json()
+        assert body["matched_order_numbers"] == ["100"]
+        assert "4446-R" in body["message"]
+
+    def test_settlement_push_is_queued_as_a_background_task(self, make_client):
+        """Mirroring settlements into Shopify is hundreds of round trips, so it must be
+        handed to BackgroundTasks rather than awaited inline - otherwise the upload
+        response waits on the whole push. Both run before TestClient returns, so this
+        asserts the registration itself, which is what actually frees the response."""
+        from starlette.background import BackgroundTasks
+        import app.routes.orders as orders_module
+
+        queued = []
+        real_add_task = BackgroundTasks.add_task
+
+        def _spy_add_task(self, func, *args, **kwargs):
+            queued.append((getattr(func, "__name__", None), args))
+            return real_add_task(self, func, *args, **kwargs)
+
+        pushed = []
+        real_push = orders_module._push_settlements_to_shopify
+
+        async def _fake_push(order_numbers, org_id):
+            pushed.append(list(order_numbers))
+
+        BackgroundTasks.add_task = _spy_add_task
+        orders_module._push_settlements_to_shopify = _fake_push
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        try:
+            r = client.post(
+                "/api/orders/upload-postex-csv",
+                files={"file": ("postex.csv", self._csv((100, 200)), "text/csv")},
+            )
+        finally:
+            BackgroundTasks.add_task = real_add_task
+            orders_module._push_settlements_to_shopify = real_push
+
+        assert r.status_code == 200
+        assert queued == [("_fake_push", (["100"], "test-org"))]
+        assert pushed == [["100"]]
+
+    def test_all_non_numeric_refs_short_circuit(self, make_client):
+        client = make_client({"shopify_orders": []})
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n4446-R,150\n", "text/csv")},
+        )
+        assert r.status_code == 200
+        assert r.json()["updated"] == 0
+
 
 class TestLedgers:
     def test_list(self, make_client, ledger_row):

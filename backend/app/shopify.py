@@ -214,20 +214,25 @@ async def adjust_inventory_levels(
 async def create_fulfillment(
     shopify_order_id: int, tracking_number: str, tracking_company: str, org_creds: OrgIntegrationSettings
 ) -> None:
-    """Mark a Shopify order fulfilled with the courier's tracking number, so the store
-    (and the customer's shipping notification) reflect a parcel that has actually been
-    booked - called after the courier API hands back a tracking number.
+    """Mark a Shopify order fulfilled with the courier's tracking number and tag it with
+    the courier's name, so the store (and the customer's shipping notification) reflect a
+    parcel that has actually been booked - called after the courier API hands back a
+    tracking number.
 
     Since API 2024-07 a fulfillment is created against the order's *fulfillment orders*,
     not the order itself, so this looks those up first. Only the ones still open are
     fulfillable; an order with none (already fulfilled, or cancelled) is left alone
-    rather than treated as an error, since the booking it belongs to did succeed.
+    rather than treated as an error, since the booking it belongs to did succeed - but
+    it is still tagged, since the courier tag describes who carries the parcel, not
+    whether this particular call created the fulfillment.
     """
     store_url, access_token = _credentials(org_creds)
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
 
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        await add_order_tag(shopify_order_id, tracking_company, org_creds, client)
+
         response = await client.get(f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
         response.raise_for_status()
         fulfillment_orders = [
@@ -247,8 +252,29 @@ async def create_fulfillment(
         response.raise_for_status()
 
 
+# Deeper than _MAX_RATE_LIMIT_RETRIES: the bucket is shop-wide, so concurrent settle
+# workers refill it together and a loser can need several seconds of backoff. At 5
+# attempts from 0.5s the budget ran out at ~8s and dropped orders.
+_SETTLE_RATE_LIMIT_RETRIES = 8
+
+
+async def _request_with_retry(client, method: str, url: str, **kwargs):
+    """Shopify request that backs off on 429 instead of raising - concurrent callers
+    (scripts.backfill_settled_orders) share one shop-wide bucket, so a burst can hit
+    the limit even well under its capacity."""
+    for attempt in range(_SETTLE_RATE_LIMIT_RETRIES):
+        response = await client.request(method, url, **kwargs)
+        if response.status_code != 429:
+            response.raise_for_status()
+            return response
+        retry_after = float(response.headers.get("Retry-After", 0) or 0)
+        await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
+    raise RuntimeError(f"rate limited by Shopify after {_SETTLE_RATE_LIMIT_RETRIES} retries: {url}")
+
+
 async def mark_order_settled(
-    shopify_order_id: int, org_creds: OrgIntegrationSettings, record_payment: bool = True
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, record_payment: bool = True,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> bool:
     """Tag a Shopify order "Settled" and record the courier's payout against it, so the
     store stops showing a COD order as unpaid once the money has actually arrived.
@@ -269,36 +295,45 @@ async def mark_order_settled(
     invent money that never arrived. The tag still matters there: it stops the sync
     reading a later "paid" as a customer advance.
 
+    `client` lets a caller settling many orders share one connection pool rather than
+    paying a TLS handshake per order.
+
     Returns True if the order was marked paid, False if it was only tagged.
     """
+    if client is None:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as owned_client:
+            return await mark_order_settled(shopify_order_id, org_creds, record_payment, owned_client)
+
     store_url, access_token = _credentials(org_creds)
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        response = await client.get(f"{base}/orders/{shopify_order_id}.json", headers=headers,
-                                    params={"fields": "id,tags,total_outstanding"})
-        response.raise_for_status()
-        order = response.json()["order"]
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        params={"fields": "id,tags,total_outstanding"})
+    order = response.json()["order"]
 
-        tags = [t.strip() for t in (order.get("tags") or "").split(",") if t.strip()]
-        if not any(t.lower() == SETTLED_TAG.lower() for t in tags):
-            response = await client.put(f"{base}/orders/{shopify_order_id}.json", headers=headers,
-                                        json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [SETTLED_TAG])}})
-            response.raise_for_status()
+    # The tags came back with the fetch above, so tag inline rather than calling
+    # add_order_tag - it would re-GET the same order, doubling this call in a bulk push.
+    tags = [t.strip() for t in (order.get("tags") or "").split(",") if t.strip()]
+    if not any(t.lower() == SETTLED_TAG.lower() for t in tags):
+        await _request_with_retry(
+            client, "PUT", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+            json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [SETTLED_TAG])}})
 
-        outstanding = float(order.get("total_outstanding") or 0)
-        if not record_payment or outstanding <= 0:
-            return False
+    outstanding = float(order.get("total_outstanding") or 0)
+    if not record_payment or outstanding <= 0:
+        return False
 
-        response = await client.get(f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers)
-        response.raise_for_status()
-        pending = next((t for t in response.json().get("transactions", [])
-                        if t.get("kind") == "sale" and t.get("status") == "pending"), None)
-        if not pending:
-            return False
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers)
+    pending = next((t for t in response.json().get("transactions", [])
+                    if t.get("kind") == "sale" and t.get("status") == "pending"), None)
+    if not pending:
+        return False
 
-        response = await client.post(f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers, json={
+    await _request_with_retry(
+        client, "POST", f"{base}/orders/{shopify_order_id}/transactions.json", headers=headers, json={
             "transaction": {
                 "kind": "capture",
                 "status": "success",
@@ -307,8 +342,33 @@ async def mark_order_settled(
                 "parent_id": pending["id"],
             }
         })
-        response.raise_for_status()
-        return True
+    return True
+
+
+async def add_order_tag(
+    shopify_order_id: int, tag: str, org_creds: OrgIntegrationSettings, client: httpx.AsyncClient
+) -> None:
+    """Append `tag` to a Shopify order, leaving its existing tags intact.
+
+    Shopify has no "add one tag" call - `tags` is a single comma-separated string that
+    is replaced wholesale - so the current set has to be read first, or the PUT silently
+    wipes every other tag the order carries. Matching is case-insensitive so re-running
+    a fulfillment cannot produce "PostEx, postex".
+    """
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        params={"fields": "id,tags"})
+    tags = [t.strip() for t in (response.json()["order"].get("tags") or "").split(",") if t.strip()]
+    if any(t.lower() == tag.lower() for t in tags):
+        return
+
+    await _request_with_retry(
+        client, "PUT", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [tag])}})
 
 
 async def fetch_product_collections(

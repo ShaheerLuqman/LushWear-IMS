@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel
 from supabase import create_client
@@ -24,7 +24,7 @@ from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
-from app.services import postex
+from app.services import couriers_next, postex
 from app.services.courier_cities import get_courier_cities
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
 from app.services.pdf.load_sheet import _generate_pdf_load_sheet
@@ -65,6 +65,10 @@ router = APIRouter(prefix="/orders", tags=["orders"])
 # asyncio.to_thread below) so a large batch no longer blocks other requests, but it can
 # still make one request very slow; this caps that.
 MAX_PDF_BATCH_ORDERS = 500
+
+# Cap on concurrent outbound requests (Shopify/Couriers Next fetches, DB save writes) -
+# keeps us from opening hundreds of simultaneous connections to any one service.
+_BULK_CONCURRENCY = 20
 
 
 def _period_start_end(month: int, year: int):
@@ -379,6 +383,7 @@ class FulfillOrderRequest(BaseModel):
 
 class FulfillOrdersBody(BaseModel):
     courier: str
+    pickup_address_code: str
     orders: List[FulfillOrderRequest]
 
 
@@ -396,9 +401,19 @@ class FulfillOrdersResult(BaseModel):
     results: List[FulfillOrderResult]
 
 
-# Only PostEx books through the app so far; the rest of the frontend's courier list
-# still has to be fulfilled in that courier's own portal.
-_FULFILL_COURIER_NAMES = {"postex": "PostEx"}
+# Display name per bookable courier - stored as the order's `courier`, sent to the courier
+# as the tracking company, and written to Shopify as the order's courier tag, so these must
+# stay spelled the way the rest of the app already writes them (see the Couriers Next
+# tracking route and orders-columns.js COURIER_LOGOS).
+#
+# The rest of the frontend's courier list still has to be fulfilled in that courier's own
+# portal - a courier absent here is rejected by /fulfill rather than silently ignored.
+_FULFILL_COURIER_NAMES = {"postex": "PostEx", "couriers_next": "Couriers Next"}
+
+# Couriers Next books a parcel from a named origin city rather than from a stored pickup
+# address, so unlike PostEx the shipper profile does not carry one. Their account is
+# Karachi-based and every dispatch leaves from there.
+_COURIERS_NEXT_ORIGIN = "Karachi"
 
 
 @router.post("/fulfill", response_model=FulfillOrdersResult)
@@ -422,8 +437,21 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
         raise HTTPException(status_code=400, detail="No orders selected.")
 
     org_creds = get_org_integration_settings(org_id)
-    if not org_creds.postex_merchant_token:
-        raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization. Set them in Settings > Integrations.")
+    courier_name = _FULFILL_COURIER_NAMES[body.courier]
+    credential = (
+        org_creds.postex_merchant_token if body.courier == "postex" else org_creds.couriers_next_auth_key
+    )
+    if not credential:
+        raise HTTPException(status_code=400, detail=f"{courier_name} credentials are not configured for this organization. Set them in Settings > Integrations.")
+
+    # Couriers Next identifies the merchant on every booking by a client_code that is
+    # not stored alongside the auth key - it is read back from the same call that lists
+    # the shipper profiles, so it is fetched once here rather than per order.
+    client_code = None
+    if body.courier == "couriers_next":
+        client_code, _ = await couriers_next.fetch_shippers(credential)
+        if not client_code:
+            raise HTTPException(status_code=502, detail="Could not read the Couriers Next account profile - check the auth key in Settings > Integrations.")
 
     supabase = get_supabase()
     requested = {o.order_id: o for o in body.orders}
@@ -438,7 +466,6 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     )
     rows_by_id = {r["id"]: r for r in rows}
 
-    courier_name = _FULFILL_COURIER_NAMES[body.courier]
     results: List[FulfillOrderResult] = []
     booked: List[Tuple[dict, str]] = []
 
@@ -472,9 +499,9 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                 ))
                 continue
 
-            # PostEx only accepts 03xxxxxxxxx, while Shopify stores whatever the customer
-            # typed - rejected here so it reads as a fixable data problem rather than
-            # PostEx's own generic validation error.
+            # Shopify stores whatever the customer typed - normalised to 03xxxxxxxxx (what
+            # PostEx mandates, and what Couriers Next riders dial) and rejected here so it
+            # reads as a fixable data problem rather than the courier generic validation error.
             customer_phone = postex.normalize_phone(row["customer_phone"])
             if not customer_phone:
                 results.append(FulfillOrderResult(
@@ -484,25 +511,46 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                 continue
 
             line_items = row.get("line_items") or []
+            # What the rider collects: the order value less whatever the customer already
+            # paid, so a fully-prepaid order books at 0 rather than being charged twice.
+            cod_amount = max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0))
+            items = sum(int(li.get("qty") or 0) for li in line_items) or 1
+            order_detail = ", ".join(
+                f"{li.get('name')} x{li.get('qty')}" for li in line_items if li.get("name")
+            )[:250] or None
+
             try:
-                tracking_number = await postex.create_order(
-                    client,
-                    org_creds.postex_merchant_token,
-                    order_ref_number=str(order_number),
-                    customer_name=row["customer_name"].strip(),
-                    customer_phone=customer_phone,
-                    delivery_address=row["customer_address"].strip(),
-                    city_name=request.courier_city.strip(),
-                    # What the rider collects: the order value less whatever the customer
-                    # already paid, so a fully-prepaid order books at 0 rather than being
-                    # charged twice.
-                    invoice_payment=max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0)),
-                    items=sum(int(li.get("qty") or 0) for li in line_items) or 1,
-                    order_detail=", ".join(
-                        f"{li.get('name')} x{li.get('qty')}" for li in line_items if li.get("name")
-                    )[:250] or None,
-                )
-            except postex.PostexBookingError as exc:
+                if body.courier == "postex":
+                    tracking_number = await postex.create_order(
+                        client,
+                        credential,
+                        order_ref_number=str(order_number),
+                        customer_name=row["customer_name"].strip(),
+                        customer_phone=customer_phone,
+                        delivery_address=row["customer_address"].strip(),
+                        city_name=request.courier_city.strip(),
+                        invoice_payment=cod_amount,
+                        items=items,
+                        pickup_address_code=body.pickup_address_code,
+                        order_detail=order_detail,
+                    )
+                else:
+                    tracking_number = await couriers_next.create_order(
+                        client,
+                        credential,
+                        client_code=client_code,
+                        profile_id=body.pickup_address_code,
+                        order_ref_number=str(order_number),
+                        customer_name=row["customer_name"].strip(),
+                        customer_phone=customer_phone,
+                        delivery_address=row["customer_address"].strip(),
+                        origin_city=_COURIERS_NEXT_ORIGIN,
+                        city_name=request.courier_city.strip(),
+                        collection_amount=cod_amount,
+                        items=items,
+                        order_detail=order_detail,
+                    )
+            except (postex.PostexBookingError, couriers_next.CouriersNextBookingError) as exc:
                 results.append(FulfillOrderResult(
                     order_id=order_id, order_number=order_number, ok=False, error=str(exc),
                 ))
@@ -577,6 +625,10 @@ async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) ->
     Best-effort by design, same as _push_fulfillments_to_shopify: the payout is already
     recorded locally and must not be reported back as failed because Shopify was
     unreachable. A miss here is recoverable by re-settling the order.
+
+    Runs the orders concurrently over one shared client: a payout CSV settles hundreds
+    at 2-4 Shopify calls each, which sequentially ran into minutes. _request_with_retry
+    absorbs the 429s the extra concurrency provokes.
     """
     if not order_numbers:
         return
@@ -588,20 +640,53 @@ async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) ->
     if not (org_creds.shopify_store_url and org_creds.shopify_access_token):
         return
 
-    for order_number in order_numbers:
-        try:
-            sp_order = await _fetch_shopify_order_by_order_number(str(order_number), org_creds)
-            if not sp_order:
-                logger.warning("Order %s not found in Shopify - skipping settlement push", order_number)
-                continue
-            # Replacement orders come from draft orders, which carry no checkout
-            # transaction to capture against - tag those instead of posting a payment
-            # Shopify would reject (see shopify.mark_order_settled).
-            await shopify.mark_order_settled(
-                sp_order["id"], org_creds,
-                record_payment=sp_order.get("source_name") != DRAFT_ORDER_SOURCE)
-        except Exception:
-            logger.exception("Shopify settlement push failed for order %s", order_number)
+    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+    async def _settle(order_number: int, client: httpx.AsyncClient) -> None:
+        async with sem:
+            try:
+                sp_order = await _fetch_shopify_order_by_order_number(str(order_number), org_creds)
+                if not sp_order:
+                    logger.warning("Order %s not found in Shopify - skipping settlement push", order_number)
+                    return
+                # Replacement orders come from draft orders, which carry no checkout
+                # transaction to capture against - tag those instead of posting a payment
+                # Shopify would reject (see shopify.mark_order_settled).
+                await shopify.mark_order_settled(
+                    sp_order["id"], org_creds,
+                    record_payment=sp_order.get("source_name") != DRAFT_ORDER_SOURCE,
+                    client=client)
+            except Exception:
+                logger.exception("Shopify settlement push failed for order %s", order_number)
+
+    async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+        await asyncio.gather(*(_settle(n, client) for n in order_numbers))
+
+
+@router.get("/courier-pickup-addresses")
+async def get_courier_pickup_addresses(courier: str, org_id: str = Depends(get_org_id)):
+    """The pickup identities this org can dispatch under, for the Order Fulfillment
+    view's picker. Neither bookable courier will accept an order without one - PostEx
+    needs a pickup address code (see postex.fetch_pickup_addresses), Couriers Next a
+    shipper profile_id - so an empty list here means fulfillment cannot proceed until
+    one is added in that courier own portal."""
+    if courier not in _FULFILL_COURIER_NAMES:
+        return {"addresses": []}
+    org_creds = get_org_integration_settings(org_id)
+    courier_name = _FULFILL_COURIER_NAMES[courier]
+    credential = (
+        org_creds.postex_merchant_token if courier == "postex" else org_creds.couriers_next_auth_key
+    )
+    if not credential:
+        raise HTTPException(status_code=400, detail=f"{courier_name} credentials are not configured for this organization. Set them in Settings > Integrations.")
+    try:
+        if courier == "postex":
+            return {"addresses": await postex.fetch_pickup_addresses(credential)}
+        _, shippers = await couriers_next.fetch_shippers(credential)
+        return {"addresses": shippers}
+    except Exception:
+        logger.exception("Failed to fetch pickup addresses for courier %s", courier)
+        raise HTTPException(status_code=500, detail="Failed to fetch pickup addresses")
 
 
 @router.get("/sync-status")
@@ -625,6 +710,7 @@ async def sync_shopify_orders(request: Request, org_id: str = Depends(get_org_id
 @limiter.limit("10/minute")
 async def upload_postex_csv(
     request: Request,
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     assignment_number: Optional[str] = Form(None),
     org_id: str = Depends(get_org_id),
@@ -635,6 +721,9 @@ async def upload_postex_csv(
     courier (set to PostEx), tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
     including exponential notation e.g. 2.63E+13), optionally folio (from assignment_number),
     and marks the order as settled (the CSV is PostEx's payout report).
+
+    Mirroring those settlements into Shopify runs after the response is sent - it is
+    best-effort and far slower than the local write, which the upload should not wait on.
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
@@ -647,9 +736,18 @@ async def upload_postex_csv(
         if not rows:
             return {"updated": 0, "message": "No valid rows with ORDER_REF_NUMBER in CSV."}
         supabase = get_supabase()
+        # Only the orders the CSV actually names - a payout report covers a few hundred
+        # rows, so paging the org's whole order table to build the lookup was pure waste.
+        # order_number is INTEGER, so the "4446-R" replacement forms normalize_order_number
+        # emits cannot go into the filter; they never matched a DB row anyway and still
+        # land in unmatched_order_numbers below.
+        wanted_order_numbers = sorted({int(n) for n in csv_order_numbers if n.isdigit()})
+        if not wanted_order_numbers:
+            return {"updated": 0, "message": "No CSV order numbers matched any orders."}
         all_orders = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date")
+            .in_("order_number", wanted_order_numbers)
             .order("order_number")
         )
         order_number_to_order = {}
@@ -733,7 +831,9 @@ async def upload_postex_csv(
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
-            await _push_settlements_to_shopify(matched_order_numbers, org_id)
+            # Deferred: the local settlement is already committed above and the push is
+            # best-effort, so hundreds of Shopify round trips must not hold the response.
+            background_tasks.add_task(_push_settlements_to_shopify, matched_order_numbers, org_id)
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), tracking, and marked settled for {updated_count} order(s)."
@@ -2039,9 +2139,6 @@ async def _fetch_couriersnext_status(client: httpx.AsyncClient, tracking_number:
 # no error, but chunking keeps each request well under whatever the real limit turns out to be.
 POSTEX_BULK_BATCH_SIZE = 100
 
-# Cap on concurrent requests for Couriers Next fetches and DB save writes below - keeps us
-# from opening hundreds of simultaneous connections to either service at once.
-_BULK_CONCURRENCY = 20
 
 # Cap on ids per `.in_()` query - keeps the request URL well under server/proxy length
 # limits. Order ids are UUIDs (36 chars each), so this is kept lower than the 200-value

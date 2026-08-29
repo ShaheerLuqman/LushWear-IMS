@@ -783,6 +783,14 @@ function initCourierPaymentReportGrid() {
             valueFormatter: money,
         },
         {
+            headerName: 'Remaining',
+            field: 'remainingAmount',
+            width: 140,
+            minWidth: 130,
+            cellClass: 'ag-right-aligned-cell',
+            valueFormatter: money,
+        },
+        {
             headerName: 'Settled Orders',
             colId: 'settledOrders',
             field: 'settledCount',

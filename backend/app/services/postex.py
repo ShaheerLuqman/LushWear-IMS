@@ -205,6 +205,33 @@ def normalize_phone(value: Optional[str]) -> Optional[str]:
     return digits if len(digits) == 11 and digits.startswith("03") else None
 
 
+async def fetch_pickup_addresses(merchant_token: str) -> List[dict]:
+    """The merchant's configured pickup/warehouse addresses, as
+    [{code, label, city, address}] ordered as PostEx returns them.
+
+    create-order rejects a booking that sets neither pickupAddressCode nor
+    storeAddressCode ("BOTH PICKUP ADDRESS CODE AND STORE ADDRESS CODE MUST NOT BE NULL
+    AT THE SAME TIME") even though the integration guide marks both Optional, so a code
+    has to be chosen before anything can be booked.
+    """
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        r = await client.get(f"{_BASE_URL}/v1/get-merchant-address", headers={"token": merchant_token})
+    if r.status_code != 200:
+        logger.warning("PostEx merchant-address fetch failed: status=%s body=%s", r.status_code, r.text[:300])
+        return []
+    return [
+        {
+            "code": row.get("addressCode"),
+            "label": row.get("addressType") or "Pickup Address",
+            "city": row.get("cityName"),
+            # PostEx stores these with embedded newlines from their own portal's textarea.
+            "address": " ".join((row.get("address") or "").split()),
+        }
+        for row in (r.json().get("dist") or [])
+        if row.get("addressCode")
+    ]
+
+
 async def create_order(
     client: httpx.AsyncClient,
     merchant_token: str,
@@ -216,6 +243,7 @@ async def create_order(
     city_name: str,
     invoice_payment: float,
     items: int,
+    pickup_address_code: str,
     order_detail: Optional[str] = None,
 ) -> str:
     """Book one shipment and return its PostEx tracking number.
@@ -236,9 +264,10 @@ async def create_order(
         "invoicePayment": int(round(invoice_payment)),
         "items": items,
         "orderRefNumber": order_ref_number,
-        # Only forward bookings go through this screen; a return/replacement is still
-        # raised in PostEx's own portal. pickupAddressCode is likewise omitted, which
-        # makes PostEx use the account's default warehouse.
+        # Required in practice despite the guide marking it Optional - see
+        # fetch_pickup_addresses. Only forward bookings go through this screen; a
+        # return/replacement is still raised in PostEx's own portal.
+        "pickupAddressCode": pickup_address_code,
         "orderType": "Normal",
     }
     if order_detail:

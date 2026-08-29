@@ -32,6 +32,7 @@ let fulfillmentDatePicker = null;
 let fulfillmentOpenMenuOrderId = null; // tags or actions menu currently open, if any
 let fulfillmentSelectedCourier = null; // the courier picked in the side panel, or null
 let fulfillmentFulfilling = false; // a booking request is in flight - guards against double-submit
+let fulfillmentPickupAddresses = []; // warehouses the picked courier can collect from
 let fulfillmentCourierCities = []; // cities the currently-picked courier supports; empty until one is picked
 let fulfillmentCourierCitiesLoading = false;
 // The open courier-city dropdown's own closer, if one is open - that panel lives in
@@ -39,6 +40,62 @@ let fulfillmentCourierCitiesLoading = false;
 // it belongs to, so re-rendering the table (tbody.innerHTML = ...) destroys the row's button
 // without it. Closed explicitly before every re-render so it can never get orphaned on screen.
 let fulfillmentOpenCourierCityCloser = null;
+
+/** Pre-fills each order's courier city with the customer-entered one when the courier
+ * actually serves a city of that name, so only the genuine mismatches ("DHA Phase 5",
+ * a misspelling, a city the courier doesn't cover) are left to pick by hand.
+ *
+ * Matched case- and whitespace-insensitively, since the customer types their city
+ * freehand while the courier's list is canonically cased ("lahore" vs "Lahore"). The
+ * courier's own spelling is what gets stored, not the customer's - it is what the
+ * booking has to send. Never overwrites a city already picked. */
+function autoSelectFulfillmentCourierCities() {
+    if (fulfillmentCourierCities.length === 0) return;
+    const byNormalizedName = new Map(fulfillmentCourierCities.map(c => [c.trim().toLowerCase(), c]));
+    fulfillmentOrders.forEach(o => {
+        if (o.courierCity) return;
+        o.courierCity = byNormalizedName.get((o.city || '').trim().toLowerCase()) || null;
+    });
+}
+
+/** Loads the pickup identities this org can dispatch under and renders the picker.
+ *
+ * Neither bookable courier accepts an order without one: PostEx refuses a booking that
+ * names no pickup address ("BOTH PICKUP ADDRESS CODE AND STORE ADDRESS CODE MUST NOT BE
+ * NULL AT THE SAME TIME"), despite its own guide marking the field optional, and Couriers
+ * Next needs the shipper profile the parcel ships under. Both come back in the same
+ * {code,label,city,address} shape, so this has to resolve before any booking can go
+ * through, but does not care which courier it is resolving for. */
+async function loadFulfillmentPickupAddresses(courierId) {
+    fulfillmentPickupAddresses = [];
+    renderFulfillmentPickupAddresses();
+    try {
+        const result = await apiJson(`/orders/courier-pickup-addresses?courier=${encodeURIComponent(courierId)}`, {
+            fallback: 'Failed to fetch pickup addresses'
+        });
+        fulfillmentPickupAddresses = result.addresses || [];
+    } catch (error) {
+        console.error('Error loading pickup addresses:', error);
+        showToast(error.message || 'Failed to fetch pickup addresses', 'error');
+        fulfillmentPickupAddresses = [];
+    }
+    renderFulfillmentPickupAddresses();
+}
+
+function renderFulfillmentPickupAddresses() {
+    const group = document.getElementById('fulfillmentPickupGroup');
+    const select = document.getElementById('fulfillmentPickupSelect');
+    if (!group || !select) return;
+
+    // Only shown for couriers that actually have pickup identities - the picker is
+    // meaningless for the ones still fulfilled in their own portal.
+    group.style.display = fulfillmentPickupAddresses.length > 0 ? 'block' : 'none';
+    const previous = select.value;
+    select.innerHTML = fulfillmentPickupAddresses
+        .map(a => `<option value="${escapeHtml(a.code)}" title="${escapeHtml(a.address)}">${escapeHtml(a.label)} - ${escapeHtml(a.city)}</option>`)
+        .join('');
+    if (fulfillmentPickupAddresses.some(a => a.code === previous)) select.value = previous;
+}
 
 /** Fetches the supported-city list for the courier just picked in the side panel
  * (PostEx/Couriers Next only - see backend GET /orders/courier-cities) and clears
@@ -53,6 +110,7 @@ async function loadFulfillmentCourierCities(courierId) {
             fallback: 'Failed to fetch supported cities'
         });
         fulfillmentCourierCities = result.cities || [];
+        autoSelectFulfillmentCourierCities();
     } catch (error) {
         console.error('Error loading courier cities:', error);
         showToast(error.message || 'Failed to fetch supported cities', 'error');
@@ -195,6 +253,9 @@ async function fetchFulfillmentOrders() {
             order_date: new Date(o.order_date),
             courierCity: courierCityByOrderId.get(o.id) || null,
         }));
+        // Orders that arrived in this refresh have no picked city yet - fill in the ones
+        // whose city the already-picked courier recognises.
+        autoSelectFulfillmentCourierCities();
     } catch (error) {
         console.error('Error loading unfulfilled orders:', error);
         showToast(error.message || 'Failed to load unfulfilled orders', 'error');
@@ -370,6 +431,7 @@ function renderFulfillmentCourierMenu() {
             if (labelEl) labelEl.innerHTML = `${icon}${escapeHtml(courier.name)}`;
             menu.classList.remove('open');
             loadFulfillmentCourierCities(courier.id);
+            loadFulfillmentPickupAddresses(courier.id);
         });
     });
 }
@@ -584,6 +646,17 @@ async function fulfillSelectedOrders() {
         return;
     }
 
+    const pickupAddressCode = document.getElementById('fulfillmentPickupSelect')?.value;
+    if (!pickupAddressCode) {
+        showToast(
+            fulfillmentPickupAddresses.length === 0
+                ? 'No pickup location is configured for this courier - add one in the courier portal first'
+                : 'Select a pickup location first',
+            'error'
+        );
+        return;
+    }
+
     // The courier books to its own city list, not the customer-entered one, so a row
     // without a courier city picked cannot be sent.
     const missingCity = selectedOrders.filter(o => !o.courierCity);
@@ -595,8 +668,10 @@ async function fulfillSelectedOrders() {
         return;
     }
 
+    const pickupLabel = fulfillmentPickupAddresses.find(a => a.code === pickupAddressCode);
     const confirmed = confirm(
         `Book ${selectedOrders.length} order(s) with ${fulfillmentSelectedCourier.name}?\n\n` +
+        `Pickup from: ${pickupLabel ? `${pickupLabel.label} - ${pickupLabel.city}` : pickupAddressCode}\n\n` +
         `This creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`
     );
     if (!confirmed) return;
@@ -613,6 +688,7 @@ async function fulfillSelectedOrders() {
             method: 'POST',
             body: {
                 courier: fulfillmentSelectedCourier.id,
+                pickup_address_code: pickupAddressCode,
                 orders: selectedOrders.map(o => ({ order_id: o.id, courier_city: o.courierCity }))
             },
             fallback: 'Failed to fulfill orders'

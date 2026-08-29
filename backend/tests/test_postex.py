@@ -155,6 +155,7 @@ class TestCreateOrder:
         "city_name": "Lahore",
         "invoice_payment": 4500.0,
         "items": 2,
+        "pickup_address_code": "002",
     }
 
     @staticmethod
@@ -190,6 +191,9 @@ class TestCreateOrder:
         assert captured["json"]["cityName"] == "Lahore"
         assert captured["json"]["orderType"] == "Normal"
         assert captured["json"]["items"] == 2
+        # Required in practice even though the guide marks it optional - PostEx rejects
+        # a booking that names neither a pickup nor a store address code.
+        assert captured["json"]["pickupAddressCode"] == "002"
 
     def test_invoice_payment_is_rounded_to_whole_rupees(self):
         captured = {}
@@ -206,7 +210,6 @@ class TestCreateOrder:
         asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
 
         assert "orderDetail" not in captured["json"]
-        assert "pickupAddressCode" not in captured["json"]
 
     def test_a_rejection_raises_with_postex_own_message(self):
         client = self._client(None, {"statusCode": "422", "statusMessage": "City is not serviceable"})
