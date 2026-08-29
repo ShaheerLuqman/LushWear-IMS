@@ -97,14 +97,13 @@ function courierPaymentReportFilteredOrders() {
     });
 }
 
-/** netOwed is the sum of COD value (computeCod: total - advance) across unsettled orders
- * only - a settled order has already been paid, so it no longer counts as owed. Ignores
- * the pickup-date range on purpose - these cards are the courier/search-scoped overview,
- * while the date range only narrows which bills the table below shows. */
-function courierPaymentReportSummary(orderRows) {
+/** netOwed is the sum of every bill's Remaining, so the card always agrees with the table
+ * below it rather than computing owed a second way. Because it's derived from the bills, it
+ * inherits their pickup-date range and drops orders with no pickup date yet - unlike the
+ * in-transit/resolved counts, which stay order-level over the full courier/search scope. */
+function courierPaymentReportSummary(orderRows, bills) {
     let inTransit = 0;
     let resolved = 0;
-    let netOwed = 0;
     const inTransitByStatus = {};
 
     orderRows.forEach((order) => {
@@ -114,11 +113,10 @@ function courierPaymentReportSummary(orderRows) {
             inTransitByStatus[order.order_status] = (inTransitByStatus[order.order_status] || 0) + 1;
         } else if (COURIER_RESOLVED_STATUSES.has(status)) {
             resolved++;
-            if (order.is_order_settled) return;
-            netOwed += computeCod(order);
         }
     });
 
+    const netOwed = bills.reduce((sum, bill) => sum + bill.remainingAmount, 0);
     return { inTransit, resolved, netOwed, inTransitByStatus };
 }
 
@@ -170,7 +168,9 @@ function computeCod(order) {
  * Gross COD minus those Delivery Charges and Taxes - a bill-level total, not a sum of
  * per-order receivables. Received only accumulates over resolved *and settled* orders
  * (via computeReceivable, since that's the only place an order's own receivable is known),
- * and Remaining is just Net Receivable minus that. */
+ * and Remaining is just Net Receivable minus that. Only *settled* returns are backed out
+ * of Gross COD - an unsettled return isn't reconciled with the courier yet, so its value
+ * has to stay in Remaining rather than being written off in advance. */
 function aggregateCourierPaymentReportBill(bill) {
     let billValue = 0;
     let advanceTotal = 0;
@@ -191,7 +191,7 @@ function aggregateCourierPaymentReportBill(bill) {
         advanceTotal += parseFloat(order.advance_amount) || 0;
         charges += parseFloat(order.delivery_charge) || 0;
         taxes += parseFloat(order.tax_amount) || 0;
-        if (status === 'returned') returnedTotal += parseFloat(order.total_amount) || 0;
+        if (status === 'returned' && order.is_order_settled) returnedTotal += parseFloat(order.total_amount) || 0;
 
         if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
             inTransitCount++;
@@ -212,8 +212,8 @@ function aggregateCourierPaymentReportBill(bill) {
     else if (settledCount === 0) status = 'unpaid';
     else status = 'partially_paid';
 
-    // Gross COD is Bill Value with the returned orders' full value backed out too - the
-    // running total after both deductions, not a separately-tracked figure, so it can't
+    // Gross COD is Bill Value with the settled returned orders' full value backed out too -
+    // the running total after both deductions, not a separately-tracked figure, so it can't
     // drift out of step with the Bill Value/Returned Orders shown above it.
     const grossCod = billValue - returnedTotal;
     const netReceivable = grossCod - charges - taxes;
@@ -265,8 +265,9 @@ function buildCourierPaymentReportBills(orderRows) {
 /** Payment Progress tracks Bill Value (already net of advance - see
  * aggregateCourierPaymentReportBill) against four claims on it: the amount the courier has
  * actually paid back for settled orders, and the three things the courier/the bill itself
- * keeps instead - delivery charges, taxes, and the full total of any returned orders (never
- * coming back at all). Whatever's left over (billValue minus all four) is still outstanding.
+ * keeps instead - delivery charges, taxes, and the full total of any settled returned orders
+ * (never coming back at all). Whatever's left over (billValue minus all four) is still
+ * outstanding, including returns not yet settled with the courier.
  * Feeds the detail screen's pie. Each ratio is clamped independently, so in an edge case
  * where one claim alone exceeds the bill value the segments can visually overrun 100%
  * rather than silently under-report - that's rare enough in real data not to be worth
@@ -595,9 +596,10 @@ function openCourierPaymentReportBillDetail(bill) {
  * summary + bill table - no refetch, since all of those are client-side facets. */
 function renderCourierPaymentReportView() {
     const filtered = courierPaymentReportFilteredOrders();
-    renderCourierPaymentReportSummary(courierPaymentReportSummary(filtered));
 
     let bills = buildCourierPaymentReportBills(filtered);
+    renderCourierPaymentReportSummary(courierPaymentReportSummary(filtered, bills));
+
     const statuses = courierPaymentReportStatusFilter?.getSelected();
     if (statuses) {
         bills = bills.filter((b) => statuses.includes(b.status));
