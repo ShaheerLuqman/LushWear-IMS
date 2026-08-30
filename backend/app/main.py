@@ -11,7 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth
+from app.routes import products, orders, courier_bills, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.features import require_feature
@@ -114,6 +114,7 @@ _auth = [Depends(require_auth)]
 # underneath, not just the ones the sidebar happens to hide.
 app.include_router(products.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
 app.include_router(orders.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
+app.include_router(courier_bills.router, prefix="/api", dependencies=_auth + [Depends(require_feature("orders"))])
 app.include_router(transactions.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(ledger.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])
 app.include_router(journal.router, prefix="/api", dependencies=_auth + [Depends(require_feature("finance"))])

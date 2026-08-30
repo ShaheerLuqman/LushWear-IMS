@@ -1232,31 +1232,40 @@
         </div>
     </div>
 
-    <!-- PostEx amount mismatches modal (shown after CSV upload when receivable != CSV NET_AMOUNT) -->
-    <div id="postExAmountMismatchesModal" class="modal">
+    <!-- PostEx upload report (shown after CSV upload: net receivable, full order breakdown,
+         and any receivable-vs-CSV-NET_AMOUNT mismatch inline, highlighted per row) -->
+    <div id="postExUploadReportModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
-                <h2>Receivable vs CSV net amount mismatch</h2>
-                <button type="button" class="modal-close" id="closePostExAmountMismatchesModal" aria-label="Close">&times;</button>
+                <h2>PostEx CSV upload report</h2>
+                <button type="button" class="modal-close" id="closePostExUploadReportModal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="modal-description">The following orders have a different receivable amount (total − advance − delivery − tax) than the NET_AMOUNT in the CSV.</p>
+                <p class="modal-description" id="postExUploadReportSummary"></p>
+                <div class="stats-grid" id="postExUploadReportStats"></div>
                 <div class="postex-mismatches-table-wrap">
                     <table class="postex-mismatches-table">
                         <thead>
                             <tr>
                                 <th>Order #</th>
-                                <th>Receivable (ours)</th>
-                                <th>NET_AMOUNT (CSV)</th>
-                                <th>Difference</th>
+                                <th>Folio</th>
+                                <th>Status</th>
+                                <th>Total</th>
+                                <th>Advance</th>
+                                <th>COD</th>
+                                <th>Delivery Charge</th>
+                                <th>Tax</th>
+                                <th>Receivable</th>
+                                <th>CSV Net</th>
+                                <th>Diff</th>
                             </tr>
                         </thead>
-                        <tbody id="postExAmountMismatchesBody"></tbody>
+                        <tbody id="postExUploadReportBody"></tbody>
                     </table>
                 </div>
             </div>
             <div class="modal-pinned-footer">
-                <button type="button" id="closePostExAmountMismatchesBtn" class="btn btn-primary">Close</button>
+                <button type="button" id="closePostExUploadReportBtn" class="btn btn-primary">Close</button>
             </div>
         </div>
     </div>

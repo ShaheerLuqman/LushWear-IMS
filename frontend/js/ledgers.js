@@ -962,38 +962,11 @@ async function uploadPostExCsv(file, assignmentNumber) {
         showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
         closeUploadPostExModal();
 
-        // Show popup if any orders have receivable != CSV NET_AMOUNT
-        const mismatches = data.amount_mismatches || [];
-        if (mismatches.length > 0) {
-            showPostExAmountMismatchesModal(mismatches);
+        if ((data.order_breakdown || []).length > 0) {
+            showPostExUploadReportModal(data);
         }
-        
-        // CSV may contain orders from multiple periods; we have all orders in the grid (period filter may hide some).
-        // Select all rows in the current view that were updated by the CSV.
-        const updatedOrderIds = data.updated_order_ids || [];
-        const matchedOrderNumbers = new Set((data.matched_order_numbers || []).map(String));
-        
-        await loadOrders();
 
-        if (ordersGridApi && (updatedOrderIds.length > 0 || matchedOrderNumbers.size > 0)) {
-            setTimeout(() => {
-                if (ordersGridApi) {
-                    ordersGridApi.deselectAll();
-                    ordersGridApi.forEachNode(node => {
-                        const data = node.data;
-                        if (!data || data.id === '__footer__') return;
-                        if (updatedOrderIds.includes(data.id) || matchedOrderNumbers.has(String(data.order_number))) {
-                            node.setSelected(true);
-                        }
-                    });
-                    const selectedRows = ordersGridApi.getSelectedRows();
-                    if (selectedRows.length > 0) {
-                        ordersGridApi.ensureNodeVisible(selectedRows[0], 'middle');
-                    }
-                    if (typeof updateFooterRow === 'function') updateFooterRow();
-                }
-            }, 100);
-        }
+        await loadOrders();
     } catch (error) {
         console.error('Error uploading PostEx CSV', error);
         showToast(error.message || 'Failed to upload PostEx CSV', 'error');

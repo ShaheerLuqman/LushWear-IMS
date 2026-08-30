@@ -770,7 +770,8 @@ async def upload_postex_csv(
             return {"updated": 0, "message": "No CSV order numbers matched any orders."}
         all_orders = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
-            .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date")
+            .select("id, order_number, total_amount, advance_amount, order_status, order_receiving_date, "
+                    "delivery_charge, tax_amount, courier, is_order_settled, tracking_number, folio")
             .in_("order_number", wanted_order_numbers)
             .order("order_number")
         )
@@ -789,8 +790,18 @@ async def upload_postex_csv(
         unmatched_order_numbers = []
         cancelled_order_numbers = []
         updated_order_ids = []
-        amount_mismatches = []  # { order_number, receivable, csv_net_amount, total_amount, advance_amount, delivery_charge, tax_amount }
+        # Orders whose CSV-derived values (charge/tax/courier/tracking/folio) exactly match what's
+        # already stored and already settled - re-uploading the same payout report a second time
+        # (e.g. re-checking a file) shouldn't re-push a no-op settlement to Shopify for each one.
+        order_numbers_to_push = []
+        # { order_number, folio, order_status, total_amount, advance_amount, cod, delivery_charge,
+        #   tax_amount, receivable, csv_net_amount, mismatch }
+        order_breakdown = []
         orders_to_upsert = []
+        totals = {
+            "total_amount": 0.0, "advance_total": 0.0, "cod_total": 0.0,
+            "delivery_charges": 0.0, "taxes": 0.0, "returned_total": 0.0, "net_receivable": 0.0,
+        }
         current_time = datetime.now(timezone.utc).isoformat()
 
         for r in rows:
@@ -822,6 +833,18 @@ async def upload_postex_csv(
                 update_data["tracking_number"] = r["tracking_number"]
             if assignment_number is not None and assignment_number.strip():
                 update_data["folio"] = assignment_number.strip()
+
+            unchanged = (
+                bool(order.get("is_order_settled"))
+                and (order.get("courier") or "") == "PostEx"
+                and money(order.get("delivery_charge") or 0) == money(r["delivery_charge"])
+                and money(order.get("tax_amount") or 0) == money(r["tax_amount"])
+                and (not update_data.get("tracking_number") or order.get("tracking_number") == update_data["tracking_number"])
+                and (not update_data.get("folio") or order.get("folio") == update_data["folio"])
+            )
+            if not unchanged:
+                order_numbers_to_push.append(order_num)
+
             orders_to_upsert.append(update_data)
             updated_order_ids.append(order["id"])
             updated_count += 1
@@ -832,32 +855,49 @@ async def upload_postex_csv(
             delivery_charge = float(r["delivery_charge"])
             tax_amount = float(r["tax_amount"])
             order_status = (order.get("order_status") or "").strip().lower()
-            if order_status == "returned":
+            cod = total_amount - advance_amount
+            is_returned = order_status == "returned"
+            if is_returned:
                 receivable = money(-delivery_charge)
             else:
                 receivable = money(total_amount - advance_amount - delivery_charge - tax_amount)
+
             csv_net = r.get("csv_net_amount")
-            if csv_net is not None:
-                csv_net_rounded = money(csv_net)
-                if receivable != csv_net_rounded:
-                    amount_mismatches.append({
-                        "order_number": order_num,
-                        "receivable": receivable,
-                        "csv_net_amount": csv_net_rounded,
-                        "total_amount": total_amount,
-                        "advance_amount": advance_amount,
-                        "delivery_charge": delivery_charge,
-                        "tax_amount": tax_amount,
-                        "order_status": order_status or None,
-                    })
+            csv_net_rounded = money(csv_net) if csv_net is not None else None
+            order_breakdown.append({
+                "order_number": order_num,
+                "folio": update_data.get("folio"),
+                "order_status": order_status or None,
+                "total_amount": money(total_amount),
+                "advance_amount": money(advance_amount),
+                "cod": money(cod),
+                "delivery_charge": money(delivery_charge),
+                "tax_amount": money(tax_amount),
+                "receivable": receivable,
+                "csv_net_amount": csv_net_rounded,
+                "mismatch": csv_net_rounded is not None and receivable != csv_net_rounded,
+            })
+            totals["total_amount"] += total_amount
+            totals["advance_total"] += advance_amount
+            totals["delivery_charges"] += delivery_charge
+            totals["net_receivable"] += receivable
+            if is_returned:
+                totals["returned_total"] += total_amount
+            else:
+                totals["cod_total"] += cod
+                totals["taxes"] += tax_amount
 
         if orders_to_upsert:
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
+            # The CSV forces courier to PostEx, which re-bills any order that was previously
+            # under another courier. Charges/taxes/settled changing needs no bill write at
+            # all - the totals view derives those from the orders on every read.
+            await _assign_courier_bills(org_id, updated_order_ids)
             # Deferred: the local settlement is already committed above and the push is
             # best-effort, so hundreds of Shopify round trips must not hold the response.
-            background_tasks.add_task(_push_settlements_to_shopify, matched_order_numbers, org_id)
+            background_tasks.add_task(_push_settlements_to_shopify, order_numbers_to_push, org_id)
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), tracking, and marked settled for {updated_count} order(s)."
@@ -880,7 +920,8 @@ async def upload_postex_csv(
             "matched_count": len(matched_order_numbers),
             "unmatched_count": len(unmatched_order_numbers),
             "cancelled_count": len(cancelled_order_numbers),
-            "amount_mismatches": amount_mismatches,
+            "order_breakdown": order_breakdown,
+            "totals": {k: money(v) for k, v in totals.items()},
         }
     except HTTPException:
         raise
@@ -2178,6 +2219,8 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
         updated = response.data[0]
+        if "courier" in update_data or "courier_pickup_date" in update_data:
+            await _assign_courier_bills(org_id, [order_id])
         # If the advance amount changed, recompute this order's advance status.
         if "advance_amount" in update_data and updated.get("order_number"):
             try:
@@ -2372,6 +2415,32 @@ async def _fetch_couriersnext_bulk(tracking_numbers: List[Tuple[str, str]]) -> D
 DELIVERY_STATUS_SAVE_BATCH_SIZE = 500
 
 
+async def _assign_courier_bills(org_id: str, order_ids: List[str]) -> None:
+    """Put the given orders on their (courier, pickup date) bill, creating it if needed.
+    Call after any write that can change an order's courier or courier_pickup_date; it is
+    idempotent, so calling it when nothing relevant changed costs one no-op query.
+
+    Orders whose pickup date moved them off a bill already marked settled are refused by
+    the function and logged here - silently rewriting a bill you have closed out with the
+    courier would be worse than leaving it stale."""
+    if not order_ids:
+        return
+    try:
+        result = await asyncio.to_thread(
+            lambda: get_supabase().rpc(
+                "assign_courier_bills", {"p_org_id": org_id, "p_order_ids": order_ids}
+            ).execute()
+        )
+        blocked = (result.data or [{}])[0].get("blocked") or []
+        if blocked:
+            logger.warning(
+                "[courier-bills] %d order(s) kept on a settled bill despite a changed "
+                "courier/pickup date: %s", len(blocked), blocked,
+            )
+    except Exception:
+        logger.exception("[courier-bills] assignment failed for %d orders", len(order_ids))
+
+
 async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], orders_by_id: Dict[str, dict]) -> None:
     """Persist delivery_status (and derived order_status/piece_received) for many orders in
     one round-trip per batch, via the apply_delivery_status_updates RPC. Partial per-column
@@ -2407,6 +2476,11 @@ async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], o
             )
         except Exception:
             logger.exception(f"[delivery-status-bulk] Failed to save {len(batch)} orders")
+
+    # This is the only place courier_pickup_date is ever set, so it is also the only place
+    # bill membership can change on its own. Best-effort: a failure here leaves the orders
+    # correctly saved but unassigned, and the next run picks them up (assign is idempotent).
+    await _assign_courier_bills(org_id, [u["id"] for u in updates if "courier_pickup_date" in u])
 
 
 async def _fetch_postex_bulk(

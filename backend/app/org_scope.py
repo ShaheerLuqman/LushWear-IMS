@@ -12,6 +12,10 @@ BUSINESS_TABLES = {
     "shopify_products",
     "shopify_variants",
     "shopify_orders",
+    "shopify_courier_bills",
+    # A view, not a table (courier bills + their derived money figures), but it carries
+    # org_id and is read exactly like one - same reasoning as finances_bills_with_paid.
+    "shopify_courier_bills_with_totals",
     "shopify_load_sheet_logs",
     "finances_ledgers",
     "finances_transaction_entries",

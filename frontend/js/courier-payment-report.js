@@ -1,16 +1,21 @@
 // Courier Payment Report: what the courier still owes for delivered/returned orders,
 // grouped by the date the courier picked the parcel up and then by courier (mirrors how
 // couriers batch-settle - one payment per pickup run), plus which orders are still in
-// transit (no final courier outcome yet). Reads the same orders data as the Orders grid
-// and reuses its receivable formula (computeReceivable, in orders-grid.js) and status badge
-// classes (orderStatusBadgeClass, in orders-columns.js) so nothing here drifts from the
-// Orders grid.
+// transit (no final courier outcome yet).
+//
+// Bills are persisted (shopify_courier_bills) and their money is derived by the
+// shopify_courier_bills_with_totals view, so this file no longer groups or aggregates
+// anything - it fetches /courier-bills/ and renders it. That view is the single source of
+// truth the PDF service reads too. The orders table on a bill's detail screen still uses
+// computeReceivable (orders-grid.js) and orderStatusBadgeClass (orders-columns.js) for its
+// per-order cells, so those stay in step with the Orders grid.
 
 let courierPaymentReportGridApi = null;
 
-// Every order, unfiltered - courier/status/search/date-range are all client-side facets
-// re-sliced from this on every filter change, so changing a filter never refetches.
-let courierPaymentReportOrders = [];
+// Bills as last returned by /courier-bills/, already scoped to the active pickup-date
+// range and courier/status filters (all applied server-side). Search is the one facet
+// still re-sliced locally, since it's a free-text match over already-loaded rows.
+let courierPaymentReportBills = [];
 
 // Multi-select checkbox filters (grid-filters.js) replacing the old single-select dropdowns.
 // getSelected() is null until the user narrows the list, which reads as "no filter".
@@ -61,16 +66,18 @@ function defaultCourierPaymentReportDateRange() {
 
 let courierPaymentReportDateRange = defaultCourierPaymentReportDateRange();
 
-function distinctCouriers(orderRows) {
-    const set = new Set();
-    orderRows.forEach((order) => {
-        const courier = (order.courier || '').trim();
-        if (courier) set.add(courier);
-    });
-    return [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+// Courier options for the filter. Kept separate from courierPaymentReportBills and only
+// grown, never rebuilt from the current page of bills: filtering to one courier must not
+// remove the others from the picker the user needs to get back to them.
+let courierPaymentReportCouriers = [];
+
+function recordCourierPaymentReportCouriers(bills) {
+    const set = new Set(courierPaymentReportCouriers);
+    bills.forEach((bill) => { if (bill.courier) set.add(bill.courier); });
+    courierPaymentReportCouriers = [...set].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 }
 
-/** Payment status of a bundled bill, in the order buildCourierPaymentReportBills assigns them. */
+/** Payment status of a bill, as derived by shopify_courier_bills_with_totals. */
 const COURIER_PAYMENT_STATUSES = ['paid', 'partially_paid', 'unpaid', 'in_transit'];
 const COURIER_PAYMENT_STATUS_LABELS = {
     paid: 'Paid',
@@ -79,48 +86,76 @@ const COURIER_PAYMENT_STATUS_LABELS = {
     in_transit: 'In Transit'
 };
 
-/** Courier + free-text search are per-order facets, applied before bundling; pickup-date
- * range and payment status are applied later since they depend on how orders get
- * grouped/aggregated. All four reach the summary cards, which are computed from the
- * fully-filtered bills. */
-function courierPaymentReportFilteredOrders() {
-    const couriers = courierPaymentReportCourierFilter?.getSelected();
-    const query = (document.getElementById('courierPaymentReportSearchFilter')?.value || '').trim().toLowerCase();
-
-    return courierPaymentReportOrders.filter((order) => {
-        if (couriers && !couriers.includes((order.courier || '').trim())) return false;
-        if (query) {
-            const courierMatch = (order.courier || '').toLowerCase().includes(query);
-            const orderNoMatch = String(order.order_number ?? '').toLowerCase().includes(query);
-            if (!courierMatch && !orderNoMatch) return false;
-        }
-        return true;
-    });
+/** Map one row of /courier-bills/ onto the camelCase shape the rest of this file (and the
+ * grid's column defs) already use. The money arrives derived from the member orders by
+ * shopify_courier_bills_with_totals, so nothing here recomputes it - this is a rename, not
+ * an aggregation. `orders` is absent from the list endpoint and filled in on demand when a
+ * bill's detail screen opens. */
+function mapCourierBillRow(row) {
+    return {
+        id: row.id,
+        courier: row.courier,
+        pickupDate: new Date(`${row.pickup_date}T00:00:00`),
+        pickupDateKey: row.pickup_date,
+        workflowStatus: row.workflow_status,
+        notes: row.notes,
+        totalOrders: row.total_orders,
+        inTransitCount: row.in_transit_count,
+        inTransitByStatus: row.in_transit_by_status || {},
+        resolvedCount: row.resolved_count,
+        settledCount: row.settled_count,
+        billValue: row.bill_value,
+        advanceTotal: row.advance_total,
+        grossCod: row.gross_cod,
+        charges: row.charges,
+        taxes: row.taxes,
+        returnedTotal: row.returned_total,
+        netReceivable: row.net_receivable,
+        receivedAmount: row.received_amount,
+        remainingAmount: row.remaining_amount,
+        status: row.payment_status,
+        orders: null,
+    };
 }
 
-/** Every card is derived from the same bills the table below shows, so all three always
- * agree with it - they inherit its pickup-date range, courier/search facets and payment
- * status filter, and (like the table) leave out orders with no pickup date yet, which
- * can't be placed on the pickup-date timeline at all. */
+/** Free-text search over the loaded bills. Courier, pickup-date range and payment status
+ * are applied by the server (see loadCourierPaymentReport), so this is all that's left to
+ * do locally - matching the old behaviour of searching courier name and order number, the
+ * latter only once a bill's orders have been loaded. */
+function courierPaymentReportVisibleBills() {
+    const query = (document.getElementById('courierPaymentReportSearchFilter')?.value || '').trim().toLowerCase();
+    if (!query) return courierPaymentReportBills;
+    return courierPaymentReportBills.filter((bill) =>
+        bill.courier.toLowerCase().includes(query)
+        || (bill.orders || []).some((o) => String(o.order_number ?? '').toLowerCase().includes(query)));
+}
+
+/** Cash-on-delivery amount for one order: total minus advance, for every order
+ * regardless of status - unlike computeReceivable, this doesn't wait for (or exclude
+ * as 0 for returns) a final delivered/returned outcome, since it's just the raw
+ * customer-facing COD figure, not a courier settlement amount. */
+function computeCod(order) {
+    return (parseFloat(order.total_amount) || 0) - (parseFloat(order.advance_amount) || 0);
+}
+
+/** The cards summarise exactly the bills the table below is showing, so all four filters
+ * reach them: courier, pickup-date range and payment status via the server query, search
+ * via courierPaymentReportVisibleBills. Orders with no pickup date are on no bill at all
+ * and so appear in neither - they can't be placed on the pickup-date timeline. */
 function courierPaymentReportSummary(bills) {
     let inTransit = 0;
     let resolved = 0;
+    let netOwed = 0;
     const inTransitByStatus = {};
-
     bills.forEach((bill) => {
-        bill.orders.forEach((order) => {
-            const status = (order.order_status || '').toLowerCase();
-            if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
-                inTransit++;
-                inTransitByStatus[order.order_status] = (inTransitByStatus[order.order_status] || 0) + 1;
-            } else if (COURIER_RESOLVED_STATUSES.has(status)) {
-                resolved++;
-            }
+        inTransit += bill.inTransitCount;
+        resolved += bill.resolvedCount;
+        netOwed += bill.remainingAmount;
+        Object.entries(bill.inTransitByStatus).forEach(([status, count]) => {
+            inTransitByStatus[status] = (inTransitByStatus[status] || 0) + count;
         });
     });
-
-    const netOwed = roundMoney(bills.reduce((sum, bill) => sum + bill.remainingAmount, 0));
-    return { inTransit, resolved, netOwed, inTransitByStatus };
+    return { inTransit, resolved, netOwed: Math.round(netOwed * 100) / 100, inTransitByStatus };
 }
 
 function renderCourierPaymentReportSummary(summary) {
@@ -147,136 +182,8 @@ function renderCourierPaymentReportSummary(summary) {
     setText('courierPayReportNetOwedDetail', net > 0 ? 'Courier owes you' : net < 0 ? 'You owe the courier' : 'Settled');
 }
 
-/** Local calendar date of courier_pickup_date as a sortable YYYY-MM-DD key, or null when
- * not yet picked up - those orders are excluded from the grouped table entirely, since
- * there's no date to group them by (buildCourierPaymentReportBills skips them). */
-function pickupDateKey(order) {
-    if (!order.courier_pickup_date) return null;
-    const d = new Date(order.courier_pickup_date);
-    if (isNaN(d.getTime())) return null;
-    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
-
-/** Money sums accumulate binary-float error, which leaves a derived figure that should be
- * exactly zero sitting at a residue like -5.5e-17 - and that formats as "-0.00" on an
- * otherwise fully-settled bill. Rounding each bill total to paisa before it's displayed or
- * summed keeps that out of both the grid and the Net Owed card. */
-function roundMoney(value) {
-    return Math.round(value * 100) / 100;
-}
-
-/** Cash-on-delivery amount for one order: total minus advance, for every order
- * regardless of status - unlike computeReceivable, this doesn't wait for (or exclude
- * as 0 for returns) a final delivered/returned outcome, since it's just the raw
- * customer-facing COD figure, not a courier settlement amount. */
-function computeCod(order) {
-    return (parseFloat(order.total_amount) || 0) - (parseFloat(order.advance_amount) || 0);
-}
-
-/** Aggregate one bill's orders into its money columns and status. Bill Value, Advance,
- * Gross COD, Delivery Charges and Taxes are summed over every order in the bill (raw
- * customer-facing/courier-cost figures, independent of outcome). Net Receivable is then
- * Gross COD minus those Delivery Charges and Taxes - a bill-level total, not a sum of
- * per-order receivables. Received only accumulates over resolved *and settled* orders
- * (via computeReceivable, since that's the only place an order's own receivable is known),
- * and Remaining is just Net Receivable minus that. Only *settled* returns are backed out
- * of Gross COD, at their COD value - an unsettled return isn't reconciled with the courier
- * yet, so its value has to stay in Remaining rather than being written off in advance. */
-function aggregateCourierPaymentReportBill(bill) {
-    let billValue = 0;
-    let advanceTotal = 0;
-    let charges = 0;
-    let taxes = 0;
-    let returnedTotal = 0;
-    let receivedAmount = 0;
-    let resolvedCount = 0;
-    let settledCount = 0;
-    let inTransitCount = 0;
-
-    bill.orders.forEach((order) => {
-        const status = (order.order_status || '').toLowerCase();
-        // Bill Value already nets out the advance (it's what the courier is actually
-        // handling), so nothing downstream needs to deduct advance again - advanceTotal
-        // is tracked only for reference (the "Advance Received" stat card).
-        billValue += computeCod(order);
-        advanceTotal += parseFloat(order.advance_amount) || 0;
-        charges += parseFloat(order.delivery_charge) || 0;
-        taxes += parseFloat(order.tax_amount) || 0;
-        if (status === 'returned' && order.is_order_settled) returnedTotal += computeCod(order);
-
-        if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
-            inTransitCount++;
-            return;
-        }
-        if (!COURIER_RESOLVED_STATUSES.has(status)) return;
-        resolvedCount++;
-        if (!order.is_order_settled) return;
-        const receivable = computeReceivable(order);
-        if (receivable == null) return;
-        settledCount++;
-        receivedAmount += receivable;
-    });
-
-    let status;
-    if (resolvedCount === 0) status = 'in_transit';
-    else if (settledCount === resolvedCount) status = 'paid';
-    else if (settledCount === 0) status = 'unpaid';
-    else status = 'partially_paid';
-
-    // Gross COD is Bill Value with the settled returned orders backed out too - the running
-    // total after both deductions, not a separately-tracked figure, so it can't drift out of
-    // step with the Bill Value/Returned Orders shown above it. Both sides are COD (net of
-    // advance), since deducting a return's full total from a Bill Value that already excludes
-    // the advance would back the advance out twice.
-    const grossCod = billValue - returnedTotal;
-    const netReceivable = grossCod - charges - taxes;
-
-    return {
-        ...bill,
-        totalOrders: bill.orders.length,
-        inTransitCount,
-        resolvedCount,
-        settledCount,
-        billValue: roundMoney(billValue),
-        advanceTotal: roundMoney(advanceTotal),
-        grossCod: roundMoney(grossCod),
-        charges: roundMoney(charges),
-        taxes: roundMoney(taxes),
-        returnedTotal: roundMoney(returnedTotal),
-        netReceivable: roundMoney(netReceivable),
-        receivedAmount: roundMoney(receivedAmount),
-        remainingAmount: roundMoney(netReceivable - receivedAmount),
-        status,
-    };
-}
-
-/** Group orders by (pickup date, courier) into one bill row each, newest pickup date
- * first, restricted to the active pickup-date range. Orders with no pickup date yet
- * (delivery status not fetched) are left out entirely - they can't be placed on the
- * pickup-date timeline, and so are absent from the summary cards above too. */
-function buildCourierPaymentReportBills(orderRows) {
-    const { from, to } = courierPaymentReportDateRange;
-    const groups = new Map();
-    orderRows.forEach((order) => {
-        const dateKey = pickupDateKey(order);
-        if (!dateKey) return;
-        if (from && dateKey < from) return;
-        if (to && dateKey > to) return;
-        const courier = (order.courier || '').trim() || 'Unknown';
-        const key = `${dateKey}|${courier}`;
-        if (!groups.has(key)) {
-            groups.set(key, { pickupDate: new Date(order.courier_pickup_date), pickupDateKey: dateKey, courier, orders: [] });
-        }
-        groups.get(key).orders.push(order);
-    });
-
-    return [...groups.values()]
-        .map(aggregateCourierPaymentReportBill)
-        .sort((a, b) => b.pickupDate - a.pickupDate || a.courier.localeCompare(b.courier, undefined, { sensitivity: 'base' }));
-}
-
 /** Payment Progress tracks Bill Value (already net of advance - see
- * aggregateCourierPaymentReportBill) against four claims on it: the amount the courier has
+ * the bill totals view) against four claims on it: the amount the courier has
  * actually paid back for settled orders, and the three things the courier/the bill itself
  * keeps instead - delivery charges, taxes, and the full total of any settled returned orders
  * (never coming back at all). Whatever's left over (billValue minus all four) is still
@@ -593,15 +500,31 @@ async function fetchCourierPaymentReportShippingInfo(bill) {
     });
 }
 
-function openCourierPaymentReportBillDetail(bill) {
+/** The list endpoint returns bills without their member orders (a few hundred bills, not
+ * every order behind them), so the detail screen fetches them on open. Everything above the
+ * orders table is already on the bill row and renders immediately. */
+async function openCourierPaymentReportBillDetail(bill) {
     courierPaymentReportCurrentBill = bill;
     renderCourierPaymentReportDetailHeader(bill);
     renderCourierPaymentReportDetailStats(bill);
     renderCourierPaymentReportDetailFinancialSummary(bill);
     renderCourierPaymentReportDetailCourierSummary(bill);
     renderCourierPaymentReportDetailProgressRing(bill);
-    renderCourierPaymentReportDetailOrdersTable(bill);
     switchView('courierPaymentReportDetail');
+
+    if (!bill.orders) {
+        try {
+            const detail = await apiJson(`/courier-bills/${bill.id}`, { fallback: 'Failed to load bill orders' });
+            bill.orders = detail.orders;
+        } catch (error) {
+            console.error('Error loading bill orders:', error);
+            showToast('Failed to load bill orders', 'error');
+            return;
+        }
+        if (courierPaymentReportCurrentBill !== bill) return;
+    }
+
+    renderCourierPaymentReportDetailOrdersTable(bill);
     fetchCourierPaymentReportShippingInfo(bill);
 }
 
@@ -633,28 +556,35 @@ async function downloadCourierPaymentReportBillPdf() {
     }
 }
 
-/** Re-slice the already-fetched orders by courier/search/date-range/status and redraw the
- * summary + bill table - no refetch, since all of those are client-side facets. */
+/** Redraw the summary + bill table from the loaded bills, applying the search box. The
+ * other three facets were applied by the server, so they need a refetch, not a re-slice -
+ * see loadCourierPaymentReport. */
 function renderCourierPaymentReportView() {
-    let bills = buildCourierPaymentReportBills(courierPaymentReportFilteredOrders());
-
-    const statuses = courierPaymentReportStatusFilter?.getSelected();
-    if (statuses) {
-        bills = bills.filter((b) => statuses.includes(b.status));
-    }
-
+    const bills = courierPaymentReportVisibleBills();
     renderCourierPaymentReportSummary(courierPaymentReportSummary(bills));
-
     if (courierPaymentReportGridApi) {
         courierPaymentReportGridApi.setGridOption('rowData', bills);
     }
 }
 
+/** Fetch the bills for the active pickup-date range, courier and payment-status filters.
+ * Unlike the old client-side grouping over /orders/, the range is applied in the database,
+ * so it reaches the whole order history rather than only the three periods /orders/
+ * returns - picking a range from six months ago now shows those bills instead of nothing. */
 async function loadCourierPaymentReport() {
     if (courierPaymentReportGridApi) courierPaymentReportGridApi.showLoadingOverlay();
 
+    const params = new URLSearchParams();
+    const { from, to } = courierPaymentReportDateRange;
+    if (from) params.append('date_from', from);
+    if (to) params.append('date_to', to);
+    courierPaymentReportCourierFilter?.getSelected()?.forEach((c) => params.append('courier', c));
+    courierPaymentReportStatusFilter?.getSelected()?.forEach((s) => params.append('payment_status', s));
+
     try {
-        courierPaymentReportOrders = await apiJson('/orders/', { fallback: 'Failed to load courier payment report data' });
+        const rows = await apiJson(`/courier-bills/?${params}`, { fallback: 'Failed to load courier payment report data' });
+        courierPaymentReportBills = rows.map(mapCourierBillRow);
+        recordCourierPaymentReportCouriers(courierPaymentReportBills);
     } catch (error) {
         console.error('Error loading courier payment report:', error);
         showToast('Failed to load courier payment report data', 'error');
@@ -668,8 +598,8 @@ async function loadCourierPaymentReport() {
 }
 
 /** Pickup-date range popover, mirroring the Orders page's own date-range button
- * (initOrdersDateRangeButton in navigation.js) but filtering courierPaymentReportOrders
- * client-side instead of an ag-grid filter model. */
+ * (initOrdersDateRangeButton in navigation.js) but refetching the courier bills for the
+ * new range instead of driving an ag-grid filter model. */
 function initCourierPaymentReportDateRangeButton() {
     const triggerBtn = document.getElementById('courierPaymentReportDateRangeBtn');
     if (!triggerBtn) return;
@@ -748,14 +678,14 @@ function initCourierPaymentReportDateRangeButton() {
             to: rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null,
         };
         updateButtonLabel();
-        renderCourierPaymentReportView();
+        loadCourierPaymentReport();
         menu.style.display = 'none';
     });
 
     clearBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         clearRange();
-        renderCourierPaymentReportView();
+        loadCourierPaymentReport();
         menu.style.display = 'none';
     });
 
@@ -868,7 +798,7 @@ function initCourierPaymentReportGrid() {
         defaultColDef: { sortable: true, resizable: true, filter: true, minWidth: 90 },
         pagination: false,
         domLayout: 'normal',
-        getRowId: (params) => `${params.data.pickupDateKey}|${params.data.courier}`,
+        getRowId: (params) => params.data.id,
         onGridReady: (params) => {
             courierPaymentReportGridApi = params.api;
         },
@@ -883,19 +813,21 @@ function initCourierPaymentReport() {
     // day to day. Falls back to every courier once PostEx isn't in the list.
     courierPaymentReportCourierFilter = createCheckboxFilterControl('courierPaymentReportCourierFilter', {
         allLabel: 'All couriers',
-        getValues: () => distinctCouriers(courierPaymentReportOrders),
+        getValues: () => courierPaymentReportCouriers,
         defaultSelected: (couriers) => {
             const postex = couriers.find((c) => c.toLowerCase() === 'postex');
             return postex ? [postex] : couriers;
         },
-        onChange: () => renderCourierPaymentReportView()
+        // Courier and payment status are server-side filters now, so narrowing them has to
+        // refetch rather than re-slice - only the search box can be answered locally.
+        onChange: () => loadCourierPaymentReport()
     });
 
     courierPaymentReportStatusFilter = createCheckboxFilterControl('courierPaymentReportStatusFilter', {
         allLabel: 'All Status',
         getValues: () => COURIER_PAYMENT_STATUSES,
         displayLabel: (v) => COURIER_PAYMENT_STATUS_LABELS[v],
-        onChange: () => renderCourierPaymentReportView()
+        onChange: () => loadCourierPaymentReport()
     });
 
     document.getElementById('courierPaymentReportSearchFilter')?.addEventListener('input', debounce(() => renderCourierPaymentReportView(), 250));
@@ -906,7 +838,7 @@ function initCourierPaymentReport() {
         const searchInput = document.getElementById('courierPaymentReportSearchFilter');
         if (searchInput) searchInput.value = '';
         if (typeof window._courierPaymentReportResetDateRange === 'function') window._courierPaymentReportResetDateRange();
-        renderCourierPaymentReportView();
+        loadCourierPaymentReport();
     });
 
     // Same PostEx payment-reconciliation CSV as the Orders page's "Upload PostEx CSV"

@@ -596,17 +596,6 @@ function closeDeliveryStatusReportModal() {
     if (modal) modal.classList.remove('active');
 }
 
-function showPostExAmountMismatchesModal(mismatches) {
-    const modal = document.getElementById('postExAmountMismatchesModal');
-    const tbody = document.getElementById('postExAmountMismatchesBody');
-    if (!modal || !tbody) return;
-    tbody.innerHTML = mismatches.map(m => {
-        const diff = (m.receivable - m.csv_net_amount).toFixed(2);
-        return `<tr><td>${m.order_number}</td><td>${m.receivable.toFixed(2)}</td><td>${m.csv_net_amount.toFixed(2)}</td><td>${diff}</td></tr>`;
-    }).join('');
-    modal.classList.add('active');
-}
-
 /** PostEx timestamps carry their own +0500 offset; take the calendar date from the string
  *  rather than via Date, which would shift it for viewers in other timezones. */
 function formatPostExDate(value) {
@@ -648,8 +637,71 @@ function closePostExSettlementsModal() {
     if (modal) modal.classList.remove('active');
 }
 
-function closePostExAmountMismatchesModal() {
-    const modal = document.getElementById('postExAmountMismatchesModal');
+/** Full report shown right after a PostEx CSV upload: net receivable and the other
+ * totals the upload derived, plus the per-order breakdown behind them, including any
+ * receivable-vs-CSV-NET_AMOUNT mismatch inline (mismatch rows highlighted, no separate
+ * popup). Built entirely from the upload response (order_breakdown/totals) - no refetch. */
+function showPostExUploadReportModal(data) {
+    const modal = document.getElementById('postExUploadReportModal');
+    const statsEl = document.getElementById('postExUploadReportStats');
+    const tbody = document.getElementById('postExUploadReportBody');
+    const summaryEl = document.getElementById('postExUploadReportSummary');
+    if (!modal || !statsEl || !tbody) return;
+
+    const orderNum = (o) => parseInt(String(o.order_number).replace(/\D/g, ''), 10) || 0;
+    const orders = [...(data.order_breakdown || [])].sort((a, b) =>
+        (b.mismatch - a.mismatch) || (orderNum(b) - orderNum(a)));
+    const t = data.totals || {};
+    const num = (v) => Number(v || 0).toFixed(2);
+    const stat = (label, value, opts = {}) => `
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">${escapeHtml(label)}</span>
+                <span class="stat-value"${opts.color ? ` style="color: ${opts.color};"` : ''}>${opts.raw ? value : `Rs ${num(value)}`}</span>
+            </div>
+        </div>`;
+    const netColor = Number(t.net_receivable || 0) < 0 ? 'var(--danger)' : 'var(--success)';
+    const mismatchCount = orders.filter((o) => o.mismatch).length;
+    statsEl.innerHTML = [
+        stat('Total Order Value', t.total_amount),
+        stat('Advance Received', t.advance_total),
+        stat('Gross COD', t.cod_total),
+        stat('Returned Orders', t.returned_total),
+        stat('Delivery Charges', t.delivery_charges),
+        stat('Taxes (SST)', t.taxes),
+        stat('Net Receivable', t.net_receivable, { color: netColor }),
+        stat('Mismatched Orders', mismatchCount, { raw: true, color: mismatchCount > 0 ? 'var(--danger)' : 'var(--success)' }),
+    ].join('');
+
+    tbody.innerHTML = orders.length
+        ? orders.map((o) => {
+            const diff = o.mismatch ? num(o.receivable - o.csv_net_amount) : null;
+            return `
+            <tr class="${o.mismatch ? 'postex-report-row--mismatch' : ''}">
+                <td>${escapeHtml(String(o.order_number ?? ''))}</td>
+                <td>${escapeHtml(o.folio || '-')}</td>
+                <td>${escapeHtml(o.order_status || '-')}</td>
+                <td>${num(o.total_amount)}</td>
+                <td>${num(o.advance_amount)}</td>
+                <td>${num(o.cod)}</td>
+                <td>${num(o.delivery_charge)}</td>
+                <td>${num(o.tax_amount)}</td>
+                <td>${num(o.receivable)}</td>
+                <td>${o.csv_net_amount != null ? num(o.csv_net_amount) : '-'}</td>
+                <td>${diff != null ? diff : '-'}</td>
+            </tr>`;
+        }).join('')
+        : '<tr><td colspan="11">No orders were updated by this CSV.</td></tr>';
+
+    if (summaryEl) {
+        summaryEl.textContent = `${orders.length} order(s) from this upload, net receivable Rs ${num(t.net_receivable)}.`
+            + (mismatchCount > 0 ? ` ${mismatchCount} order(s) differ from the CSV's NET_AMOUNT (highlighted).` : '');
+    }
+    modal.classList.add('active');
+}
+
+function closePostExUploadReportModal() {
+    const modal = document.getElementById('postExUploadReportModal');
     if (modal) modal.classList.remove('active');
 }
 
@@ -674,18 +726,6 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // PostEx amount mismatches modal
-    const mismatchesModal = document.getElementById('postExAmountMismatchesModal');
-    const closeMismatchesBtn = document.getElementById('closePostExAmountMismatchesModal');
-    const closeMismatchesBtn2 = document.getElementById('closePostExAmountMismatchesBtn');
-    if (mismatchesModal) {
-        mismatchesModal.addEventListener('click', (e) => {
-            if (e.target === mismatchesModal) closePostExAmountMismatchesModal();
-        });
-    }
-    if (closeMismatchesBtn) closeMismatchesBtn.addEventListener('click', closePostExAmountMismatchesModal);
-    if (closeMismatchesBtn2) closeMismatchesBtn2.addEventListener('click', closePostExAmountMismatchesModal);
-
     // PostEx settlements modal
     const settlementsModal = document.getElementById('postExSettlementsModal');
     if (settlementsModal) {
@@ -695,6 +735,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     document.getElementById('closePostExSettlementsModal')?.addEventListener('click', closePostExSettlementsModal);
     document.getElementById('closePostExSettlementsBtn')?.addEventListener('click', closePostExSettlementsModal);
+
+    // PostEx upload report modal
+    const uploadReportModal = document.getElementById('postExUploadReportModal');
+    if (uploadReportModal) {
+        uploadReportModal.addEventListener('click', (e) => {
+            if (e.target === uploadReportModal) closePostExUploadReportModal();
+        });
+    }
+    document.getElementById('closePostExUploadReportModal')?.addEventListener('click', closePostExUploadReportModal);
+    document.getElementById('closePostExUploadReportBtn')?.addEventListener('click', closePostExUploadReportModal);
 
     const reportModal = document.getElementById('deliveryStatusReportModal');
     if (reportModal) {
