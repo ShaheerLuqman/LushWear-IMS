@@ -1,0 +1,81 @@
+﻿order_number,tracking_number,field,ours,postex,difference,reason,our_status,postex_status,total_amount,invoice_payment,our_receivable,postex_receivable,receivable_difference,folio
+6475,29306960004107,delivery_charge,1124.00,211.60,-912.40,our stored delivery charge is not what PostEx billed,delivered,delivered,2298.00,2298.00,1082.08,1994.48,+912.40,1/4/26
+8116,25306960005299,delivery_charge,162.00,432.75,+270.75,our stored delivery charge is not what PostEx billed,delivered,delivered,650.00,650.00,462.00,191.25,-270.75,6/5/26
+8117,27306960005298,delivery_charge,261.00,261.28,+0.28,our stored delivery charge is not what PostEx billed,delivered,delivered,1100.00,1100.00,795.00,794.72,-0.28,6/5/26
+8379,25306960005471,delivery_charge,523.00,261.28,-261.72,our stored delivery charge is not what PostEx billed,delivered,delivered,650.00,650.00,101.00,362.72,+261.72,13/5/26
+9882,28306960006491,delivery_charge,3153.00,261.28,-2891.72,our stored delivery charge is not what PostEx billed,delivered,delivered,3048.00,949.00,-2241.96,649.76,+2891.72,24/6/26
+10065,23306960006572,delivery_charge,1760.00,310.27,-1449.73,our stored delivery charge is not what PostEx billed,delivered,delivered,349.00,349.00,-1424.96,24.77,+1449.73,24/6/26
+12652,28306960008387,delivery_charge,0.00,261.28,+261.28,our stored delivery charge is not what PostEx billed,delivered,delivered,2598.00,2598.00,2598.00,2232.80,-365.20,
+7866,27306960005096,folio,LW-14,29/4/26-API,,folio does not match PostEx's reserve payment date,delivered,delivered,2398.00,2398.00,2040.80,2040.80,+0.00,LW-14
+12652,28306960008387,is_order_settled,settled,not paid out,,marked settled here but PostEx shows no reserve payment,delivered,delivered,2598.00,2598.00,2598.00,2232.80,-365.20,
+6060,25306960003884,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2998.00,,,,,LW-7
+6087,22306960003883,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,6298.00,,,,,LW-7
+6105,25306960003882,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2998.00,,,,,LW-7
+6112,25306960003881,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-7
+6131,27306960003880,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,4247.00,,,,,LW-7
+6132,24306960003951,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5247.00,,,,,LW-8
+6135,24306960003950,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,5397.00,,,,,LW-8
+6141,20306960003949,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5598.00,,,,,LW-10
+6146,25306960003948,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2248.00,,,,,LW-8
+6148,21306960003961,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2298.00,,,,,LW-10
+6150,29306960003947,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,4247.00,,,,,LW-10
+6157,24306960003946,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-8
+6165,28306960003945,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-10
+6166,26306960003944,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3398.00,,,,,LW-10
+6167,28306960003943,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5998.00,,,,,LW-10
+6168,28306960003942,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2248.00,,,,,LW-9
+6175,27306960003941,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,6148.00,,,,,LW-10
+6177,22306960003940,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2648.00,,,,,LW-9
+6182,27306960003939,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3398.00,,,,,LW-10
+6184,22306960003938,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-11
+6192,20306960003959,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,8497.00,,,,,LW-10
+6198,28306960003937,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3048.00,,,,,LW-10
+6201,21306960003958,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-11
+6203,29306960003936,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5047.00,,,,,LW-11
+6208,24306960003957,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3248.00,,,,,LW-11
+6209,28306960003935,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5997.00,,,,,LW-8
+6214,20306960003934,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,4247.00,,,,,LW-10
+6224,25306960003962,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3248.00,,,,,LW-10
+6231,21306960003994,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-8
+6236,27306960003993,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-9
+6237,20306960004055,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-10
+6238,26306960003992,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,8997.00,,,,,LW-10
+6250,28306960004018,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3048.00,,,,,LW-10
+6264,26306960003991,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2348.00,,,,,LW-11
+6270,24306960004014,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5998.00,,,,,LW-10
+6274,22306960004013,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,8497.00,,,,,LW-10
+6277,20306960003990,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3248.00,,,,,LW-10
+6287,20306960003989,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5898.00,,,,,LW-10
+6288,25306960003988,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3248.00,,,,,LW-10
+6292,20306960004017,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3048.00,,,,,LW-8
+6298,27306960004012,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-8
+6303,29306960004054,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,6148.00,,,,,LW-10
+6307,26306960004053,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3398.00,,,,,LW-11
+6312,26306960004052,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-10
+6315,21306960004051,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-11
+6317,20306960004050,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2298.00,,,,,LW-11
+6320,23306960004062,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2298.00,,,,,LW-11
+6329,27306960004049,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-11
+6333,25306960004048,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3398.00,,,,,LW-10
+6335,20306960004047,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,5997.00,,,,,LW-10
+6336,23306960004046,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-11
+6337,20306960004045,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2598.00,,,,,LW-10
+6341,29306960004044,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2998.00,,,,,LW-11
+6345,21306960004057,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,11394.00,,,,,LW-10
+6347,24306960004056,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-10
+6349,27306960004067,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3398.00,,,,,LW-11
+6364,28306960004074,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2998.00,,,,,LW-12
+6377,24306960004073,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,4297.00,,,,,LW-12
+6378,23306960004072,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2248.00,,,,,LW-12
+6380,29306960004071,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,3247.00,,,,,LW-12
+6385,20306960004070,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,6997.00,,,,,LW-12
+6386,24306960004069,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2248.00,,,,,LW-12
+6387,24306960004068,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2298.00,,,,,LW-12
+7483,28306960004848,order_status,returned,delivered,,PostEx reports a different final status than we recorded,returned,delivered,2250.00,2250.00,-195.96,1964.04,+2160.00,15/4/26
+8191,25306960005362,order_status,returned,delivered,,PostEx reports a different final status than we recorded,returned,delivered,2348.00,2348.00,-261.28,1992.80,+2254.08,6/5/26
+9026,27306960005851,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2798.00,,,,,LW-13
+9027,28306960005850,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2398.00,,,,,LW-13
+9030,29306960005849,order_status,delivered,Unbooked,,settled here but PostEx has not marked it delivered or returned,delivered,Unbooked,2398.00,,,,,LW-13
+9042,25306960005845,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2398.00,,,,,LW-13
+9056,29306960005844,order_status,returned,Unbooked,,settled here but PostEx has not marked it delivered or returned,returned,Unbooked,2398.00,,,,,LW-13
+12652,28306960008387,tax_amount,0.00,103.92,+103.92,withholding differs from 2% income + 2% sales of the COD amount,delivered,delivered,2598.00,2598.00,2598.00,2232.80,-365.20,

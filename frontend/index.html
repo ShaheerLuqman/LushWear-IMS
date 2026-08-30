@@ -249,6 +249,7 @@
                             <button type="button" id="ordersMoreActionGenerateLoadSheet" class="orders-more-actions__item" role="menuitem" title="Generate load sheet for selected orders">Generate Load Sheet</button>
                             <button type="button" id="ordersMoreActionGeneratePackagingList" class="orders-more-actions__item" role="menuitem" title="Generate combined packaging list for selected orders">Generate Packaging List</button>
                             <button type="button" id="ordersMoreActionGenerateInvoice" class="orders-more-actions__item" role="menuitem" title="Generate invoice PDF for selected orders">Generate Invoice</button>
+                            <button type="button" id="ordersMoreActionPrintAirwayBills" class="orders-more-actions__item" role="menuitem" title="Download airway bills for selected orders (PostEx combined into one PDF; Couriers Next opened individually)">Print Airway Bills</button>
                             <button type="button" id="exportGridExcelBtn" class="orders-more-actions__item" role="menuitem" title="Export current AG Grid data to Excel">Export Data to Excel</button>
                         </div>
                     </div>
@@ -309,6 +310,7 @@
                         </div>
                         <button type="button" id="courierPaymentReportClearFiltersBtn" class="btn btn-secondary header-toolbar-btn">Clear Filters</button>
                         <button type="button" id="courierPaymentReportImportCsvBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-upload"></i> Import Payment (CSV)</button>
+                        <button type="button" id="courierPaymentReportFetchSettlementsBtn" class="btn btn-secondary header-toolbar-btn" title="Check unsettled PostEx orders against the courier API and settle the ones now delivered or returned"><i class="fa-solid fa-rotate"></i> Fetch PostEx Settlements</button>
                     </div>
                 </div>
             </header>
@@ -488,20 +490,6 @@
                             <select id="fulfillmentCityFilter" class="form-input"></select>
                         </div>
                         <div class="fulfillment-filter-group">
-                            <label for="fulfillmentCityMode">Filter By City</label>
-                            <select id="fulfillmentCityMode" class="form-input">
-                                <option value="exclude">Exclude</option>
-                                <option value="include">Include</option>
-                            </select>
-                        </div>
-                        <div class="fulfillment-filter-group fulfillment-filter-group--chips">
-                            <label for="fulfillmentCityChipInput">&nbsp;</label>
-                            <div id="fulfillmentCityChips" class="fulfillment-chip-input">
-                                <input type="text" id="fulfillmentCityChipInput" class="fulfillment-chip-input__field" placeholder="Add city..." list="fulfillmentCityChipOptions" autocomplete="off">
-                                <datalist id="fulfillmentCityChipOptions"></datalist>
-                            </div>
-                        </div>
-                        <div class="fulfillment-filter-group">
                             <label for="fulfillmentTagsFilter">Tags</label>
                             <select id="fulfillmentTagsFilter" class="form-input"></select>
                         </div>
@@ -539,6 +527,7 @@
                                             <th>Tags</th>
                                             <th>City</th>
                                             <th class="fulfillment-th-courier-city">Courier City <i data-lucide="info" title="Select a courier in the side panel to populate this with its supported cities"></i></th>
+                                            <th class="fulfillment-th-order-type">Type <i data-lucide="info" title="The courier's own order type. Only couriers whose booking API has one (PostEx) are selectable; the rest show a dash."></i></th>
                                             <th class="fulfillment-th-risk">Risk / Customer Status <i data-lucide="info" title="Based on this customer's past delivered vs. total orders"></i></th>
                                             <th class="fulfillment-col-actions">Actions</th>
                                         </tr>
@@ -578,6 +567,17 @@
                                 <div class="fulfillment-side-panel-actions">
                                     <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn"><i data-lucide="check-circle-2"></i> Fulfill Order</button>
                                     <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
+                                </div>
+                            </div>
+
+                            <!-- Shown right after a successful fulfill, in place of Empty/Content, until a
+                                 new selection is made (see renderFulfillmentSidePanel/renderFulfillmentBookedPanel). -->
+                            <div id="fulfillmentSidePanelBooked" class="fulfillment-side-panel-booked" style="display: none;">
+                                <p id="fulfillmentSidePanelBookedTitle" class="fulfillment-side-panel-title"></p>
+                                <div id="fulfillmentSidePanelBookedList" class="fulfillment-booked-list"></div>
+                                <div class="fulfillment-side-panel-actions">
+                                    <button type="button" id="fulfillmentBookedPrintBtn" class="btn btn-primary">Print Airway Bills</button>
+                                    <button type="button" id="fulfillmentBookedDoneBtn" class="btn btn-secondary">Done</button>
                                 </div>
                             </div>
                         </aside>
@@ -1257,6 +1257,40 @@
             </div>
             <div class="modal-pinned-footer">
                 <button type="button" id="closePostExAmountMismatchesBtn" class="btn btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PostEx settlements summary (shown after "Fetch PostEx Settlements") -->
+    <div id="postExSettlementsModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>PostEx settlements</h2>
+                <button type="button" class="modal-close" id="closePostExSettlementsModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description" id="postExSettlementsSummary"></p>
+                <div class="postex-mismatches-table-wrap">
+                    <table class="postex-mismatches-table">
+                        <thead>
+                            <tr>
+                                <th>Order #</th>
+                                <th>Folio</th>
+                                <th>Status</th>
+                                <th>Reserve payment date</th>
+                                <th>Invoice</th>
+                                <th>Delivery charge</th>
+                                <th>Tax</th>
+                                <th>Receivable</th>
+                            </tr>
+                        </thead>
+                        <tbody id="postExSettlementsBody"></tbody>
+                    </table>
+                </div>
+                <p class="modal-description" id="postExSettlementsNote"></p>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="closePostExSettlementsBtn" class="btn btn-primary">Close</button>
             </div>
         </div>
     </div>

@@ -17,13 +17,25 @@ const FULFILLMENT_COURIERS = [
     { id: 'other', name: 'Other', monogram: '···', color: '#6d6d78' }
 ];
 
+// Order types each courier's booking API accepts, keyed by courier id. Mirrors
+// postex.ORDER_TYPES on the backend; a courier absent here (Couriers Next included) has
+// no equivalent field, so its Type cells render as a plain dash.
+const FULFILLMENT_ORDER_TYPES = {
+    postex: ['Normal', 'Reversed', 'Replacement']
+};
+const FULFILLMENT_DEFAULT_ORDER_TYPE = 'Normal';
+
 let fulfillmentOrders = [];
 let fulfillmentLoading = false;
 let fulfillmentAllCities = [];
 let fulfillmentAllTags = [];
 let fulfillmentSelectedIds = new Set();
+// Orders booked by the most recent fulfillSelectedOrders() call, shown in the side panel
+// in place of the normal Empty/Content view until a new selection is made (see
+// renderFulfillmentSidePanel). [{id, order_number, tracking_number, courier}]
+let fulfillmentJustBooked = [];
 // cities/tags are null while nothing narrows them (every value ticked), which reads as "no filter".
-let fulfillmentFilters = { cities: null, cityMode: 'exclude', chipCities: [], tags: null, dateFrom: null, dateTo: null };
+let fulfillmentFilters = { cities: null, tags: null, dateFrom: null, dateTo: null };
 
 // Multi-select checkbox filters (grid-filters.js) replacing the old single-select dropdowns.
 let fulfillmentCityFilterControl = null;
@@ -40,6 +52,11 @@ let fulfillmentCourierCitiesLoading = false;
 // it belongs to, so re-rendering the table (tbody.innerHTML = ...) destroys the row's button
 // without it. Closed explicitly before every re-render so it can never get orphaned on screen.
 let fulfillmentOpenCourierCityCloser = null;
+
+/** The picked courier's order types, or [] for one whose API has no such field. */
+function fulfillmentOrderTypes() {
+    return (fulfillmentSelectedCourier && FULFILLMENT_ORDER_TYPES[fulfillmentSelectedCourier.id]) || [];
+}
 
 /** Pre-fills each order's courier city with the customer-entered one when the courier
  * actually serves a city of that name, so only the genuine mismatches ("DHA Phase 5",
@@ -82,6 +99,19 @@ async function loadFulfillmentPickupAddresses(courierId) {
     renderFulfillmentPickupAddresses();
 }
 
+/** One pickup option's text. Leads with the street address, since PostEx's own label is
+ * a generic address *type* ("Pickup Address") that reads identically for every warehouse
+ * a merchant has - the address is the only part that tells them apart. Falls back to the
+ * label when a courier returns no address, and keeps the city for the ones whose address
+ * doesn't already name it. */
+function fulfillmentPickupAddressLabel(a) {
+    const address = (a.address || '').trim();
+    if (!address) return [a.label, a.city].filter(Boolean).join(' - ');
+    const city = (a.city || '').trim();
+    const hasCity = city && address.toLowerCase().includes(city.toLowerCase());
+    return hasCity || !city ? address : `${address}, ${city}`;
+}
+
 function renderFulfillmentPickupAddresses() {
     const group = document.getElementById('fulfillmentPickupGroup');
     const select = document.getElementById('fulfillmentPickupSelect');
@@ -92,9 +122,23 @@ function renderFulfillmentPickupAddresses() {
     group.style.display = fulfillmentPickupAddresses.length > 0 ? 'block' : 'none';
     const previous = select.value;
     select.innerHTML = fulfillmentPickupAddresses
-        .map(a => `<option value="${escapeHtml(a.code)}" title="${escapeHtml(a.address)}">${escapeHtml(a.label)} - ${escapeHtml(a.city)}</option>`)
+        .map(a => `<option value="${escapeHtml(a.code)}" title="${escapeHtml(fulfillmentPickupAddressLabel(a))}">${escapeHtml(fulfillmentPickupAddressLabel(a))}</option>`)
         .join('');
-    if (fulfillmentPickupAddresses.some(a => a.code === previous)) select.value = previous;
+    if (fulfillmentPickupAddresses.some(a => a.code === previous)) {
+        select.value = previous;
+    } else {
+        // Both couriers flag one pickup identity as their own default (PostEx's
+        // addressType "Default Address", Couriers Next's is_default "1" - see
+        // postex.fetch_pickup_addresses and couriers_next.fetch_shippers) - pre-select
+        // it instead of leaving whichever one the browser puts first, which is just
+        // API response order.
+        const defaultAddress = fulfillmentPickupAddresses.find(a => a.is_default);
+        if (defaultAddress) select.value = defaultAddress.code;
+    }
+    // The side panel is only 300px wide, so a full street address truncates hard once
+    // picked and the dropdown closes - the option's own title stops being reachable then.
+    // Mirroring it onto the closed <select> keeps the full address a hover away.
+    select.title = select.selectedOptions[0]?.title || '';
 }
 
 /** Fetches the supported-city list for the courier just picked in the side panel
@@ -103,7 +147,12 @@ function renderFulfillmentPickupAddresses() {
 async function loadFulfillmentCourierCities(courierId) {
     fulfillmentCourierCitiesLoading = true;
     fulfillmentCourierCities = [];
-    fulfillmentOrders.forEach(o => { o.courierCity = null; });
+    // Both are courier-specific: a city the previous courier served may not exist for
+    // this one, and so may an order type.
+    fulfillmentOrders.forEach(o => {
+        o.courierCity = null;
+        o.orderType = FULFILLMENT_DEFAULT_ORDER_TYPE;
+    });
     renderFulfillmentTable();
     try {
         const result = await apiJson(`/orders/courier-cities?courier=${encodeURIComponent(courierId)}`, {
@@ -248,10 +297,12 @@ async function fetchFulfillmentOrders() {
         // partial fulfillment) silently blanks every picked city while the courier still
         // reads as selected.
         const courierCityByOrderId = new Map(fulfillmentOrders.filter(o => o.courierCity).map(o => [o.id, o.courierCity]));
+        const orderTypeByOrderId = new Map(fulfillmentOrders.map(o => [o.id, o.orderType]));
         fulfillmentOrders = rows.map(o => ({
             ...o,
             order_date: new Date(o.order_date),
             courierCity: courierCityByOrderId.get(o.id) || null,
+            orderType: orderTypeByOrderId.get(o.id) || FULFILLMENT_DEFAULT_ORDER_TYPE,
         }));
         // Orders that arrived in this refresh have no picked city yet - fill in the ones
         // whose city the already-picked courier recognises.
@@ -278,11 +329,6 @@ function renderFulfillmentFilterOptions() {
 
     fulfillmentCityFilterControl?.refresh();
     fulfillmentTagsFilterControl?.refresh();
-
-    const chipOptionsEl = document.getElementById('fulfillmentCityChipOptions');
-    if (chipOptionsEl) {
-        chipOptionsEl.innerHTML = fulfillmentAllCities.map(c => `<option value="${escapeHtml(c)}">`).join('');
-    }
 }
 
 function initOrderFulfillment() {
@@ -304,29 +350,6 @@ function initOrderFulfillment() {
         }
     });
 
-    const cityModeEl = document.getElementById('fulfillmentCityMode');
-    if (cityModeEl) {
-        cityModeEl.addEventListener('change', () => {
-            fulfillmentFilters.cityMode = cityModeEl.value;
-            renderFulfillmentTable();
-        });
-    }
-
-    const chipInput = document.getElementById('fulfillmentCityChipInput');
-    if (chipInput) {
-        chipInput.addEventListener('keydown', (e) => {
-            if (e.key !== 'Enter') return;
-            e.preventDefault();
-            const val = chipInput.value.trim();
-            if (val && fulfillmentAllCities.includes(val) && !fulfillmentFilters.chipCities.includes(val)) {
-                fulfillmentFilters.chipCities.push(val);
-                renderFulfillmentCityChips();
-                renderFulfillmentTable();
-            }
-            chipInput.value = '';
-        });
-    }
-
     const dateInput = document.getElementById('fulfillmentDateRangeInput');
     if (dateInput && window.flatpickr) {
         fulfillmentDatePicker = window.flatpickr(dateInput, {
@@ -343,12 +366,10 @@ function initOrderFulfillment() {
     }
 
     document.getElementById('fulfillmentClearFiltersBtn')?.addEventListener('click', () => {
-        fulfillmentFilters = { cities: null, cityMode: 'exclude', chipCities: [], tags: null, dateFrom: null, dateTo: null };
+        fulfillmentFilters = { cities: null, tags: null, dateFrom: null, dateTo: null };
         fulfillmentCityFilterControl?.reset();
         fulfillmentTagsFilterControl?.reset();
-        if (cityModeEl) cityModeEl.value = 'exclude';
         if (fulfillmentDatePicker) fulfillmentDatePicker.clear();
-        renderFulfillmentCityChips();
         renderFulfillmentTable();
     });
 
@@ -368,12 +389,29 @@ function initOrderFulfillment() {
         document.getElementById('fulfillmentCourierMenu')?.classList.toggle('open');
     });
 
+    // Keeps the closed select's own tooltip in sync when the user changes it by hand -
+    // renderFulfillmentPickupAddresses only sets it on (re)populate, not on selection.
+    document.getElementById('fulfillmentPickupSelect')?.addEventListener('change', (e) => {
+        e.target.title = e.target.selectedOptions[0]?.title || '';
+    });
+
     document.getElementById('fulfillmentCancelSelectionBtn')?.addEventListener('click', () => {
         fulfillmentSelectedIds.clear();
         renderFulfillmentTable();
     });
 
     document.getElementById('fulfillmentFulfillBtn')?.addEventListener('click', fulfillSelectedOrders);
+    document.getElementById('fulfillmentBookedPrintBtn')?.addEventListener('click', async () => {
+        try {
+            await printAirwayBillsForOrders(fulfillmentJustBooked);
+        } catch (error) {
+            showToast(error.message || 'Failed to print airway bills', 'error');
+        }
+    });
+    document.getElementById('fulfillmentBookedDoneBtn')?.addEventListener('click', () => {
+        fulfillmentJustBooked = [];
+        renderFulfillmentSidePanel();
+    });
 
     document.getElementById('orderFulfillmentExportBtn')?.addEventListener('click', () => {
         showToast('Export not implemented yet', 'info');
@@ -388,25 +426,6 @@ function initOrderFulfillment() {
     });
 
     renderFulfillmentCourierMenu();
-    renderFulfillmentCityChips();
-}
-
-function renderFulfillmentCityChips() {
-    const wrap = document.getElementById('fulfillmentCityChips');
-    if (!wrap) return;
-    const input = document.getElementById('fulfillmentCityChipInput');
-    wrap.querySelectorAll('.fulfillment-chip').forEach(el => el.remove());
-    fulfillmentFilters.chipCities.forEach(city => {
-        const chip = document.createElement('span');
-        chip.className = 'fulfillment-chip';
-        chip.innerHTML = `${escapeHtml(city)} <button type="button" aria-label="Remove ${escapeHtml(city)}">&times;</button>`;
-        chip.querySelector('button').addEventListener('click', () => {
-            fulfillmentFilters.chipCities = fulfillmentFilters.chipCities.filter(c => c !== city);
-            renderFulfillmentCityChips();
-            renderFulfillmentTable();
-        });
-        wrap.insertBefore(chip, input);
-    });
 }
 
 function renderFulfillmentCourierMenu() {
@@ -444,11 +463,6 @@ function getFulfillmentFilteredOrders() {
     return fulfillmentOrders.filter(o => {
         if (fulfillmentFilters.cities && !fulfillmentFilters.cities.includes(o.city)) return false;
         if (fulfillmentFilters.tags && !fulfillmentFilters.tags.some((t) => o.tags.includes(t))) return false;
-        if (fulfillmentFilters.chipCities.length > 0) {
-            const inChips = fulfillmentFilters.chipCities.includes(o.city);
-            if (fulfillmentFilters.cityMode === 'exclude' && inChips) return false;
-            if (fulfillmentFilters.cityMode === 'include' && !inChips) return false;
-        }
         if (fulfillmentFilters.dateFrom && o.order_date < fulfillmentFilters.dateFrom) return false;
         if (fulfillmentFilters.dateTo) {
             const endOfDay = new Date(fulfillmentFilters.dateTo);
@@ -493,6 +507,17 @@ function renderFulfillmentRiskCell(order) {
     `;
 }
 
+/** The order's courier order type, as a picker for couriers that have the field
+ * (PostEx) and a plain dash for the ones that don't - and before a courier is picked
+ * at all, since which types exist is the courier's own business. */
+function renderFulfillmentOrderTypeCell(order) {
+    const types = fulfillmentOrderTypes();
+    if (types.length === 0) return '<span class="fulfillment-order-type-none">—</span>';
+    return `<select class="fulfillment-order-type-select" data-order-type-select>
+        ${types.map(t => `<option value="${escapeHtml(t)}" ${t === order.orderType ? 'selected' : ''}>${escapeHtml(t)}</option>`).join('')}
+    </select>`;
+}
+
 function renderFulfillmentRow(order) {
     const checked = fulfillmentSelectedIds.has(order.id);
     const tagsHtml = order.tags.map(t => `<span class="fulfillment-tag-badge ${fulfillmentTagBadgeClass(t)}">${escapeHtml(t)}</span>`).join('');
@@ -525,6 +550,7 @@ function renderFulfillmentRow(order) {
             </td>
             <td class="fulfillment-city-fixed" title="Entered by the customer">${escapeHtml(order.city)}</td>
             <td class="fulfillment-courier-city-cell" data-courier-city-cell></td>
+            <td class="fulfillment-order-type-cell">${renderFulfillmentOrderTypeCell(order)}</td>
             <td class="fulfillment-risk-cell">${renderFulfillmentRiskCell(order)}</td>
             <td class="fulfillment-actions-cell">
                 <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="More actions">&#8942;</button>
@@ -599,6 +625,12 @@ function attachFulfillmentRowHandlers(tbody) {
         const courierCityCell = tr.querySelector('[data-courier-city-cell]');
         if (courierCityCell) courierCityCell.appendChild(createFulfillmentCourierCityDropdown(order));
 
+        // No re-render: the <select> already shows the new value, and redrawing the table
+        // would close the row's menus for nothing.
+        tr.querySelector('[data-order-type-select]')?.addEventListener('change', (e) => {
+            order.orderType = e.target.value;
+        });
+
         tr.querySelector('[data-actions-toggle]')?.addEventListener('click', (e) => {
             e.stopPropagation();
             const menu = tr.querySelector('.fulfillment-actions-menu');
@@ -668,12 +700,15 @@ async function fulfillSelectedOrders() {
         return;
     }
 
-    const pickupLabel = fulfillmentPickupAddresses.find(a => a.code === pickupAddressCode);
-    const confirmed = confirm(
-        `Book ${selectedOrders.length} order(s) with ${fulfillmentSelectedCourier.name}?\n\n` +
-        `Pickup from: ${pickupLabel ? `${pickupLabel.label} - ${pickupLabel.city}` : pickupAddressCode}\n\n` +
-        `This creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`
-    );
+    const pickup = fulfillmentPickupAddresses.find(a => a.code === pickupAddressCode);
+    const confirmed = await showAppConfirm({
+        title: 'Fulfill Orders',
+        message:
+            `Book ${selectedOrders.length} order(s) with ${fulfillmentSelectedCourier.name}?\n\n` +
+            `Pickup from: ${pickup ? fulfillmentPickupAddressLabel(pickup) : pickupAddressCode}\n\n` +
+            `This creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`,
+        confirmText: 'Fulfill'
+    });
     if (!confirmed) return;
 
     const fulfillBtn = document.getElementById('fulfillmentFulfillBtn');
@@ -689,14 +724,26 @@ async function fulfillSelectedOrders() {
             body: {
                 courier: fulfillmentSelectedCourier.id,
                 pickup_address_code: pickupAddressCode,
-                orders: selectedOrders.map(o => ({ order_id: o.id, courier_city: o.courierCity }))
+                orders: selectedOrders.map(o => ({ order_id: o.id, courier_city: o.courierCity, order_type: o.orderType }))
             },
             fallback: 'Failed to fulfill orders'
         });
 
-        const booked = new Set(result.results.filter(r => r.ok).map(r => r.order_id));
+        const bookedResults = result.results.filter(r => r.ok);
+        const booked = new Set(bookedResults.map(r => r.order_id));
         fulfillmentOrders = fulfillmentOrders.filter(o => !booked.has(o.id));
         booked.forEach(id => fulfillmentSelectedIds.delete(id));
+
+        // courier is per-batch (fulfillmentSelectedCourier), not per-result, since the
+        // booking request only ever names one courier for the whole selection. The airway
+        // bill itself is resolved live from tracking_number by printAirwayBillsForOrders,
+        // not stored here.
+        fulfillmentJustBooked = bookedResults.map(r => ({
+            id: r.order_id,
+            order_number: r.order_number,
+            tracking_number: r.tracking_number,
+            courier: fulfillmentSelectedCourier.name,
+        }));
 
         const failures = result.results.filter(r => !r.ok);
         if (failures.length === 0) {
@@ -713,6 +760,11 @@ async function fulfillSelectedOrders() {
 
         renderFulfillmentFilterOptions();
         renderFulfillmentTable();
+        if (fulfillmentJustBooked.length > 0) {
+            printAirwayBillsForOrders(fulfillmentJustBooked).catch((error) => {
+                console.error('Error printing airway bills:', error);
+            });
+        }
     } catch (error) {
         console.error('Error fulfilling orders:', error);
         showToast(error.message || 'Failed to fulfill orders', 'error');
@@ -729,7 +781,20 @@ async function fulfillSelectedOrders() {
 function renderFulfillmentSidePanel() {
     const empty = document.getElementById('fulfillmentSidePanelEmpty');
     const content = document.getElementById('fulfillmentSidePanelContent');
+    const booked = document.getElementById('fulfillmentSidePanelBooked');
     const count = fulfillmentSelectedIds.size;
+
+    // A fresh selection always wins back the panel from the post-fulfill "Booked" state.
+    if (count > 0) fulfillmentJustBooked = [];
+
+    if (count === 0 && fulfillmentJustBooked.length > 0) {
+        if (empty) empty.style.display = 'none';
+        if (content) content.style.display = 'none';
+        if (booked) booked.style.display = 'block';
+        renderFulfillmentBookedPanel();
+        return;
+    }
+    if (booked) booked.style.display = 'none';
 
     if (count === 0) {
         if (empty) empty.style.display = 'flex';
@@ -750,6 +815,28 @@ function renderFulfillmentSidePanel() {
     }
 }
 
+/** Renders the post-fulfill "Booked" state: the list of just-booked orders, one grouped
+ * Print Airway Bills button covering all of them (see printAirwayBillsForOrders), and a
+ * Done button that dismisses the panel. */
+function renderFulfillmentBookedPanel() {
+    const title = document.getElementById('fulfillmentSidePanelBookedTitle');
+    const list = document.getElementById('fulfillmentSidePanelBookedList');
+    if (title) {
+        title.textContent = fulfillmentJustBooked.length === 1
+            ? 'Booked 1 order' : `Booked ${fulfillmentJustBooked.length} orders`;
+    }
+    if (list) {
+        list.innerHTML = fulfillmentJustBooked.map(o => `
+            <div class="fulfillment-booked-row">
+                <span class="fulfillment-booked-row-order">#${escapeHtml(String(o.order_number))}</span>
+                <span class="fulfillment-booked-row-tracking">${escapeHtml(o.tracking_number || '-')}</span>
+            </div>
+        `).join('');
+    }
+    const printBtn = document.getElementById('fulfillmentBookedPrintBtn');
+    if (printBtn) printBtn.disabled = !fulfillmentJustBooked.some(orderHasAirwayBill);
+}
+
 function renderFulfillmentTable() {
     // About to blow away tbody's rows - an open courier-city dropdown lives outside them
     // (document.body), so it has to be closed explicitly or it's orphaned on screen.
@@ -765,11 +852,11 @@ function renderFulfillmentTable() {
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
         if (fulfillmentLoading) {
-            tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Loading unfulfilled orders…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">Loading unfulfilled orders…</td></tr>';
         } else {
             tbody.innerHTML = filtered.length
                 ? filtered.map(renderFulfillmentRow).join('')
-                : '<tr><td colspan="10" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
+                : '<tr><td colspan="11" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
             attachFulfillmentRowHandlers(tbody);
             if (window.lucide) lucide.createIcons();
         }

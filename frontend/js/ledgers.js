@@ -1005,6 +1005,41 @@ async function uploadPostExCsv(file, assignmentNumber) {
     }
 }
 
+async function fetchPostExSettlements() {
+    const btn = document.getElementById('courierPaymentReportFetchSettlementsBtn');
+    const originalText = btn?.textContent;
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Checking PostEx...';
+    }
+    try {
+        // recheck_derived also revisits orders this endpoint settled earlier, so a corrected
+        // derivation reaches rows written under the old one. CSV-settled rows are never touched.
+        const response = await fetch(`${API_BASE}/orders/fetch-postex-settlements?recheck_derived=true`, { method: 'POST' });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const detail = Array.isArray(data.detail) ? data.detail.map(d => d.msg || d).join(' ') : data.detail;
+            throw new Error(detail || response.statusText || 'Failed to fetch settlements');
+        }
+        showToast(data.message || `Settled ${data.updated || 0} order(s).`, 'success');
+        // Lives on the courier payment report, which keeps its own copy of the orders it
+        // renders - refreshing only the orders grid would leave the visible report stale.
+        if (data.updated > 0) {
+            await loadOrders();
+            if (typeof loadCourierPaymentReport === 'function') await loadCourierPaymentReport();
+        }
+        showPostExSettlementsModal(data);
+    } catch (error) {
+        console.error('Error fetching PostEx settlements', error);
+        showToast(error.message || 'Failed to fetch PostEx settlements', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = originalText;
+        }
+    }
+}
+
 function openUploadPostExModal() {
     const modal = document.getElementById('uploadPostExModal');
     const fileInput = document.getElementById('uploadPostExFileInput');

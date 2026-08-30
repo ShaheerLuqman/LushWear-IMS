@@ -26,6 +26,7 @@ from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token,
 from app.rate_limit import limiter
 from app.services import couriers_next, postex
 from app.services.courier_cities import get_courier_cities
+from app.services.pdf.courier_bill_summary import generate_courier_bill_summary_pdf
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
 from app.services.pdf.load_sheet import _generate_pdf_load_sheet
 from app.services.pdf.packaging_list import (
@@ -379,6 +380,9 @@ async def get_courier_supported_cities(courier: str, org_id: str = Depends(get_o
 class FulfillOrderRequest(BaseModel):
     order_id: str
     courier_city: str
+    # PostEx-only (see postex.ORDER_TYPES); ignored for couriers whose API has no
+    # equivalent, which is why it defaults rather than being required.
+    order_type: str = "Normal"
 
 
 class FulfillOrdersBody(BaseModel):
@@ -410,6 +414,15 @@ class FulfillOrdersResult(BaseModel):
 # portal - a courier absent here is rejected by /fulfill rather than silently ignored.
 _FULFILL_COURIER_NAMES = {"postex": "PostEx", "couriers_next": "Couriers Next"}
 
+# Public tracking page per bookable courier, formatted with the tracking number. Sent to
+# Shopify with the fulfillment so the number is a working link in the customer's shipping
+# email - Shopify can only infer a carrier URL for carriers it knows, which is none of
+# these, so an absent template leaves the number as plain text.
+_FULFILL_TRACKING_URLS = {
+    "postex": "https://postex.pk/tracking?cn={tracking_number}",
+    "couriers_next": "https://portal.couriersnext.com/track-details.php?track_code={tracking_number}",
+}
+
 # Couriers Next books a parcel from a named origin city rather than from a stored pickup
 # address, so unlike PostEx the shipper profile does not carry one. Their account is
 # Karachi-based and every dispatch leaves from there.
@@ -435,6 +448,10 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
         raise HTTPException(status_code=400, detail=f"Fulfillment is not supported for courier '{body.courier}' yet.")
     if not body.orders:
         raise HTTPException(status_code=400, detail="No orders selected.")
+    if body.courier == "postex":
+        bad_types = {o.order_type for o in body.orders} - set(postex.ORDER_TYPES)
+        if bad_types:
+            raise HTTPException(status_code=400, detail=f"Unknown PostEx order type(s): {', '.join(sorted(bad_types))}.")
 
     org_creds = get_org_integration_settings(org_id)
     courier_name = _FULFILL_COURIER_NAMES[body.courier]
@@ -532,6 +549,7 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                         invoice_payment=cod_amount,
                         items=items,
                         pickup_address_code=body.pickup_address_code,
+                        order_type=request.order_type,
                         order_detail=order_detail,
                     )
                 else:
@@ -580,7 +598,7 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
             ))
 
     if booked:
-        await _push_fulfillments_to_shopify(booked, courier_name, org_id, org_creds)
+        await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)
 
     return FulfillOrdersResult(
         booked_count=sum(1 for r in results if r.ok),
@@ -590,7 +608,8 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
 
 
 async def _push_fulfillments_to_shopify(
-    booked: List[Tuple[dict, str]], courier_name: str, org_id: str, org_creds: OrgIntegrationSettings
+    booked: List[Tuple[dict, str]], courier: str, courier_name: str, org_id: str,
+    org_creds: OrgIntegrationSettings
 ) -> None:
     """Mirror successful bookings into Shopify so the store shows them fulfilled with
     tracking, and the customer gets the shipping notification.
@@ -612,7 +631,12 @@ async def _push_fulfillments_to_shopify(
             if not sp_order:
                 logger.warning("Order %s not found in Shopify - skipping fulfillment push", row["order_number"])
                 continue
-            await shopify.create_fulfillment(sp_order["id"], tracking_number, courier_name, org_creds)
+            tracking_url = _FULFILL_TRACKING_URLS.get(courier)
+            await shopify.create_fulfillment(
+                sp_order["id"], tracking_number, courier_name,
+                tracking_url.format(tracking_number=tracking_number) if tracking_url else None,
+                org_creds,
+            )
         except Exception:
             logger.exception("Shopify fulfillment push failed for order %s (booked as %s)",
                              row["order_number"], tracking_number)
@@ -1533,6 +1557,58 @@ async def get_returned_delivery_charges_sum(org_id: str = Depends(get_org_id)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/courier-bill-summary-pdf")
+@limiter.limit("10/minute")
+async def get_courier_bill_summary_pdf(
+    request: Request,
+    pickup_date: str = Query(..., description="Pickup date as YYYY-MM-DD"),
+    courier: str = Query(...),
+    org_id: str = Depends(get_org_id),
+):
+    """Settlement summary PDF for one courier payment bill (one courier's pickup on one day)."""
+    try:
+        try:
+            day = datetime.strptime(pickup_date, "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="pickup_date must be YYYY-MM-DD")
+
+        supabase = get_supabase()
+        # courier_pickup_date is TIMESTAMPTZ, so the day is a half-open range rather than an
+        # equality match, and the bounds are anchored to PKT - the frontend groups by the
+        # browser's local calendar date, and bare dates would be read as UTC, shifting the
+        # window five hours and pulling in the neighbouring day's pickups.
+        start = datetime(day.year, day.month, day.day, tzinfo=PKT_TIMEZONE)
+        response = (
+            org_table(supabase, org_id, "shopify_orders")
+            .select("*")
+            .gte("courier_pickup_date", start.isoformat())
+            .lt("courier_pickup_date", (start + timedelta(days=1)).isoformat())
+            .execute()
+        )
+        courier_name = courier.strip()
+        orders = [
+            row for row in (response.data or [])
+            if (row.get("courier") or "").strip().lower() == courier_name.lower()
+        ]
+        if not orders:
+            raise HTTPException(status_code=404, detail="No orders found for this bill")
+
+        pdf_buffer = await asyncio.to_thread(
+            generate_courier_bill_summary_pdf, orders, pickup_date, courier_name
+        )
+        filename = f"courier_summary_{courier_name.replace(' ', '_')}_{pickup_date}.pdf"
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("/{order_id}")
 async def get_order(order_id: str, org_id: str = Depends(get_org_id)):
     """Get a single order by ID"""
@@ -1547,6 +1623,91 @@ async def get_order(order_id: str, org_id: str = Depends(get_org_id)):
     except Exception:
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/postex-airway-bills")
+async def get_postex_airway_bills(order_ids: List[str] = Body(..., embed=False), org_id: str = Depends(get_org_id)):
+    """One combined PDF of PostEx airway bills for several booked orders.
+
+    PostEx's get-invoice already returns every requested tracking number's bill in a
+    single PDF - no client-side merge needed. Couriers Next has no equivalent batch
+    endpoint (each order's invoice_link is independent), so the frontend downloads those
+    directly and only routes PostEx orders through this endpoint.
+
+    Capped at postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS (PostEx's own get-invoice limit) -
+    rejected outright rather than silently chunked into multiple PostEx calls, since that
+    would mean multiple PDFs with no single-file way to hand them back as one response.
+    """
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders selected.")
+    if len(order_ids) > postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"PostEx generates airway bills for at most {postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS} orders at a time.")
+
+    supabase = get_supabase()
+    rows = org_table(supabase, org_id, "shopify_orders").select(
+        "id, order_number, courier, tracking_number"
+    ).in_("id", order_ids).execute().data or []
+    postex_name = _FULFILL_COURIER_NAMES["postex"]
+    tracking_numbers = [
+        r["tracking_number"] for r in rows
+        if (r.get("courier") or "").strip() == postex_name and r.get("tracking_number")
+    ]
+    if not tracking_numbers:
+        raise HTTPException(status_code=400, detail="None of the selected orders are booked PostEx orders.")
+
+    org_creds = get_org_integration_settings(org_id)
+    if not org_creds.postex_merchant_token:
+        raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization.")
+
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            pdf_bytes = await postex.get_airway_bill(client, org_creds.postex_merchant_token, tracking_numbers)
+    except postex.PostexInvoiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": "inline; filename=airway_bills.pdf"},
+    )
+
+
+@router.post("/couriers-next-airway-bills")
+async def get_couriers_next_airway_bills(order_ids: List[str] = Body(..., embed=False), org_id: str = Depends(get_org_id)):
+    """One combined airway bill URL covering several Couriers Next orders.
+
+    invoicehtml.php accepts a comma-separated order_id list and renders every one on the
+    same page (confirmed live) - the same combined-document shape as PostEx's get-invoice,
+    so the whole selection resolves to one link via couriers_next.get_airway_bill_link
+    (one GetOrderList.php fetch, cached, regardless of how many orders are asked for).
+    """
+    if not order_ids:
+        raise HTTPException(status_code=400, detail="No orders selected.")
+
+    supabase = get_supabase()
+    rows = org_table(supabase, org_id, "shopify_orders").select(
+        "id, order_number, courier, tracking_number"
+    ).in_("id", order_ids).execute().data or []
+    couriers_next_name = _FULFILL_COURIER_NAMES["couriers_next"]
+    tracking_numbers = [
+        r["tracking_number"] for r in rows
+        if (r.get("courier") or "").strip() == couriers_next_name and r.get("tracking_number")
+    ]
+    if not tracking_numbers:
+        raise HTTPException(status_code=400, detail="None of the selected orders are booked Couriers Next orders.")
+
+    org_creds = get_org_integration_settings(org_id)
+    if not org_creds.couriers_next_auth_key:
+        raise HTTPException(status_code=400, detail="Couriers Next credentials are not configured for this organization.")
+
+    try:
+        url = await couriers_next.get_airway_bill_link(org_creds.couriers_next_auth_key, tracking_numbers)
+    except couriers_next.CouriersNextInvoiceError as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
+    return {"url": url}
+
 
 def _delivery_status_is_final(delivery_status_data: dict) -> bool:
     """True if latest status is final (Delivered to Customer or Returned at Merchant Warehouse). No need to fetch from PostEx again."""
@@ -2095,21 +2256,20 @@ def _parse_postex_dist(dist: dict, tracking_number: str) -> dict:
     }
 
 
-def _parse_couriersnext_response(data: list, tracking_number: str) -> dict:
-    status_history_raw = [item for item in data if isinstance(item, dict)]
+def _parse_couriersnext_rows(rows: List[dict], tracking_number: str) -> dict:
+    """Build delivery_status_data from the history rows belonging to one tracking number."""
     status_history_parsed = [
         {
             "status": item.get("status", "") or "",
             "status_code": item.get("title", "") or "",
             "datetime": item.get("created", "") or "",
         }
-        for item in status_history_raw
+        for item in rows
     ]
     # Sort by provider timestamp ascending (oldest first, newest last).
     status_history_sorted = sorted(status_history_parsed, key=lambda x: x.get("datetime", "") or "")
     latest_status = status_history_sorted[-1].get("status", "") if status_history_sorted else ""
-    first_row = status_history_raw[0] if status_history_raw else {}
-    resolved_tracking = (first_row.get("tracking_no") if isinstance(first_row, dict) else None) or tracking_number
+    resolved_tracking = (rows[0].get("tracking_no") if rows else None) or tracking_number
     return {
         "courier": "Couriers Next",
         "tracking_number": resolved_tracking,
@@ -2121,23 +2281,52 @@ def _parse_couriersnext_response(data: list, tracking_number: str) -> dict:
     }
 
 
-async def _fetch_couriersnext_status(client: httpx.AsyncClient, tracking_number: str) -> dict:
-    api_url = "https://portal.couriersnext.com/API/TrackOrder.php"
+COURIERSNEXT_TRACK_URL = "https://portal.couriersnext.com/API/TrackOrder.php"
+
+
+async def _fetch_couriersnext_rows(client: httpx.AsyncClient, tracking_numbers: List[str]) -> Dict[str, List[dict]]:
+    """POST one or many tracking numbers to TrackOrder.php and group the flat history rows
+    it returns by tracking number. The API takes a comma-separated list - undocumented, but
+    the doc's own overview calls this endpoint "one to many". Separator must be a bare comma:
+    a space after it makes the API silently return only the first number's history.
+    Numbers it has no record of are simply absent from the response, not an error."""
     response = await client.post(
-        api_url,
-        json={"tracking_no": tracking_number},
+        COURIERSNEXT_TRACK_URL,
+        json={"tracking_no": ",".join(tracking_numbers)},
         headers={"Content-Type": "application/json"},
     )
     response.raise_for_status()
     data = response.json()
+    # A rejected request still comes back HTTP 200, as a bare string ("Tracking No is required").
     if not isinstance(data, list):
         raise HTTPException(status_code=500, detail="Invalid response from Couriers Next tracking API")
-    return _parse_couriersnext_response(data, tracking_number)
+    rows_by_tracking: Dict[str, List[dict]] = {}
+    for item in data:
+        if isinstance(item, dict) and item.get("tracking_no"):
+            rows_by_tracking.setdefault(str(item["tracking_no"]), []).append(item)
+    return rows_by_tracking
 
 
-# Undocumented cap on track-bulk-order; tested up to 120 tracking numbers in one call with
-# no error, but chunking keeps each request well under whatever the real limit turns out to be.
+async def _fetch_couriersnext_status(client: httpx.AsyncClient, tracking_number: str) -> dict:
+    rows_by_tracking = await _fetch_couriersnext_rows(client, [tracking_number])
+    return _parse_couriersnext_rows(rows_by_tracking.get(tracking_number, []), tracking_number)
+
+
+# track-bulk-order takes tracking numbers as repeated query params, so the batch size is
+# bounded by URL length, not by any documented cap: 400 in one call returns 414 URI Too Long.
+# 100 leaves plenty of headroom.
 POSTEX_BULK_BATCH_SIZE = 100
+
+# Each batch costs PostEx ~2s regardless of size, so batches run concurrently rather than
+# back to back. Measured over 400 numbers: 10.0s sequential, 3.0s at 4, 2.7s at 8 - past 4
+# the courier, not our fan-out, is the limit, so this stays low to avoid hammering them.
+POSTEX_BULK_CONCURRENCY = 4
+
+
+# TrackOrder.php returns every history row for every number in one flat array, so the
+# response grows much faster than the request - 200 numbers came back as ~1900 rows / 260KB
+# in testing (400 worked too). Batching at 200 keeps responses a sane size.
+COURIERSNEXT_BULK_BATCH_SIZE = 200
 
 
 # Cap on ids per `.in_()` query - keeps the request URL well under server/proxy length
@@ -2146,74 +2335,102 @@ POSTEX_BULK_BATCH_SIZE = 100
 IN_QUERY_ID_CHUNK_SIZE = 100
 
 
+# Only the columns the bulk delivery-status fetch actually reads. Notably NOT `select("*")`:
+# that pulled ~674KB per 300 orders against ~375KB here, most of the difference being
+# line_items. delivery_status has to stay - _merge_delivery_status_data falls back to the
+# stored status_history when the courier returns a blank one.
+DELIVERY_STATUS_ORDER_SELECT = "id, order_status, courier, tracking_number, piece_received, delivery_status"
+
+
 async def _fetch_couriersnext_bulk(tracking_numbers: List[Tuple[str, str]]) -> Dict[str, dict]:
-    """Fetch delivery status for many Couriers Next tracking numbers concurrently (no bulk
-    API exists for this courier, so this is just many single calls run in parallel)."""
+    """Fetch delivery status for many Couriers Next tracking numbers, batched into as few
+    requests as possible. Returns a dict keyed by tracking number."""
     results: Dict[str, dict] = {}
-    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+    unique = list(dict.fromkeys(tn for _, tn in tracking_numbers))
 
-    async def run(client: httpx.AsyncClient, tracking_number: str):
-        async with sem:
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for i in range(0, len(unique), COURIERSNEXT_BULK_BATCH_SIZE):
+            batch = unique[i:i + COURIERSNEXT_BULK_BATCH_SIZE]
             try:
-                results[tracking_number] = await _fetch_couriersnext_status(client, tracking_number)
+                rows_by_tracking = await _fetch_couriersnext_rows(client, batch)
             except Exception as e:
-                results[tracking_number] = {"error": str(e)}
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        await asyncio.gather(*(run(client, tn) for _, tn in tracking_numbers))
+                for tn in batch:
+                    results[tn] = {"error": str(e)}
+                continue
+            for tn in batch:
+                rows = rows_by_tracking.get(tn)
+                results[tn] = (
+                    _parse_couriersnext_rows(rows, tn) if rows
+                    else {"error": "No Couriers Next record found for this tracking number"}
+                )
     return results
 
 
-def _update_order_sync(org_id: str, order_id: str, update_payload: dict) -> None:
-    """Runs on its own Supabase client (not the shared singleton) - sharing one client's
-    HTTP/2 connection across concurrent threads crashes with a stream-read error."""
-    client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-    org_table(client, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
+# Rows per apply_delivery_status_updates call. Each row carries a full delivery_status
+# JSONB blob (status history included), so this bounds the request body rather than any
+# server-side limit.
+DELIVERY_STATUS_SAVE_BATCH_SIZE = 500
 
 
 async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], orders_by_id: Dict[str, dict]) -> None:
-    """Persist delivery_status (and derived order_status/piece_received) for many orders
-    concurrently. Partial per-row updates only - never a full-row write - so a stale
-    in-memory snapshot here can't clobber an unrelated field someone else edited meanwhile."""
-    now = datetime.now(timezone.utc).isoformat()
-    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
-
-    async def run(order_id: str, delivery_status_data: dict):
-        order = orders_by_id[order_id]
-        update_payload = {"delivery_status": delivery_status_data, "updated_at": now}
+    """Persist delivery_status (and derived order_status/piece_received) for many orders in
+    one round-trip per batch, via the apply_delivery_status_updates RPC. Partial per-column
+    updates only - never a full-row write - so a stale in-memory snapshot here can't clobber
+    an unrelated field someone else edited meanwhile."""
+    updates = []
+    for order_id, delivery_status_data in results.items():
+        if "error" in delivery_status_data:
+            continue
+        row = {"id": order_id, "delivery_status": delivery_status_data}
         pickup_date = _courier_pickup_date_iso(delivery_status_data)
         if pickup_date:
-            update_payload["courier_pickup_date"] = pickup_date
+            row["courier_pickup_date"] = pickup_date
         derived_status = _derive_order_status_from_latest(delivery_status_data)
         if derived_status:
-            update_payload["order_status"] = derived_status
-            if derived_status == "delivered":
-                current_piece = (order.get("piece_received") or "").strip().lower()
-                if current_piece == "pending":
-                    update_payload["piece_received"] = "Done"
-        async with sem:
-            try:
-                await asyncio.to_thread(_update_order_sync, org_id, order_id, update_payload)
-            except Exception:
-                logger.exception(f"[delivery-status-bulk] Failed to save order_id={order_id}")
+            row["order_status"] = derived_status
+            # Only on the first transition to delivered - never overwrite a value the user set.
+            if derived_status == "delivered" and (orders_by_id[order_id].get("piece_received") or "").strip().lower() == "pending":
+                row["piece_received"] = "Done"
+        updates.append(row)
 
-    to_save = [oid for oid, data in results.items() if "error" not in data]
-    await asyncio.gather(*(run(oid, results[oid]) for oid in to_save))
+    if not updates:
+        return
+
+    supabase = get_supabase()
+    for i in range(0, len(updates), DELIVERY_STATUS_SAVE_BATCH_SIZE):
+        batch = updates[i:i + DELIVERY_STATUS_SAVE_BATCH_SIZE]
+        try:
+            await asyncio.to_thread(
+                lambda b=batch: supabase.rpc(
+                    "apply_delivery_status_updates", {"p_org_id": org_id, "p_updates": b}
+                ).execute()
+            )
+        except Exception:
+            logger.exception(f"[delivery-status-bulk] Failed to save {len(batch)} orders")
 
 
-async def _fetch_postex_bulk(tracking_numbers: List[str], postex_token: str) -> Dict[str, dict]:
+async def _fetch_postex_bulk(
+    tracking_numbers: List[str], postex_token: str, with_raw: bool = False
+) -> Dict[str, dict]:
     """Fetch delivery status for many PostEx tracking numbers in as few requests as possible.
-    Returns a dict keyed by tracking number; numbers PostEx has no record of are simply absent."""
+    Returns a dict keyed by tracking number; numbers PostEx has no record of are simply absent.
+
+    with_raw additionally carries PostEx's untouched trackingResponse under "_raw", which the
+    settlement fetch needs for the fee/tax/invoice fields delivery_status_data drops."""
     if not tracking_numbers:
         return {}
     if not postex_token:
         raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization. Set them in Settings > Integrations.")
 
     url = "https://api.postex.pk/services/integration/api/order/v1/track-bulk-order"
-    results: Dict[str, dict] = {}
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for i in range(0, len(tracking_numbers), POSTEX_BULK_BATCH_SIZE):
-            batch = tracking_numbers[i:i + POSTEX_BULK_BATCH_SIZE]
+    batches = [
+        tracking_numbers[i:i + POSTEX_BULK_BATCH_SIZE]
+        for i in range(0, len(tracking_numbers), POSTEX_BULK_BATCH_SIZE)
+    ]
+    semaphore = asyncio.Semaphore(POSTEX_BULK_CONCURRENCY)
+
+    async def fetch_batch(client: httpx.AsyncClient, batch: List[str]) -> dict:
+        async with semaphore:
             # Doc says GET; body-less GET is what actually works, tracking numbers as repeated
             # query params (not the POST+JSON-body shape the doc's example implies).
             response = await client.get(
@@ -2222,14 +2439,29 @@ async def _fetch_postex_bulk(tracking_numbers: List[str], postex_token: str) -> 
                 params=[("TrackingNumbers", tn) for tn in batch],
             )
             response.raise_for_status()
-            data = response.json()
-            if data.get("statusCode") != "200":
-                continue
-            for item in data.get("dist") or []:
-                tr = item.get("trackingResponse") or {}
-                tn = tr.get("trackingNumber")
-                if tn:
-                    results[tn] = _parse_postex_dist(tr, tn)
+            return response.json()
+
+    results: Dict[str, dict] = {}
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # One failed batch must not lose the others' results - the caller reports per-order
+        # errors for whatever is missing from the returned dict.
+        responses = await asyncio.gather(
+            *(fetch_batch(client, b) for b in batches), return_exceptions=True
+        )
+    for batch, data in zip(batches, responses):
+        if isinstance(data, BaseException):
+            logger.warning(f"[postex-bulk] Batch of {len(batch)} failed: {data}")
+            continue
+        if data.get("statusCode") != "200":
+            continue
+        for item in data.get("dist") or []:
+            tr = item.get("trackingResponse") or {}
+            tn = tr.get("trackingNumber")
+            if tn:
+                parsed = _parse_postex_dist(tr, tn)
+                if with_raw:
+                    parsed["_raw"] = tr
+                results[tn] = parsed
     return results
 
 
@@ -2338,19 +2570,25 @@ async def get_delivery_status_bulk(
     save: bool = Query(False, description="If true, store fetched status in each order's delivery_status"),
     org_id: str = Depends(get_org_id),
 ):
-    """Fetch delivery status for many orders at once. PostEx orders are fetched in as few
-    requests as possible via track-bulk-order; Couriers Next has no bulk API so those are
-    fetched one at a time, same as the single-order endpoint."""
+    """Fetch delivery status for many orders at once, batched per courier: PostEx via
+    track-bulk-order, Couriers Next via TrackOrder.php's comma-separated list."""
     if not order_ids:
         raise HTTPException(status_code=400, detail="No orders selected")
     try:
         supabase = get_supabase()
-        org_creds = get_org_integration_settings(org_id)
-        orders_by_id = {}
-        for i in range(0, len(order_ids), IN_QUERY_ID_CHUNK_SIZE):
-            chunk = order_ids[i:i + IN_QUERY_ID_CHUNK_SIZE]
-            chunk_response = org_table(supabase, org_id, "shopify_orders").select("*").in_("id", chunk).execute()
-            orders_by_id.update({o["id"]: o for o in chunk_response.data or []})
+        chunks = [order_ids[i:i + IN_QUERY_ID_CHUNK_SIZE] for i in range(0, len(order_ids), IN_QUERY_ID_CHUNK_SIZE)]
+
+        def fetch_chunk(chunk):
+            # Own client per chunk - sharing one client's HTTP/2 connection across threads
+            # crashes with a stream-read error (same reason as advance_status.py's fetch_chunk).
+            client = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY) if len(chunks) > 1 else supabase
+            return org_table(client, org_id, "shopify_orders").select(DELIVERY_STATUS_ORDER_SELECT).in_("id", chunk).execute().data or []
+
+        if len(chunks) > 1:
+            chunk_rows = await asyncio.gather(*(asyncio.to_thread(fetch_chunk, c) for c in chunks))
+        else:
+            chunk_rows = [await asyncio.to_thread(fetch_chunk, chunks[0])] if chunks else []
+        orders_by_id = {o["id"]: o for rows in chunk_rows for o in rows}
 
         postex_orders: List[Tuple[str, str]] = []
         couriersnext_orders: List[Tuple[str, str]] = []
@@ -2383,6 +2621,9 @@ async def get_delivery_status_bulk(
                 results[order_id] = {"error": "Courier not supported for delivery status tracking"}
 
         if postex_orders:
+            # Only read once a PostEx order is actually in the batch - a Couriers-Next-only
+            # refresh has no use for these credentials.
+            org_creds = get_org_integration_settings(org_id)
             postex_by_tracking = await _fetch_postex_bulk([tn for _, tn in postex_orders], org_creds.postex_merchant_token)
             for order_id, tracking_number in postex_orders:
                 data = postex_by_tracking.get(tracking_number)
@@ -2417,6 +2658,174 @@ async def get_delivery_status_bulk(
     except Exception:
         logger.exception("Error fetching bulk delivery status")
         raise HTTPException(status_code=500, detail="Error fetching delivery status")
+
+@router.post("/fetch-postex-settlements")
+async def fetch_postex_settlements(
+    apply: bool = Query(True, description="If false, report what PostEx returns without writing"),
+    recheck_derived: bool = Query(False, description="Also re-derive orders this endpoint already settled, correcting stale figures"),
+    org_id: str = Depends(get_org_id),
+):
+    """Settle unsettled PostEx orders from the tracking API.
+
+    Scans every unsettled, uncancelled PostEx order with a tracking number, asks PostEx for
+    its current state, and for the ones it reports delivered or returned writes back
+    delivery_charge, tax_amount and folio, marking them settled.
+
+    delivery_charge is PostEx's own fee + GST. tax_amount is DERIVED (see
+    postex.settlement_from_tracking) because the API never reports withholding - rows written
+    here carry tax_amount_derived so a later CPR CSV upload overrides them with real figures.
+
+    recheck_derived additionally revisits orders this endpoint already settled, so a fix to
+    the derivation can be applied to rows written under the old one. It deliberately never
+    touches CSV-settled rows: those carry PostEx's authoritative figures, which a derivation
+    must not overwrite.
+    """
+    try:
+        supabase = get_supabase()
+        def _candidate_query():
+            q = (
+                org_table(supabase, org_id, "shopify_orders")
+                .select("id, order_number, tracking_number, order_status, total_amount, advance_amount, order_receiving_date, folio, courier, delivery_charge, tax_amount, is_order_settled")
+                .eq("courier", "PostEx")
+                .not_.is_("tracking_number", "null")
+                .neq("tracking_number", "")
+            )
+            # Unsettled rows are always in scope; recheck_derived widens that to rows this
+            # endpoint settled itself, which tax_amount_derived is exactly what identifies.
+            q = q.or_("is_order_settled.eq.false,tax_amount_derived.eq.true") if recheck_derived else q.eq("is_order_settled", False)
+            return q.order("order_number")
+
+        candidates = fetch_all(_candidate_query)
+        candidates = [
+            o for o in candidates
+            if (o.get("order_status") or "").strip().lower() != "cancelled"
+            and str(o.get("tracking_number") or "").strip()
+        ]
+        if not candidates:
+            return {"checked": 0, "updated": 0, "settlements": [], "message": "No unsettled PostEx orders with a tracking number."}
+
+        org_creds = get_org_integration_settings(org_id)
+        if not org_creds.postex_merchant_token:
+            raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization. Set them in Settings > Integrations.")
+
+        by_tracking = await _fetch_postex_bulk(
+            [str(o["tracking_number"]).strip() for o in candidates],
+            org_creds.postex_merchant_token,
+            with_raw=True,
+        )
+
+        settlements = []
+        orders_to_upsert = []
+        pending = []
+        not_found = []
+        unchanged = 0
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        for order in candidates:
+            tn = str(order["tracking_number"]).strip()
+            fetched = by_tracking.get(tn)
+            if not fetched:
+                not_found.append(order.get("order_number"))
+                continue
+            derived = postex.settlement_from_tracking(fetched.get("_raw") or {})
+            if derived is None:
+                pending.append({
+                    "order_number": order.get("order_number"),
+                    "latest_status": fetched.get("latest_status") or "",
+                })
+                continue
+
+            total_amount = float(order.get("total_amount") or 0)
+            advance_amount = float(order.get("advance_amount") or 0)
+            dc = derived["delivery_charge"]
+            tax = derived["tax_amount"]
+            is_return = derived["order_status"] == "returned"
+            receivable = money(-dc) if is_return else money(total_amount - advance_amount - dc - tax)
+
+            was_settled = bool(order.get("is_order_settled"))
+            changed = (
+                abs(dc - round(float(order.get("delivery_charge") or 0), 2)) > 0.011
+                or abs(tax - round(float(order.get("tax_amount") or 0), 2)) > 0.011
+                or bool(derived["folio"]) and derived["folio"] != (order.get("folio") or "")
+            )
+            # A recheck pass re-reads rows that are already correct; skip them so it writes
+            # only genuine corrections and the summary is not padded with no-ops.
+            if was_settled and not changed:
+                unchanged += 1
+                continue
+
+            # Returns carry no reserve payment, so they derive no folio - keep the existing one.
+            folio = derived["folio"] or (order.get("folio") or "")
+            settlements.append({
+                "corrected": was_settled,
+                "order_number": order.get("order_number"),
+                "tracking_number": tn,
+                "order_status": derived["order_status"],
+                "folio": folio,
+                "reserve_payment_date": derived["reserve_payment_date"],
+                "invoice_payment": derived["invoice_payment"],
+                "delivery_charge": dc,
+                "tax_amount": tax,
+                "receivable": receivable,
+                "paid": derived["settled"],
+            })
+            if not apply:
+                continue
+            orders_to_upsert.append({
+                "id": order["id"],
+                # Upsert is INSERT ... ON CONFLICT and Postgres checks NOT NULL before
+                # resolving the conflict, so every NOT NULL column without a default rides
+                # along on this update-only write (same reason as upload_postex_csv). org_id
+                # is the one exception - org_table.upsert injects it.
+                "order_number": order["order_number"],
+                "order_status": order["order_status"],
+                "total_amount": order["total_amount"],
+                "order_receiving_date": order["order_receiving_date"],
+                "courier": order["courier"],
+                "delivery_charge": dc,
+                "tax_amount": tax,
+                "tax_amount_derived": True,
+                "is_order_settled": True,
+                "updated_at": current_time,
+            })
+            if derived["folio"]:
+                orders_to_upsert[-1]["folio"] = derived["folio"]
+
+        if orders_to_upsert:
+            for i in range(0, len(orders_to_upsert), 1000):
+                org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + 1000], on_conflict="id").execute()
+
+        updated = len(orders_to_upsert)
+        corrected = sum(1 for s in settlements if s["corrected"])
+        newly = len(settlements) - corrected
+        if apply:
+            message = f"Settled {newly} order(s) from PostEx."
+            if corrected:
+                message += f" Corrected {corrected} previously derived order(s)."
+        else:
+            message = f"{newly} order(s) ready to settle, {corrected} to correct (preview only, nothing written)."
+        if pending:
+            message += f" {len(pending)} still in transit."
+        if not_found:
+            message += f" {len(not_found)} not found at PostEx."
+
+        return {
+            "checked": len(candidates),
+            "updated": updated,
+            "corrected": corrected,
+            "unchanged": unchanged,
+            "applied": apply,
+            "settlements": settlements,
+            "pending": pending,
+            "not_found": not_found,
+            "message": message,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error fetching PostEx settlements")
+        raise HTTPException(status_code=500, detail="Error fetching PostEx settlements")
+
 
 @router.delete("/{order_id}")
 async def delete_order(order_id: str, org_id: str = Depends(get_org_id)):

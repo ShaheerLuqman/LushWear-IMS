@@ -607,6 +607,47 @@ function showPostExAmountMismatchesModal(mismatches) {
     modal.classList.add('active');
 }
 
+/** PostEx timestamps carry their own +0500 offset; take the calendar date from the string
+ *  rather than via Date, which would shift it for viewers in other timezones. */
+function formatPostExDate(value) {
+    if (!value) return '-';
+    const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    return m ? `${m[3]}/${m[2]}/${m[1]}` : '-';
+}
+
+function showPostExSettlementsModal(data) {
+    const modal = document.getElementById('postExSettlementsModal');
+    const tbody = document.getElementById('postExSettlementsBody');
+    const summaryEl = document.getElementById('postExSettlementsSummary');
+    const noteEl = document.getElementById('postExSettlementsNote');
+    if (!modal || !tbody) return;
+
+    const rows = data.settlements || [];
+    const num = (v) => Number(v || 0).toFixed(2);
+    tbody.innerHTML = rows.length
+        ? rows.map(r => `<tr><td>${r.order_number}${r.corrected ? ' <em>(corrected)</em>' : ''}</td><td>${r.folio || '-'}</td><td>${r.order_status}</td>` +
+            `<td>${formatPostExDate(r.reserve_payment_date)}</td><td>${num(r.invoice_payment)}</td>` +
+            `<td>${num(r.delivery_charge)}</td><td>${num(r.tax_amount)}</td><td>${num(r.receivable)}</td></tr>`).join('')
+        : '<tr><td colspan="8">No orders were ready to settle.</td></tr>';
+
+    if (summaryEl) {
+        const totalReceivable = rows.reduce((sum, r) => sum + Number(r.receivable || 0), 0);
+        summaryEl.textContent = `${data.message || ''} Checked ${data.checked || 0} order(s); ` +
+            `total receivable across the ${rows.length} listed: ${totalReceivable.toFixed(2)}.`;
+    }
+    if (noteEl) {
+        noteEl.textContent = rows.length
+            ? 'Tax is derived from the order value (2% income + 2% sales withholding); PostEx does not report it. Uploading the CPR CSV later replaces it with the exact figures.'
+            : '';
+    }
+    modal.classList.add('active');
+}
+
+function closePostExSettlementsModal() {
+    const modal = document.getElementById('postExSettlementsModal');
+    if (modal) modal.classList.remove('active');
+}
+
 function closePostExAmountMismatchesModal() {
     const modal = document.getElementById('postExAmountMismatchesModal');
     if (modal) modal.classList.remove('active');
@@ -644,6 +685,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     if (closeMismatchesBtn) closeMismatchesBtn.addEventListener('click', closePostExAmountMismatchesModal);
     if (closeMismatchesBtn2) closeMismatchesBtn2.addEventListener('click', closePostExAmountMismatchesModal);
+
+    // PostEx settlements modal
+    const settlementsModal = document.getElementById('postExSettlementsModal');
+    if (settlementsModal) {
+        settlementsModal.addEventListener('click', (e) => {
+            if (e.target === settlementsModal) closePostExSettlementsModal();
+        });
+    }
+    document.getElementById('closePostExSettlementsModal')?.addEventListener('click', closePostExSettlementsModal);
+    document.getElementById('closePostExSettlementsBtn')?.addEventListener('click', closePostExSettlementsModal);
 
     const reportModal = document.getElementById('deliveryStatusReportModal');
     if (reportModal) {

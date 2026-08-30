@@ -57,6 +57,11 @@ def _load_fixture_products_and_variants():
     return products, variants
 
 
+# Enforced by the fake orders table below, mirroring supabase_schema.sql - a null in one
+# of these fails the entire batch's upsert in Postgres, not just the offending row.
+_NOT_NULL_ORDER_COLUMNS = ("courier", "order_status")
+
+
 class _FakeResp:
     def __init__(self, data):
         self.data = data
@@ -137,6 +142,12 @@ class _FakeOrdersQuery:
         self._store.last_on_conflict = on_conflict
         key_col = (on_conflict or "").split(",")[-1].strip()
         for row in batch:
+            for col in _NOT_NULL_ORDER_COLUMNS:
+                if col in row and row[col] is None:
+                    raise AssertionError(
+                        f"null {col!r} would violate the NOT NULL constraint in "
+                        f"supabase_schema.sql and fail the whole batch's upsert"
+                    )
             key = row.get(key_col)
             merged = {**self._store.rows_by_number.get(key, {}), **row}
             merged.setdefault("id", f"gen-{key}")
@@ -575,3 +586,230 @@ class TestFetchRangeFiltersByUpdatedAt:
         assert "updated_at_max=" in captured[0]
         assert "created_at_min" not in captured[0]
         assert "created_at_max" not in captured[0]
+
+
+def _tracking_payload(latest_status):
+    """The real shape of shopify_orders.delivery_status: JSONB holding the courier's
+    tracking payload, never a bare status string."""
+    return {"latest_status": latest_status, "tracking_number": "TRK900001",
+            "status_history": [{"status": latest_status}]}
+
+
+class TestCancelledAfterBookingResetsToUnfulfilled:
+    """An order we booked with a courier, then cancelled on Shopify before the parcel
+    ever moved, has to become bookable again so a different fulfillment can be created.
+    extract_order_status reports these as "returned" (cancelled_at is later than the
+    fulfillment's created_at), which is right only once the parcel has actually shipped -
+    the two are told apart by delivery_status, the only record of a real courier scan."""
+
+    @staticmethod
+    def _cancel_after_fulfillment(orders_fixture, order_number):
+        for o in orders_fixture:
+            if int(o["order_number"]) != order_number:
+                continue
+            latest = max(
+                f["created_at"] for f in o["fulfillments"] if f.get("status") != "cancelled"
+            )
+            cancelled_at = datetime.fromisoformat(latest.replace("Z", "+00:00")) + timedelta(days=1)
+            o["cancelled_at"] = cancelled_at.isoformat()
+            return
+        raise AssertionError(f"order {order_number} not in fixture")
+
+    def _sync_then_cancel(self, monkeypatch, *, delivery_status):
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["order_status"] == "fulfilled"
+        # What /fulfill writes on a successful booking.
+        row["courier"] = "PostEx"
+        row["tracking_number"] = "TRK123456"
+        row["delivery_status"] = _tracking_payload(delivery_status) if delivery_status else None
+
+        self._cancel_after_fulfillment(orders_fixture, order_number)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        return fake_db.orders.rows_by_number[order_number]
+
+    def test_untracked_booking_is_reset_and_its_courier_fields_cleared(self, monkeypatch):
+        row = self._sync_then_cancel(monkeypatch, delivery_status=None)
+
+        assert row["order_status"] == "unfulfilled"
+        # /fulfill rejects any order still carrying a tracking_number, so leaving these
+        # behind would block the re-booking this reset exists to allow.
+        # Not None: `courier` is NOT NULL in the schema, so a null here fails the upsert
+        # for the whole batch, not just this order.
+        assert row["courier"] == "Unassigned"
+        assert not row["tracking_number"]
+
+    def test_not_delivered_placeholder_counts_as_never_moved(self, monkeypatch):
+        """"not_delivered" is what extract_delivery_status writes for any order Shopify
+        hasn't fulfilled - it records the absence of a scan, not a failed delivery."""
+        row = self._sync_then_cancel(monkeypatch, delivery_status="not_delivered")
+
+        assert row["order_status"] == "unfulfilled"
+        assert not row["tracking_number"]
+
+    def test_a_parcel_that_moved_is_not_reset_to_bookable(self, monkeypatch):
+        """The parcel physically shipped, so the cancellation really is a return - it must
+        keep counting against the courier bill rather than being reset to bookable."""
+        row = self._sync_then_cancel(monkeypatch, delivery_status="Returned at Merchant Warehouse")
+
+        assert row["order_status"] != "unfulfilled"
+        assert row["delivery_status"]["latest_status"] == "Returned at Merchant Warehouse"
+
+
+class TestCancelledFulfillmentReturnsOrderToUnfulfilled:
+    """Cancelling the *fulfillment* in Shopify (the order itself stays live) leaves every
+    fulfillment at status "cancelled", which Shopify reports as fulfillment_status null -
+    extract_order_status reads that as "unfulfilled". That has to survive the write-back
+    so the order can be booked again, and it outranks whatever the courier last told us."""
+
+    @staticmethod
+    def _cancel_every_fulfillment(orders_fixture, order_number):
+        for o in orders_fixture:
+            if int(o["order_number"]) != order_number:
+                continue
+            for f in o["fulfillments"]:
+                f["status"] = "cancelled"
+            # Shopify drops the order-level status to null once nothing is fulfilled.
+            o["fulfillment_status"] = None
+            return
+        raise AssertionError(f"order {order_number} not in fixture")
+
+    def _sync_then_cancel_fulfillment(self, monkeypatch, *, order_status, delivery_status=None):
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["order_status"] == "fulfilled"
+        row["courier"] = "PostEx"
+        row["tracking_number"] = "TRK900001"
+        row["order_status"] = order_status
+        row["delivery_status"] = _tracking_payload(delivery_status) if delivery_status else None
+
+        self._cancel_every_fulfillment(orders_fixture, order_number)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        return fake_db.orders.rows_by_number[order_number]
+
+    def test_fulfilled_order_returns_to_unfulfilled_and_clears_the_booking(self, monkeypatch):
+        row = self._sync_then_cancel_fulfillment(monkeypatch, order_status="fulfilled")
+
+        assert row["order_status"] == "unfulfilled"
+        # extract_tracking_number falls back to a cancelled fulfillment when every
+        # fulfillment is cancelled, so without the void this stale number would survive
+        # and /fulfill would refuse to re-book the order.
+        assert not row["tracking_number"]
+        # Not None: `courier` is NOT NULL in the schema, so a null here fails the upsert
+        # for the whole batch, not just this order.
+        assert row["courier"] == "Unassigned"
+
+    def test_a_courier_scanned_order_is_still_pulled_back(self, monkeypatch):
+        """Cancelling the fulfillment in Shopify is a deliberate act and outranks courier
+        tracking, so even an order the courier had already scanned resets."""
+        row = self._sync_then_cancel_fulfillment(
+            monkeypatch, order_status="RFD", delivery_status="Attempt Made: CNA(CUSTOMER NOT AVAILABLE)")
+
+        assert row["order_status"] == "unfulfilled"
+        assert not row["tracking_number"]
+
+    @pytest.mark.parametrize("terminal_status", ["delivered", "returned", "cancelled"])
+    def test_terminal_statuses_are_left_alone(self, monkeypatch, terminal_status):
+        """delivered/returned have already resolved into money on the courier bill and
+        cancelled is a deliberate end state - none of them are waiting on a booking."""
+        row = self._sync_then_cancel_fulfillment(
+            monkeypatch, order_status=terminal_status, delivery_status="Delivered to Customer")
+
+        assert row["order_status"] == terminal_status
+
+
+class TestStaleSyncLockReclaim:
+    """A held lock must always be reclaimable, or every later sync is refused with
+    "Sync already in progress" forever. The filters are the whole point here, so these
+    run against a fake that actually applies them - unlike _FakeSyncStatusTable, which
+    accepts filters without evaluating them."""
+
+    class _FilteringSyncStatusTable:
+        def __init__(self, row):
+            self.row = dict(row)
+            self._eq = {}
+            self._lt = {}
+            self._is_null = []
+            self._payload = None
+
+        def table(self, _name):
+            return self
+
+        def update(self, payload):
+            self._eq, self._lt, self._is_null, self._payload = {}, {}, [], payload
+            return self
+
+        def eq(self, col, val):
+            self._eq[col] = val
+            return self
+
+        def lt(self, col, val):
+            self._lt[col] = val
+            return self
+
+        def is_(self, col, val):
+            assert val == "null"
+            self._is_null.append(col)
+            return self
+
+        def execute(self):
+            for col, val in self._eq.items():
+                if self.row.get(col) != val:
+                    return _FakeResp([])
+            for col, val in self._lt.items():
+                cur = self.row.get(col)
+                # NULL < x is NULL in SQL, i.e. the row does not match.
+                if cur is None or not (cur < val):
+                    return _FakeResp([])
+            for col in self._is_null:
+                if self.row.get(col) is not None:
+                    return _FakeResp([])
+            self.row.update(self._payload)
+            return _FakeResp([dict(self.row)])
+
+    def _reclaim(self, monkeypatch, row):
+        fake = self._FilteringSyncStatusTable(row)
+        monkeypatch.setattr(shopify_sync, "org_table", lambda _db, _org, _name: fake)
+        shopify_sync._release_stale_sync_lock(object(), TEST_ORG_ID)
+        return fake.row
+
+    def test_reclaims_a_lock_held_since_before_the_stale_cutoff(self, monkeypatch):
+        acquired = datetime.now(timezone.utc) - shopify_sync._SYNC_LOCK_STALE_AFTER * 2
+        row = self._reclaim(monkeypatch, {
+            "id": shopify_sync._SYNC_STATUS_ORDERS_ID,
+            "in_progress": True,
+            "lock_acquired_at": acquired.isoformat(),
+        })
+        assert row["in_progress"] is False
+
+    def test_reclaims_a_held_lock_that_carries_no_timestamp(self, monkeypatch):
+        """The age filter can never match this row (NULL < cutoff is NULL), so without a
+        second is-null pass the sync stays wedged forever instead of for four minutes."""
+        row = self._reclaim(monkeypatch, {
+            "id": shopify_sync._SYNC_STATUS_ORDERS_ID,
+            "in_progress": True,
+            "lock_acquired_at": None,
+        })
+        assert row["in_progress"] is False
+
+    def test_leaves_a_freshly_acquired_lock_alone(self, monkeypatch):
+        """A live sync's lock must survive, or two syncs run concurrently."""
+        acquired = datetime.now(timezone.utc)
+        row = self._reclaim(monkeypatch, {
+            "id": shopify_sync._SYNC_STATUS_ORDERS_ID,
+            "in_progress": True,
+            "lock_acquired_at": acquired.isoformat(),
+        })
+        assert row["in_progress"] is True

@@ -212,3 +212,87 @@ class TestFetchShippers:
         _, shippers = asyncio.run(couriers_next.fetch_shippers("auth-key"))
 
         assert [s["code"] for s in shippers] == ["20002"]
+
+
+class TestGetAirwayBillLink:
+    """get_airway_bill_link resolves an order_id live via GetOrderList.php (no endpoint
+    accepts a tracking_no filter - confirmed live against a real account), cached in
+    couriers_next._order_list_cache. Cache is cleared before/after each test so runs don't
+    leak into each other."""
+
+    ORDER_LIST_RESPONSE = [
+        {"id": 740336, "tracking_no": "202370601454", "order_id": "#13093"},
+        {"id": 739505, "tracking_no": "202370601452", "order_id": "#13054"},
+    ]
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        couriers_next._order_list_cache.clear()
+        yield
+        couriers_next._order_list_cache.clear()
+
+    @staticmethod
+    def _install(monkeypatch, payload, status_code=200, call_log=None):
+        def handler(request):
+            if call_log is not None:
+                call_log.append(request)
+            return httpx.Response(status_code, json=payload)
+
+        transport = httpx.MockTransport(handler)
+        original = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs["transport"] = transport
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    def test_builds_the_invoicehtml_url_from_the_matched_order_id(self, monkeypatch):
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE)
+
+        url = asyncio.run(couriers_next.get_airway_bill_link("auth-key", ["202370601454"]))
+
+        assert url == "https://portal.couriersnext.com/invoicehtml.php?order_id=740336&print=1"
+
+    def test_multiple_tracking_numbers_produce_one_comma_joined_url(self, monkeypatch):
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE)
+
+        url = asyncio.run(couriers_next.get_airway_bill_link(
+            "auth-key", ["202370601454", "202370601452"]))
+
+        assert url == "https://portal.couriersnext.com/invoicehtml.php?order_id=740336,739505&print=1"
+
+    def test_an_unknown_tracking_number_among_known_ones_is_dropped_not_fatal(self, monkeypatch):
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE)
+
+        url = asyncio.run(couriers_next.get_airway_bill_link(
+            "auth-key", ["202370601454", "no-such-tracking-no"]))
+
+        assert url == "https://portal.couriersnext.com/invoicehtml.php?order_id=740336&print=1"
+
+    def test_no_tracking_numbers_found_raises(self, monkeypatch):
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE)
+
+        with pytest.raises(couriers_next.CouriersNextInvoiceError):
+            asyncio.run(couriers_next.get_airway_bill_link("auth-key", ["no-such-tracking-no"]))
+
+    def test_an_empty_tracking_number_list_raises(self, monkeypatch):
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE)
+
+        with pytest.raises(couriers_next.CouriersNextInvoiceError):
+            asyncio.run(couriers_next.get_airway_bill_link("auth-key", []))
+
+    def test_a_second_lookup_reuses_the_cached_order_list(self, monkeypatch):
+        call_log = []
+        self._install(monkeypatch, self.ORDER_LIST_RESPONSE, call_log=call_log)
+
+        asyncio.run(couriers_next.get_airway_bill_link("auth-key", ["202370601454"]))
+        asyncio.run(couriers_next.get_airway_bill_link("auth-key", ["202370601452"]))
+
+        assert len(call_log) == 1
+
+    def test_a_failed_fetch_raises_rather_than_caching_nothing_silently(self, monkeypatch):
+        self._install(monkeypatch, {"error": "unauthorized"}, status_code=401)
+
+        with pytest.raises(couriers_next.CouriersNextInvoiceError):
+            asyncio.run(couriers_next.get_airway_bill_link("bad-key", ["202370601454"]))

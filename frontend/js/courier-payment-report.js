@@ -79,9 +79,10 @@ const COURIER_PAYMENT_STATUS_LABELS = {
     in_transit: 'In Transit'
 };
 
-/** Courier + free-text search are per-order facets (applied before bundling and used for
- * the summary cards too); pickup-date range and payment status are applied later since
- * they depend on how orders get grouped/aggregated. */
+/** Courier + free-text search are per-order facets, applied before bundling; pickup-date
+ * range and payment status are applied later since they depend on how orders get
+ * grouped/aggregated. All four reach the summary cards, which are computed from the
+ * fully-filtered bills. */
 function courierPaymentReportFilteredOrders() {
     const couriers = courierPaymentReportCourierFilter?.getSelected();
     const query = (document.getElementById('courierPaymentReportSearchFilter')?.value || '').trim().toLowerCase();
@@ -97,23 +98,25 @@ function courierPaymentReportFilteredOrders() {
     });
 }
 
-/** netOwed is the sum of every bill's Remaining, so the card always agrees with the table
- * below it rather than computing owed a second way. Because it's derived from the bills, it
- * inherits their pickup-date range and drops orders with no pickup date yet - unlike the
- * in-transit/resolved counts, which stay order-level over the full courier/search scope. */
-function courierPaymentReportSummary(orderRows, bills) {
+/** Every card is derived from the same bills the table below shows, so all three always
+ * agree with it - they inherit its pickup-date range, courier/search facets and payment
+ * status filter, and (like the table) leave out orders with no pickup date yet, which
+ * can't be placed on the pickup-date timeline at all. */
+function courierPaymentReportSummary(bills) {
     let inTransit = 0;
     let resolved = 0;
     const inTransitByStatus = {};
 
-    orderRows.forEach((order) => {
-        const status = (order.order_status || '').toLowerCase();
-        if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
-            inTransit++;
-            inTransitByStatus[order.order_status] = (inTransitByStatus[order.order_status] || 0) + 1;
-        } else if (COURIER_RESOLVED_STATUSES.has(status)) {
-            resolved++;
-        }
+    bills.forEach((bill) => {
+        bill.orders.forEach((order) => {
+            const status = (order.order_status || '').toLowerCase();
+            if (COURIER_IN_TRANSIT_STATUSES.has(status)) {
+                inTransit++;
+                inTransitByStatus[order.order_status] = (inTransitByStatus[order.order_status] || 0) + 1;
+            } else if (COURIER_RESOLVED_STATUSES.has(status)) {
+                resolved++;
+            }
+        });
     });
 
     const netOwed = roundMoney(bills.reduce((sum, bill) => sum + bill.remainingAmount, 0));
@@ -250,7 +253,7 @@ function aggregateCourierPaymentReportBill(bill) {
 /** Group orders by (pickup date, courier) into one bill row each, newest pickup date
  * first, restricted to the active pickup-date range. Orders with no pickup date yet
  * (delivery status not fetched) are left out entirely - they can't be placed on the
- * pickup-date timeline, but still count in the summary cards above. */
+ * pickup-date timeline, and so are absent from the summary cards above too. */
 function buildCourierPaymentReportBills(orderRows) {
     const { from, to } = courierPaymentReportDateRange;
     const groups = new Map();
@@ -547,7 +550,7 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
             <td>${formatMoney(order.delivery_charge)}</td>
             <td>${formatMoney(order.tax_amount)}</td>
             <td>${receivable != null ? formatMoney(receivable) : '-'}</td>
-            <td>${isResolved ? settledBadge : '-'}</td>
+            <td>${settledBadge}</td>
         </tr>`;
     }).join('');
 }
@@ -602,18 +605,45 @@ function openCourierPaymentReportBillDetail(bill) {
     fetchCourierPaymentReportShippingInfo(bill);
 }
 
+/** The bill is a client-side grouping with no id of its own, so the endpoint is given the
+ * (pickup date, courier) pair that defines it and re-derives the same totals server-side. */
+async function downloadCourierPaymentReportBillPdf() {
+    const bill = courierPaymentReportCurrentBill;
+    if (!bill) return;
+
+    const btn = document.getElementById('courierPaymentReportDetailDownloadBtn');
+    if (btn) btn.disabled = true;
+    try {
+        const query = new URLSearchParams({ pickup_date: bill.pickupDateKey, courier: bill.courier });
+        const response = await apiRequest(`/orders/courier-bill-summary-pdf?${query}`, { fallback: 'Failed to generate PDF' });
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `courier_summary_${bill.courier.replace(/\s+/g, '_')}_${bill.pickupDateKey}.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        showToast('Summary downloaded', 'success');
+    } catch (error) {
+        showToast(error.message || 'Failed to download summary', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
+}
+
 /** Re-slice the already-fetched orders by courier/search/date-range/status and redraw the
  * summary + bill table - no refetch, since all of those are client-side facets. */
 function renderCourierPaymentReportView() {
-    const filtered = courierPaymentReportFilteredOrders();
-
-    let bills = buildCourierPaymentReportBills(filtered);
-    renderCourierPaymentReportSummary(courierPaymentReportSummary(filtered, bills));
+    let bills = buildCourierPaymentReportBills(courierPaymentReportFilteredOrders());
 
     const statuses = courierPaymentReportStatusFilter?.getSelected();
     if (statuses) {
         bills = bills.filter((b) => statuses.includes(b.status));
     }
+
+    renderCourierPaymentReportSummary(courierPaymentReportSummary(bills));
 
     if (courierPaymentReportGridApi) {
         courierPaymentReportGridApi.setGridOption('rowData', bills);
@@ -883,10 +913,8 @@ function initCourierPaymentReport() {
     // action (openUploadPostExModal, in ledgers.js) - surfaced here too since this page is
     // where that reconciliation actually gets used.
     document.getElementById('courierPaymentReportImportCsvBtn')?.addEventListener('click', () => openUploadPostExModal());
+    document.getElementById('courierPaymentReportFetchSettlementsBtn')?.addEventListener('click', fetchPostExSettlements);
 
     document.getElementById('courierPaymentReportDetailBackBtn')?.addEventListener('click', () => switchView('courierPaymentReport'));
-    // No backend PDF generation for this bill summary yet - just a placeholder for now.
-    document.getElementById('courierPaymentReportDetailDownloadBtn')?.addEventListener('click', () => {
-        showToast('PDF export is coming soon', 'info');
-    });
+    document.getElementById('courierPaymentReportDetailDownloadBtn')?.addEventListener('click', downloadCourierPaymentReportBillPdf);
 }

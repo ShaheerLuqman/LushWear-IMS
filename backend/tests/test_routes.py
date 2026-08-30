@@ -336,6 +336,52 @@ class TestPdfBatchCaps:
         assert r.status_code == 400
 
 
+class TestPostexAirwayBillsRoute:
+    """Request-validation branches only - the org_creds -> PostEx round trip is covered
+    at the service layer (test_postex.py::TestGetAirwayBill), same precedent as
+    fulfill_orders's own PostEx/Couriers Next calls, which aren't exercised at the route
+    level either."""
+
+    def test_no_orders_selected_is_rejected(self, make_client):
+        client = make_client({})
+        r = client.post("/api/orders/postex-airway-bills", json=[])
+        assert r.status_code == 400
+
+    def test_a_batch_over_postexs_own_cap_is_rejected(self, make_client):
+        from app.services.postex import MAX_AIRWAY_BILL_TRACKING_NUMBERS
+        client = make_client({})
+        order_ids = [f"id-{i}" for i in range(MAX_AIRWAY_BILL_TRACKING_NUMBERS + 1)]
+        r = client.post("/api/orders/postex-airway-bills", json=order_ids)
+        assert r.status_code == 400
+
+    def test_a_selection_with_no_booked_postex_orders_is_rejected(self, make_client):
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "courier": "Couriers Next", "tracking_number": "CN1"},
+            {"id": "o2", "order_number": 200, "courier": "PostEx", "tracking_number": None},
+        ]})
+        r = client.post("/api/orders/postex-airway-bills", json=["o1", "o2"])
+        assert r.status_code == 400
+
+
+class TestCouriersNextAirwayBillsRoute:
+    """Same precedent as TestPostexAirwayBillsRoute - request-validation branches only;
+    the org_creds -> GetOrderList.php round trip is covered at the service layer
+    (test_couriers_next.py::TestGetAirwayBillLink)."""
+
+    def test_no_orders_selected_is_rejected(self, make_client):
+        client = make_client({})
+        r = client.post("/api/orders/couriers-next-airway-bills", json=[])
+        assert r.status_code == 400
+
+    def test_a_selection_with_no_booked_couriers_next_orders_is_rejected(self, make_client):
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "courier": "PostEx", "tracking_number": "PX1"},
+            {"id": "o2", "order_number": 200, "courier": "Couriers Next", "tracking_number": None},
+        ]})
+        r = client.post("/api/orders/couriers-next-airway-bills", json=["o1", "o2"])
+        assert r.status_code == 400
+
+
 class TestGeneratePackagingList:
     """The PDF groups items by each product's shopify_products.collection - see
     test_packaging_list.py for the aggregation/grouping unit tests."""

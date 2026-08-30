@@ -1,5 +1,6 @@
 import asyncio
 
+import httpx
 import pytest
 
 from app.services import postex
@@ -195,6 +196,14 @@ class TestCreateOrder:
         # a booking that names neither a pickup nor a store address code.
         assert captured["json"]["pickupAddressCode"] == "002"
 
+    def test_order_type_is_sent_as_picked(self):
+        captured = {}
+        client = self._client(None, {"statusCode": "200", "dist": {"trackingNumber": "CX1"}}, captured)
+
+        asyncio.run(postex.create_order(client, "tok", **{**self.BOOKING, "order_type": "Replacement"}))
+
+        assert captured["json"]["orderType"] == "Replacement"
+
     def test_invoice_payment_is_rounded_to_whole_rupees(self):
         captured = {}
         client = self._client(None, {"statusCode": "200", "dist": {"trackingNumber": "CX1"}}, captured)
@@ -223,3 +232,226 @@ class TestCreateOrder:
 
         with pytest.raises(postex.PostexBookingError):
             asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
+
+
+class TestGetAirwayBill:
+    """get_airway_bill is async; driven with plain asyncio.run, same convention as
+    TestCreateOrder above."""
+
+    @staticmethod
+    def _client(pdf_bytes=b"%PDF-1.4 fake", status_code=200, json_body=None, captured=None):
+        class _Response:
+            def __init__(self):
+                self.status_code = status_code
+                self.content = pdf_bytes
+
+            def json(self):
+                if json_body is None:
+                    raise ValueError("not json")
+                return json_body
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                if captured is not None:
+                    captured.update({"url": url, "headers": headers, "params": params})
+                return _Response()
+
+        return _Client()
+
+    def test_returns_the_pdf_bytes_and_sends_the_documented_shape(self):
+        captured = {}
+        client = self._client(pdf_bytes=b"%PDF-1.4 the bytes", captured=captured)
+
+        pdf = asyncio.run(postex.get_airway_bill(client, "tok", ["CX-1", "CX-2"]))
+
+        assert pdf == b"%PDF-1.4 the bytes"
+        assert captured["url"].endswith("/v1/get-invoice")
+        assert captured["headers"]["token"] == "tok"
+        assert captured["params"]["trackingNumbers"] == "CX-1,CX-2"
+
+    def test_more_than_ten_tracking_numbers_is_rejected_before_calling(self):
+        client = self._client()
+
+        with pytest.raises(postex.PostexInvoiceError, match="10"):
+            asyncio.run(postex.get_airway_bill(client, "tok", [f"CX-{i}" for i in range(11)]))
+
+    def test_no_tracking_numbers_is_rejected(self):
+        client = self._client()
+
+        with pytest.raises(postex.PostexInvoiceError):
+            asyncio.run(postex.get_airway_bill(client, "tok", []))
+
+    def test_a_non_200_response_raises_with_their_message(self):
+        client = self._client(status_code=404, json_body={"statusMessage": "Order Not Found"})
+
+        with pytest.raises(postex.PostexInvoiceError, match="Order Not Found"):
+            asyncio.run(postex.get_airway_bill(client, "tok", ["CX-1"]))
+
+    def test_a_non_json_failure_body_still_raises_cleanly(self):
+        client = self._client(status_code=500, json_body=None)
+
+        with pytest.raises(postex.PostexInvoiceError, match="500"):
+            asyncio.run(postex.get_airway_bill(client, "tok", ["CX-1"]))
+
+
+class TestFetchPickupAddresses:
+    """fetch_pickup_addresses builds its own AsyncClient, so these stub the transport
+    (same pattern as test_couriers_next.TestFetchShippers). Fixture is a real
+    get-merchant-address response, captured live against an actual PostEx account -
+    the integration guide's documented shape omits addressType entirely."""
+
+    LIVE_RESPONSE = {
+        "statusCode": "200",
+        "statusMessage": "SUCCESSFULLY OPERATED",
+        "dist": [
+            {
+                "merchantAddressId": 55327,
+                "address": "335 b block adamjee nagar society Karachi Pakistan",
+                "phone1": "03390153893",
+                "phone2": "03390153893",
+                "contactPersonName": "Lushwear",
+                "cityName": "Karachi",
+                "addressCode": "001",
+                "addressType": "Default Address",
+            },
+            {
+                "merchantAddressId": 95717,
+                "address": "office number 1B, 1st floor zull jallal centre",
+                "phone1": "03390153893",
+                "phone2": "03322158364",
+                "contactPersonName": "Lushwear",
+                "cityName": "Karachi",
+                "addressCode": "002",
+                "addressType": "Pickup/Return Address",
+            },
+        ],
+    }
+
+    @staticmethod
+    def _install(monkeypatch, payload, status_code=200):
+        def handler(request):
+            return httpx.Response(status_code, json=payload)
+
+        transport = httpx.MockTransport(handler)
+        original = httpx.AsyncClient
+
+        def factory(*args, **kwargs):
+            kwargs["transport"] = transport
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(httpx, "AsyncClient", factory)
+
+    def test_marks_the_default_address_true_and_the_rest_false(self, monkeypatch):
+        self._install(monkeypatch, self.LIVE_RESPONSE)
+
+        addresses = asyncio.run(postex.fetch_pickup_addresses("tok"))
+
+        assert [a["code"] for a in addresses] == ["001", "002"]
+        assert addresses[0]["is_default"] is True
+        assert addresses[1]["is_default"] is False
+
+    def test_a_failed_fetch_returns_an_empty_list(self, monkeypatch):
+        self._install(monkeypatch, {"statusMessage": "Unauthorized"}, status_code=401)
+
+        assert asyncio.run(postex.fetch_pickup_addresses("bad-tok")) == []
+
+
+class TestSettlementFromTracking:
+    """Figures below are real rows from a PostEx CPR export, so these assert the
+    derivation reproduces the courier's own settlement arithmetic."""
+
+    def _dist(self, **over):
+        base = {
+            "transactionStatus": "Delivered",
+            "transactionFee": 227.20,
+            "transactionTax": 34.08,
+            "invoicePayment": 3248.00,
+            "reservePaymentDate": "2026-08-28T08:17:19.000+0500",
+        }
+        base.update(over)
+        return base
+
+    def test_delivered_derives_dc_and_four_percent_tax(self):
+        result = postex.settlement_from_tracking(self._dist())
+        assert result["delivery_charge"] == 261.28   # CSV SHIPPING_CHARGES + GST
+        assert result["tax_amount"] == 129.92        # CSV WH_INCOME_TAX + WH_SALES_TAX
+        assert result["order_status"] == "delivered"
+        assert result["settled"] is True
+
+    def test_returned_reads_the_reversal_fields_and_withholds_nothing(self):
+        # A real return: PostEx zeroes the transaction pair and bills the same amounts
+        # under reversalFee/reversalTax, with no reserve payment date.
+        result = postex.settlement_from_tracking(self._dist(
+            transactionStatus="Returned",
+            transactionFee=0.0, transactionTax=0.0,
+            reversalFee=227.20, reversalTax=34.08,
+            reservePaymentDate=None,
+        ))
+        assert result["delivery_charge"] == 261.28   # CSV SHIPPING_CHARGES + GST
+        assert result["tax_amount"] == 0.0           # 40/40 CSV return rows withheld nothing
+        assert result["order_status"] == "returned"
+        # Returns are never reserve-paid, so they must not be reported as awaiting payment.
+        assert result["settled"] is True
+
+    def test_zero_cod_delivered_has_no_tax(self):
+        result = postex.settlement_from_tracking(self._dist(invoicePayment=0))
+        assert result["tax_amount"] == 0.0
+        assert result["delivery_charge"] == 261.28
+
+    @pytest.mark.parametrize("status", ["Out For Delivery", "Booked", "UnBooked", "Attempted", ""])
+    def test_non_terminal_status_is_skipped(self, status):
+        # Charges are not final mid-transit, so nothing should be written.
+        assert postex.settlement_from_tracking(self._dist(transactionStatus=status)) is None
+
+    def test_unpaid_settlement_is_reported_unsettled(self):
+        result = postex.settlement_from_tracking(self._dist(reservePaymentDate=None))
+        assert result["settled"] is False
+        assert result["reserve_payment_date"] == ""
+
+    def test_a_return_with_no_reversal_fields_yields_zero_rather_than_the_transaction_pair(self):
+        # Guards the branch itself: if the return path ever fell back to transactionFee,
+        # this fixture would report 261.28 instead of 0.
+        result = postex.settlement_from_tracking(self._dist(
+            transactionStatus="Returned", reversalFee=0.0, reversalTax=0.0,
+        ))
+        assert result["delivery_charge"] == 0.0
+
+    def test_delivered_ignores_reversal_fields(self):
+        result = postex.settlement_from_tracking(self._dist(reversalFee=999.0, reversalTax=99.0))
+        assert result["delivery_charge"] == 261.28
+
+    def test_folio_is_the_reserve_payment_date_tagged_as_api_derived(self):
+        # Same payout batch the CSV upload records by hand as d/m/yy, suffixed so the two
+        # sources stay distinguishable.
+        result = postex.settlement_from_tracking(self._dist())
+        assert result["folio"] == "28/8/26-API"
+
+    @pytest.mark.parametrize("raw,expected", [
+        ("2026-08-28T08:17:19.000+0500", "28/8/26-API"),
+        ("2026-01-05T00:00:00.000+0500", "5/1/26-API"),   # no zero padding, matching the CSV values
+        ("2026-12-31T23:59:59.000+0500", "31/12/26-API"),
+        ("", ""),
+        (None, ""),
+        ("not-a-date", ""),
+    ])
+    def test_folio_formatting(self, raw, expected):
+        assert postex._folio_from_reserve_date(raw) == expected
+
+    def test_returns_derive_no_folio(self):
+        # 0 of 188 CSV-settled returns had a reserve payment date, so there is nothing to
+        # derive - the caller must leave any existing folio alone.
+        result = postex.settlement_from_tracking(self._dist(
+            transactionStatus="Returned", reversalFee=227.20, reversalTax=34.08,
+            reservePaymentDate=None,
+        ))
+        assert result["folio"] == ""
+
+    @pytest.mark.parametrize("invoice,expected_tax", [
+        (2598.00, 103.92),
+        (2348.00, 93.92),
+        (12344.00, 493.76),
+        (349.00, 13.96),
+    ])
+    def test_matches_csv_rows(self, invoice, expected_tax):
+        result = postex.settlement_from_tracking(self._dist(invoicePayment=invoice))
+        assert result["tax_amount"] == expected_tax

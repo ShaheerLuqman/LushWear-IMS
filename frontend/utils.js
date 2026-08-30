@@ -52,6 +52,98 @@ async function apiJson(path, { body, ...options } = {}) {
     return response.json();
 }
 
+/** True when an order can produce a printable airway bill - both couriers need only a
+ * tracking number; the airway bill itself (PDF for PostEx, resolved link for Couriers
+ * Next) is always fetched live from the backend, never read off the order object. */
+function orderHasAirwayBill(order) {
+    if (!order) return false;
+    const courier = getCourierDisplayName(order);
+    return (courier === 'PostEx' || courier === 'Couriers Next') && !!order.tracking_number;
+}
+
+/** Open a blank tab right now, synchronously, so it's still inside the click handler's
+ * call stack - a plain window.open called AFTER an await falls outside that window in
+ * most browsers and gets blocked (with an inconsistent, sometimes-delayed fallback UI,
+ * not a clean single tab). Navigate the returned handle to the real URL once it's known,
+ * via navigateTab, instead of calling window.open a second time. */
+function openBlankTab() {
+    return window.open('', '_blank');
+}
+
+/** Point an already-open tab (from openBlankTab) at a URL, once it's known. Closes the
+ * tab instead if the popup was blocked after all (handle exists but navigation is a
+ * no-op), so a silently-blocked tab doesn't sit open on about:blank. */
+function navigateTab(tab, url) {
+    if (!tab || tab.closed) return;
+    tab.location.href = url;
+}
+
+// PostEx's own get-invoice cap - more than this per call is rejected server-side.
+const POSTEX_AIRWAY_BILL_BATCH_SIZE = 10;
+
+function airwayBillsPdfFilename() {
+    const d = new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `airway_bills_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`;
+}
+
+/** Prints/downloads one or more orders' airway bills as a single grouped action - no
+ * per-order button, this is the only entry point. Both couriers combine every requested
+ * order into one document: PostEx's get-invoice PDF covers however many tracking numbers
+ * are given (chunked here at its own 10-per-call cap, one tab per chunk); Couriers Next's
+ * invoicehtml.php accepts a comma-separated order_id list and renders every one on the
+ * same page (resolved live through the backend, since only GetOrderList.php - not any
+ * tracking lookup - ever returns their internal order_id again after booking).
+ *
+ * Every destination tab is opened blank up front, before any await, and navigated once
+ * its URL is known (see openBlankTab/navigateTab) - exactly one tab per document, opened
+ * the instant the button is clicked, with no popup-blocker delay or duplicate fallback tab.
+ *
+ * Returns the count of orders that had nothing to print (no tracking number yet, or an
+ * unsupported courier) so the caller can report it. */
+async function printAirwayBillsForOrders(orders) {
+    const eligible = orders.filter(orderHasAirwayBill);
+    const skipped = orders.length - eligible.length;
+    if (eligible.length === 0) {
+        throw new Error('No selected orders have an airway bill available');
+    }
+
+    const postexOrders = eligible.filter(o => getCourierDisplayName(o) === 'PostEx');
+    const couriersNextOrders = eligible.filter(o => getCourierDisplayName(o) === 'Couriers Next');
+
+    const postexChunks = [];
+    for (let i = 0; i < postexOrders.length; i += POSTEX_AIRWAY_BILL_BATCH_SIZE) {
+        postexChunks.push(postexOrders.slice(i, i + POSTEX_AIRWAY_BILL_BATCH_SIZE));
+    }
+    // Opened synchronously, still within this click's call stack, before any fetch starts.
+    const postexTabs = postexChunks.map(() => openBlankTab());
+    const couriersNextTab = couriersNextOrders.length > 0 ? openBlankTab() : null;
+
+    for (let i = 0; i < postexChunks.length; i++) {
+        const res = await apiRequest('/orders/postex-airway-bills', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(postexChunks[i].map(o => o.id)),
+            fallback: 'Failed to fetch airway bills'
+        });
+        const blob = await res.blob();
+        const url = window.URL.createObjectURL(blob);
+        navigateTab(postexTabs[i], url);
+        setTimeout(() => window.URL.revokeObjectURL(url), 60000);
+    }
+
+    if (couriersNextOrders.length > 0) {
+        const { url } = await apiJson('/orders/couriers-next-airway-bills', {
+            method: 'POST',
+            body: couriersNextOrders.map(o => o.id),
+            fallback: 'Failed to fetch airway bills'
+        });
+        navigateTab(couriersNextTab, url);
+    }
+
+    return skipped;
+}
+
 /** Pull a displayable message out of a FastAPI error body. */
 function apiErrorMessage(body, fallback) {
     const detail = body && body.detail;

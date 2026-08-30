@@ -11,6 +11,7 @@ body - so every response here is judged on its body, not its status code.
 """
 
 import logging
+import time
 from datetime import datetime
 from typing import List, Optional, Tuple
 
@@ -32,6 +33,10 @@ class CouriersNextBookingError(Exception):
     fulfillment endpoint can report per-order why it failed rather than a generic 502."""
 
 
+class CouriersNextInvoiceError(Exception):
+    """The airway bill's order_id could not be resolved for one or more tracking numbers."""
+
+
 def _parse_body(response: httpx.Response, what: str) -> dict:
     try:
         body = response.json()
@@ -45,17 +50,26 @@ def _parse_body(response: httpx.Response, what: str) -> dict:
 
 async def fetch_shippers(auth_key: str) -> Tuple[Optional[str], List[dict]]:
     """The account's client_code and its configured shipper profiles, as
-    (client_code, [{code, label, city, address}]).
+    (client_code, [{code, label, city, address, is_default}]).
 
     `code` is the shipper's profile_id: CreateOrder needs one to know which of the
     merchant's pickup identities a parcel ships under, so this is the Couriers Next
     equivalent of PostEx's pickup addresses and feeds the same picker. client_code
     comes back on the same call, so both are fetched together rather than twice.
+
+    Reads `profiles`, not the response's `shipper` key - `shipper` is an unscoped,
+    company-wide table (670+ rows across 300+ other merchants' customer_ids in
+    testing), while `profiles` is already filtered to this auth_key's own
+    default_profile.id. Confirmed live: using `shipper` here would hand every merchant
+    every other merchant's pickup identities, and let a booking go out under one.
+
+    Sent as POST despite their docs saying GET-with-a-body: a real GET-with-JSON-body
+    request (which is what httpx.request("GET", ..., json=...) sends) gets a 403 HTML
+    page from their edge/WAF, confirmed live: POST with the same body returns 200 with
+    the real payload.
     """
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        # Their docs specify GET with a JSON body, which httpx only allows via request().
-        r = await client.request(
-            "GET", f"{_BASE_URL}/ProductAndService.php", json={"auth_key": auth_key})
+        r = await client.post(f"{_BASE_URL}/ProductAndService.php", json={"auth_key": auth_key})
     if r.status_code >= 400:
         logger.warning("Couriers Next profile fetch failed: status=%s body=%s", r.status_code, r.text[:300])
         return None, []
@@ -74,10 +88,11 @@ async def fetch_shippers(auth_key: str) -> Tuple[Optional[str], List[dict]]:
         {
             "code": str(row.get("profile_id")),
             "label": row.get("shipper_name") or "Shipper",
-            "city": profile.get("city"),
+            "city": row.get("origin") or profile.get("city"),
             "address": " ".join((row.get("shipper_address") or "").split()),
+            "is_default": str(row.get("is_default")).strip() == "1",
         }
-        for row in (body.get("shipper") or [])
+        for row in (body.get("profiles") or [])
         if row.get("profile_id")
     ]
     return (str(client_code) if client_code else None), shippers
@@ -151,3 +166,66 @@ async def create_order(
         raise CouriersNextBookingError(
             body.get("error") or body.get("message") or f"Couriers Next rejected the order (HTTP {response.status_code})")
     return str(tracking_number)
+
+
+# ==================== AIRWAY BILL LOOKUP ====================
+#
+# CreateOrder's response does carry the order's internal `id` (what invoicehtml.php needs),
+# but only once, at booking time - there is no endpoint to fetch it back by tracking_no
+# (confirmed live: TrackOrder.php and CurrentStatus.php return neither `id` nor `order_id`).
+# GetOrderList.php does return it, but as a full, unfiltered dump of the account's entire
+# order history (1400+ rows, ~1.2MB, no date/tracking_no filter) - so rather than storing
+# `id` at booking time and hoping it never needs recovering, every lookup goes through this
+# same endpoint and result, held in a short-lived cache so a batch print of several orders
+# costs one fetch, not one per order.
+
+INVOICE_BASE_URL = "https://portal.couriersnext.com/invoicehtml.php"
+_ORDER_LIST_CACHE_TTL = 120.0  # seconds
+_order_list_cache: dict = {}  # auth_key -> (fetched_at, {tracking_no: id})
+
+
+async def _fetch_order_ids_by_tracking(auth_key: str) -> dict:
+    cached = _order_list_cache.get(auth_key)
+    if cached and (time.monotonic() - cached[0]) < _ORDER_LIST_CACHE_TTL:
+        return cached[1]
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        try:
+            r = await client.post(f"{_BASE_URL}/GetOrderList.php", json={"auth_key": auth_key})
+        except httpx.HTTPError as exc:
+            raise CouriersNextInvoiceError(f"Could not reach Couriers Next: {exc}") from exc
+    if r.status_code >= 400:
+        raise CouriersNextInvoiceError(f"Couriers Next rejected the order list request (HTTP {r.status_code})")
+    try:
+        rows = r.json()
+    except ValueError:
+        raise CouriersNextInvoiceError("Couriers Next returned a non-JSON order list response")
+    if not isinstance(rows, list):
+        raise CouriersNextInvoiceError("Couriers Next returned an unexpected order list response")
+
+    by_tracking = {
+        str(row["tracking_no"]): row["id"]
+        for row in rows
+        if isinstance(row, dict) and row.get("tracking_no") and row.get("id") is not None
+    }
+    _order_list_cache[auth_key] = (time.monotonic(), by_tracking)
+    return by_tracking
+
+
+async def get_airway_bill_link(auth_key: str, tracking_numbers: List[str]) -> str:
+    """One printable airway bill URL covering every given tracking number, resolved live.
+
+    invoicehtml.php accepts a comma-separated order_id list and renders every one on the
+    same page - confirmed live against a real account, same combined-document behaviour
+    as PostEx's get-invoice. Raises CouriersNextInvoiceError if none of the tracking
+    numbers are found in the account's order list; tracking numbers that ARE found still
+    produce a URL even if others in the batch are missing, since a partial bill is still
+    useful and the caller already knows which orders it asked for.
+    """
+    if not tracking_numbers:
+        raise CouriersNextInvoiceError("No tracking number given")
+    by_tracking = await _fetch_order_ids_by_tracking(auth_key)
+    order_ids = [str(by_tracking[t]) for t in (str(tn) for tn in tracking_numbers) if t in by_tracking]
+    if not order_ids:
+        raise CouriersNextInvoiceError("No Couriers Next order found for the given tracking number(s)")
+    return f"{INVOICE_BASE_URL}?order_id={','.join(order_ids)}&print=1"

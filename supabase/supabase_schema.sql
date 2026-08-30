@@ -249,6 +249,9 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     advance_status           SMALLINT NOT NULL DEFAULT 1,
     delivery_charge          DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     tax_amount               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
+    -- Set when tax_amount was derived from the PostEx API (2%+2% of COD) rather than
+    -- read from a CPR CSV, which is the authoritative source. See migration 20260830020000.
+    tax_amount_derived       BOOLEAN NOT NULL DEFAULT false,
     cost_price               DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     order_receiving_date     TIMESTAMPTZ NOT NULL,
     -- Date the courier picked up the parcel: PostEx's own orderPickupDate when available,
@@ -1658,6 +1661,41 @@ AS $$
       AND trim(courier) <> ''
     GROUP BY courier
     ORDER BY total_count DESC, courier ASC;
+$$;
+
+
+-- Bulk delivery-status writeback for the tracking fetch (orders.py's
+-- _save_delivery_status_updates), so refreshing N orders costs one round-trip
+-- instead of N.
+--
+-- Deliberately an UPDATE ... FROM rather than a bulk upsert: shopify_orders has
+-- NOT NULL columns and hand-edited ones (cost_price, folio, is_order_settled, ...)
+-- that an INSERT ... ON CONFLICT would reset to defaults for every column absent
+-- from the payload. Each field is applied only when the caller supplies it, so a
+-- stale in-memory snapshot can't clobber a field someone else edited meanwhile.
+CREATE OR REPLACE FUNCTION apply_delivery_status_updates(
+    p_org_id UUID,
+    p_updates JSONB
+)
+RETURNS TABLE(id UUID)
+LANGUAGE sql
+AS $$
+    UPDATE shopify_orders o
+       SET delivery_status = u.delivery_status,
+           courier_pickup_date = COALESCE(u.courier_pickup_date, o.courier_pickup_date),
+           order_status        = COALESCE(u.order_status, o.order_status),
+           piece_received      = COALESCE(u.piece_received, o.piece_received),
+           updated_at          = NOW()
+      FROM jsonb_to_recordset(p_updates) AS u(
+           id UUID,
+           delivery_status JSONB,
+           courier_pickup_date TIMESTAMPTZ,
+           order_status VARCHAR(50),
+           piece_received TEXT
+       )
+     WHERE o.id = u.id
+       AND o.org_id = p_org_id
+    RETURNING o.id;
 $$;
 
 

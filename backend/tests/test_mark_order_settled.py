@@ -150,20 +150,39 @@ class _StubFulfillment:
     install = _StubShopify.install
 
 
+_POSTEX_URL = "https://postex.pk/tracking?cn=CX123"
+
+
 class TestCreateFulfillment:
     def test_tags_the_order_with_the_courier_and_sends_the_tracking_number(self, monkeypatch):
         stub = _StubFulfillment().install(monkeypatch)
 
-        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
 
         assert stub.puts[0]["tags"] == "Confirmed, PostEx"
         tracking = stub.fulfillments[0]["tracking_info"]
-        assert tracking == {"number": "CX123", "company": "PostEx"}
+        assert tracking["number"] == "CX123"
+        assert tracking["company"] == "PostEx"
+
+    def test_the_tracking_url_is_sent_so_the_number_is_a_working_link(self, monkeypatch):
+        stub = _StubFulfillment().install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
+
+        assert stub.fulfillments[0]["tracking_info"]["url"] == _POSTEX_URL
+
+    def test_url_is_omitted_rather_than_sent_null_when_there_is_none(self, monkeypatch):
+        """Shopify rejects a null tracking url, so an unknown courier sends no key."""
+        stub = _StubFulfillment().install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", None, _creds()))
+
+        assert "url" not in stub.fulfillments[0]["tracking_info"]
 
     def test_courier_tag_uses_the_courier_name_it_was_booked_with(self, monkeypatch):
         stub = _StubFulfillment().install(monkeypatch)
 
-        asyncio.run(shopify.create_fulfillment(1, "CN9", "Couriers Next", _creds()))
+        asyncio.run(shopify.create_fulfillment(1, "CN9", "Couriers Next", None, _creds()))
 
         assert stub.puts[0]["tags"] == "Confirmed, Couriers Next"
 
@@ -171,14 +190,14 @@ class TestCreateFulfillment:
         # Case-insensitive, so a re-run cannot produce "PostEx, postex".
         stub = _StubFulfillment(tags="Confirmed, postex").install(monkeypatch)
 
-        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
 
         assert stub.puts == []
 
     def test_other_tags_survive(self, monkeypatch):
         stub = _StubFulfillment(tags="Confirmed, Settled, VIP").install(monkeypatch)
 
-        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
 
         assert stub.puts[0]["tags"] == "Confirmed, Settled, VIP, PostEx"
 
@@ -187,7 +206,7 @@ class TestCreateFulfillment:
         # was the one that created the fulfillment.
         stub = _StubFulfillment(fulfillment_orders=[{"id": 55, "status": "closed"}]).install(monkeypatch)
 
-        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _creds()))
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
 
         assert stub.puts[0]["tags"] == "Confirmed, PostEx"
         assert stub.fulfillments == []

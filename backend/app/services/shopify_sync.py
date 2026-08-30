@@ -148,6 +148,42 @@ def _apply_customer_fields(payload: dict, customer_info: Dict[str, Any], existin
         payload[key] = new_val if new_val not in (None, "") else (existing_order.get(key) if existing_order else None)
 
 
+# delivery_status is JSONB holding the courier's own tracking payload; its latest_status is
+# free-form courier text. The statuses meaning "nothing has moved yet" are a small closed
+# set, while movement is open-ended (every city name, hub and delivery phrase each courier
+# uses), so this matches the stationary ones and treats everything else as movement -
+# erring towards leaving a live parcel's booking alone rather than voiding it.
+#
+# "not_delivered"/"delivered" (no space) are not courier text at all: extract_delivery_status
+# writes them from Shopify's fulfillment_status, so "not_delivered" must not be read as a
+# failed delivery attempt.
+_STATIONARY_STATUSES = {
+    "", "not_delivered", "restocked", "cancelled",
+    "order is booked", "pick up in progress", "at lushwear warehouse",
+}
+
+
+def _parcel_has_moved(existing_order: dict) -> bool:
+    """Whether the courier has ever reported this parcel moving. Only the JSONB payload's
+    latest_status counts - a booking on its own is not movement."""
+    delivery_status = existing_order.get("delivery_status")
+    if not isinstance(delivery_status, dict):
+        return False
+    latest = (delivery_status.get("latest_status") or "").strip().lower()
+    return latest not in _STATIONARY_STATUSES
+
+
+_TERMINAL_ORDER_STATUSES = {"delivered", "returned", "cancelled"}
+
+
+def _has_booking(existing_order: dict) -> bool:
+    """Whether a courier was ever booked for this order - i.e. whether there is anything to
+    void. "Unassigned" is the table's no-courier value, so it does not count as one."""
+    if (existing_order.get("tracking_number") or "").strip():
+        return True
+    return (existing_order.get("courier") or "").strip().lower() not in ("", "unassigned")
+
+
 _OTHER_COURIER_TAG_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
 
 
@@ -347,11 +383,22 @@ def _release_stale_sync_lock(supabase, org_id: str) -> None:
     (eq + eq + lt) - PostgREST/Postgres handle this combination everywhere else
     in this file (see the order_receiving_date range filters below), unlike the
     OR'd single-UPDATE version this replaced, which had no precedent in this
-    codebase and turned out not to reclaim stale locks correctly."""
+    codebase and turned out not to reclaim stale locks correctly.
+
+    Runs as two statements for that reason: `lock_acquired_at < cutoff` is NULL - not
+    true - for a held lock that carries no timestamp, so the age filter alone can never
+    reclaim one and the sync stays wedged forever rather than for _SYNC_LOCK_STALE_AFTER.
+    A held-but-unstamped lock cannot belong to a live sync (acquiring one always writes
+    the timestamp in the same update), so it is always stale.
+    """
+    def _held_lock():
+        return org_table(supabase, org_id, "shopify_sync_status").update(
+            {"in_progress": False}
+        ).eq("id", _SYNC_STATUS_ORDERS_ID).eq("in_progress", True)
+
     stale_cutoff = (datetime.now(timezone.utc) - _SYNC_LOCK_STALE_AFTER).isoformat()
-    org_table(supabase, org_id, "shopify_sync_status").update({"in_progress": False}).eq(
-        "id", _SYNC_STATUS_ORDERS_ID
-    ).eq("in_progress", True).lt("lock_acquired_at", stale_cutoff).execute()
+    _held_lock().lt("lock_acquired_at", stale_cutoff).execute()
+    _held_lock().is_("lock_acquired_at", "null").execute()
 
 
 def _try_acquire_sync_lock(supabase, org_id: str) -> bool:
@@ -491,15 +538,16 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 existing_orders_map[order_num] = o
 
         def extract_courier(order):
-            """Extract courier from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
+            """Extract courier from the latest non-cancelled fulfillment.
+
+            A cancelled fulfillment is explicitly NOT a fallback: cancelling every
+            fulfillment is how a booking is undone in Shopify, so reading the courier back
+            off one would re-assign a booking that no longer exists (and fight any local
+            reset of it on every sync)."""
             if "fulfillments" not in order or len(order["fulfillments"]) == 0:
                 return "Unassigned"
 
-            fulfillments = order["fulfillments"]
-
-            # Filter out cancelled fulfillments first, but keep them as fallback
-            active_fulfillments = [f for f in fulfillments if f.get("status") != "cancelled"]
-            fulfillments_to_check = active_fulfillments if active_fulfillments else fulfillments
+            fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
 
             if not fulfillments_to_check:
                 return "Unassigned"
@@ -531,15 +579,12 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             return "Unassigned"
 
         def extract_tracking_number(order):
-            """Extract tracking number from the latest non-cancelled fulfillment, or latest fulfillment if all are cancelled."""
+            """Extract tracking number from the latest non-cancelled fulfillment. See
+            extract_courier for why a cancelled fulfillment is not used as a fallback."""
             if "fulfillments" not in order or len(order["fulfillments"]) == 0:
                 return None
 
-            fulfillments = order["fulfillments"]
-
-            # Filter out cancelled fulfillments first, but keep them as fallback
-            active_fulfillments = [f for f in fulfillments if f.get("status") != "cancelled"]
-            fulfillments_to_check = active_fulfillments if active_fulfillments else fulfillments
+            fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
 
             if not fulfillments_to_check:
                 return None
@@ -909,6 +954,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             if order_number in existing_orders_map:
                 existing_order = existing_orders_map[order_number]
                 existing_status = (existing_order.get("order_status") or "").strip().lower()
+                booking_was_voided = False
                 if existing_status in ("delivered", "returned"):
                     existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
                     shopify_courier_lower = (courier or "").strip().lower()
@@ -956,8 +1002,31 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 shopify_order_status = (order_data.get("order_status") or "").strip().lower()
                 if shopify_order_status == "cancelled":
                     order_data["order_status"] = shopify_order_status
+                elif shopify_order_status == "returned" and existing_status == "fulfilled" and not _parcel_has_moved(existing_order):
+                    # We booked a parcel, then the order was cancelled on Shopify before the
+                    # courier ever scanned it. extract_order_status calls that "returned" off
+                    # the cancelled_at/fulfillment timestamps alone, but nothing shipped and
+                    # nothing is coming back - it must not reach the courier bill as a return.
+                    # Reset it to bookable instead; the booking fields are cleared below.
+                    order_data["order_status"] = "unfulfilled"
+                    booking_was_voided = True
                 elif shopify_order_status == "fulfilled" and existing_status == "unfulfilled":
                     order_data["order_status"] = shopify_order_status
+                elif (
+                    shopify_order_status == "unfulfilled"
+                    and existing_status not in _TERMINAL_ORDER_STATUSES
+                    # Only when there is actually a booking to void. Without this an ordinary
+                    # never-booked order matches on every sync and is rewritten forever.
+                    and _has_booking(existing_order)
+                ):
+                    # Shopify reports "unfulfilled" for an order whose every fulfillment has
+                    # been cancelled. That is a deliberate undo of the fulfillment - the parcel
+                    # is not going out under this booking - so it outranks whatever courier
+                    # tracking last told us and the order goes back to bookable. Statuses that
+                    # already resolved into money (delivered/returned) or a cancellation are
+                    # left alone; they are not waiting on a booking.
+                    order_data["order_status"] = "unfulfilled"
+                    booking_was_voided = True
                 else:
                     order_data["order_status"] = existing_order.get("order_status")
                 # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
@@ -1078,7 +1147,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
                 # invisible to has_changed's skip mode once courier is assigned); customer_info_changed
                 # covers the same blind spot for a customer's name/phone/address/city/id.
-                if courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+                # booking_was_voided is listed explicitly: it clears courier/tracking to values
+                # that differ from BOTH Shopify (which still carries the cancelled fulfillment)
+                # and the existing row, so neither courier_changed nor has_changed sees it.
+                if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
                     order_data["id"] = existing_order["id"]
                     orders_to_update.append(order_data)
                 else:

@@ -101,6 +101,25 @@ function initOrdersActions() {
         }
     });
 
+    // Print Airway Bills for selected orders - one grouped document per courier present
+    // in the selection (see printAirwayBillsForOrders in utils.js), not a per-order button.
+    document.getElementById('ordersMoreActionPrintAirwayBills')?.addEventListener('click', async () => {
+        if (!ordersGridApi) {
+            showToast('Orders grid not initialized', 'error');
+            return;
+        }
+        const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
+        try {
+            const skipped = await printAirwayBillsForOrders(selectedRows);
+            showToast(
+                `Airway bills opened${skipped > 0 ? ` (${skipped} order(s) skipped - not fulfilled or unsupported courier)` : ''}`,
+                'success'
+            );
+        } catch (e) {
+            showToast(e.message || 'Failed to print airway bills', 'error');
+        }
+    });
+
     // Generate Packaging List (opens modal: enter order numbers or upload labels PDF)
     document.getElementById('ordersMoreActionGeneratePackagingList')?.addEventListener('click', openPackagingListModal);
     document.getElementById('closePackagingListModal')?.addEventListener('click', closePackagingListModal);

@@ -212,12 +212,17 @@ async def adjust_inventory_levels(
 
 
 async def create_fulfillment(
-    shopify_order_id: int, tracking_number: str, tracking_company: str, org_creds: OrgIntegrationSettings
+    shopify_order_id: int, tracking_number: str, tracking_company: str,
+    tracking_url: Optional[str], org_creds: OrgIntegrationSettings
 ) -> None:
     """Mark a Shopify order fulfilled with the courier's tracking number and tag it with
     the courier's name, so the store (and the customer's shipping notification) reflect a
     parcel that has actually been booked - called after the courier API hands back a
     tracking number.
+
+    tracking_url makes the number a working link in the customer's shipping email and in
+    the order status page; without it Shopify falls back to guessing a carrier URL from
+    the company name, which it cannot do for Pakistani couriers it does not know.
 
     Since API 2024-07 a fulfillment is created against the order's *fulfillment orders*,
     not the order itself, so this looks those up first. Only the ones still open are
@@ -245,7 +250,11 @@ async def create_fulfillment(
         response = await client.post(f"{base}/fulfillments.json", headers=headers, json={
             "fulfillment": {
                 "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
-                "tracking_info": {"number": tracking_number, "company": tracking_company},
+                "tracking_info": {
+                    "number": tracking_number,
+                    "company": tracking_company,
+                    **({"url": tracking_url} if tracking_url else {}),
+                },
                 "notify_customer": True,
             }
         })
