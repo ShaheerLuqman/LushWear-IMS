@@ -501,6 +501,40 @@
                             </div>
                         </div>
                         <button type="button" id="fulfillmentClearFiltersBtn" class="btn btn-secondary fulfillment-clear-filters-btn">Clear Filters</button>
+
+                        <div id="fulfillmentSidePanelContent" class="fulfillment-side-panel-content" style="display: none;">
+                            <span id="fulfillmentSidePanelOrderId" class="fulfillment-side-panel-order-id"></span>
+
+                            <div class="fulfillment-courier-select-wrap">
+                                <button type="button" id="fulfillmentCourierSelectBtn" class="fulfillment-courier-select-btn">
+                                    <span id="fulfillmentCourierSelectLabel" class="fulfillment-courier-select-label">Select Courier</span>
+                                    <i data-lucide="chevron-down" class="fulfillment-courier-select-caret"></i>
+                                </button>
+                                <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
+                            </div>
+
+                            <!-- The courier assigns the tracking number at booking time, so there is
+                                 deliberately no tracking-number field here. A pickup location is required:
+                                 PostEx rejects a booking that names no pickup address, and Couriers Next
+                                 needs the shipper profile the parcel ships under. -->
+                            <div class="form-group fulfillment-pickup-group" id="fulfillmentPickupGroup">
+                                <select id="fulfillmentPickupSelect" class="form-input" disabled>
+                                    <option value="">Select courier first</option>
+                                </select>
+                            </div>
+
+                            <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn"><i data-lucide="check-circle-2"></i> Fulfill Order</button>
+                            <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
+                        </div>
+
+                        <!-- Shown right after a successful fulfill, in place of Empty/Content, until a
+                             new selection is made (see renderFulfillmentSidePanel/renderFulfillmentBookedPanel). -->
+                        <div id="fulfillmentSidePanelBooked" class="fulfillment-side-panel-booked" style="display: none;">
+                            <span id="fulfillmentSidePanelBookedTitle" class="fulfillment-side-panel-title"></span>
+                            <div id="fulfillmentSidePanelBookedList" class="fulfillment-booked-list"></div>
+                            <button type="button" id="fulfillmentBookedPrintBtn" class="btn btn-primary fulfillment-fulfill-btn">Print Airway Bills</button>
+                            <button type="button" id="fulfillmentBookedDoneBtn" class="btn btn-secondary fulfillment-cancel-btn">Done</button>
+                        </div>
                     </div>
 
                     <div class="fulfillment-body">
@@ -526,7 +560,7 @@
                                             <th>Mobile Number</th>
                                             <th>Tags</th>
                                             <th>City</th>
-                                            <th class="fulfillment-th-courier-city">Courier City <i data-lucide="info" title="Select a courier in the side panel to populate this with its supported cities"></i></th>
+                                            <th class="fulfillment-th-courier-city">Courier City <i data-lucide="info" title="Select a courier above to populate this with its supported cities"></i></th>
                                             <th class="fulfillment-th-order-type">Type <i data-lucide="info" title="The courier's own order type. Only couriers whose booking API has one (PostEx) are selectable; the rest show a dash."></i></th>
                                             <th class="fulfillment-th-risk">Risk / Customer Status <i data-lucide="info" title="Based on this customer's past delivered vs. total orders"></i></th>
                                             <th class="fulfillment-col-actions">Actions</th>
@@ -536,51 +570,6 @@
                                 </table>
                             </div>
                         </div>
-
-                        <aside class="fulfillment-side-panel">
-                            <div id="fulfillmentSidePanelEmpty" class="fulfillment-side-panel-empty">
-                                <i data-lucide="package-check"></i>
-                                <p>Select one or more orders to fulfill them.</p>
-                            </div>
-                            <div id="fulfillmentSidePanelContent" class="fulfillment-side-panel-content" style="display: none;">
-                                <p id="fulfillmentSidePanelTitle" class="fulfillment-side-panel-title"></p>
-                                <p id="fulfillmentSidePanelOrderId" class="fulfillment-side-panel-order-id"></p>
-
-                                <label class="fulfillment-field-label">Select Courier</label>
-                                <div class="fulfillment-courier-select-wrap">
-                                    <button type="button" id="fulfillmentCourierSelectBtn" class="fulfillment-courier-select-btn">
-                                        <span id="fulfillmentCourierSelectLabel" class="fulfillment-courier-select-label">Select Courier</span>
-                                        <i data-lucide="chevron-down" class="fulfillment-courier-select-caret"></i>
-                                    </button>
-                                    <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
-                                </div>
-
-                                <!-- The courier assigns the tracking number at booking time, so there is
-                                     deliberately no tracking-number field here. A pickup location is required:
-                                     PostEx rejects a booking that names no pickup address, and Couriers Next
-                                     needs the shipper profile the parcel ships under. -->
-                                <div class="form-group fulfillment-pickup-group" id="fulfillmentPickupGroup" style="display: none;">
-                                    <label for="fulfillmentPickupSelect">Pickup Location</label>
-                                    <select id="fulfillmentPickupSelect" class="form-input"></select>
-                                </div>
-
-                                <div class="fulfillment-side-panel-actions">
-                                    <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn"><i data-lucide="check-circle-2"></i> Fulfill Order</button>
-                                    <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
-                                </div>
-                            </div>
-
-                            <!-- Shown right after a successful fulfill, in place of Empty/Content, until a
-                                 new selection is made (see renderFulfillmentSidePanel/renderFulfillmentBookedPanel). -->
-                            <div id="fulfillmentSidePanelBooked" class="fulfillment-side-panel-booked" style="display: none;">
-                                <p id="fulfillmentSidePanelBookedTitle" class="fulfillment-side-panel-title"></p>
-                                <div id="fulfillmentSidePanelBookedList" class="fulfillment-booked-list"></div>
-                                <div class="fulfillment-side-panel-actions">
-                                    <button type="button" id="fulfillmentBookedPrintBtn" class="btn btn-primary">Print Airway Bills</button>
-                                    <button type="button" id="fulfillmentBookedDoneBtn" class="btn btn-secondary">Done</button>
-                                </div>
-                            </div>
-                        </aside>
                     </div>
                 </div>
 

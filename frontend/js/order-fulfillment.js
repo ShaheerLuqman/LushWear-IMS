@@ -113,17 +113,18 @@ function fulfillmentPickupAddressLabel(a) {
 }
 
 function renderFulfillmentPickupAddresses() {
-    const group = document.getElementById('fulfillmentPickupGroup');
     const select = document.getElementById('fulfillmentPickupSelect');
-    if (!group || !select) return;
+    if (!select) return;
 
-    // Only shown for couriers that actually have pickup identities - the picker is
-    // meaningless for the ones still fulfilled in their own portal.
-    group.style.display = fulfillmentPickupAddresses.length > 0 ? 'block' : 'none';
+    // Disabled (rather than hidden) until a courier with pickup identities is picked -
+    // the picker is meaningless for couriers still fulfilled in their own portal.
+    select.disabled = fulfillmentPickupAddresses.length === 0;
     const previous = select.value;
-    select.innerHTML = fulfillmentPickupAddresses
-        .map(a => `<option value="${escapeHtml(a.code)}" title="${escapeHtml(fulfillmentPickupAddressLabel(a))}">${escapeHtml(fulfillmentPickupAddressLabel(a))}</option>`)
-        .join('');
+    select.innerHTML = fulfillmentPickupAddresses.length
+        ? fulfillmentPickupAddresses
+            .map(a => `<option value="${escapeHtml(a.code)}" title="${escapeHtml(fulfillmentPickupAddressLabel(a))}">${escapeHtml(fulfillmentPickupAddressLabel(a))}</option>`)
+            .join('')
+        : `<option value="">Select courier first</option>`;
     if (fulfillmentPickupAddresses.some(a => a.code === previous)) {
         select.value = previous;
     } else {
@@ -554,11 +555,7 @@ function renderFulfillmentRow(order) {
             <td class="fulfillment-risk-cell">${renderFulfillmentRiskCell(order)}</td>
             <td class="fulfillment-actions-cell">
                 <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="More actions">&#8942;</button>
-                <div class="fulfillment-actions-menu">
-                    <button type="button" data-action="view">View Order</button>
-                    <button type="button" data-action="duplicate">Duplicate</button>
-                    <button type="button" class="fulfillment-actions-menu__danger" data-action="remove">Remove from list</button>
-                </div>
+                <div class="fulfillment-actions-menu"></div>
             </td>
         </tr>
     `;
@@ -637,23 +634,6 @@ function attachFulfillmentRowHandlers(tbody) {
             const isOpen = menu.classList.contains('open');
             closeFulfillmentOpenMenus();
             if (!isOpen) menu.classList.add('open');
-        });
-        tr.querySelectorAll('[data-action]').forEach(btn => {
-            btn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                const action = btn.dataset.action;
-                if (action === 'remove') {
-                    fulfillmentOrders = fulfillmentOrders.filter(o => o.id !== orderId);
-                    fulfillmentSelectedIds.delete(orderId);
-                    renderFulfillmentTable();
-                } else if (action === 'duplicate') {
-                    const newOrder = { ...order, id: `fo-${Date.now()}`, order_number: Math.max(...fulfillmentOrders.map(o => o.order_number)) + 1, tags: [...order.tags] };
-                    fulfillmentOrders.push(newOrder);
-                    renderFulfillmentTable();
-                } else {
-                    showToast(`Order #${order.order_number}`, 'info');
-                }
-            });
         });
     });
 }
@@ -790,29 +770,23 @@ function renderFulfillmentSidePanel() {
     if (count === 0 && fulfillmentJustBooked.length > 0) {
         if (empty) empty.style.display = 'none';
         if (content) content.style.display = 'none';
-        if (booked) booked.style.display = 'block';
+        if (booked) booked.style.display = 'flex';
         renderFulfillmentBookedPanel();
         return;
     }
     if (booked) booked.style.display = 'none';
 
     if (count === 0) {
-        if (empty) empty.style.display = 'flex';
+        if (empty) empty.style.display = 'none';
         if (content) content.style.display = 'none';
         return;
     }
 
     if (empty) empty.style.display = 'none';
-    if (content) content.style.display = 'block';
+    if (content) content.style.display = 'flex';
 
-    const selectedOrders = fulfillmentOrders.filter(o => fulfillmentSelectedIds.has(o.id));
-    const title = document.getElementById('fulfillmentSidePanelTitle');
     const orderIdEl = document.getElementById('fulfillmentSidePanelOrderId');
-    if (title) title.textContent = count === 1 ? '1 Order Selected' : `${count} Orders Selected`;
-    if (orderIdEl) {
-        const ids = selectedOrders.slice(0, 4).map(o => `#${o.order_number}`).join(', ');
-        orderIdEl.textContent = count > 4 ? `${ids} +${count - 4} more` : ids;
-    }
+    if (orderIdEl) orderIdEl.textContent = count === 1 ? '1 order selected' : `${count} orders selected`;
 }
 
 /** Renders the post-fulfill "Booked" state: the list of just-booked orders, one grouped

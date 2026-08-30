@@ -5967,122 +5967,90 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--danger);
 }
 
-.fulfillment-side-panel {
-    width: 300px;
-    flex-shrink: 0;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-    position: sticky;
-    top: 0;
+.fulfillment-side-panel-content,
+.fulfillment-side-panel-booked {
     display: flex;
-    flex-direction: column;
-    overflow: auto;
-}
-
-.fulfillment-side-panel-empty {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
     align-items: center;
-    justify-content: center;
-    text-align: center;
-    gap: 12px;
-    color: var(--text-muted);
-    padding: 30px 10px;
-    font-size: 13px;
-}
-
-.fulfillment-side-panel-empty .lucide {
-    width: 32px;
-    height: 32px;
-    opacity: .5;
-}
-
-.fulfillment-side-panel-title {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
+    gap: 10px;
+    margin-left: auto;
 }
 
 .fulfillment-side-panel-order-id {
     font-size: 13px;
     color: var(--text-muted);
-    margin: 2px 0 18px;
+    white-space: nowrap;
 }
 
-.fulfillment-side-panel-booked {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
+.fulfillment-side-panel-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
 }
 
 .fulfillment-booked-list {
-    flex: 1;
-    overflow-y: auto;
     display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin: 16px 0;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
 }
 
 .fulfillment-booked-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 10px 12px;
+    gap: 6px;
+    padding: 4px 10px;
     background: var(--bg-secondary);
-    border-radius: var(--radius-md);
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
 }
 
 .fulfillment-booked-row-order {
-    font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
 }
 
 .fulfillment-booked-row-tracking {
-    font-size: 12px;
     color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
-.fulfillment-field-label {
-    display: block;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .4px;
-    margin-bottom: 8px;
-}
-
-/* A full street address in fulfillmentPickupAddressLabel routinely outruns the 300px side
-   panel. As a flex item in .form-group's column flex, a <select> defaults to min-width:
-   auto - it sizes to fit its longest option's intrinsic width instead of respecting the
-   panel, so overflow/text-overflow below never got the chance to engage; min-width: 0 is
-   what actually lets it shrink and clip. Full text stays reachable via the select's own
-   title (see renderFulfillmentPickupAddresses). */
+/* A full street address in fulfillmentPickupAddressLabel routinely outruns this inline
+   toolbar slot. As a flex item, a <select> defaults to min-width: auto - it sizes to fit
+   its longest option's intrinsic width instead of respecting the slot, so overflow/
+   text-overflow below never got the chance to engage; min-width: 0 is what actually lets
+   it shrink and clip. Full text stays reachable via the select's own title (see
+   renderFulfillmentPickupAddresses). */
+/* Matches .fulfillment-filter-group select's height/border/background exactly - both sit
+   in the same filters bar and read as one row of controls. */
 #fulfillmentPickupSelect {
     min-width: 0;
-    width: 100%;
+    width: 180px;
+    height: 40px;
+    padding: 0 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background-color: var(--bg-secondary);
+    color: var(--text-primary);
+    font-family: var(--font-primary);
+    font-size: 13px;
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+}
+
+#fulfillmentPickupSelect:disabled {
+    cursor: not-allowed;
+    opacity: .6;
 }
 
 .fulfillment-courier-select-wrap {
     position: relative;
-    margin-bottom: 16px;
 }
 
 .fulfillment-courier-select-btn {
-    width: 100%;
+    width: 180px;
+    height: 40px;
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -6091,7 +6059,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-radius: var(--radius-md);
     background: var(--bg-secondary);
     color: var(--text-primary);
-    padding: 10px 12px;
+    padding: 0 12px;
     font-size: 13px;
     cursor: pointer;
 }
@@ -6115,9 +6083,9 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .fulfillment-courier-menu {
     position: absolute;
     left: 0;
-    right: 0;
     top: 100%;
     margin-top: 4px;
+    min-width: 100%;
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -6139,6 +6107,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-size: 13px;
     color: var(--text-primary);
     cursor: pointer;
+    white-space: nowrap;
 }
 
 .fulfillment-courier-menu-item:hover {
@@ -6174,34 +6143,16 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
-.fulfillment-tracking-group {
-    margin-bottom: 20px;
-}
-
 .fulfillment-pickup-group {
-    margin-bottom: 20px;
-}
-
-.fulfillment-side-panel-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
+    margin: 0;
 }
 
 .fulfillment-fulfill-btn,
 .fulfillment-cancel-btn {
-    width: 100%;
-}
-
-@media (max-width: 1024px) {
-    .fulfillment-body {
-        flex-direction: column;
-    }
-
-    .fulfillment-side-panel {
-        width: 100%;
-        position: static;
-    }
+    height: 40px;
+    padding: 0 20px;
+    font-size: 13px;
+    white-space: nowrap;
 }
 
 .bulk-entry-line-text {
