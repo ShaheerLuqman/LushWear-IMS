@@ -241,6 +241,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     // Update nav (ledgerDetail/courierPaymentReportDetail keep their list's nav item active)
     const navView = viewName === 'ledgerDetail' ? 'ledgers'
         : viewName === 'courierPaymentReportDetail' ? 'courierPaymentReport'
+        : viewName === 'orderFulfillmentProgress' ? 'orderFulfillment'
         : viewName;
     navItems.forEach(item => {
         item.classList.toggle('active', item.dataset.view === navView);
@@ -265,6 +266,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthDetail': 'Month Details',
         'products': 'Products',
         'orderFulfillment': 'Order Fulfillment',
+        'orderFulfillmentProgress': 'Order Fulfillment',
         'loadSheetLogs': 'Load Sheet Logs',
         'courierPaymentReport': 'Courier Payment Report',
         'courierPaymentReportDetail': 'Courier Payment Report',

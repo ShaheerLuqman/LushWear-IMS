@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import re
 import time
@@ -7,7 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 from supabase import create_client
 
@@ -218,6 +219,12 @@ class CustomerStatus(BaseModel):
     total: int
 
 
+class UnfulfilledOrderLineItem(BaseModel):
+    name: str
+    variant_title: str = "-"
+    qty: int = 0
+
+
 class UnfulfilledOrder(BaseModel):
     id: str
     order_number: int
@@ -227,6 +234,9 @@ class UnfulfilledOrder(BaseModel):
     tags: List[str]
     city: str
     order_date: datetime
+    total_amount: float
+    advance_amount: float
+    line_items: List[UnfulfilledOrderLineItem]
     customer_status: CustomerStatus
 
 
@@ -263,7 +273,7 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
         supabase = get_supabase()
         rows = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
-            .select("id, order_number, order_receiving_date, customer_id, customer_name, customer_phone, customer_address, customer_city")
+            .select("id, order_number, order_receiving_date, total_amount, advance_amount, line_items, customer_id, customer_name, customer_phone, customer_address, customer_city")
             .eq("order_status", "unfulfilled")
             .order("order_receiving_date", desc=True)
         )
@@ -338,6 +348,16 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
                 "tags": _tags_for(row["order_number"]),
                 "city": row.get("customer_city") or "-",
                 "order_date": row["order_receiving_date"],
+                "total_amount": float(row.get("total_amount") or 0),
+                "advance_amount": float(row.get("advance_amount") or 0),
+                "line_items": [
+                    {
+                        "name": li.get("name") or "",
+                        "variant_title": li.get("variant_title") or "-",
+                        "qty": int(li.get("qty") or 0),
+                    }
+                    for li in (row.get("line_items") or [])
+                ],
                 "customer_status": {"tier": tier, "label": label, "received": received, "total": total},
             })
 
@@ -383,6 +403,18 @@ class FulfillOrderRequest(BaseModel):
     # PostEx-only (see postex.ORDER_TYPES); ignored for couriers whose API has no
     # equivalent, which is why it defaults rather than being required.
     order_type: str = "Normal"
+    # Per-order overrides typed into the fulfillment row's details modal. cod_amount
+    # None means "use the computed total - advance"; a value (including 0) overrides it.
+    # pieces None falls back to the summed line-item quantity; invoice_division is
+    # PostEx-only (airway-bill split count).
+    cod_amount: Optional[float] = None
+    customer_email: Optional[str] = None
+    instructions: Optional[str] = None
+    pieces: Optional[int] = None
+    invoice_division: Optional[int] = None
+    # "Standard" | "Fragile". Neither courier's API has a handling field, so "Fragile"
+    # is surfaced by prefixing the instructions note the courier does receive.
+    handling: Optional[str] = None
 
 
 class FulfillOrdersBody(BaseModel):
@@ -397,12 +429,6 @@ class FulfillOrderResult(BaseModel):
     ok: bool
     tracking_number: Optional[str] = None
     error: Optional[str] = None
-
-
-class FulfillOrdersResult(BaseModel):
-    booked_count: int
-    failed_count: int
-    results: List[FulfillOrderResult]
 
 
 # Display name per bookable courier - stored as the order's `courier`, sent to the courier
@@ -445,20 +471,156 @@ def _order_detail_string(line_items: List[dict]) -> Optional[str]:
     return " ".join(parts)[:250] or None
 
 
-@router.post("/fulfill", response_model=FulfillOrdersResult)
-async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_id)):
-    """Book the selected orders with the courier and record the tracking numbers.
+async def _book_one_order(
+    client: httpx.AsyncClient, body: FulfillOrdersBody, order_id: str,
+    request: FulfillOrderRequest, row: Optional[dict], courier_name: str,
+    credential: str, client_code: Optional[str], supabase, org_id: str,
+) -> Tuple[FulfillOrderResult, Optional[Tuple[dict, str]]]:
+    """Book one parcel with the courier and record the tracking number locally. Returns
+    the order's outcome and, only when the booking succeeded, the (row, tracking_number)
+    pair the Shopify fulfillment push needs. Never raises for an expected
+    booking/validation failure - those come back as an ok=False result so the caller can
+    report each order separately.
 
-    Bookings run sequentially, not gathered like the read-side Shopify sweeps: each
-    one creates a real shipment, so a mid-flight failure must leave a knowable number
-    of parcels behind, and PostEx rate-limits create-order far more tightly than its
-    read APIs. One order failing (unserviceable city, duplicate ref number, bad phone)
-    never aborts the rest - each order's outcome comes back in `results` so the UI can
-    show exactly which ones need attention.
-
-    The parcel is booked before anything is written locally, so a DB failure can leave
-    a booked shipment unrecorded, but never the reverse: an order marked fulfilled here
+    The parcel is booked before anything is written locally, so a DB failure can leave a
+    booked shipment unrecorded, but never the reverse: an order marked fulfilled here
     always has a real parcel behind it.
+    """
+    if not row:
+        return FulfillOrderResult(order_id=order_id, ok=False, error="Order not found"), None
+    order_number = row["order_number"]
+    # Re-checked against the DB rather than trusting the client's list, which can be
+    # minutes stale - without this a double-submit books the same parcel twice.
+    if row.get("order_status") != "unfulfilled" or row.get("tracking_number"):
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False, error="Already fulfilled",
+        ), None
+
+    missing = [
+        label for label, value in (
+            ("customer name", row.get("customer_name")),
+            ("phone", row.get("customer_phone")),
+            ("address", row.get("customer_address")),
+            ("courier city", request.courier_city),
+        ) if not (value or "").strip()
+    ]
+    if missing:
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False,
+            error=f"Missing {', '.join(missing)}",
+        ), None
+
+    # Shopify stores whatever the customer typed - normalised to 03xxxxxxxxx (what PostEx
+    # mandates, and what Couriers Next riders dial) and rejected here so it reads as a
+    # fixable data problem rather than the courier generic validation error.
+    customer_phone = postex.normalize_phone(row["customer_phone"])
+    if not customer_phone:
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False,
+            error=f"Invalid phone number ({row['customer_phone']})",
+        ), None
+
+    line_items = row.get("line_items") or []
+    # What the rider collects: the order value less whatever the customer already paid, so
+    # a fully-prepaid order books at 0 rather than being charged twice. An explicit
+    # cod_amount from the row's details modal (0 included) overrides that.
+    if request.cod_amount is not None and request.cod_amount >= 0:
+        cod_amount = float(request.cod_amount)
+    else:
+        cod_amount = max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0))
+    customer_email = (request.customer_email or "").strip() or None
+    instructions = (request.instructions or "").strip() or None
+    if (request.handling or "").strip().lower() == "fragile" and not (instructions and "FRAGILE" in instructions.upper()):
+        instructions = f"{instructions}\n- FRAGILE" if instructions else "- FRAGILE"
+    items = (
+        request.pieces
+        if request.pieces is not None and request.pieces > 0
+        else sum(int(li.get("qty") or 0) for li in line_items) or 1
+    )
+    order_detail = _order_detail_string(line_items)
+
+    try:
+        if body.courier == "postex":
+            tracking_number = await postex.create_order(
+                client,
+                credential,
+                order_ref_number=str(order_number),
+                customer_name=row["customer_name"].strip(),
+                customer_phone=customer_phone,
+                delivery_address=row["customer_address"].strip(),
+                city_name=request.courier_city.strip(),
+                invoice_payment=cod_amount,
+                items=items,
+                pickup_address_code=body.pickup_address_code,
+                order_type=request.order_type,
+                order_detail=order_detail,
+                instructions=instructions,
+                customer_email=customer_email,
+                invoice_division=request.invoice_division,
+            )
+        else:
+            tracking_number = await couriers_next.create_order(
+                client,
+                credential,
+                client_code=client_code,
+                profile_id=body.pickup_address_code,
+                order_ref_number=str(order_number),
+                customer_name=row["customer_name"].strip(),
+                customer_phone=customer_phone,
+                delivery_address=row["customer_address"].strip(),
+                origin_city=_COURIERS_NEXT_ORIGIN,
+                city_name=request.courier_city.strip(),
+                collection_amount=cod_amount,
+                items=items,
+                order_detail=order_detail,
+                instructions=instructions,
+                customer_email=customer_email,
+            )
+    except (postex.PostexBookingError, couriers_next.CouriersNextBookingError) as exc:
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False, error=str(exc),
+        ), None
+
+    try:
+        org_table(supabase, org_id, "shopify_orders").update({
+            "courier": courier_name,
+            "tracking_number": tracking_number,
+            "order_status": "fulfilled",
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", order_id).execute()
+    except Exception:
+        # The parcel exists at the courier regardless, so surface the tracking number
+        # instead of losing it with the exception.
+        logger.exception("Order %s booked with %s (%s) but the local update failed",
+                         order_number, courier_name, tracking_number)
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False, tracking_number=tracking_number,
+            error=f"Booked as {tracking_number}, but saving it locally failed - record it manually.",
+        ), None
+
+    return (
+        FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=True, tracking_number=tracking_number,
+        ),
+        (row, tracking_number),
+    )
+
+
+@router.post("/fulfill")
+async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_id)):
+    """Book the selected orders with the courier and stream each outcome as it lands.
+
+    Bookings run sequentially, not gathered like the read-side Shopify sweeps: each one
+    creates a real shipment, so a mid-flight failure must leave a knowable number of
+    parcels behind, and PostEx rate-limits create-order far more tightly than its read
+    APIs. One order failing (unserviceable city, duplicate ref number, bad phone) never
+    aborts the rest.
+
+    The response is newline-delimited JSON so the Order Fulfillment progress screen can
+    fill in row by row: one `{"type": "order", "result": {...}}` line per order the
+    instant it resolves, an optional `{"type": "shopify_sync"}` marker while successful
+    bookings are mirrored into Shopify, then a final
+    `{"type": "done", "booked_count", "failed_count"}` line.
     """
     if body.courier not in _FULFILL_COURIER_NAMES:
         raise HTTPException(status_code=400, detail=f"Fulfillment is not supported for courier '{body.courier}' yet.")
@@ -499,126 +661,31 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     )
     rows_by_id = {r["id"]: r for r in rows}
 
-    results: List[FulfillOrderResult] = []
-    booked: List[Tuple[dict, str]] = []
+    async def stream():
+        results: List[FulfillOrderResult] = []
+        booked: List[Tuple[dict, str]] = []
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            for order_id, request in requested.items():
+                result, booked_row = await _book_one_order(
+                    client, body, order_id, request, rows_by_id.get(order_id),
+                    courier_name, credential, client_code, supabase, org_id,
+                )
+                results.append(result)
+                if booked_row:
+                    booked.append(booked_row)
+                yield json.dumps({"type": "order", "result": result.model_dump()}) + "\n"
 
-    async with httpx.AsyncClient(timeout=60.0) as client:
-        for order_id, request in requested.items():
-            row = rows_by_id.get(order_id)
-            if not row:
-                results.append(FulfillOrderResult(order_id=order_id, ok=False, error="Order not found"))
-                continue
-            order_number = row["order_number"]
-            # Re-checked against the DB rather than trusting the client's list, which can
-            # be minutes stale - without this a double-submit books the same parcel twice.
-            if row.get("order_status") != "unfulfilled" or row.get("tracking_number"):
-                results.append(FulfillOrderResult(
-                    order_id=order_id, order_number=order_number, ok=False, error="Already fulfilled",
-                ))
-                continue
+        if booked:
+            yield json.dumps({"type": "shopify_sync"}) + "\n"
+            await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)
 
-            missing = [
-                label for label, value in (
-                    ("customer name", row.get("customer_name")),
-                    ("phone", row.get("customer_phone")),
-                    ("address", row.get("customer_address")),
-                    ("courier city", request.courier_city),
-                ) if not (value or "").strip()
-            ]
-            if missing:
-                results.append(FulfillOrderResult(
-                    order_id=order_id, order_number=order_number, ok=False,
-                    error=f"Missing {', '.join(missing)}",
-                ))
-                continue
+        yield json.dumps({
+            "type": "done",
+            "booked_count": sum(1 for r in results if r.ok),
+            "failed_count": sum(1 for r in results if not r.ok),
+        }) + "\n"
 
-            # Shopify stores whatever the customer typed - normalised to 03xxxxxxxxx (what
-            # PostEx mandates, and what Couriers Next riders dial) and rejected here so it
-            # reads as a fixable data problem rather than the courier generic validation error.
-            customer_phone = postex.normalize_phone(row["customer_phone"])
-            if not customer_phone:
-                results.append(FulfillOrderResult(
-                    order_id=order_id, order_number=order_number, ok=False,
-                    error=f"Invalid phone number ({row['customer_phone']})",
-                ))
-                continue
-
-            line_items = row.get("line_items") or []
-            # What the rider collects: the order value less whatever the customer already
-            # paid, so a fully-prepaid order books at 0 rather than being charged twice.
-            cod_amount = max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0))
-            items = sum(int(li.get("qty") or 0) for li in line_items) or 1
-            order_detail = _order_detail_string(line_items)
-
-            try:
-                if body.courier == "postex":
-                    tracking_number = await postex.create_order(
-                        client,
-                        credential,
-                        order_ref_number=str(order_number),
-                        customer_name=row["customer_name"].strip(),
-                        customer_phone=customer_phone,
-                        delivery_address=row["customer_address"].strip(),
-                        city_name=request.courier_city.strip(),
-                        invoice_payment=cod_amount,
-                        items=items,
-                        pickup_address_code=body.pickup_address_code,
-                        order_type=request.order_type,
-                        order_detail=order_detail,
-                    )
-                else:
-                    tracking_number = await couriers_next.create_order(
-                        client,
-                        credential,
-                        client_code=client_code,
-                        profile_id=body.pickup_address_code,
-                        order_ref_number=str(order_number),
-                        customer_name=row["customer_name"].strip(),
-                        customer_phone=customer_phone,
-                        delivery_address=row["customer_address"].strip(),
-                        origin_city=_COURIERS_NEXT_ORIGIN,
-                        city_name=request.courier_city.strip(),
-                        collection_amount=cod_amount,
-                        items=items,
-                        order_detail=order_detail,
-                    )
-            except (postex.PostexBookingError, couriers_next.CouriersNextBookingError) as exc:
-                results.append(FulfillOrderResult(
-                    order_id=order_id, order_number=order_number, ok=False, error=str(exc),
-                ))
-                continue
-
-            try:
-                org_table(supabase, org_id, "shopify_orders").update({
-                    "courier": courier_name,
-                    "tracking_number": tracking_number,
-                    "order_status": "fulfilled",
-                    "updated_at": datetime.now(timezone.utc).isoformat(),
-                }).eq("id", order_id).execute()
-            except Exception:
-                # The parcel exists at PostEx regardless, so surface the tracking number
-                # instead of losing it with the exception.
-                logger.exception("Order %s booked with %s (%s) but the local update failed",
-                                 order_number, courier_name, tracking_number)
-                results.append(FulfillOrderResult(
-                    order_id=order_id, order_number=order_number, ok=False, tracking_number=tracking_number,
-                    error=f"Booked as {tracking_number}, but saving it locally failed - record it manually.",
-                ))
-                continue
-
-            booked.append((row, tracking_number))
-            results.append(FulfillOrderResult(
-                order_id=order_id, order_number=order_number, ok=True, tracking_number=tracking_number,
-            ))
-
-    if booked:
-        await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)
-
-    return FulfillOrdersResult(
-        booked_count=sum(1 for r in results if r.ok),
-        failed_count=sum(1 for r in results if not r.ok),
-        results=results,
-    )
+    return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
 async def _push_fulfillments_to_shopify(

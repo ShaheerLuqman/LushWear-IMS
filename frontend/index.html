@@ -523,17 +523,8 @@
                                 </select>
                             </div>
 
-                            <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn"><i data-lucide="check-circle-2"></i> Fulfill Order</button>
+                            <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn" disabled><i data-lucide="check-circle-2"></i> Fulfill Order</button>
                             <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
-                        </div>
-
-                        <!-- Shown right after a successful fulfill, in place of Empty/Content, until a
-                             new selection is made (see renderFulfillmentSidePanel/renderFulfillmentBookedPanel). -->
-                        <div id="fulfillmentSidePanelBooked" class="fulfillment-side-panel-booked" style="display: none;">
-                            <span id="fulfillmentSidePanelBookedTitle" class="fulfillment-side-panel-title"></span>
-                            <div id="fulfillmentSidePanelBookedList" class="fulfillment-booked-list"></div>
-                            <button type="button" id="fulfillmentBookedPrintBtn" class="btn btn-primary fulfillment-fulfill-btn">Print Airway Bills</button>
-                            <button type="button" id="fulfillmentBookedDoneBtn" class="btn btn-secondary fulfillment-cancel-btn">Done</button>
                         </div>
                     </div>
 
@@ -562,6 +553,7 @@
                                             <th>City</th>
                                             <th class="fulfillment-th-courier-city">Courier City <i data-lucide="info" title="Select a courier above to populate this with its supported cities"></i></th>
                                             <th class="fulfillment-th-order-type">Type <i data-lucide="info" title="The courier's own order type. Only couriers whose booking API has one (PostEx) are selectable; the rest show a dash."></i></th>
+                                            <th class="fulfillment-th-cod">CoD <i data-lucide="info" title="Amount the rider collects on delivery. Defaults to order total minus advance paid; edit inline or in the row's details."></i></th>
                                             <th class="fulfillment-th-risk">Risk / Customer Status <i data-lucide="info" title="Based on this customer's past delivered vs. total orders"></i></th>
                                             <th class="fulfillment-col-actions">Actions</th>
                                         </tr>
@@ -569,6 +561,110 @@
                                     <tbody id="fulfillmentTableBody"></tbody>
                                 </table>
                             </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Fulfillment: live booking progress. Opened by fulfillSelectedOrders
+                     when Fulfill Order is pressed; fills in row by row as POST /orders/fulfill
+                     streams each booking's outcome. -->
+                <div id="orderFulfillmentProgressView" class="view">
+                    <div class="fulfillment-progress-head">
+                        <div class="fulfillment-progress-head-titles">
+                            <h2 class="fulfillment-progress-title">Fulfillment Progress</h2>
+                            <span id="fulfillmentProgressStatusPill" class="fulfillment-progress-pill"></span>
+                        </div>
+                        <span id="fulfillmentProgressCourier" class="fulfillment-progress-courier"></span>
+                    </div>
+
+                    <div class="fulfillment-progress-summary">
+                        <div class="fulfillment-progress-stat">
+                            <span class="fulfillment-progress-stat-label">Total</span>
+                            <span id="fulfillmentProgressTotal" class="fulfillment-progress-stat-value">0</span>
+                        </div>
+                        <div class="fulfillment-progress-stat">
+                            <span class="fulfillment-progress-stat-label">Completed</span>
+                            <span id="fulfillmentProgressCompleted" class="fulfillment-progress-stat-value fulfillment-progress-stat-value--ok">0</span>
+                        </div>
+                        <div class="fulfillment-progress-stat">
+                            <span class="fulfillment-progress-stat-label">Failed</span>
+                            <span id="fulfillmentProgressFailed" class="fulfillment-progress-stat-value fulfillment-progress-stat-value--fail">0</span>
+                        </div>
+                        <div class="fulfillment-progress-stat">
+                            <span class="fulfillment-progress-stat-label">Remaining</span>
+                            <span id="fulfillmentProgressRemaining" class="fulfillment-progress-stat-value">0</span>
+                        </div>
+                    </div>
+                    <div class="fulfillment-progress-bar"><div id="fulfillmentProgressBarFill" class="fulfillment-progress-bar-fill"></div></div>
+
+                    <div id="fulfillmentProgressList" class="fulfillment-progress-list"></div>
+
+                    <div class="fulfillment-progress-footer">
+                        <button type="button" id="fulfillmentProgressPrintBtn" class="btn btn-secondary" disabled><i data-lucide="printer"></i> Print All Airway Bills</button>
+                        <button type="button" id="fulfillmentProgressDoneBtn" class="btn btn-primary" disabled>Done</button>
+                    </div>
+                </div>
+
+                <!-- Per-order shipping details for the Order Fulfillment view, opened by a
+                     row's kebab. Mirrors PostEx's own booking screen; fields PostEx has but
+                     Couriers Next doesn't ([data-postex-only]) are hidden for that courier.
+                     Values are held in browser memory on the order (like Courier City /
+                     Type) and sent with POST /orders/fulfill. -->
+                <div id="fulfillmentDetailsModal" class="modal">
+                    <div class="modal-content fulfillment-details-modal-content">
+                        <div class="modal-header">
+                            <h2 id="fulfillmentDetailsTitle">Shipping Details</h2>
+                            <button type="button" class="modal-close" id="fulfillmentDetailsClose" aria-label="Close">&times;</button>
+                        </div>
+                        <div class="modal-body">
+                            <p id="fulfillmentDetailsSubtitle" class="fulfillment-details-subtitle"></p>
+                            <form id="fulfillmentDetailsForm" autocomplete="off">
+                                <div class="form-group">
+                                    <label for="fulfillmentDetailsPickup">Pickup Location</label>
+                                    <input type="text" id="fulfillmentDetailsPickup" class="form-input" readonly>
+                                </div>
+                                <div class="form-group" data-postex-only>
+                                    <label for="fulfillmentDetailsHandling">Handling</label>
+                                    <select id="fulfillmentDetailsHandling" class="form-input">
+                                        <option value="Standard">Standard</option>
+                                        <option value="Fragile">Fragile</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="fulfillmentDetailsEmail">Email Address</label>
+                                    <input type="email" id="fulfillmentDetailsEmail" class="form-input" placeholder="user@user.com">
+                                </div>
+                                <div class="fulfillment-details-grid">
+                                    <div class="form-group">
+                                        <label for="fulfillmentDetailsPieces">Pieces</label>
+                                        <input type="number" id="fulfillmentDetailsPieces" class="form-input" min="1" step="1">
+                                    </div>
+                                    <div class="form-group" data-postex-only>
+                                        <label for="fulfillmentDetailsInvoiceDivision">Invoice Division</label>
+                                        <input type="number" id="fulfillmentDetailsInvoiceDivision" class="form-input" min="1" step="1">
+                                    </div>
+                                </div>
+                                <div class="form-group" data-postex-only>
+                                    <label for="fulfillmentDetailsPaymentMethod">Payment Method</label>
+                                    <input type="text" id="fulfillmentDetailsPaymentMethod" class="form-input" value="Manual" readonly>
+                                </div>
+                                <div class="form-group fulfillment-details-readonly">
+                                    <label>Fulfillment Products</label>
+                                    <ul id="fulfillmentDetailsProducts" class="fulfillment-details-products"></ul>
+                                </div>
+                                <div class="form-group">
+                                    <label for="fulfillmentDetailsProductString">Products</label>
+                                    <textarea id="fulfillmentDetailsProductString" class="form-input" rows="2" readonly></textarea>
+                                </div>
+                                <div class="form-group">
+                                    <label for="fulfillmentDetailsInstructions" id="fulfillmentDetailsInstructionsLabel">Remarks</label>
+                                    <textarea id="fulfillmentDetailsInstructions" class="form-input" rows="3"></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-pinned-footer">
+                            <button type="button" class="btn btn-secondary" id="fulfillmentDetailsCancelBtn">Cancel</button>
+                            <button type="submit" form="fulfillmentDetailsForm" class="btn btn-primary" id="fulfillmentDetailsSaveBtn">Save</button>
                         </div>
                     </div>
                 </div>

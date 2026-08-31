@@ -113,12 +113,17 @@ async def create_order(
     collection_amount: float,
     items: int,
     order_detail: Optional[str] = None,
+    instructions: Optional[str] = None,
+    customer_email: Optional[str] = None,
 ) -> str:
     """Book one shipment and return its Couriers Next tracking number.
 
     collection_amount is what the rider collects on delivery, so it must already be
     net of any advance the customer paid - a fully-prepaid order books at 0, not at
     its order value.
+
+    instructions and customer_email are the merchant's per-order overrides, sent as
+    special_instruction and receiver_email.
 
     `tracking_no` is deliberately not sent: it is the merchant's own optional
     reference, and supplying one makes their backend reuse it as the parcel's number
@@ -136,7 +141,7 @@ async def create_order(
         "destination": city_name,
         "receiver_name": customer_name,
         "receiver_phone": customer_phone,
-        "receiver_email": "",
+        "receiver_email": customer_email or "",
         "receiver_address": delivery_address,
         "pieces": items,
         # Their API requires a weight and rates per_kg. The real weight is not tracked
@@ -146,7 +151,7 @@ async def create_order(
         "order_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "collection_amount": f"{collection_amount:.2f}",
         "product_description": order_detail or "",
-        "special_instruction": "",
+        "special_instruction": instructions or "",
         "order_id": f"#{order_ref_number}",
         # Let Couriers Next route to whichever downstream carrier it prefers.
         "api_vendor": "auto",

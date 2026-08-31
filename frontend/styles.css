@@ -217,6 +217,10 @@ body {
     max-width: 440px;
 }
 
+.fulfillment-details-modal-content {
+    max-width: 520px;
+}
+
 .password-change-form .form-group {
     margin-bottom: 0;
 }
@@ -5751,6 +5755,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .fulfillment-th-risk .lucide,
 .fulfillment-th-order-type .lucide,
+.fulfillment-th-cod .lucide,
 .fulfillment-th-courier-city .lucide {
     width: 12px;
     height: 12px;
@@ -5928,47 +5933,76 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-primary);
 }
 
-.fulfillment-actions-menu {
-    position: absolute;
-    right: 0;
-    top: 100%;
-    margin-top: 4px;
-    background: var(--bg-primary);
+.fulfillment-col-cod {
+    white-space: nowrap;
+}
+
+.fulfillment-cod-input {
+    width: 90px;
+    padding: 4px 6px;
+    font-size: 13px;
     border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    min-width: 160px;
-    z-index: 40;
-    display: none;
-    overflow: hidden;
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-primary);
 }
 
-.fulfillment-actions-menu.open {
+.fulfillment-cod-input:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+    box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.fulfillment-details-subtitle {
+    margin: 0 0 16px;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.fulfillment-details-modal-content [hidden] {
+    display: none !important;
+}
+
+.fulfillment-details-modal-content input[readonly],
+.fulfillment-details-modal-content textarea[readonly] {
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    cursor: default;
+}
+
+.fulfillment-details-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+}
+
+/* Invoice Division is PostEx-only, so the grid is single-column for Couriers Next. */
+.fulfillment-details-grid:has([data-postex-only][hidden]) {
+    grid-template-columns: 1fr;
+}
+
+.fulfillment-details-readonly label {
     display: block;
 }
 
-.fulfillment-actions-menu button {
-    display: block;
-    width: 100%;
-    text-align: left;
-    background: none;
-    border: none;
-    padding: 9px 14px;
+.fulfillment-details-products {
+    margin: 0;
+    padding-left: 18px;
     font-size: 13px;
     color: var(--text-primary);
-    cursor: pointer;
 }
 
-.fulfillment-actions-menu button:hover {
-    background: var(--bg-tertiary);
+.fulfillment-details-products li {
+    margin: 2px 0;
 }
 
-.fulfillment-actions-menu__danger {
-    color: var(--danger);
+.fulfillment-details-empty {
+    list-style: none;
+    margin-left: -18px;
+    color: var(--text-muted);
 }
 
-.fulfillment-side-panel-content,
-.fulfillment-side-panel-booked {
+.fulfillment-side-panel-content {
     display: flex;
     align-items: center;
     gap: 10px;
@@ -5981,38 +6015,279 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     white-space: nowrap;
 }
 
-.fulfillment-side-panel-title {
+/* Order Fulfillment: live booking progress screen (#orderFulfillmentProgressView) */
+.fulfillment-progress-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.fulfillment-progress-head-titles {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.fulfillment-progress-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.fulfillment-progress-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}
+
+.fulfillment-progress-pill::before {
+    content: "";
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+.fulfillment-progress-pill--live {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+}
+
+.fulfillment-progress-pill--live::before {
+    animation: pulse-dot 1.4s ease-in-out infinite;
+}
+
+.fulfillment-progress-pill--done {
+    background: color-mix(in srgb, var(--success) 16%, transparent);
+    color: var(--success);
+}
+
+.fulfillment-progress-pill--warn {
+    background: color-mix(in srgb, var(--warning) 18%, transparent);
+    color: var(--warning);
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.fulfillment-progress-courier {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.fulfillment-progress-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    gap: 14px;
+    margin-bottom: 12px;
+}
+
+.fulfillment-progress-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 14px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.fulfillment-progress-stat-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+    color: var(--text-muted);
+}
+
+.fulfillment-progress-stat-value {
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.fulfillment-progress-stat-value--ok { color: var(--success); }
+.fulfillment-progress-stat-value--fail { color: var(--danger); }
+
+.fulfillment-progress-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: var(--bg-tertiary);
+    overflow: hidden;
+    margin-bottom: 18px;
+}
+
+.fulfillment-progress-bar-fill {
+    height: 100%;
+    width: 0;
+    border-radius: 999px;
+    background: var(--accent-primary);
+    transition: width .35s ease;
+}
+
+.fulfillment-progress-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-right: 4px;
+}
+
+.fulfillment-progress-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding: 12px 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.fulfillment-progress-row[data-state="booking"] {
+    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
+    background: color-mix(in srgb, var(--accent-primary) 5%, var(--bg-card));
+}
+
+.fulfillment-progress-row[data-state="fail"] {
+    border-color: color-mix(in srgb, var(--danger) 40%, var(--border-color));
+}
+
+.fulfillment-progress-row-icon {
+    display: flex;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+}
+
+.fulfillment-progress-row-icon .lucide {
+    width: 20px;
+    height: 20px;
+}
+
+.fulfillment-progress-row[data-state="ok"] .fulfillment-progress-row-icon { color: var(--success); }
+.fulfillment-progress-row[data-state="fail"] .fulfillment-progress-row-icon { color: var(--danger); }
+.fulfillment-progress-row[data-state="booking"] .fulfillment-progress-row-icon {
+    color: var(--accent-primary);
+    animation: spin 0.8s linear infinite;
+}
+
+.fulfillment-progress-row-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    flex: 1;
+}
+
+.fulfillment-progress-row-order {
     font-size: 13px;
     font-weight: 600;
     color: var(--text-primary);
-    white-space: nowrap;
 }
 
-.fulfillment-booked-list {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-wrap: wrap;
-}
-
-.fulfillment-booked-row {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 10px;
-    background: var(--bg-secondary);
-    border-radius: 999px;
+.fulfillment-progress-row-sub {
     font-size: 12px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.fulfillment-booked-row-order {
+.fulfillment-progress-row-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+}
+
+.fulfillment-progress-badge {
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
     font-weight: 600;
+    background: var(--bg-tertiary);
+    color: var(--text-muted);
+}
+
+.fulfillment-progress-badge--ok {
+    background: color-mix(in srgb, var(--success) 14%, transparent);
+    color: var(--success);
+}
+
+.fulfillment-progress-badge--fail {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    color: var(--danger);
+}
+
+.fulfillment-progress-badge--booking {
+    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
+    color: var(--accent-primary);
+}
+
+.fulfillment-progress-row-tracking {
+    font-size: 12px;
+    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
     color: var(--text-primary);
 }
 
-.fulfillment-booked-row-tracking {
-    color: var(--text-muted);
+.fulfillment-progress-row-error {
+    font-size: 12px;
+    color: var(--danger);
+    max-width: 320px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.fulfillment-progress-awb-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 6px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.fulfillment-progress-awb-btn:hover {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+.fulfillment-progress-awb-btn .lucide {
+    width: 14px;
+    height: 14px;
+}
+
+.fulfillment-progress-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    padding-top: 16px;
+    margin-top: 16px;
+    border-top: 1px solid var(--border-color);
 }
 
 /* A full street address in fulfillmentPickupAddressLabel routinely outruns this inline

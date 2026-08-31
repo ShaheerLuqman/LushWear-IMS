@@ -363,6 +363,9 @@ async def create_order(
     pickup_address_code: str,
     order_type: str = "Normal",
     order_detail: Optional[str] = None,
+    instructions: Optional[str] = None,
+    customer_email: Optional[str] = None,
+    invoice_division: Optional[int] = None,
 ) -> str:
     """Book one shipment and return its PostEx tracking number.
 
@@ -373,6 +376,11 @@ async def create_order(
     order_type is one of ORDER_TYPES - a Reversed/Replacement booking collects from the
     customer instead of delivering to them, so it is picked per order rather than assumed.
 
+    instructions is the merchant's per-order note, sent as PostEx's transactionNotes.
+    invoice_division is PostEx's airway-bill split count (defaults to 1).
+    customer_email is accepted for call-site symmetry with couriers_next.create_order
+    but not sent - PostEx's create-order has no email field.
+
     Raises PostexBookingError when PostEx declines (unserviceable city, duplicate
     orderRefNumber, bad phone); the caller books the remaining orders regardless.
     """
@@ -381,7 +389,7 @@ async def create_order(
         "customerName": customer_name,
         "customerPhone": customer_phone,
         "deliveryAddress": delivery_address,
-        "invoiceDivision": 0,
+        "invoiceDivision": invoice_division if invoice_division and invoice_division > 0 else 1,
         "invoicePayment": int(round(invoice_payment)),
         "items": items,
         # Prefixed with # so PostEx prints "#4807" on the airway bill; the CSV reconcile
@@ -394,6 +402,8 @@ async def create_order(
     }
     if order_detail:
         payload["orderDetail"] = order_detail
+    if instructions:
+        payload["transactionNotes"] = instructions
 
     try:
         response = await client.post(

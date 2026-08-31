@@ -219,6 +219,20 @@ class TestCreateOrder:
         asyncio.run(postex.create_order(client, "tok", **self.BOOKING))
 
         assert "orderDetail" not in captured["json"]
+        assert "transactionNotes" not in captured["json"]
+        # invoiceDivision has no "omit" state - PostEx wants a number, default 1.
+        assert captured["json"]["invoiceDivision"] == 1
+
+    def test_instructions_and_invoice_division_are_sent_when_given(self):
+        captured = {}
+        client = self._client(None, {"statusCode": "200", "dist": {"trackingNumber": "CX1"}}, captured)
+
+        asyncio.run(postex.create_order(client, "tok", **{
+            **self.BOOKING, "instructions": "Call before delivery", "invoice_division": 3,
+        }))
+
+        assert captured["json"]["transactionNotes"] == "Call before delivery"
+        assert captured["json"]["invoiceDivision"] == 3
 
     def test_a_rejection_raises_with_postex_own_message(self):
         client = self._client(None, {"statusCode": "422", "statusMessage": "City is not serviceable"})

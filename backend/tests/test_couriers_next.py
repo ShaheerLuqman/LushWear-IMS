@@ -72,6 +72,17 @@ class TestCreateOrder:
         # Their order_id is the merchant reference, formatted as their docs show it.
         assert sent["order_id"] == "#4807"
 
+    def test_email_and_instructions_flow_into_their_payload_keys(self):
+        captured = {}
+        client = self._client({"tracking_no": "1"}, captured)
+
+        asyncio.run(couriers_next.create_order(client, "auth-key", **{
+            **self.BOOKING, "customer_email": "buyer@example.com", "instructions": "Leave with guard",
+        }))
+
+        assert captured["json"]["receiver_email"] == "buyer@example.com"
+        assert captured["json"]["special_instruction"] == "Leave with guard"
+
     def test_does_not_send_a_tracking_number(self):
         """Supplying tracking_no makes their backend reuse it as the parcel number
         instead of issuing one, which would collide across orders."""

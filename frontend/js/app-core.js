@@ -113,7 +113,7 @@ let currentView = 'orders';
  * (ledgerDetail, monthDetail, courierPaymentReportDetail) need extra context
  * beyond the view name, so they're excluded in switchView/restoreLastView. */
 const CURRENT_VIEW_KEY = 'lushwear_current_view';
-const NON_RESTORABLE_VIEWS = new Set(['ledgerDetail', 'monthDetail', 'courierPaymentReportDetail']);
+const NON_RESTORABLE_VIEWS = new Set(['ledgerDetail', 'monthDetail', 'courierPaymentReportDetail', 'orderFulfillmentProgress']);
 let productsGridApi = null;
 let ordersGridApi = null;
 let transactionsGridApi = null;

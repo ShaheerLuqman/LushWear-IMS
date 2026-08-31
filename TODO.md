@@ -66,6 +66,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Per-order shipping details on fulfillment** — row kebab opens a PostEx-style modal (email, handling, pieces, invoice division, remarks, read-only pickup/products); PostEx-only fields hidden for Couriers Next; Fragile handling prefixes the courier remarks note; separate inline CoD column defaults to total minus advance; values flow to the booking.
+- [x] **Live order-fulfillment progress screen** — Fulfill Order now opens a dedicated screen that fills in row-by-row as bookings stream back, with per-order tracking numbers and airway-bill downloads; fulfill button stays disabled until courier, pickup, and every courier city are set.
 - [x] **Per-ledger expenses in Month Summary** — removed `is_party`/`report_category`; every Expense-type ledger now shows its own Month Summary line by name, no manual tagging.
 - [x] **Faster bill view** — skip the redundant ledger re-fetch in the bill modal when ledgers are already loaded.
 - [x] **View Bill button on bills table** — dedicated row button opens the bill; row click/dblclick no longer opens it.

@@ -382,6 +382,171 @@ class TestCouriersNextAirwayBillsRoute:
         assert r.status_code == 400
 
 
+class TestFulfillOrdersRoute:
+    """Request-validation branches and the newline-delimited JSON stream shape. The
+    courier booking round trip is faked here, same precedent as
+    TestPostexAirwayBillsRoute - the real PostEx/Couriers Next calls are covered at the
+    service layer (test_postex.py, test_couriers_next.py)."""
+
+    def test_unsupported_courier_is_rejected(self, make_client):
+        client = make_client({})
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "leopards", "pickup_address_code": "PA1",
+            "orders": [{"order_id": "o1", "courier_city": "Lahore"}],
+        })
+        assert r.status_code == 400
+
+    def test_no_orders_selected_is_rejected(self, make_client):
+        client = make_client({})
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1", "orders": [],
+        })
+        assert r.status_code == 400
+
+    def test_streams_one_line_per_order_then_a_done_summary(self, make_client, monkeypatch):
+        import json
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 0, "line_items": [{"name": "Tee", "qty": 1}],
+             "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
+            {"id": "o2", "order_number": 102, "order_status": "fulfilled", "tracking_number": "X1"},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings",
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+
+        async def _fake_create_order(*_a, **_k):
+            return "PX999"
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders.postex, "create_order", _fake_create_order)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1",
+            "orders": [{"order_id": "o1", "courier_city": "Lahore"},
+                       {"order_id": "o2", "courier_city": "Lahore"}],
+        })
+        assert r.status_code == 200
+        events = [json.loads(line) for line in r.text.splitlines() if line.strip()]
+        assert [e["type"] for e in events] == ["order", "order", "shopify_sync", "done"]
+        assert events[0]["result"] == {
+            "order_id": "o1", "order_number": 101, "ok": True, "tracking_number": "PX999", "error": None,
+        }
+        assert events[1]["result"]["ok"] is False  # o2 was already fulfilled
+        assert events[-1] == {"type": "done", "booked_count": 1, "failed_count": 1}
+
+    def test_per_order_overrides_reach_the_courier_booking(self, make_client, monkeypatch):
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 200, "line_items": [{"name": "Tee", "qty": 1}],
+             "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings",
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+
+        captured = {}
+
+        async def _spy_create_order(*_a, **kwargs):
+            captured.update(kwargs)
+            return "PX999"
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1",
+            "orders": [{"order_id": "o1", "courier_city": "Lahore",
+                        "cod_amount": 750, "instructions": "Leave at gate", "customer_email": " a@b.com ",
+                        "pieces": 3, "invoice_division": 2}],
+        })
+        assert r.status_code == 200
+        assert captured["invoice_payment"] == 750.0
+        assert captured["instructions"] == "Leave at gate"
+        assert captured["customer_email"] == "a@b.com"
+        assert captured["items"] == 3
+        assert captured["invoice_division"] == 2
+
+    def test_fragile_handling_adds_a_bullet_to_the_instructions_note(self, make_client, monkeypatch):
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 0, "line_items": [{"name": "Tee", "qty": 1}],
+             "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
+            {"id": "o2", "order_number": 102, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 500, "advance_amount": 0, "line_items": [{"name": "Cap", "qty": 1}],
+             "customer_name": "Bo", "customer_phone": "03007654321", "customer_address": "2 Side St"},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings",
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+
+        seen = []
+
+        async def _spy_create_order(*_a, **kwargs):
+            seen.append(kwargs.get("instructions"))
+            return f"PX{len(seen)}"
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1",
+            "orders": [
+                {"order_id": "o1", "courier_city": "Lahore", "handling": "Fragile",
+                 "instructions": "- THIS ORDER IS 100% CONFIRMED"},
+                {"order_id": "o2", "courier_city": "Lahore", "handling": "Fragile"},
+            ],
+        })
+        assert r.status_code == 200
+        assert seen == ["- THIS ORDER IS 100% CONFIRMED\n- FRAGILE", "- FRAGILE"]
+
+    def test_cod_falls_back_to_total_minus_advance_when_not_overridden(self, make_client, monkeypatch):
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 200, "line_items": [{"name": "Tee", "qty": 1}],
+             "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings",
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+
+        captured = {}
+
+        async def _spy_create_order(*_a, **kwargs):
+            captured.update(kwargs)
+            return "PX999"
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1",
+            "orders": [{"order_id": "o1", "courier_city": "Lahore"}],
+        })
+        assert r.status_code == 200
+        assert captured["invoice_payment"] == 800.0
+
+
 class TestOrderDetailString:
     """The airway-bill contents line built for courier bookings (fulfill_orders)."""
 

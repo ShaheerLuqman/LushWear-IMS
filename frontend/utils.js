@@ -52,6 +52,35 @@ async function apiJson(path, { body, ...options } = {}) {
     return response.json();
 }
 
+/** POST `body` as JSON and yield each newline-delimited JSON object from the response
+ * as it streams in, rather than waiting for the whole body. Used by endpoints that
+ * report progress incrementally (POST /orders/fulfill books parcels one at a time). */
+async function* apiJsonStream(path, { body, fallback = 'Request failed', ...options } = {}) {
+    const response = await apiRequest(path, {
+        method: 'POST',
+        ...options,
+        headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+        body: JSON.stringify(body),
+        fallback,
+    });
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let newline;
+        while ((newline = buffer.indexOf('\n')) >= 0) {
+            const line = buffer.slice(0, newline).trim();
+            buffer = buffer.slice(newline + 1);
+            if (line) yield JSON.parse(line);
+        }
+    }
+    const tail = buffer.trim();
+    if (tail) yield JSON.parse(tail);
+}
+
 /** True when an order can produce a printable airway bill - both couriers need only a
  * tracking number; the airway bill itself (PDF for PostEx, resolved link for Couriers
  * Next) is always fetched live from the backend, never read off the order object. */

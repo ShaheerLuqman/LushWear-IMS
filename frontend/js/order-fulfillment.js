@@ -24,16 +24,22 @@ const FULFILLMENT_ORDER_TYPES = {
     postex: ['Normal', 'Reversed', 'Replacement']
 };
 const FULFILLMENT_DEFAULT_ORDER_TYPE = 'Normal';
+// Pre-filled into the details modal's Remarks; the courier prints it on the airway
+// bill. A Fragile handling pick adds a "- FRAGILE" bullet server-side (see _book_one_order).
+const FULFILLMENT_DEFAULT_REMARK = '- THIS ORDER IS 100% CONFIRMED';
 
 let fulfillmentOrders = [];
 let fulfillmentLoading = false;
 let fulfillmentAllCities = [];
 let fulfillmentAllTags = [];
 let fulfillmentSelectedIds = new Set();
-// Orders booked by the most recent fulfillSelectedOrders() call, shown in the side panel
-// in place of the normal Empty/Content view until a new selection is made (see
-// renderFulfillmentSidePanel). [{id, order_number, tracking_number, courier}]
-let fulfillmentJustBooked = [];
+// Snapshot of the orders in the current (or just-finished) fulfillment run, driving the
+// Order Fulfillment progress screen - see renderFulfillmentProgress. Each entry carries
+// the display fields the run needs plus its live outcome:
+//   {id, order_number, name, city, courier,
+//    state: 'pending' | 'booking' | 'ok' | 'fail', tracking_number, error}
+let fulfillmentProgressOrders = [];
+let fulfillmentProgressPhase = 'idle'; // 'idle' | 'booking' | 'shopify_sync' | 'done'
 // cities/tags are null while nothing narrows them (every value ticked), which reads as "no filter".
 let fulfillmentFilters = { cities: null, tags: null, dateFrom: null, dateTo: null };
 
@@ -140,6 +146,7 @@ function renderFulfillmentPickupAddresses() {
     // picked and the dropdown closes - the option's own title stops being reachable then.
     // Mirroring it onto the closed <select> keeps the full address a hover away.
     select.title = select.selectedOptions[0]?.title || '';
+    updateFulfillmentFulfillBtnState();
 }
 
 /** Fetches the supported-city list for the courier just picked in the side panel
@@ -205,6 +212,7 @@ function createFulfillmentCourierCityDropdown(order) {
         order.courierCity = city || null;
         button.querySelector('.folio-dropdown-text').textContent = city || placeholder;
         closeDropdown();
+        updateFulfillmentFulfillBtnState();
     }
 
     function renderOptions(optionsList, filter) {
@@ -299,12 +307,27 @@ async function fetchFulfillmentOrders() {
         // reads as selected.
         const courierCityByOrderId = new Map(fulfillmentOrders.filter(o => o.courierCity).map(o => [o.id, o.courierCity]));
         const orderTypeByOrderId = new Map(fulfillmentOrders.map(o => [o.id, o.orderType]));
-        fulfillmentOrders = rows.map(o => ({
-            ...o,
-            order_date: new Date(o.order_date),
-            courierCity: courierCityByOrderId.get(o.id) || null,
-            orderType: orderTypeByOrderId.get(o.id) || FULFILLMENT_DEFAULT_ORDER_TYPE,
-        }));
+        // Shipping-details fields (row kebab / CoD cell) live only in the UI too, so
+        // they are carried across a refresh the same way. CoD defaults to the order
+        // total less any advance paid - what the rider collects; Pieces to the summed
+        // line-item quantity; Invoice Division to 1 (PostEx's own default).
+        const detailsByOrderId = new Map(fulfillmentOrders.map(o => [o.id,
+            { codAmount: o.codAmount, email: o.email, instructions: o.instructions, pieces: o.pieces, invoiceDivision: o.invoiceDivision, handling: o.handling }]));
+        fulfillmentOrders = rows.map(o => {
+            const carried = detailsByOrderId.get(o.id) || {};
+            return {
+                ...o,
+                order_date: new Date(o.order_date),
+                courierCity: courierCityByOrderId.get(o.id) || null,
+                orderType: orderTypeByOrderId.get(o.id) || FULFILLMENT_DEFAULT_ORDER_TYPE,
+                codAmount: carried.codAmount != null ? carried.codAmount : Math.max(0, (o.total_amount || 0) - (o.advance_amount || 0)),
+                email: carried.email || '',
+                instructions: carried.instructions != null ? carried.instructions : FULFILLMENT_DEFAULT_REMARK,
+                pieces: carried.pieces != null ? carried.pieces : (fulfillmentLineItemCount(o.line_items) || 1),
+                invoiceDivision: carried.invoiceDivision != null ? carried.invoiceDivision : 1,
+                handling: carried.handling || 'Standard',
+            };
+        });
         // Orders that arrived in this refresh have no picked city yet - fill in the ones
         // whose city the already-picked courier recognises.
         autoSelectFulfillmentCourierCities();
@@ -394,6 +417,7 @@ function initOrderFulfillment() {
     // renderFulfillmentPickupAddresses only sets it on (re)populate, not on selection.
     document.getElementById('fulfillmentPickupSelect')?.addEventListener('change', (e) => {
         e.target.title = e.target.selectedOptions[0]?.title || '';
+        updateFulfillmentFulfillBtnState();
     });
 
     document.getElementById('fulfillmentCancelSelectionBtn')?.addEventListener('click', () => {
@@ -402,17 +426,14 @@ function initOrderFulfillment() {
     });
 
     document.getElementById('fulfillmentFulfillBtn')?.addEventListener('click', fulfillSelectedOrders);
-    document.getElementById('fulfillmentBookedPrintBtn')?.addEventListener('click', async () => {
+    document.getElementById('fulfillmentProgressPrintBtn')?.addEventListener('click', async () => {
         try {
-            await printAirwayBillsForOrders(fulfillmentJustBooked);
+            await printAirwayBillsForOrders(fulfillmentProgressOrders);
         } catch (error) {
             showToast(error.message || 'Failed to print airway bills', 'error');
         }
     });
-    document.getElementById('fulfillmentBookedDoneBtn')?.addEventListener('click', () => {
-        fulfillmentJustBooked = [];
-        renderFulfillmentSidePanel();
-    });
+    document.getElementById('fulfillmentProgressDoneBtn')?.addEventListener('click', () => switchView('orderFulfillment'));
 
     document.getElementById('orderFulfillmentExportBtn')?.addEventListener('click', () => {
         showToast('Export not implemented yet', 'info');
@@ -457,7 +478,111 @@ function renderFulfillmentCourierMenu() {
 }
 
 function closeFulfillmentOpenMenus() {
-    document.querySelectorAll('.fulfillment-tags-menu.open, .fulfillment-actions-menu.open').forEach(el => el.classList.remove('open'));
+    document.querySelectorAll('.fulfillment-tags-menu.open').forEach(el => el.classList.remove('open'));
+}
+
+/** "1 x Ruby Camisole Set L", dropping the size for a product with no variants
+ * ("-"). Matches the backend's _order_detail_string label. */
+function fulfillmentLineItemLabel(li) {
+    const size = (li.variant_title || '').trim();
+    const name = li.name || '';
+    return size && size !== '-' ? `${name} ${size}` : name;
+}
+
+function fulfillmentLineItemCount(lineItems) {
+    return (lineItems || []).reduce((sum, li) => sum + (parseInt(li.qty, 10) || 0), 0);
+}
+
+/** The bracketed contents string PostEx/Couriers Next print on the airway bill -
+ * mirrors the backend's _order_detail_string so the modal shows what will be sent. */
+function fulfillmentOrderDetailString(lineItems) {
+    return (lineItems || [])
+        .filter(li => li.name)
+        .map(li => `[ ${li.qty} x ${fulfillmentLineItemLabel(li)} ]`)
+        .join(' ');
+}
+
+/** Per-order shipping details, opened from the row's kebab - the same fields
+ * PostEx's own booking screen has. Fields PostEx has but Couriers Next lacks
+ * ([data-postex-only]) are hidden when that courier is picked. Edits are written
+ * straight onto the order object (browser memory, like courierCity/orderType) and
+ * sent with POST /orders/fulfill, so Save just repaints the row. */
+function openFulfillmentDetailsModal(order) {
+    const modal = document.getElementById('fulfillmentDetailsModal');
+    const form = document.getElementById('fulfillmentDetailsForm');
+    const emailInput = document.getElementById('fulfillmentDetailsEmail');
+    const instructionsInput = document.getElementById('fulfillmentDetailsInstructions');
+    const instructionsLabel = document.getElementById('fulfillmentDetailsInstructionsLabel');
+    const handlingSelect = document.getElementById('fulfillmentDetailsHandling');
+    const piecesInput = document.getElementById('fulfillmentDetailsPieces');
+    const invoiceDivisionInput = document.getElementById('fulfillmentDetailsInvoiceDivision');
+    const pickupInput = document.getElementById('fulfillmentDetailsPickup');
+    const productsEl = document.getElementById('fulfillmentDetailsProducts');
+    const productStringEl = document.getElementById('fulfillmentDetailsProductString');
+    const subtitle = document.getElementById('fulfillmentDetailsSubtitle');
+    const cancelBtn = document.getElementById('fulfillmentDetailsCancelBtn');
+    const closeBtn = document.getElementById('fulfillmentDetailsClose');
+    if (!modal || !form) return;
+
+    const isCouriersNext = fulfillmentSelectedCourier?.id === 'couriers_next';
+    modal.querySelectorAll('[data-postex-only]').forEach(el => { el.hidden = isCouriersNext; });
+    instructionsLabel.textContent = isCouriersNext ? 'Special Instructions' : 'Remarks';
+
+    const pickupSelect = document.getElementById('fulfillmentPickupSelect');
+    pickupInput.value = (pickupSelect && !pickupSelect.disabled && pickupSelect.selectedOptions[0]?.textContent) || '—';
+
+    const lineItems = order.line_items || [];
+    productsEl.innerHTML = lineItems.length
+        ? lineItems.map(li => `<li>${escapeHtml(String(li.qty))} &times; ${escapeHtml(fulfillmentLineItemLabel(li))}</li>`).join('')
+        : '<li class="fulfillment-details-empty">No products on this order</li>';
+    productStringEl.value = fulfillmentOrderDetailString(lineItems);
+
+    subtitle.textContent = `Order #${order.order_number} · ${order.name}`;
+    emailInput.value = order.email || '';
+    instructionsInput.value = order.instructions || '';
+    handlingSelect.value = order.handling || 'Standard';
+    piecesInput.value = order.pieces ?? 1;
+    invoiceDivisionInput.value = order.invoiceDivision ?? 1;
+    // Show the "- FRAGILE" bullet live while the modal is open; the backend also
+    // adds it at send time (idempotently) for any booking that skips this modal.
+    syncFragileLine();
+    modal.classList.add('active');
+    setTimeout(() => emailInput.focus(), 0);
+
+    function syncFragileLine() {
+        const lines = instructionsInput.value.split('\n').filter(l => l.trim().toUpperCase() !== '- FRAGILE');
+        if (handlingSelect.value === 'Fragile') {
+            while (lines.length && !lines[lines.length - 1].trim()) lines.pop();
+            lines.push('- FRAGILE');
+        }
+        instructionsInput.value = lines.join('\n');
+    }
+
+    const close = () => {
+        modal.classList.remove('active');
+        form.removeEventListener('submit', onSubmit);
+        handlingSelect.removeEventListener('change', syncFragileLine);
+        cancelBtn.removeEventListener('click', close);
+        closeBtn.removeEventListener('click', close);
+        modal.removeEventListener('click', onBackdrop);
+    };
+    const onSubmit = (e) => {
+        e.preventDefault();
+        order.email = emailInput.value.trim();
+        order.instructions = instructionsInput.value.trim();
+        order.handling = handlingSelect.value;
+        order.pieces = Math.max(1, parseInt(piecesInput.value, 10) || 1);
+        order.invoiceDivision = Math.max(1, parseInt(invoiceDivisionInput.value, 10) || 1);
+        close();
+        renderFulfillmentTable();
+    };
+    const onBackdrop = (e) => { if (e.target === modal) close(); };
+
+    form.addEventListener('submit', onSubmit);
+    handlingSelect.addEventListener('change', syncFragileLine);
+    cancelBtn.addEventListener('click', close);
+    closeBtn.addEventListener('click', close);
+    modal.addEventListener('click', onBackdrop);
 }
 
 function getFulfillmentFilteredOrders() {
@@ -552,10 +677,12 @@ function renderFulfillmentRow(order) {
             <td class="fulfillment-city-fixed" title="Entered by the customer">${escapeHtml(order.city)}</td>
             <td class="fulfillment-courier-city-cell" data-courier-city-cell></td>
             <td class="fulfillment-order-type-cell">${renderFulfillmentOrderTypeCell(order)}</td>
+            <td class="fulfillment-col-cod">
+                <input type="number" class="fulfillment-cod-input" min="0" step="0.01" value="${escapeHtml(String(order.codAmount ?? 0))}">
+            </td>
             <td class="fulfillment-risk-cell">${renderFulfillmentRiskCell(order)}</td>
             <td class="fulfillment-actions-cell">
-                <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="More actions">&#8942;</button>
-                <div class="fulfillment-actions-menu"></div>
+                <button type="button" class="fulfillment-kebab-btn" data-actions-toggle title="Shipping details">&#8942;</button>
             </td>
         </tr>
     `;
@@ -622,29 +749,31 @@ function attachFulfillmentRowHandlers(tbody) {
         const courierCityCell = tr.querySelector('[data-courier-city-cell]');
         if (courierCityCell) courierCityCell.appendChild(createFulfillmentCourierCityDropdown(order));
 
-        // No re-render: the <select> already shows the new value, and redrawing the table
-        // would close the row's menus for nothing.
+        // No re-render: the <select>/<input> already shows the new value, and redrawing
+        // the table would close the row's menus for nothing.
         tr.querySelector('[data-order-type-select]')?.addEventListener('change', (e) => {
             order.orderType = e.target.value;
+        });
+        tr.querySelector('.fulfillment-cod-input')?.addEventListener('change', (e) => {
+            order.codAmount = Math.max(0, parseFloat(e.target.value) || 0);
+            e.target.value = String(order.codAmount);
         });
 
         tr.querySelector('[data-actions-toggle]')?.addEventListener('click', (e) => {
             e.stopPropagation();
-            const menu = tr.querySelector('.fulfillment-actions-menu');
-            const isOpen = menu.classList.contains('open');
-            closeFulfillmentOpenMenus();
-            if (!isOpen) menu.classList.add('open');
+            openFulfillmentDetailsModal(order);
         });
     });
 }
 
-/** Books every selected order with the picked courier via POST /orders/fulfill.
+/** Books every selected order with the picked courier via POST /orders/fulfill, streaming
+ * the result onto the Order Fulfillment progress screen row by row.
  *
  * Confirms first: unlike everything else on this screen, this creates real shipments the
  * courier will come and collect, so an accidental click must not dispatch a table full of
- * parcels. The backend books orders one at a time and reports each outcome separately, so
+ * parcels. The backend books orders one at a time and reports each outcome as it lands, so
  * a partial success is the normal case to render, not an edge case - successfully booked
- * orders are dropped from the list and the failures stay put with their reasons. */
+ * orders are dropped from the underlying list, the failures keep their reason on screen. */
 async function fulfillSelectedOrders() {
     if (fulfillmentFulfilling) return;
     if (!fulfillmentSelectedCourier) {
@@ -691,124 +820,205 @@ async function fulfillSelectedOrders() {
     });
     if (!confirmed) return;
 
-    const fulfillBtn = document.getElementById('fulfillmentFulfillBtn');
+    // Snapshot the display fields now - a booked order is dropped from fulfillmentOrders
+    // as its result lands, so its name/city would be gone by the next progress re-render.
+    fulfillmentProgressOrders = selectedOrders.map(o => ({
+        id: o.id,
+        order_number: o.order_number,
+        name: o.name,
+        city: o.city,
+        courier: fulfillmentSelectedCourier.name,
+        state: 'pending',
+        tracking_number: null,
+        error: null,
+    }));
+    fulfillmentProgressOrders[0].state = 'booking';
+    fulfillmentProgressPhase = 'booking';
     fulfillmentFulfilling = true;
-    if (fulfillBtn) {
-        fulfillBtn.disabled = true;
-        fulfillBtn.textContent = 'Booking…';
-    }
+    switchView('orderFulfillmentProgress');
+    renderFulfillmentProgress();
 
+    const courierName = fulfillmentSelectedCourier.name;
     try {
-        const result = await apiJson('/orders/fulfill', {
-            method: 'POST',
+        for await (const event of apiJsonStream('/orders/fulfill', {
             body: {
                 courier: fulfillmentSelectedCourier.id,
                 pickup_address_code: pickupAddressCode,
-                orders: selectedOrders.map(o => ({ order_id: o.id, courier_city: o.courierCity, order_type: o.orderType }))
+                orders: selectedOrders.map(o => ({
+                    order_id: o.id,
+                    courier_city: o.courierCity,
+                    order_type: o.orderType,
+                    cod_amount: o.codAmount,
+                    customer_email: o.email || null,
+                    instructions: o.instructions || null,
+                    pieces: o.pieces,
+                    invoice_division: o.invoiceDivision,
+                    handling: o.handling,
+                })),
             },
-            fallback: 'Failed to fulfill orders'
-        });
-
-        const bookedResults = result.results.filter(r => r.ok);
-        const booked = new Set(bookedResults.map(r => r.order_id));
-        fulfillmentOrders = fulfillmentOrders.filter(o => !booked.has(o.id));
-        booked.forEach(id => fulfillmentSelectedIds.delete(id));
-
-        // courier is per-batch (fulfillmentSelectedCourier), not per-result, since the
-        // booking request only ever names one courier for the whole selection. The airway
-        // bill itself is resolved live from tracking_number by printAirwayBillsForOrders,
-        // not stored here.
-        fulfillmentJustBooked = bookedResults.map(r => ({
-            id: r.order_id,
-            order_number: r.order_number,
-            tracking_number: r.tracking_number,
-            courier: fulfillmentSelectedCourier.name,
-        }));
-
-        const failures = result.results.filter(r => !r.ok);
-        if (failures.length === 0) {
-            showToast(`Booked ${result.booked_count} order(s) with ${fulfillmentSelectedCourier.name}`, 'success');
-        } else {
-            // Only the first couple of reasons - a long failure list is unreadable as a toast,
-            // and each failed row stays on screen to be retried anyway.
-            const detail = failures.slice(0, 2).map(f => `#${f.order_number}: ${f.error}`).join('; ');
-            showToast(
-                `Booked ${result.booked_count}, failed ${result.failed_count}. ${detail}${failures.length > 2 ? '…' : ''}`,
-                result.booked_count > 0 ? 'info' : 'error'
-            );
-        }
-
-        renderFulfillmentFilterOptions();
-        renderFulfillmentTable();
-        if (fulfillmentJustBooked.length > 0) {
-            printAirwayBillsForOrders(fulfillmentJustBooked).catch((error) => {
-                console.error('Error printing airway bills:', error);
-            });
+            fallback: 'Failed to fulfill orders',
+        })) {
+            if (event.type === 'order') applyFulfillmentProgressResult(event.result);
+            else if (event.type === 'shopify_sync') fulfillmentProgressPhase = 'shopify_sync';
+            renderFulfillmentProgress();
         }
     } catch (error) {
         console.error('Error fulfilling orders:', error);
         showToast(error.message || 'Failed to fulfill orders', 'error');
+        // The connection dropped mid-run - anything not yet resolved never got a booking.
+        fulfillmentProgressOrders.forEach(o => {
+            if (o.state === 'pending' || o.state === 'booking') {
+                o.state = 'fail';
+                o.error = o.error || 'Fulfillment interrupted - not booked';
+            }
+        });
     } finally {
         fulfillmentFulfilling = false;
-        if (fulfillBtn) {
-            fulfillBtn.disabled = false;
-            fulfillBtn.innerHTML = '<i data-lucide="check-circle-2"></i> Fulfill Order';
-            if (window.lucide) lucide.createIcons();
-        }
+        fulfillmentProgressPhase = 'done';
+        renderFulfillmentProgress();
     }
+
+    const booked = fulfillmentProgressOrders.filter(o => o.state === 'ok').length;
+    const failed = fulfillmentProgressOrders.filter(o => o.state === 'fail').length;
+    showToast(
+        failed === 0
+            ? `Booked ${booked} order(s) with ${courierName}`
+            : `Booked ${booked}, failed ${failed}`,
+        failed === 0 ? 'success' : (booked > 0 ? 'info' : 'error')
+    );
+}
+
+/** Fold one streamed booking outcome into the progress list, drop a booked order from the
+ * working set, and move the next still-pending row to "booking". */
+function applyFulfillmentProgressResult(result) {
+    const entry = fulfillmentProgressOrders.find(o => o.id === result.order_id);
+    if (entry) {
+        entry.state = result.ok ? 'ok' : 'fail';
+        entry.tracking_number = result.tracking_number || null;
+        entry.error = result.error || null;
+    }
+    if (result.ok) {
+        fulfillmentOrders = fulfillmentOrders.filter(o => o.id !== result.order_id);
+        fulfillmentSelectedIds.delete(result.order_id);
+    }
+    const next = fulfillmentProgressOrders.find(o => o.state === 'pending');
+    if (next) next.state = 'booking';
+}
+
+const FULFILLMENT_PROGRESS_STATE_META = {
+    pending: { badge: 'Pending', icon: 'circle' },
+    booking: { badge: 'Booking…', icon: 'loader' },
+    ok: { badge: 'Fulfilled', icon: 'check-circle-2' },
+    fail: { badge: 'Failed', icon: 'x-circle' },
+};
+
+function renderFulfillmentProgressRow(o) {
+    const meta = FULFILLMENT_PROGRESS_STATE_META[o.state] || FULFILLMENT_PROGRESS_STATE_META.pending;
+    const detail = o.state === 'fail'
+        ? `<span class="fulfillment-progress-row-error" title="${escapeHtml(o.error || 'Failed')}">${escapeHtml(o.error || 'Failed')}</span>`
+        : o.tracking_number
+            ? `<span class="fulfillment-progress-row-tracking">${escapeHtml(o.tracking_number)}</span>`
+            : '';
+    const awbBtn = orderHasAirwayBill(o)
+        ? `<button type="button" class="fulfillment-progress-awb-btn" data-awb-order-id="${escapeHtml(o.id)}"><i data-lucide="file-down"></i> Airway Bill</button>`
+        : '';
+    return `
+        <div class="fulfillment-progress-row" data-state="${o.state}">
+            <span class="fulfillment-progress-row-icon"><i data-lucide="${meta.icon}"></i></span>
+            <div class="fulfillment-progress-row-main">
+                <span class="fulfillment-progress-row-order">#${escapeHtml(String(o.order_number))}</span>
+                <span class="fulfillment-progress-row-sub">${escapeHtml([o.name, o.city].filter(Boolean).join(' · '))}</span>
+            </div>
+            <div class="fulfillment-progress-row-status">
+                <span class="fulfillment-progress-badge fulfillment-progress-badge--${o.state}">${meta.badge}</span>
+                ${detail}
+            </div>
+            ${awbBtn}
+        </div>
+    `;
+}
+
+/** Paints the whole progress screen from fulfillmentProgressOrders + fulfillmentProgressPhase. */
+function renderFulfillmentProgress() {
+    const total = fulfillmentProgressOrders.length;
+    const ok = fulfillmentProgressOrders.filter(o => o.state === 'ok').length;
+    const failed = fulfillmentProgressOrders.filter(o => o.state === 'fail').length;
+    const done = fulfillmentProgressPhase === 'done';
+
+    const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    setText('fulfillmentProgressTotal', total);
+    setText('fulfillmentProgressCompleted', ok);
+    setText('fulfillmentProgressFailed', failed);
+    setText('fulfillmentProgressRemaining', total - ok - failed);
+    setText('fulfillmentProgressCourier', fulfillmentProgressOrders[0] ? `via ${fulfillmentProgressOrders[0].courier}` : '');
+
+    const pill = document.getElementById('fulfillmentProgressStatusPill');
+    if (pill) {
+        pill.textContent = fulfillmentProgressPhase === 'shopify_sync' ? 'Updating Shopify…'
+            : done ? (failed ? 'Completed with errors' : 'Fulfillment complete')
+            : 'Live fulfillment in progress';
+        pill.classList.toggle('fulfillment-progress-pill--live', !done);
+        pill.classList.toggle('fulfillment-progress-pill--done', done && failed === 0);
+        pill.classList.toggle('fulfillment-progress-pill--warn', done && failed > 0);
+    }
+
+    const fill = document.getElementById('fulfillmentProgressBarFill');
+    if (fill) fill.style.width = total ? `${Math.round(((ok + failed) / total) * 100)}%` : '0%';
+
+    const list = document.getElementById('fulfillmentProgressList');
+    if (list) {
+        list.innerHTML = fulfillmentProgressOrders.map(renderFulfillmentProgressRow).join('');
+        list.querySelectorAll('[data-awb-order-id]').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const entry = fulfillmentProgressOrders.find(o => o.id === btn.dataset.awbOrderId);
+                if (!entry) return;
+                try {
+                    await printAirwayBillsForOrders([entry]);
+                } catch (error) {
+                    showToast(error.message || 'Failed to print airway bill', 'error');
+                }
+            });
+        });
+    }
+
+    const printBtn = document.getElementById('fulfillmentProgressPrintBtn');
+    if (printBtn) printBtn.disabled = !fulfillmentProgressOrders.some(orderHasAirwayBill);
+    const doneBtn = document.getElementById('fulfillmentProgressDoneBtn');
+    if (doneBtn) doneBtn.disabled = !done;
+
+    if (window.lucide) lucide.createIcons();
+}
+
+/** Fulfill stays disabled until every input POST /orders/fulfill needs is set: a courier,
+ * a pickup identity, at least one selected order, and a courier city on every one of them.
+ * Mirrors the guard checks in fulfillSelectedOrders so the button never offers an action
+ * that would only toast an error, and its title spells out what is still missing. */
+function updateFulfillmentFulfillBtnState() {
+    const btn = document.getElementById('fulfillmentFulfillBtn');
+    if (!btn) return;
+    const selectedOrders = fulfillmentOrders.filter(o => fulfillmentSelectedIds.has(o.id));
+    const missingCity = selectedOrders.filter(o => !o.courierCity);
+    let reason = '';
+    if (fulfillmentFulfilling) reason = 'Booking in progress…';
+    else if (!fulfillmentSelectedCourier) reason = 'Select a courier first';
+    else if (!document.getElementById('fulfillmentPickupSelect')?.value) reason = 'Select a pickup location first';
+    else if (selectedOrders.length === 0) reason = 'Select at least one order';
+    else if (missingCity.length > 0) {
+        reason = `Pick a courier city for ${missingCity.length === 1
+            ? `order #${missingCity[0].order_number}` : `${missingCity.length} orders`} first`;
+    }
+    btn.disabled = !!reason;
+    btn.title = reason;
 }
 
 function renderFulfillmentSidePanel() {
-    const empty = document.getElementById('fulfillmentSidePanelEmpty');
     const content = document.getElementById('fulfillmentSidePanelContent');
-    const booked = document.getElementById('fulfillmentSidePanelBooked');
     const count = fulfillmentSelectedIds.size;
-
-    // A fresh selection always wins back the panel from the post-fulfill "Booked" state.
-    if (count > 0) fulfillmentJustBooked = [];
-
-    if (count === 0 && fulfillmentJustBooked.length > 0) {
-        if (empty) empty.style.display = 'none';
-        if (content) content.style.display = 'none';
-        if (booked) booked.style.display = 'flex';
-        renderFulfillmentBookedPanel();
-        return;
-    }
-    if (booked) booked.style.display = 'none';
-
-    if (count === 0) {
-        if (empty) empty.style.display = 'none';
-        if (content) content.style.display = 'none';
-        return;
-    }
-
-    if (empty) empty.style.display = 'none';
-    if (content) content.style.display = 'flex';
+    if (content) content.style.display = count === 0 ? 'none' : 'flex';
+    if (count === 0) return;
 
     const orderIdEl = document.getElementById('fulfillmentSidePanelOrderId');
     if (orderIdEl) orderIdEl.textContent = count === 1 ? '1 order selected' : `${count} orders selected`;
-}
-
-/** Renders the post-fulfill "Booked" state: the list of just-booked orders, one grouped
- * Print Airway Bills button covering all of them (see printAirwayBillsForOrders), and a
- * Done button that dismisses the panel. */
-function renderFulfillmentBookedPanel() {
-    const title = document.getElementById('fulfillmentSidePanelBookedTitle');
-    const list = document.getElementById('fulfillmentSidePanelBookedList');
-    if (title) {
-        title.textContent = fulfillmentJustBooked.length === 1
-            ? 'Booked 1 order' : `Booked ${fulfillmentJustBooked.length} orders`;
-    }
-    if (list) {
-        list.innerHTML = fulfillmentJustBooked.map(o => `
-            <div class="fulfillment-booked-row">
-                <span class="fulfillment-booked-row-order">#${escapeHtml(String(o.order_number))}</span>
-                <span class="fulfillment-booked-row-tracking">${escapeHtml(o.tracking_number || '-')}</span>
-            </div>
-        `).join('');
-    }
-    const printBtn = document.getElementById('fulfillmentBookedPrintBtn');
-    if (printBtn) printBtn.disabled = !fulfillmentJustBooked.some(orderHasAirwayBill);
 }
 
 function renderFulfillmentTable() {
@@ -826,11 +1036,11 @@ function renderFulfillmentTable() {
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
         if (fulfillmentLoading) {
-            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">Loading unfulfilled orders…</td></tr>';
+            tbody.innerHTML = '<tr><td colspan="12" class="empty-state">Loading unfulfilled orders…</td></tr>';
         } else {
             tbody.innerHTML = filtered.length
                 ? filtered.map(renderFulfillmentRow).join('')
-                : '<tr><td colspan="11" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
+                : '<tr><td colspan="12" class="empty-state">No unfulfilled orders match these filters.</td></tr>';
             attachFulfillmentRowHandlers(tbody);
             if (window.lucide) lucide.createIcons();
         }
@@ -848,6 +1058,7 @@ function renderFulfillmentTable() {
     if (selectedCountLabel) selectedCountLabel.textContent = `${fulfillmentSelectedIds.size} selected`;
 
     renderFulfillmentSidePanel();
+    updateFulfillmentFulfillBtnState();
 }
 
 async function renderOrderFulfillmentView() {
