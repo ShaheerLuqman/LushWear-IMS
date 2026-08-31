@@ -384,7 +384,9 @@ async def create_order(
         "invoiceDivision": 0,
         "invoicePayment": int(round(invoice_payment)),
         "items": items,
-        "orderRefNumber": order_ref_number,
+        # Prefixed with # so PostEx prints "#4807" on the airway bill; the CSV reconcile
+        # strips it again via normalize_order_number.
+        "orderRefNumber": f"#{order_ref_number}",
         # Required in practice despite the guide marking it Optional - see
         # fetch_pickup_addresses.
         "pickupAddressCode": pickup_address_code,

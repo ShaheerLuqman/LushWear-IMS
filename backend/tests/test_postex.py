@@ -188,7 +188,7 @@ class TestCreateOrder:
         assert tracking == "CX123456789012"
         assert captured["headers"]["token"] == "tok"
         assert captured["url"].endswith("/v3/create-order")
-        assert captured["json"]["orderRefNumber"] == "4807"
+        assert captured["json"]["orderRefNumber"] == "#4807"
         assert captured["json"]["cityName"] == "Lahore"
         assert captured["json"]["orderType"] == "Normal"
         assert captured["json"]["items"] == 2
