@@ -382,6 +382,33 @@ class TestCouriersNextAirwayBillsRoute:
         assert r.status_code == 400
 
 
+class TestOrderDetailString:
+    """The airway-bill contents line built for courier bookings (fulfill_orders)."""
+
+    def _fn(self):
+        from app.routes.orders import _order_detail_string
+        return _order_detail_string
+
+    def test_formats_qty_name_and_size_in_brackets(self):
+        assert self._fn()([
+            {"name": "Ruby Camisole Set", "variant_title": "L", "qty": 1},
+        ]) == "[ 1 x Ruby Camisole Set L ]"
+
+    def test_drops_the_size_when_the_product_has_no_variants(self):
+        assert self._fn()([
+            {"name": "Cotton Eye Mask", "variant_title": "-", "qty": 2},
+        ]) == "[ 2 x Cotton Eye Mask ]"
+
+    def test_joins_multiple_lines_with_a_space(self):
+        assert self._fn()([
+            {"name": "Ruby Camisole Set", "variant_title": "L", "qty": 1},
+            {"name": "Silk Robe", "variant_title": "M", "qty": 2},
+        ]) == "[ 1 x Ruby Camisole Set L ] [ 2 x Silk Robe M ]"
+
+    def test_empty_line_items_is_none(self):
+        assert self._fn()([]) is None
+
+
 class TestGeneratePackagingList:
     """The PDF groups items by each product's shopify_products.collection - see
     test_packaging_list.py for the aggregation/grouping unit tests."""

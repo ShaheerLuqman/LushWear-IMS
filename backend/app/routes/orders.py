@@ -429,6 +429,22 @@ _FULFILL_TRACKING_URLS = {
 _COURIERS_NEXT_ORIGIN = "Karachi"
 
 
+def _order_detail_string(line_items: List[dict]) -> Optional[str]:
+    """The per-parcel contents line the courier prints on the airway bill, one
+    "[ <qty> x <product> <size> ]" token per line. `variant_title` is "-" for a
+    product with no variants, so the size is dropped there. Capped at 250 chars
+    to stay within what the courier APIs accept for the field."""
+    parts = []
+    for li in line_items:
+        name = li.get("name")
+        if not name:
+            continue
+        size = (li.get("variant_title") or "").strip()
+        label = f"{name} {size}" if size and size != "-" else name
+        parts.append(f"[ {li.get('qty')} x {label} ]")
+    return " ".join(parts)[:250] or None
+
+
 @router.post("/fulfill", response_model=FulfillOrdersResult)
 async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_id)):
     """Book the selected orders with the courier and record the tracking numbers.
@@ -532,9 +548,7 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
             # paid, so a fully-prepaid order books at 0 rather than being charged twice.
             cod_amount = max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0))
             items = sum(int(li.get("qty") or 0) for li in line_items) or 1
-            order_detail = ", ".join(
-                f"{li.get('name')} x{li.get('qty')}" for li in line_items if li.get("name")
-            )[:250] or None
+            order_detail = _order_detail_string(line_items)
 
             try:
                 if body.courier == "postex":
