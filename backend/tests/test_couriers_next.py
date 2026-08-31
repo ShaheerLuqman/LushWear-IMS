@@ -139,7 +139,7 @@ class TestFetchShippers:
                 "city": "Karachi",
             }
         },
-        "shipper": [
+        "profiles": [
             {
                 "profile_id": "20001",
                 "shipper_name": "Scensational",
@@ -190,7 +190,7 @@ class TestFetchShippers:
         the flat shape too rather than reading client_code as missing."""
         self._install(monkeypatch, {
             "default_profile": {"client_code": "1663", "city": "Karachi"},
-            "shipper": [{"profile_id": "20001", "shipper_name": "Scensational"}],
+            "profiles": [{"profile_id": "20001", "shipper_name": "Scensational"}],
         })
 
         client_code, shippers = asyncio.run(couriers_next.fetch_shippers("auth-key"))
@@ -206,7 +206,7 @@ class TestFetchShippers:
     def test_shippers_without_a_profile_id_are_skipped(self, monkeypatch):
         self._install(monkeypatch, {
             "default_profile": {"client_code": "1663"},
-            "shipper": [{"shipper_name": "No profile"}, {"profile_id": "20002", "shipper_name": "Ok"}],
+            "profiles": [{"shipper_name": "No profile"}, {"profile_id": "20002", "shipper_name": "Ok"}],
         })
 
         _, shippers = asyncio.run(couriers_next.fetch_shippers("auth-key"))
