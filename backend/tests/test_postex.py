@@ -1,9 +1,19 @@
 import asyncio
+import io
 
 import httpx
 import pytest
+from pypdf import PdfReader, PdfWriter
 
 from app.services import postex
+
+
+def _tiny_pdf() -> bytes:
+    writer = PdfWriter()
+    writer.add_blank_page(width=72, height=72)
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
 
 
 class TestParseFloat:
@@ -283,11 +293,29 @@ class TestGetAirwayBill:
         assert captured["headers"]["token"] == "tok"
         assert captured["params"]["trackingNumbers"] == "CX-1,CX-2"
 
-    def test_more_than_ten_tracking_numbers_is_rejected_before_calling(self):
-        client = self._client()
+    def test_a_selection_within_one_call_is_sent_as_a_single_request(self):
+        captured = {}
+        client = self._client(captured=captured)
 
-        with pytest.raises(postex.PostexInvoiceError, match="10"):
-            asyncio.run(postex.get_airway_bill(client, "tok", [f"CX-{i}" for i in range(11)]))
+        asyncio.run(postex.get_airway_bill(client, "tok", [f"CX-{i}" for i in range(50)]))
+
+        assert captured["params"]["trackingNumbers"].count(",") == 49
+
+    def test_a_large_selection_is_chunked_and_merged_into_one_pdf(self):
+        calls = []
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                calls.append(params["trackingNumbers"])
+                return type("R", (), {"status_code": 200, "content": _tiny_pdf(),
+                                      "json": lambda self: (_ for _ in ()).throw(ValueError())})()
+
+        pdf = asyncio.run(postex.get_airway_bill(
+            _Client(), "tok", [f"CX-{i}" for i in range(postex._INVOICE_TRACKING_PER_CALL + 5)]))
+
+        assert len(calls) == 2
+        assert pdf.startswith(b"%PDF")
+        assert len(PdfReader(io.BytesIO(pdf)).pages) == 2
 
     def test_no_tracking_numbers_is_rejected(self):
         client = self._client()

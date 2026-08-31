@@ -66,6 +66,9 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **PostEx airway bills in one PDF** — backend chunks get-invoice at 100/call and merges; selection cap raised from 10 to 500, one tab instead of many.
+- [x] **Courier Payment Report defaults to last month** — first-load pickup-date range is now all of the previous calendar month instead of this-month-to-date.
+- [x] **Courier Payment Report courier default actually applies** — the PostEx-only default filter now refetches once the courier list is known, so the grid matches the filter chip instead of showing every courier.
 - [x] **Per-order shipping details on fulfillment** — row kebab opens a PostEx-style modal (email, handling, pieces, invoice division, remarks, read-only pickup/products); PostEx-only fields hidden for Couriers Next; Fragile handling prefixes the courier remarks note; separate inline CoD column defaults to total minus advance; values flow to the booking.
 - [x] **Live order-fulfillment progress screen** — Fulfill Order now opens a dedicated screen that fills in row-by-row as bookings stream back, with per-order tracking numbers and airway-bill downloads; fulfill button stays disabled until courier, pickup, and every courier city are set.
 - [x] **Per-ledger expenses in Month Summary** — removed `is_party`/`report_category`; every Expense-type ledger now shows its own Month Summary line by name, no manual tagging.

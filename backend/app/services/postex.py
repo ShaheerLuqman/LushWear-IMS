@@ -8,6 +8,7 @@ normalised here rather than at the call site. The booking section at the bottom 
 the live Create Order API behind the Order Fulfillment view.
 """
 
+import asyncio
 import csv
 import io
 import logging
@@ -15,6 +16,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
+from pypdf import PdfReader, PdfWriter
 
 logger = logging.getLogger("app.postex")
 
@@ -291,8 +293,12 @@ class PostexInvoiceError(Exception):
     """The airway bill PDF could not be fetched for one or more tracking numbers."""
 
 
-# Their get-invoice note: "PDF will be generated for a maximum of 10 tracking numbers."
-MAX_AIRWAY_BILL_TRACKING_NUMBERS = 10
+# get-invoice's note says "maximum of 10 tracking numbers", but the live endpoint honours
+# far more in one call and returns them in one PDF. trackingNumbers is a single
+# comma-joined query param, so the real bound is URL length - 100 leaves ample headroom
+# (track-bulk-order, which repeats the param instead, only 414s near 400). Selections above
+# this are fetched in concurrent chunks and merged into one PDF here.
+_INVOICE_TRACKING_PER_CALL = 100
 
 
 def normalize_phone(value: Optional[str]) -> Optional[str]:
@@ -430,19 +436,12 @@ async def create_order(
     return str(tracking_number)
 
 
-async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]) -> bytes:
-    """Fetch the printable airway bill PDF for one or more booked orders.
-
-    Unlike every other endpoint in this file, get-invoice returns the PDF bytes directly
-    rather than their usual {statusCode, statusMessage, dist} envelope - a failure comes
-    back as a non-200 with a plain-text or JSON body instead.
-    """
-    if not tracking_numbers:
-        raise PostexInvoiceError("No tracking number given")
-    if len(tracking_numbers) > MAX_AIRWAY_BILL_TRACKING_NUMBERS:
-        raise PostexInvoiceError(
-            f"PostEx generates airway bills for at most {MAX_AIRWAY_BILL_TRACKING_NUMBERS} tracking numbers at a time")
-
+async def _fetch_invoice_pdf(
+    client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]
+) -> bytes:
+    """One get-invoice call. Unlike every other endpoint in this file it returns the PDF
+    bytes directly rather than the usual {statusCode, statusMessage, dist} envelope - a
+    failure comes back as a non-200 with a plain-text or JSON body instead."""
     try:
         response = await client.get(
             f"{_BASE_URL}/v1/get-invoice",
@@ -460,3 +459,31 @@ async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracki
         raise PostexInvoiceError(
             message or f"PostEx rejected the airway bill request (HTTP {response.status_code})")
     return response.content
+
+
+def _merge_pdfs(pdfs: List[bytes]) -> bytes:
+    writer = PdfWriter()
+    for pdf in pdfs:
+        writer.append(PdfReader(io.BytesIO(pdf)))
+    out = io.BytesIO()
+    writer.write(out)
+    return out.getvalue()
+
+
+async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]) -> bytes:
+    """Fetch the printable airway bill PDF for one or more booked orders, as a single PDF.
+
+    Selections above _INVOICE_TRACKING_PER_CALL are fetched in concurrent chunks and
+    merged so the caller always gets one file.
+    """
+    if not tracking_numbers:
+        raise PostexInvoiceError("No tracking number given")
+
+    chunks = [
+        tracking_numbers[i:i + _INVOICE_TRACKING_PER_CALL]
+        for i in range(0, len(tracking_numbers), _INVOICE_TRACKING_PER_CALL)
+    ]
+    pdfs = await asyncio.gather(*(_fetch_invoice_pdf(client, merchant_token, c) for c in chunks))
+    if len(pdfs) == 1:
+        return pdfs[0]
+    return await asyncio.to_thread(_merge_pdfs, list(pdfs))

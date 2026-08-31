@@ -347,10 +347,10 @@ class TestPostexAirwayBillsRoute:
         r = client.post("/api/orders/postex-airway-bills", json=[])
         assert r.status_code == 400
 
-    def test_a_batch_over_postexs_own_cap_is_rejected(self, make_client):
-        from app.services.postex import MAX_AIRWAY_BILL_TRACKING_NUMBERS
+    def test_a_batch_over_the_pdf_cap_is_rejected(self, make_client):
+        from app.routes.orders import MAX_PDF_BATCH_ORDERS
         client = make_client({})
-        order_ids = [f"id-{i}" for i in range(MAX_AIRWAY_BILL_TRACKING_NUMBERS + 1)]
+        order_ids = [f"id-{i}" for i in range(MAX_PDF_BATCH_ORDERS + 1)]
         r = client.post("/api/orders/postex-airway-bills", json=order_ids)
         assert r.status_code == 400
 

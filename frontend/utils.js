@@ -107,9 +107,6 @@ function navigateTab(tab, url) {
     tab.location.href = url;
 }
 
-// PostEx's own get-invoice cap - more than this per call is rejected server-side.
-const POSTEX_AIRWAY_BILL_BATCH_SIZE = 10;
-
 function airwayBillsPdfFilename() {
     const d = new Date();
     const p = (n) => String(n).padStart(2, '0');
@@ -118,11 +115,11 @@ function airwayBillsPdfFilename() {
 
 /** Prints/downloads one or more orders' airway bills as a single grouped action - no
  * per-order button, this is the only entry point. Both couriers combine every requested
- * order into one document: PostEx's get-invoice PDF covers however many tracking numbers
- * are given (chunked here at its own 10-per-call cap, one tab per chunk); Couriers Next's
- * invoicehtml.php accepts a comma-separated order_id list and renders every one on the
- * same page (resolved live through the backend, since only GetOrderList.php - not any
- * tracking lookup - ever returns their internal order_id again after booking).
+ * order into one document: the backend returns every PostEx order's bill as one merged
+ * PDF (chunking get-invoice calls as needed); Couriers Next's invoicehtml.php accepts a
+ * comma-separated order_id list and renders every one on the same page (resolved live
+ * through the backend, since only GetOrderList.php - not any tracking lookup - ever
+ * returns their internal order_id again after booking).
  *
  * Every destination tab is opened blank up front, before any await, and navigated once
  * its URL is known (see openBlankTab/navigateTab) - exactly one tab per document, opened
@@ -140,24 +137,20 @@ async function printAirwayBillsForOrders(orders) {
     const postexOrders = eligible.filter(o => getCourierDisplayName(o) === 'PostEx');
     const couriersNextOrders = eligible.filter(o => getCourierDisplayName(o) === 'Couriers Next');
 
-    const postexChunks = [];
-    for (let i = 0; i < postexOrders.length; i += POSTEX_AIRWAY_BILL_BATCH_SIZE) {
-        postexChunks.push(postexOrders.slice(i, i + POSTEX_AIRWAY_BILL_BATCH_SIZE));
-    }
     // Opened synchronously, still within this click's call stack, before any fetch starts.
-    const postexTabs = postexChunks.map(() => openBlankTab());
+    const postexTab = postexOrders.length > 0 ? openBlankTab() : null;
     const couriersNextTab = couriersNextOrders.length > 0 ? openBlankTab() : null;
 
-    for (let i = 0; i < postexChunks.length; i++) {
+    if (postexOrders.length > 0) {
         const res = await apiRequest('/orders/postex-airway-bills', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(postexChunks[i].map(o => o.id)),
+            body: JSON.stringify(postexOrders.map(o => o.id)),
             fallback: 'Failed to fetch airway bills'
         });
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
-        navigateTab(postexTabs[i], url);
+        navigateTab(postexTab, url);
         setTimeout(() => window.URL.revokeObjectURL(url), 60000);
     }
 

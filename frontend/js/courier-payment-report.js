@@ -54,14 +54,17 @@ const PAYMENT_PROGRESS_COLORS = {
     remaining: '#7c3aed',
 };
 
-/** Default pickup-date range shown on first load: the 1st of this month through today
- * (local calendar, matching pickupDateKey's own convention) - a sensible "this month so
- * far" starting point rather than an unbounded table. */
+/** Default pickup-date range shown on first load: all of last month (local calendar,
+ * matching pickupDateKey's own convention) - courier payouts land after the pickup
+ * month closes, so last month is the range you actually reconcile against. */
 function defaultCourierPaymentReportDateRange() {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const yyyyMm = `${now.getFullYear()}-${pad(now.getMonth() + 1)}`;
-    return { from: `${yyyyMm}-01`, to: `${yyyyMm}-${pad(now.getDate())}` };
+    const firstOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const y = firstOfLastMonth.getFullYear();
+    const m = firstOfLastMonth.getMonth(); // 0-indexed
+    const lastDay = new Date(y, m + 1, 0).getDate();
+    return { from: `${y}-${pad(m + 1)}-01`, to: `${y}-${pad(m + 1)}-${pad(lastDay)}` };
 }
 
 let courierPaymentReportDateRange = defaultCourierPaymentReportDateRange();
@@ -581,6 +584,7 @@ async function loadCourierPaymentReport() {
     courierPaymentReportCourierFilter?.getSelected()?.forEach((c) => params.append('courier', c));
     courierPaymentReportStatusFilter?.getSelected()?.forEach((s) => params.append('payment_status', s));
 
+    const courierFilterBefore = courierPaymentReportCourierFilter?.getSelected();
     try {
         const rows = await apiJson(`/courier-bills/?${params}`, { fallback: 'Failed to load courier payment report data' });
         courierPaymentReportBills = rows.map(mapCourierBillRow);
@@ -593,6 +597,12 @@ async function loadCourierPaymentReport() {
     }
 
     courierPaymentReportCourierFilter?.refresh();
+    // refresh() can only promote the data-derived default (PostEx alone) to a real
+    // selection once the courier list is known - which is after this first fetch, so the
+    // bills we just loaded ignored it. Refetch once with the now-known selection applied.
+    if (courierFilterBefore == null && courierPaymentReportCourierFilter?.getSelected()?.length) {
+        return loadCourierPaymentReport();
+    }
     renderCourierPaymentReportView();
     if (courierPaymentReportGridApi) courierPaymentReportGridApi.hideOverlay();
 }

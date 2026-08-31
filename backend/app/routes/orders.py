@@ -1751,21 +1751,18 @@ async def get_order(order_id: str, org_id: str = Depends(get_org_id)):
 async def get_postex_airway_bills(order_ids: List[str] = Body(..., embed=False), org_id: str = Depends(get_org_id)):
     """One combined PDF of PostEx airway bills for several booked orders.
 
-    PostEx's get-invoice already returns every requested tracking number's bill in a
-    single PDF - no client-side merge needed. Couriers Next has no equivalent batch
-    endpoint (each order's invoice_link is independent), so the frontend downloads those
-    directly and only routes PostEx orders through this endpoint.
-
-    Capped at postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS (PostEx's own get-invoice limit) -
-    rejected outright rather than silently chunked into multiple PostEx calls, since that
-    would mean multiple PDFs with no single-file way to hand them back as one response.
+    postex.get_airway_bill chunks the tracking numbers across get-invoice calls as needed
+    and merges the results, so any selection up to MAX_PDF_BATCH_ORDERS comes back as one
+    PDF. Couriers Next has no equivalent batch endpoint (each order's invoice_link is
+    independent), so the frontend downloads those directly and only routes PostEx orders
+    through this endpoint.
     """
     if not order_ids:
         raise HTTPException(status_code=400, detail="No orders selected.")
-    if len(order_ids) > postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS:
+    if len(order_ids) > MAX_PDF_BATCH_ORDERS:
         raise HTTPException(
             status_code=400,
-            detail=f"PostEx generates airway bills for at most {postex.MAX_AIRWAY_BILL_TRACKING_NUMBERS} orders at a time.")
+            detail=f"Cannot generate airway bills for more than {MAX_PDF_BATCH_ORDERS} orders at once.")
 
     supabase = get_supabase()
     rows = org_table(supabase, org_id, "shopify_orders").select(
