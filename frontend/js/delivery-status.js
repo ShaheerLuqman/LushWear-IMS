@@ -615,7 +615,7 @@ function showPostExSettlementsModal(data) {
     const num = (v) => Number(v || 0).toFixed(2);
     tbody.innerHTML = rows.length
         ? rows.map(r => `<tr><td>${r.order_number}${r.corrected ? ' <em>(corrected)</em>' : ''}</td><td>${r.folio || '-'}</td><td>${r.order_status}</td>` +
-            `<td>${formatPostExDate(r.reserve_payment_date)}</td><td>${num(r.invoice_payment)}</td>` +
+            `<td>${formatPostExDate(r.settlement_date)}</td><td>${num(r.invoice_payment)}</td>` +
             `<td>${num(r.delivery_charge)}</td><td>${num(r.tax_amount)}</td><td>${num(r.receivable)}</td></tr>`).join('')
         : '<tr><td colspan="8">No orders were ready to settle.</td></tr>';
 

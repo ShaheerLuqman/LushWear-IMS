@@ -180,12 +180,13 @@ WH_SALES_TAX_RATE = 0.02
 _SETTLEABLE_STATUSES = {"delivered", "returned"}
 
 
-def _folio_from_reserve_date(raw: str) -> str:
-    """PostEx's reserve payment date as the d/m/yy folio the CSV upload records by hand.
+def _folio_from_date(raw: str) -> str:
+    """A PostEx payout date as the d/m/yy folio the CSV upload records by hand.
 
-    The two are the same payout batch: across 312 CSV-settled delivered orders the stored
-    folio equalled this date every time. Returns never carry one (0 of 188), so they keep
-    whatever folio they already had.
+    For a delivery that date is reservePaymentDate; for a return it is the Payment Status
+    API's settlementDate. Either way it names the CPR batch the order was paid on, which is
+    what the folio records - verified equal to the stored folio on 312 CSV-settled
+    deliveries and every CSV-settled return checked.
 
     The -API suffix marks the folio as derived here rather than typed against a CPR export,
     so the two sources stay distinguishable in the grid.
@@ -197,12 +198,31 @@ def _folio_from_reserve_date(raw: str) -> str:
     return f"{int(day)}/{int(month)}/{year[2:]}{FOLIO_API_SUFFIX}"
 
 
-def settlement_from_tracking(dist: dict) -> Optional[dict]:
+def parse_payment_status(dist: Optional[dict]) -> dict:
+    """Fold a payment-status response's `dist` into the settled flag and folio.
+
+    The tracking API dates only reserve payments (deliveries); a return's payout shows
+    only here, as settlementDate against the CPR it was netted on. The live response is
+    {settle, settlementDate, cpr1, cpr1Date}, or just {settle: false} before payout - not
+    the {cprNumber_1, cprNumber_2, reservePaymentDate} shape the v4.1.9 guide documents.
+    """
+    d = dist or {}
+    if not d.get("settle"):
+        return {"settled": False, "settlement_date": "", "folio": ""}
+    date = d.get("settlementDate") or d.get("cpr1Date") or ""
+    return {"settled": True, "settlement_date": date, "folio": _folio_from_date(date)}
+
+
+def settlement_from_tracking(dist: dict, payment_status: Optional[dict] = None) -> Optional[dict]:
     """Derive delivery_charge and tax_amount for one order from a tracking response.
 
     Returns None unless PostEx reports a settled terminal status, since the fee is not
     final until then. tax_amount is derived, not reported - callers must record that so
     a later CPR upload can overwrite it with the real withholding.
+
+    payment_status is parse_payment_status()'s output. A return carries no
+    reservePaymentDate, so the caller fetches its payout separately and passes it here;
+    without it a return still derives its charges but stays unsettled with no folio.
     """
     status = str(dist.get("transactionStatus") or "").strip().lower()
     if status not in _SETTLEABLE_STATUSES:
@@ -220,16 +240,25 @@ def settlement_from_tracking(dist: dict) -> Optional[dict]:
         fee = parse_float(dist.get("transactionFee"), 0.0)
         gst = parse_float(dist.get("transactionTax"), 0.0)
     tax = 0.0 if is_return else invoice * (WH_INCOME_TAX_RATE + WH_SALES_TAX_RATE)
+
+    if payment_status is not None:
+        settled = payment_status["settled"]
+        folio = payment_status["folio"]
+        settlement_date = payment_status["settlement_date"]
+    else:
+        reserve_date = dist.get("reservePaymentDate")
+        settled = bool(reserve_date) and not is_return
+        folio = "" if is_return else _folio_from_date(reserve_date)
+        settlement_date = "" if is_return else (reserve_date or "")
+
     return {
         "delivery_charge": round(fee + gst, 2),
         "tax_amount": round(tax, 2),
         "invoice_payment": round(invoice, 2),
         "order_status": "returned" if is_return else "delivered",
-        "reserve_payment_date": dist.get("reservePaymentDate") or "",
-        "folio": _folio_from_reserve_date(dist.get("reservePaymentDate")),
-        # Returns are never reserve-paid (0/840 carry a reservePaymentDate) - their money
-        # comes back as a reversal, so payout confirmation only means anything for deliveries.
-        "settled": True if is_return else bool(dist.get("reservePaymentDate")),
+        "settlement_date": settlement_date,
+        "folio": folio,
+        "settled": settled,
     }
 
 

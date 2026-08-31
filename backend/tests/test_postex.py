@@ -356,6 +356,35 @@ class TestFetchPickupAddresses:
         assert asyncio.run(postex.fetch_pickup_addresses("bad-tok")) == []
 
 
+class TestParsePaymentStatus:
+    """The live payment-status response is {settle, settlementDate, cpr1, cpr1Date}, or
+    just {settle: false} before payout - not the shape the v4.1.9 guide documents."""
+
+    def test_settled_returns_the_folio_from_the_settlement_date(self):
+        result = postex.parse_payment_status({
+            "settle": True,
+            "settlementDate": "2026-05-20T16:07:28.000+0500",
+            "cpr1": "CPR-NCDPI654568",
+            "cpr1Date": "2026-05-20T10:16:53.000+0500",
+        })
+        assert result == {
+            "settled": True,
+            "settlement_date": "2026-05-20T16:07:28.000+0500",
+            "folio": "20/5/26-API",
+        }
+
+    def test_falls_back_to_cpr1_date_when_settlement_date_is_absent(self):
+        result = postex.parse_payment_status(
+            {"settle": True, "cpr1Date": "2026-06-03T10:52:19.000+0500"})
+        assert result["folio"] == "3/6/26-API"
+
+    @pytest.mark.parametrize("dist", [{"settle": False}, {}, None])
+    def test_unpaid_or_empty_is_unsettled_with_no_folio(self, dist):
+        assert postex.parse_payment_status(dist) == {
+            "settled": False, "settlement_date": "", "folio": "",
+        }
+
+
 class TestSettlementFromTracking:
     """Figures below are real rows from a PostEx CPR export, so these assert the
     derivation reproduces the courier's own settlement arithmetic."""
@@ -390,8 +419,29 @@ class TestSettlementFromTracking:
         assert result["delivery_charge"] == 261.28   # CSV SHIPPING_CHARGES + GST
         assert result["tax_amount"] == 0.0           # 40/40 CSV return rows withheld nothing
         assert result["order_status"] == "returned"
-        # Returns are never reserve-paid, so they must not be reported as awaiting payment.
+        # A return's payout is only knowable from the Payment Status API; with none passed
+        # the charges are derived but the row stays unsettled with no folio.
+        assert result["settled"] is False
+
+    def test_returned_payout_comes_from_payment_status(self):
+        result = postex.settlement_from_tracking(
+            self._dist(transactionStatus="Returned", transactionFee=0.0, transactionTax=0.0,
+                       reversalFee=227.20, reversalTax=34.08, reservePaymentDate=None),
+            payment_status=postex.parse_payment_status(
+                {"settle": True, "settlementDate": "2026-05-20T16:07:28.000+0500"}),
+        )
         assert result["settled"] is True
+        assert result["folio"] == "20/5/26-API"
+        assert result["settlement_date"] == "2026-05-20T16:07:28.000+0500"
+
+    def test_payment_status_not_settled_leaves_return_unsettled(self):
+        result = postex.settlement_from_tracking(
+            self._dist(transactionStatus="Returned", reversalFee=227.20, reversalTax=34.08,
+                       reservePaymentDate=None),
+            payment_status=postex.parse_payment_status({"settle": False}),
+        )
+        assert result["settled"] is False
+        assert result["folio"] == ""
 
     def test_zero_cod_delivered_has_no_tax(self):
         result = postex.settlement_from_tracking(self._dist(invoicePayment=0))
@@ -406,7 +456,7 @@ class TestSettlementFromTracking:
     def test_unpaid_settlement_is_reported_unsettled(self):
         result = postex.settlement_from_tracking(self._dist(reservePaymentDate=None))
         assert result["settled"] is False
-        assert result["reserve_payment_date"] == ""
+        assert result["settlement_date"] == ""
 
     def test_a_return_with_no_reversal_fields_yields_zero_rather_than_the_transaction_pair(self):
         # Guards the branch itself: if the return path ever fell back to transactionFee,
@@ -435,11 +485,11 @@ class TestSettlementFromTracking:
         ("not-a-date", ""),
     ])
     def test_folio_formatting(self, raw, expected):
-        assert postex._folio_from_reserve_date(raw) == expected
+        assert postex._folio_from_date(raw) == expected
 
-    def test_returns_derive_no_folio(self):
-        # 0 of 188 CSV-settled returns had a reserve payment date, so there is nothing to
-        # derive - the caller must leave any existing folio alone.
+    def test_returns_derive_no_folio_without_payment_status(self):
+        # A return carries no reservePaymentDate; with no payment-status passed the caller
+        # must leave any existing folio alone.
         result = postex.settlement_from_tracking(self._dist(
             transactionStatus="Returned", reversalFee=227.20, reversalTax=34.08,
             reservePaymentDate=None,

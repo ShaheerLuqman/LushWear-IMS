@@ -62,6 +62,31 @@ async def fetch_all_tracking(numbers, token):
     return out
 
 
+async def fetch_all_payment_status(numbers, token):
+    """payment-status is one call per tracking number - no bulk endpoint - so fan out.
+    Returns postex.parse_payment_status() output keyed by tracking number."""
+    url = "https://api.postex.pk/services/integration/api/order/v1/payment-status/"
+    sem = asyncio.Semaphore(CONCURRENCY)
+    out = {}
+
+    async def one(client, tn):
+        async with sem:
+            r = await client.get(url + tn, headers={"token": token})
+            r.raise_for_status()
+            return tn, r.json()
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        results = await asyncio.gather(*(one(client, t) for t in numbers), return_exceptions=True)
+    for item in results:
+        if isinstance(item, BaseException):
+            print(f"  [warn] payment-status failed: {item}", file=sys.stderr)
+            continue
+        tn, data = item
+        if data.get("statusCode") == "200":
+            out[tn] = postex.parse_payment_status(data.get("dist"))
+    return out
+
+
 def _folio_dates_equal(ours: str, theirs: str) -> bool:
     """True when two folios name the same day in different notations.
 
@@ -115,7 +140,15 @@ def main() -> int:
     numbers = [str(r["tracking_number"]).strip() for r in rows]
     print(f"querying PostEx for {len(numbers)} tracking numbers...")
     live = asyncio.run(fetch_all_tracking(numbers, token))
-    print(f"  returned: {len(live)}\n")
+    print(f"  returned: {len(live)}")
+
+    # Returns carry no reservePaymentDate; their folio and payout come from payment-status.
+    return_numbers = [
+        tn for tn in numbers
+        if str((live.get(tn) or {}).get("transactionStatus") or "").strip().lower() == "returned"
+    ]
+    pay_status = asyncio.run(fetch_all_payment_status(return_numbers, token)) if return_numbers else {}
+    print(f"  payment-status fetched for {len(pay_status)}/{len(return_numbers)} return(s)\n")
 
     buckets = {"delivery_charge": [], "tax_amount": [], "status": [], "unpaid": []}
     missing, pending, checked = [], [], 0
@@ -136,7 +169,8 @@ def main() -> int:
                 "folio": str(r.get("folio") or "").strip(),
             })
             continue
-        derived = postex.settlement_from_tracking(dist)
+        is_return = str(dist.get("transactionStatus") or "").strip().lower() == "returned"
+        derived = postex.settlement_from_tracking(dist, payment_status=pay_status.get(tn) if is_return else None)
         if derived is None:
             status_now = str(dist.get("transactionStatus") or "")
             pending.append((r["order_number"], status_now))
@@ -238,10 +272,12 @@ def main() -> int:
     # API-settled rows have no external truth; verify only that they still agree with today's API.
     drift = []
     for r in api_settled:
-        dist = live.get(str(r["tracking_number"]).strip())
+        tn = str(r["tracking_number"]).strip()
+        dist = live.get(tn)
         if not dist:
             continue
-        derived = postex.settlement_from_tracking(dist)
+        is_return = str(dist.get("transactionStatus") or "").strip().lower() == "returned"
+        derived = postex.settlement_from_tracking(dist, payment_status=pay_status.get(tn) if is_return else None)
         if derived is None:
             continue
         if abs(derived["delivery_charge"] - round(float(r.get("delivery_charge") or 0), 2)) > 0.011 \

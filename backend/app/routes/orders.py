@@ -2539,6 +2539,41 @@ async def _fetch_postex_bulk(
     return results
 
 
+async def _fetch_postex_payment_statuses(
+    tracking_numbers: List[str], postex_token: str
+) -> Dict[str, dict]:
+    """Payment-status for many tracking numbers. There is no bulk endpoint, so this is one
+    request per number, fanned out at the same concurrency as _fetch_postex_bulk. Returns
+    postex.parse_payment_status() output keyed by tracking number; a number that errors is
+    simply absent, and the caller settles it without a folio until the next run."""
+    if not tracking_numbers:
+        return {}
+
+    url = "https://api.postex.pk/services/integration/api/order/v1/payment-status/"
+    semaphore = asyncio.Semaphore(POSTEX_BULK_CONCURRENCY)
+
+    async def fetch_one(client: httpx.AsyncClient, tn: str) -> tuple:
+        async with semaphore:
+            response = await client.get(url + tn, headers={"token": postex_token})
+            response.raise_for_status()
+            return tn, response.json()
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        responses = await asyncio.gather(
+            *(fetch_one(client, tn) for tn in tracking_numbers), return_exceptions=True
+        )
+
+    results: Dict[str, dict] = {}
+    for item in responses:
+        if isinstance(item, BaseException):
+            logger.warning(f"[postex-payment-status] fetch failed: {item}")
+            continue
+        tn, data = item
+        if data.get("statusCode") == "200":
+            results[tn] = postex.parse_payment_status(data.get("dist"))
+    return results
+
+
 @router.get("/{order_id}/delivery-status")
 async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status"), org_id: str = Depends(get_org_id)):
     """Fetch delivery status from courier API. Optionally store in order.delivery_status when save=true."""
@@ -2749,6 +2784,10 @@ async def fetch_postex_settlements(
     postex.settlement_from_tracking) because the API never reports withholding - rows written
     here carry tax_amount_derived so a later CPR CSV upload overrides them with real figures.
 
+    The folio is the payout date: a delivery's reservePaymentDate rides along in the bulk
+    response, while a return's shows only on the per-order Payment Status API, fetched here
+    for the returns in scope.
+
     recheck_derived additionally revisits orders this endpoint already settled, so a fix to
     the derivation can be applied to rows written under the old one. It deliberately never
     touches CSV-settled rows: those carry PostEx's authoritative figures, which a derivation
@@ -2788,6 +2827,22 @@ async def fetch_postex_settlements(
             with_raw=True,
         )
 
+        # A delivery's folio is its reservePaymentDate, already in the bulk response. A
+        # return carries none - its payout, and the CPR date the folio records, show only
+        # on the per-order Payment Status API. Fetch it for the returns that still need it:
+        # unsettled, or settled here earlier before this lookup existed.
+        returned_tracking = []
+        for candidate in candidates:
+            tn = str(candidate["tracking_number"]).strip()
+            raw = (by_tracking.get(tn) or {}).get("_raw") or {}
+            if str(raw.get("transactionStatus") or "").strip().lower() == "returned" and not (
+                candidate.get("is_order_settled") and (candidate.get("folio") or "").strip()
+            ):
+                returned_tracking.append(tn)
+        payment_status_by_tracking = await _fetch_postex_payment_statuses(
+            returned_tracking, org_creds.postex_merchant_token
+        )
+
         settlements = []
         orders_to_upsert = []
         pending = []
@@ -2801,7 +2856,10 @@ async def fetch_postex_settlements(
             if not fetched:
                 not_found.append(order.get("order_number"))
                 continue
-            derived = postex.settlement_from_tracking(fetched.get("_raw") or {})
+            derived = postex.settlement_from_tracking(
+                fetched.get("_raw") or {},
+                payment_status=payment_status_by_tracking.get(tn),
+            )
             if derived is None:
                 pending.append({
                     "order_number": order.get("order_number"),
@@ -2828,7 +2886,8 @@ async def fetch_postex_settlements(
                 unchanged += 1
                 continue
 
-            # Returns carry no reserve payment, so they derive no folio - keep the existing one.
+            # A return whose payout PostEx has not booked to a CPR yet derives no folio -
+            # keep the existing one; the next run fills it once the CPR date is available.
             folio = derived["folio"] or (order.get("folio") or "")
             settlements.append({
                 "corrected": was_settled,
@@ -2836,7 +2895,7 @@ async def fetch_postex_settlements(
                 "tracking_number": tn,
                 "order_status": derived["order_status"],
                 "folio": folio,
-                "reserve_payment_date": derived["reserve_payment_date"],
+                "settlement_date": derived["settlement_date"],
                 "invoice_payment": derived["invoice_payment"],
                 "delivery_charge": dc,
                 "tax_amount": tax,
