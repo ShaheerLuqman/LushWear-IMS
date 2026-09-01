@@ -282,7 +282,23 @@ function initProductsGrid() {
             headerName: 'Variants',
             field: 'variants',
             flex: 3.2,
-            filter: false,
+            filter: 'agTextColumnFilter',
+            filterParams: {
+                filterOptions: ['contains', 'startsWith', 'endsWith'],
+                defaultOption: 'contains'
+            },
+            // Filters on each variant's title, qty and cost (the same fields the
+            // cellRenderer below shows as "Title: qty @ cost") rather than the raw
+            // array field. Commas are stripped so searching "1500" still matches a
+            // "@ 1,500.00" tag.
+            filterValueGetter: (params) => {
+                const variants = params.data?.variants || [];
+                const fallbackCost = params.data?.cost_price;
+                return variants.map(v => {
+                    const cost = v.cost_price ?? fallbackCost;
+                    return `${v.title} ${v.quantity || 0} ${cost != null ? formatAmount(cost).replace(/,/g, '') : ''}`;
+                }).join(' ');
+            },
             sortable: false,
             autoHeight: true,
             wrapText: true,
