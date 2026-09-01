@@ -235,9 +235,6 @@
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         <span id="syncShopifyBtnLabel">Sync from Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
                     </button>
-                    <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Bulk update cost price for selected products">
-                        Bulk update cost price
-                    </button>
                     <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
                         <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded="false" title="More order actions">
                             <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
@@ -1233,29 +1230,6 @@
         </div>
     </div>
 
-    <!-- Bulk Update Cost Price Modal (products) -->
-    <div id="bulkUpdateCostPriceModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Bulk update cost price</h2>
-                <button type="button" class="modal-close" id="closeBulkUpdateCostPriceModal" aria-label="Close">&times;</button>
-            </div>
-            <div class="modal-body">
-                <p class="modal-description">Selected products (select products in the grid using checkboxes):</p>
-                <p id="bulkUpdateCostPriceCount" class="bulk-update-order-count">0 products</p>
-                <textarea id="bulkUpdateCostPriceNames" class="bulk-update-textarea" rows="10" readonly placeholder="Select products in the grid first"></textarea>
-                <div class="form-group" style="margin-top: 16px;">
-                    <label for="bulkUpdateCostPriceValue">New cost price (Rs) *</label>
-                    <input type="number" id="bulkUpdateCostPriceValue" class="form-input" min="0" step="0.01" placeholder="0.00">
-                </div>
-            </div>
-            <div class="bulk-update-actions modal-pinned-footer">
-                <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
-                <button type="button" id="bulkUpdateCostPriceSubmit" class="btn btn-primary">Update cost price</button>
-            </div>
-        </div>
-    </div>
-
     <!-- Edit a product's per-variant cost prices, plus recalculating its orders' cost totals -->
     <div id="editVariantCostsModal" class="modal">
         <div class="modal-content">
@@ -1264,7 +1238,15 @@
                 <button type="button" class="modal-close" id="closeEditVariantCostsModal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="modal-description">Cost price per variant. Blank falls back to the product's own cost price.</p>
+                <p class="modal-description">Blank falls back to the product's own cost price.</p>
+                <label class="ledger-form-toggle" id="editVariantCostsPerVariantWrap">
+                    <input type="checkbox" id="editVariantCostsPerVariantToggle">
+                    <span>Set cost price separately for each variant</span>
+                </label>
+                <div id="editVariantCostsSharedRow" class="form-group">
+                    <label for="editVariantCostsSharedInput">Cost price (Rs)</label>
+                    <input type="number" id="editVariantCostsSharedInput" class="form-input" min="0" step="0.01" placeholder="0.00">
+                </div>
                 <div id="editVariantCostsList" class="edit-variant-costs-list"></div>
 
                 <div class="edit-variant-costs-recalc">
@@ -1273,18 +1255,16 @@
                         Refresh order cost totals from the costs above. Only orders on or after the date below that include this product are updated.
                     </p>
                     <input type="hidden" id="editVariantCostsRecalcProductId" value="">
-                    <div class="edit-variant-costs-recalc-row">
-                        <div class="form-group">
-                            <label for="editVariantCostsRecalcCreatedAfter">Update orders created on or after *</label>
-                            <input type="datetime-local" id="editVariantCostsRecalcCreatedAfter" class="form-input" required>
-                        </div>
-                        <button type="button" id="editVariantCostsRecalcSubmit" class="btn btn-secondary">Recalculate order costs</button>
+                    <div class="form-group">
+                        <label for="editVariantCostsRecalcCreatedAfter">Update orders created on or after *</label>
+                        <input type="datetime-local" id="editVariantCostsRecalcCreatedAfter" class="form-input" required>
                     </div>
                 </div>
             </div>
             <div class="modal-pinned-footer">
                 <button type="button" id="editVariantCostsCancel" class="btn btn-secondary">Cancel</button>
                 <button type="button" id="editVariantCostsSave" class="btn btn-primary">Save</button>
+                <button type="button" id="editVariantCostsRecalcSubmit" class="btn btn-secondary" disabled>Save and recalculate orders</button>
             </div>
         </div>
     </div>

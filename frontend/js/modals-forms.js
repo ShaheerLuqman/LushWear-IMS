@@ -160,72 +160,6 @@ async function submitBulkUpdateDeliveryCharges() {
     }
 }
 
-function openBulkUpdateCostPriceModal() {
-    if (!productsGridApi) {
-        showToast('Products grid not ready', 'error');
-        return;
-    }
-    const selected = productsGridApi.getSelectedRows();
-    if (!selected.length) {
-        showToast('Select at least one product using the checkboxes', 'error');
-        return;
-    }
-    const namesEl = document.getElementById('bulkUpdateCostPriceNames');
-    const countEl = document.getElementById('bulkUpdateCostPriceCount');
-    const priceEl = document.getElementById('bulkUpdateCostPriceValue');
-    if (namesEl) namesEl.value = selected.map((r) => r.name || '(no name)').join('\n');
-    if (countEl) countEl.textContent = selected.length === 1 ? '1 product' : `${selected.length} products`;
-    if (priceEl) priceEl.value = '';
-    document.getElementById('bulkUpdateCostPriceModal')?.classList.add('active');
-    if (priceEl) priceEl.focus();
-}
-
-function closeBulkUpdateCostPriceModal() {
-    document.getElementById('bulkUpdateCostPriceModal')?.classList.remove('active');
-}
-
-async function submitBulkUpdateCostPrice() {
-    if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
-        return;
-    }
-    if (!productsGridApi) return;
-    const selected = productsGridApi.getSelectedRows();
-    if (!selected.length) {
-        showToast('No products selected', 'error');
-        return;
-    }
-    const priceEl = document.getElementById('bulkUpdateCostPriceValue');
-    const raw = priceEl?.value?.trim();
-    const costPrice = raw === '' ? NaN : parseFloat(raw);
-    if (isNaN(costPrice) || costPrice < 0) {
-        showToast('Enter a valid cost price (0 or more)', 'error');
-        return;
-    }
-    const submitBtn = document.getElementById('bulkUpdateCostPriceSubmit');
-    if (submitBtn) {
-        submitBtn.disabled = true;
-        submitBtn.textContent = 'Updating...';
-    }
-    try {
-        const result = await apiJson('/products/batch-update-cost-prices', {
-            method: 'PUT',
-            body: { updates: selected.map((r) => ({ id: r.id, cost_price: costPrice })) },
-            fallback: 'Failed to update cost prices'
-        });
-        showToast(result.message || `Updated cost price for ${selected.length} product(s)`, 'success');
-        closeBulkUpdateCostPriceModal();
-        await loadProducts();
-    } catch (error) {
-        showToast(error.message || 'Bulk update failed', 'error');
-    } finally {
-        if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Update cost price';
-        }
-    }
-}
-
 // Cost is per-variant for a product with variants; for one with none, this
 // falls back to a single row for the product itself, saved through the
 // product-level batch endpoint instead - same modal either way, opened from
@@ -242,23 +176,37 @@ function openEditVariantCostsModal(product) {
         ? variants.map(v => ({ kind: 'variant', id: v.id, title: v.title, qty: v.quantity || 0, cost: v.cost_price ?? product.cost_price }))
         : [{ kind: 'product', id: product.id, title: product.name, qty: null, cost: product.cost_price }];
 
+    // Cost is usually the same across a product's variants, so multi-variant
+    // products default to one shared field; the toggle below switches to the
+    // per-row list for the rare product that actually varies by variant.
+    const multiVariant = variants.length > 1;
+
     document.getElementById('editVariantCostsTitle').textContent =
         `${variants.length ? 'Edit variant costs' : 'Edit cost price'} — ${product.name}`;
-    document.getElementById('editVariantCostsList').innerHTML = rows.map(r => `
+    const listEl = document.getElementById('editVariantCostsList');
+    listEl.innerHTML = rows.map(r => `
         <div class="edit-variant-costs-row">
             <span class="edit-variant-costs-title">${escapeHtml(r.title)}${r.qty != null ? ` <span class="edit-variant-costs-qty">(qty: ${r.qty})</span>` : ''}</span>
             <input type="number" class="edit-variant-costs-input" data-kind="${r.kind}" data-id="${r.id}" min="0" step="0.01" placeholder="0.00" value="${r.cost ?? ''}">
         </div>
     `).join('');
+    listEl.dataset.variantIds = JSON.stringify(rows.map(r => r.id));
+
+    const toggleWrap = document.getElementById('editVariantCostsPerVariantWrap');
+    const toggle = document.getElementById('editVariantCostsPerVariantToggle');
+    const sharedRow = document.getElementById('editVariantCostsSharedRow');
+    const sharedInput = document.getElementById('editVariantCostsSharedInput');
+    if (toggleWrap) toggleWrap.style.display = multiVariant ? 'flex' : 'none';
+    if (toggle) toggle.checked = false;
+    if (sharedInput) sharedInput.value = product.cost_price ?? '';
+    if (sharedRow) sharedRow.style.display = multiVariant ? 'block' : 'none';
+    listEl.style.display = multiVariant ? 'none' : 'flex';
 
     document.getElementById('editVariantCostsRecalcProductId').value = product.id;
     const dtEl = document.getElementById('editVariantCostsRecalcCreatedAfter');
-    if (dtEl) {
-        const n = new Date();
-        n.setHours(0, 0, 0, 0);
-        const pad = (x) => String(x).padStart(2, '0');
-        dtEl.value = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}T${pad(n.getHours())}:${pad(n.getMinutes())}`;
-    }
+    if (dtEl) dtEl.value = '';
+    const recalcBtn = document.getElementById('editVariantCostsRecalcSubmit');
+    if (recalcBtn) recalcBtn.disabled = true;
 
     document.getElementById('editVariantCostsModal')?.classList.add('active');
 }
@@ -267,11 +215,32 @@ function closeEditVariantCostsModal() {
     document.getElementById('editVariantCostsModal')?.classList.remove('active');
 }
 
-async function submitEditVariantCosts() {
-    if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
-        return;
+// Validates and persists the costs - one shared value applied to every variant
+// (the default for a multi-variant product), or the per-row list when the
+// "separately for each variant" toggle is on. Returns false without saving if
+// a value is invalid. Shared by the plain Save button and Save and recalculate orders.
+async function saveVariantCosts() {
+    const listEl = document.getElementById('editVariantCostsList');
+    const toggle = document.getElementById('editVariantCostsPerVariantToggle');
+    const sharedMode = listEl.style.display === 'none' && !(toggle && toggle.checked);
+
+    if (sharedMode) {
+        const sharedInput = document.getElementById('editVariantCostsSharedInput');
+        const raw = sharedInput?.value.trim() || '';
+        const cost = raw === '' ? null : parseFloat(raw);
+        if (raw !== '' && (isNaN(cost) || cost < 0)) {
+            showToast('Enter a valid cost price (0 or more)', 'error');
+            return false;
+        }
+        const ids = JSON.parse(listEl.dataset.variantIds || '[]');
+        if (ids.length) {
+            await apiJson('/products/batch-update-variant-cost-prices', {
+                method: 'PUT', body: { updates: ids.map(id => ({ id, cost_price: cost })) }, fallback: 'Failed to update variant costs'
+            });
+        }
+        return true;
     }
+
     const inputs = document.querySelectorAll('#editVariantCostsList .edit-variant-costs-input');
     const variantUpdates = [];
     const productUpdates = [];
@@ -280,29 +249,38 @@ async function submitEditVariantCosts() {
         const cost = raw === '' ? null : parseFloat(raw);
         if (raw !== '' && (isNaN(cost) || cost < 0)) {
             showToast('Enter a valid cost (0 or more) for every row', 'error');
-            return;
+            return false;
         }
         const update = { id: input.dataset.id, cost_price: cost };
         (input.dataset.kind === 'product' ? productUpdates : variantUpdates).push(update);
     }
-    if (!variantUpdates.length && !productUpdates.length) return;
+    if (!variantUpdates.length && !productUpdates.length) return true;
 
+    if (variantUpdates.length) {
+        await apiJson('/products/batch-update-variant-cost-prices', {
+            method: 'PUT', body: { updates: variantUpdates }, fallback: 'Failed to update variant costs'
+        });
+    }
+    if (productUpdates.length) {
+        await apiJson('/products/batch-update-cost-prices', {
+            method: 'PUT', body: { updates: productUpdates }, fallback: 'Failed to update cost price'
+        });
+    }
+    return true;
+}
+
+async function submitEditVariantCosts() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
     const saveBtn = document.getElementById('editVariantCostsSave');
     if (saveBtn) {
         saveBtn.disabled = true;
         saveBtn.textContent = 'Saving...';
     }
     try {
-        if (variantUpdates.length) {
-            await apiJson('/products/batch-update-variant-cost-prices', {
-                method: 'PUT', body: { updates: variantUpdates }, fallback: 'Failed to update variant costs'
-            });
-        }
-        if (productUpdates.length) {
-            await apiJson('/products/batch-update-cost-prices', {
-                method: 'PUT', body: { updates: productUpdates }, fallback: 'Failed to update cost price'
-            });
-        }
+        if (!(await saveVariantCosts())) return;
         showToast('Cost price updated', 'success');
         closeEditVariantCostsModal();
         await loadProducts();
@@ -316,7 +294,9 @@ async function submitEditVariantCosts() {
     }
 }
 
-async function submitEditVariantCostsRecalc() {
+// Saves the costs above, then refreshes order cost totals from them - one
+// action so the recalc never runs against costs that weren't actually saved.
+async function submitEditVariantCostsSaveAndRecalc() {
     if (!isEditingAllowed()) {
         showToast('Editing is locked', 'error');
         return;
@@ -339,9 +319,11 @@ async function submitEditVariantCostsRecalc() {
     const submitBtn = document.getElementById('editVariantCostsRecalcSubmit');
     if (submitBtn) {
         submitBtn.disabled = true;
-        submitBtn.textContent = 'Recalculating...';
+        submitBtn.textContent = 'Saving...';
     }
     try {
+        if (!(await saveVariantCosts())) return;
+        if (submitBtn) submitBtn.textContent = 'Recalculating...';
         const result = await apiJson('/products/recalculate-order-costs', {
             method: 'POST',
             body: { product_id: productId, created_after: d.toISOString() },
@@ -351,13 +333,15 @@ async function submitEditVariantCostsRecalc() {
         if (Array.isArray(nums) && nums.length) {
             console.log('[recalculate-order-costs] updated order_numbers:', nums);
         }
-        showToast(`Updated ${result.updated ?? 0} order(s) (${result.scanned ?? 0} checked)`, 'success');
+        showToast(`Saved. Updated ${result.updated ?? 0} order(s) (${result.scanned ?? 0} checked)`, 'success');
+        closeEditVariantCostsModal();
+        await loadProducts();
     } catch (error) {
         showToast(error.message || 'Recalculation failed', 'error');
     } finally {
         if (submitBtn) {
             submitBtn.disabled = false;
-            submitBtn.textContent = 'Recalculate order costs';
+            submitBtn.textContent = 'Save and recalculate orders';
         }
     }
 }
@@ -378,22 +362,22 @@ document.getElementById('closeBulkUpdateDeliveryChargesModal')?.addEventListener
 document.getElementById('bulkUpdateDeliveryChargesCancel')?.addEventListener('click', closeBulkUpdateDeliveryChargesModal);
 document.getElementById('bulkUpdateDeliveryChargesConfirm')?.addEventListener('click', submitBulkUpdateDeliveryCharges);
 
-// Bulk update cost price modal
-document.getElementById('bulkUpdateCostPriceModal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'bulkUpdateCostPriceModal') closeBulkUpdateCostPriceModal();
-});
-document.getElementById('closeBulkUpdateCostPriceModal')?.addEventListener('click', closeBulkUpdateCostPriceModal);
-document.getElementById('bulkUpdateCostPriceCancel')?.addEventListener('click', closeBulkUpdateCostPriceModal);
-document.getElementById('bulkUpdateCostPriceSubmit')?.addEventListener('click', submitBulkUpdateCostPrice);
-
-// Edit variant costs modal (also holds the recalculate-order-costs action)
+// Edit variant costs modal (also holds the save-and-recalculate-order-costs action)
 document.getElementById('editVariantCostsModal')?.addEventListener('click', (e) => {
     if (e.target.id === 'editVariantCostsModal') closeEditVariantCostsModal();
 });
 document.getElementById('closeEditVariantCostsModal')?.addEventListener('click', closeEditVariantCostsModal);
 document.getElementById('editVariantCostsCancel')?.addEventListener('click', closeEditVariantCostsModal);
 document.getElementById('editVariantCostsSave')?.addEventListener('click', submitEditVariantCosts);
-document.getElementById('editVariantCostsRecalcSubmit')?.addEventListener('click', submitEditVariantCostsRecalc);
+document.getElementById('editVariantCostsRecalcSubmit')?.addEventListener('click', submitEditVariantCostsSaveAndRecalc);
+document.getElementById('editVariantCostsPerVariantToggle')?.addEventListener('change', (e) => {
+    document.getElementById('editVariantCostsSharedRow').style.display = e.target.checked ? 'none' : 'block';
+    document.getElementById('editVariantCostsList').style.display = e.target.checked ? 'flex' : 'none';
+});
+document.getElementById('editVariantCostsRecalcCreatedAfter')?.addEventListener('input', (e) => {
+    const btn = document.getElementById('editVariantCostsRecalcSubmit');
+    if (btn) btn.disabled = !e.target.value;
+});
 
 document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () => {
     closeBulkUpdateOrderModal();

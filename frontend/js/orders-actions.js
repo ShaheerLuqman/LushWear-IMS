@@ -10,7 +10,6 @@ function initOrdersActions() {
     });
 
     document.getElementById('bulkUpdateOrderBtn')?.addEventListener('click', openBulkUpdateOrderModal);
-    document.getElementById('bulkUpdateCostPriceBtn')?.addEventListener('click', openBulkUpdateCostPriceModal);
     document.getElementById('bulkUpdateSetDelivered')?.addEventListener('click', () => bulkUpdateOrderStatus('delivered'));
     document.getElementById('bulkUpdateSetReturned')?.addEventListener('click', () => bulkUpdateOrderStatus('returned'));
     document.getElementById('bulkUpdateSetCancelled')?.addEventListener('click', () => bulkUpdateOrderStatus('cancelled'));

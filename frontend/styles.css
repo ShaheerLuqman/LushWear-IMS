@@ -3302,20 +3302,8 @@ input[type="number"] {
     color: var(--text-primary);
 }
 
-.edit-variant-costs-recalc-row {
-    display: flex;
-    align-items: flex-end;
-    gap: 12px;
+.edit-variant-costs-recalc .form-group {
     margin-top: 12px;
-}
-
-.edit-variant-costs-recalc-row .form-group {
-    flex: 1;
-}
-
-.edit-variant-costs-recalc-row .btn {
-    flex-shrink: 0;
-    white-space: nowrap;
 }
 
 .grid-quantity-badge {

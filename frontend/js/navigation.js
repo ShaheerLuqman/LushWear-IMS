@@ -285,7 +285,6 @@ function switchView(viewName, { skipReload = false } = {}) {
 
     show('syncShopifyBtn', isProducts);
     if (isProducts) updateSyncShopifyLastSyncLabel();
-    show('bulkUpdateCostPriceBtn', isProducts);
 
     show('syncOrdersLastSync', isOrders, 'inline-block');
     if (isOrders) updateSyncOrdersLastSyncLabel();
