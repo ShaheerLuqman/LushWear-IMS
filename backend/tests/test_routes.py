@@ -701,7 +701,7 @@ class TestPostexCsvUpload:
         pushed = []
         real_push = orders_module._push_settlements_to_shopify
 
-        async def _fake_push(order_numbers, org_id, returned_order_numbers=None):
+        async def _fake_push(order_numbers, org_id, delivered_order_numbers=None):
             pushed.append(list(order_numbers))
 
         BackgroundTasks.add_task = _spy_add_task
@@ -723,16 +723,17 @@ class TestPostexCsvUpload:
         assert queued == [("_fake_push", (["100"], "test-org", set()))]
         assert pushed == [["100"]]
 
-    def test_returned_orders_are_pushed_but_not_marked_paid(self, make_client):
-        """A returned parcel is settled with the courier but the customer never paid, so
-        the CSV upload must hand it to the push as tag-only, never a recorded payment."""
+    def test_only_delivered_orders_are_marked_paid_on_shopify(self, make_client):
+        """Every settled order is tagged in Shopify, but only delivered ones are marked
+        paid - a returned or otherwise-undelivered parcel was never paid for. The CSV
+        upload passes just the delivered order numbers as the payable set."""
         from starlette.background import BackgroundTasks
         import app.routes.orders as orders_module
 
         queued = []
         real_add_task = BackgroundTasks.add_task
         BackgroundTasks.add_task = lambda self, func, *args, **kwargs: (
-            queued.append((getattr(func, "__name__", None), args)),
+            queued.append(args),
             real_add_task(self, func, *args, **kwargs),
         )[1]
         real_push = orders_module._push_settlements_to_shopify
@@ -746,11 +747,13 @@ class TestPostexCsvUpload:
              "order_status": "delivered", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
             {"id": "o2", "order_number": 200, "total_amount": 800.0, "advance_amount": 0.0,
              "order_status": "returned", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+            {"id": "o3", "order_number": 300, "total_amount": 600.0, "advance_amount": 0.0,
+             "order_status": "unfulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ]})
         try:
             r = client.post(
                 "/api/orders/upload-postex-csv",
-                files={"file": ("postex.csv", self._csv((100, 200), (200, 150)), "text/csv")},
+                files={"file": ("postex.csv", self._csv((100, 200), (200, 150), (300, 180)), "text/csv")},
             )
         finally:
             BackgroundTasks.add_task = real_add_task
@@ -758,7 +761,7 @@ class TestPostexCsvUpload:
 
         assert r.status_code == 200
         assert len(queued) == 1
-        assert queued[0][1] == (["100", "200"], "test-org", {"200"})
+        assert queued[0] == (["100", "200", "300"], "test-org", {"100"})
 
     def test_all_non_numeric_refs_short_circuit(self, make_client):
         client = make_client({"shopify_orders": []})
@@ -768,6 +771,52 @@ class TestPostexCsvUpload:
         )
         assert r.status_code == 200
         assert r.json()["updated"] == 0
+
+
+class TestBulkUpdateOrderSettled:
+    def test_only_delivered_orders_are_marked_paid_on_shopify(self, make_client):
+        """All selected orders are settled locally, but the Shopify push is told to mark
+        paid only the delivered ones - the rest are tagged only."""
+        import app.routes.orders as orders_module
+
+        pushed = []
+
+        async def _fake_push(order_numbers, org_id, delivered_order_numbers=None):
+            pushed.append((list(order_numbers), delivered_order_numbers))
+
+        real_push = orders_module._push_settlements_to_shopify
+        orders_module._push_settlements_to_shopify = _fake_push
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "order_status": "delivered"},
+            {"id": "o2", "order_number": 200, "order_status": "returned"},
+        ]})
+        try:
+            r = client.post("/api/orders/bulk-update-order-settled", json={"order_numbers": [100, 200]})
+        finally:
+            orders_module._push_settlements_to_shopify = real_push
+
+        assert r.status_code == 200
+        assert pushed == [([100, 200], {100})]
+
+    def test_unsettling_does_not_push_to_shopify(self, make_client):
+        import app.routes.orders as orders_module
+
+        pushed = []
+        real_push = orders_module._push_settlements_to_shopify
+        orders_module._push_settlements_to_shopify = lambda *a, **k: pushed.append(a)
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "order_status": "delivered"},
+        ]})
+        try:
+            r = client.post(
+                "/api/orders/bulk-update-order-settled",
+                json={"order_numbers": [100], "is_order_settled": False},
+            )
+        finally:
+            orders_module._push_settlements_to_shopify = real_push
+
+        assert r.status_code == 200
+        assert pushed == []
 
 
 class TestLedgers:

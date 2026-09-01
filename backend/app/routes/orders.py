@@ -724,14 +724,15 @@ async def _push_fulfillments_to_shopify(
 
 
 async def _push_settlements_to_shopify(
-    order_numbers: List[int], org_id: str, returned_order_numbers: Optional[Set[int]] = None
+    order_numbers: List[int], org_id: str, delivered_order_numbers: Optional[Set[int]] = None
 ) -> None:
-    """Mirror settled orders into Shopify: tag them "Settled" and record the courier's
-    payout, so the store reflects money that has actually been received.
+    """Mirror settled orders into Shopify: tag them "Settled" and, for delivered orders,
+    record the courier's payout so the store reflects money that has actually arrived.
 
-    Orders in returned_order_numbers are tagged only, never marked paid: the customer
-    never paid for a returned parcel, so recording its balance would invent money that
-    never arrived (see shopify.mark_order_settled).
+    Every order is tagged "Settled" - that tag is what stops the sync reading a later
+    "paid" as a customer advance. Only orders in delivered_order_numbers are also marked
+    paid: a returned or otherwise-undelivered parcel was never paid for, so recording its
+    balance would invent money that never arrived (see shopify.mark_order_settled).
 
     Best-effort by design, same as _push_fulfillments_to_shopify: the payout is already
     recorded locally and must not be reported back as failed because Shopify was
@@ -751,7 +752,7 @@ async def _push_settlements_to_shopify(
     if not (org_creds.shopify_store_url and org_creds.shopify_access_token):
         return
 
-    returned = returned_order_numbers or set()
+    delivered = delivered_order_numbers or set()
     sem = asyncio.Semaphore(_BULK_CONCURRENCY)
 
     async def _settle(order_number: int, client: httpx.AsyncClient) -> None:
@@ -768,7 +769,7 @@ async def _push_settlements_to_shopify(
                     sp_order["id"], org_creds,
                     record_payment=(
                         sp_order.get("source_name") != DRAFT_ORDER_SOURCE
-                        and order_number not in returned
+                        and order_number in delivered
                     ),
                     client=client)
             except Exception:
@@ -839,6 +840,7 @@ async def upload_postex_csv(
 
     Mirroring those settlements into Shopify runs after the response is sent - it is
     best-effort and far slower than the local write, which the upload should not wait on.
+    Only delivered orders are marked paid there; returned/other rows are tagged only.
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
         raise HTTPException(status_code=400, detail="Please upload a CSV file.")
@@ -885,7 +887,7 @@ async def upload_postex_csv(
         # already stored and already settled - re-uploading the same payout report a second time
         # (e.g. re-checking a file) shouldn't re-push a no-op settlement to Shopify for each one.
         order_numbers_to_push = []
-        returned_order_numbers_to_push = []
+        delivered_order_numbers_to_push = []
         # { order_number, folio, order_status, total_amount, advance_amount, cod, delivery_charge,
         #   tax_amount, receivable, csv_net_amount, mismatch }
         order_breakdown = []
@@ -939,8 +941,8 @@ async def upload_postex_csv(
             )
             if not unchanged:
                 order_numbers_to_push.append(order_num)
-                if is_returned:
-                    returned_order_numbers_to_push.append(order_num)
+                if order_status == "delivered":
+                    delivered_order_numbers_to_push.append(order_num)
 
             orders_to_upsert.append(update_data)
             updated_order_ids.append(order["id"])
@@ -994,7 +996,7 @@ async def upload_postex_csv(
             # best-effort, so hundreds of Shopify round trips must not hold the response.
             background_tasks.add_task(
                 _push_settlements_to_shopify, order_numbers_to_push, org_id,
-                set(returned_order_numbers_to_push),
+                set(delivered_order_numbers_to_push),
             )
 
         # Build response message with debugging info
@@ -2282,9 +2284,15 @@ async def bulk_update_order_settled(body: BulkUpdateOrderSettledBody, org_id: st
         updated_rows = response.data or []
         updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
         # Only settling pushes to Shopify - un-settling can't retract a payment already
-        # recorded there, so that stays a local-only correction.
+        # recorded there, so that stays a local-only correction. Every settled order is
+        # tagged there, but only delivered ones are marked paid (see mark_order_settled).
         if body.is_order_settled:
-            await _push_settlements_to_shopify(updated_order_numbers, org_id)
+            delivered_order_numbers = {
+                o["order_number"] for o in updated_rows
+                if o.get("order_number") is not None
+                and (o.get("order_status") or "").strip().lower() == "delivered"
+            }
+            await _push_settlements_to_shopify(updated_order_numbers, org_id, delivered_order_numbers)
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
