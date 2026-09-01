@@ -50,13 +50,20 @@ let bankLedgerBalances = []; // Store individual ledger balances for tooltip
 // Applies balance(s) returned by a transaction entry write (see ledger_balances
 // in supabase_schema.sql / TransactionEntry.ledger_balances) to the in-memory
 // `ledgers` array, so updateCashInHand() reflects the write with no extra fetch.
+// Persists the result so a view that only fetches on a cold cache (Bills) and
+// hydrateLedgersFromCache() on the next load don't serve pre-write balances.
 function applyLedgerBalancePatches(patches) {
     if (!patches) return;
+    let patched = false;
     (Array.isArray(patches) ? patches : [patches]).forEach(p => {
         if (!p || !p.ledger_id) return;
         const ledger = ledgers.find(l => l.id === p.ledger_id);
-        if (ledger) ledger.balance = p.balance;
+        if (ledger) {
+            ledger.balance = p.balance;
+            patched = true;
+        }
     });
+    if (patched) saveLedgersCache();
 }
 
 // Natures that sit on the Credit side when healthy. Balances are stored
