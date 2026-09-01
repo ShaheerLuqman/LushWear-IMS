@@ -701,7 +701,7 @@ class TestPostexCsvUpload:
         pushed = []
         real_push = orders_module._push_settlements_to_shopify
 
-        async def _fake_push(order_numbers, org_id):
+        async def _fake_push(order_numbers, org_id, returned_order_numbers=None):
             pushed.append(list(order_numbers))
 
         BackgroundTasks.add_task = _spy_add_task
@@ -720,8 +720,45 @@ class TestPostexCsvUpload:
             orders_module._push_settlements_to_shopify = real_push
 
         assert r.status_code == 200
-        assert queued == [("_fake_push", (["100"], "test-org"))]
+        assert queued == [("_fake_push", (["100"], "test-org", set()))]
         assert pushed == [["100"]]
+
+    def test_returned_orders_are_pushed_but_not_marked_paid(self, make_client):
+        """A returned parcel is settled with the courier but the customer never paid, so
+        the CSV upload must hand it to the push as tag-only, never a recorded payment."""
+        from starlette.background import BackgroundTasks
+        import app.routes.orders as orders_module
+
+        queued = []
+        real_add_task = BackgroundTasks.add_task
+        BackgroundTasks.add_task = lambda self, func, *args, **kwargs: (
+            queued.append((getattr(func, "__name__", None), args)),
+            real_add_task(self, func, *args, **kwargs),
+        )[1]
+        real_push = orders_module._push_settlements_to_shopify
+
+        async def _noop_push(*a, **k):
+            return None
+
+        orders_module._push_settlements_to_shopify = _noop_push
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "delivered", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+            {"id": "o2", "order_number": 200, "total_amount": 800.0, "advance_amount": 0.0,
+             "order_status": "returned", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        try:
+            r = client.post(
+                "/api/orders/upload-postex-csv",
+                files={"file": ("postex.csv", self._csv((100, 200), (200, 150)), "text/csv")},
+            )
+        finally:
+            BackgroundTasks.add_task = real_add_task
+            orders_module._push_settlements_to_shopify = real_push
+
+        assert r.status_code == 200
+        assert len(queued) == 1
+        assert queued[0][1] == (["100", "200"], "test-org", {"200"})
 
     def test_all_non_numeric_refs_short_circuit(self, make_client):
         client = make_client({"shopify_orders": []})

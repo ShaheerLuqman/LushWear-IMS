@@ -4,7 +4,7 @@ import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
@@ -723,9 +723,15 @@ async def _push_fulfillments_to_shopify(
                              row["order_number"], tracking_number)
 
 
-async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) -> None:
+async def _push_settlements_to_shopify(
+    order_numbers: List[int], org_id: str, returned_order_numbers: Optional[Set[int]] = None
+) -> None:
     """Mirror settled orders into Shopify: tag them "Settled" and record the courier's
     payout, so the store reflects money that has actually been received.
+
+    Orders in returned_order_numbers are tagged only, never marked paid: the customer
+    never paid for a returned parcel, so recording its balance would invent money that
+    never arrived (see shopify.mark_order_settled).
 
     Best-effort by design, same as _push_fulfillments_to_shopify: the payout is already
     recorded locally and must not be reported back as failed because Shopify was
@@ -745,6 +751,7 @@ async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) ->
     if not (org_creds.shopify_store_url and org_creds.shopify_access_token):
         return
 
+    returned = returned_order_numbers or set()
     sem = asyncio.Semaphore(_BULK_CONCURRENCY)
 
     async def _settle(order_number: int, client: httpx.AsyncClient) -> None:
@@ -759,7 +766,10 @@ async def _push_settlements_to_shopify(order_numbers: List[int], org_id: str) ->
                 # Shopify would reject (see shopify.mark_order_settled).
                 await shopify.mark_order_settled(
                     sp_order["id"], org_creds,
-                    record_payment=sp_order.get("source_name") != DRAFT_ORDER_SOURCE,
+                    record_payment=(
+                        sp_order.get("source_name") != DRAFT_ORDER_SOURCE
+                        and order_number not in returned
+                    ),
                     client=client)
             except Exception:
                 logger.exception("Shopify settlement push failed for order %s", order_number)
@@ -875,6 +885,7 @@ async def upload_postex_csv(
         # already stored and already settled - re-uploading the same payout report a second time
         # (e.g. re-checking a file) shouldn't re-push a no-op settlement to Shopify for each one.
         order_numbers_to_push = []
+        returned_order_numbers_to_push = []
         # { order_number, folio, order_status, total_amount, advance_amount, cod, delivery_charge,
         #   tax_amount, receivable, csv_net_amount, mismatch }
         order_breakdown = []
@@ -915,6 +926,9 @@ async def upload_postex_csv(
             if assignment_number is not None and assignment_number.strip():
                 update_data["folio"] = assignment_number.strip()
 
+            order_status = (order.get("order_status") or "").strip().lower()
+            is_returned = order_status == "returned"
+
             unchanged = (
                 bool(order.get("is_order_settled"))
                 and (order.get("courier") or "") == "PostEx"
@@ -925,6 +939,8 @@ async def upload_postex_csv(
             )
             if not unchanged:
                 order_numbers_to_push.append(order_num)
+                if is_returned:
+                    returned_order_numbers_to_push.append(order_num)
 
             orders_to_upsert.append(update_data)
             updated_order_ids.append(order["id"])
@@ -935,9 +951,7 @@ async def upload_postex_csv(
             advance_amount = float(order.get("advance_amount") or 0)
             delivery_charge = float(r["delivery_charge"])
             tax_amount = float(r["tax_amount"])
-            order_status = (order.get("order_status") or "").strip().lower()
             cod = total_amount - advance_amount
-            is_returned = order_status == "returned"
             if is_returned:
                 receivable = money(-delivery_charge)
             else:
@@ -978,7 +992,10 @@ async def upload_postex_csv(
             await _assign_courier_bills(org_id, updated_order_ids)
             # Deferred: the local settlement is already committed above and the push is
             # best-effort, so hundreds of Shopify round trips must not hold the response.
-            background_tasks.add_task(_push_settlements_to_shopify, order_numbers_to_push, org_id)
+            background_tasks.add_task(
+                _push_settlements_to_shopify, order_numbers_to_push, org_id,
+                set(returned_order_numbers_to_push),
+            )
 
         # Build response message with debugging info
         message = f"Updated delivery charges, tax, courier (PostEx), tracking, and marked settled for {updated_count} order(s)."
