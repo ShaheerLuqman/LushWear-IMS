@@ -84,6 +84,10 @@ class ProductCostPriceUpdate(BaseModel):
 class ProductBatchCostPriceUpdate(BaseModel):
     updates: List[ProductCostPriceUpdate]
 
+class ProductBulkSetCostPrice(BaseModel):
+    product_ids: List[str]
+    cost_price: Optional[float] = None
+
 class VariantCostPriceUpdate(BaseModel):
     id: str
     cost_price: Optional[float] = None
@@ -93,8 +97,10 @@ class VariantBatchCostPriceUpdate(BaseModel):
 
 
 class RecalculateOrderCostsByProductBody(BaseModel):
-    product_id: str
     created_after: datetime
+    # One product (single-product cost modal) or many (products bulk cost modal).
+    product_id: Optional[str] = None
+    product_ids: Optional[List[str]] = None
 
 # ==================== ORDER MODELS ====================
 

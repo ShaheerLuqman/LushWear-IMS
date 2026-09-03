@@ -915,6 +915,192 @@ class TestProducts:
         assert r.status_code == 200
         assert r.json()["updated_count"] == 0
 
+    def test_bulk_update_cost_price_sets_one_value_and_cascades_to_variants(self, make_client):
+        import app.routes.products as products_module
+
+        client = make_client({
+            "shopify_products": [
+                {"id": "p1", "name": "Apple", "cost_price": 100.0},
+                {"id": "p2", "name": "banana", "cost_price": 200.0},
+            ],
+            "shopify_variants": [
+                {"id": "v1", "title": "L", "product_id": "p1", "cost_price": 100.0},
+                {"id": "v2", "title": "M", "product_id": "p2", "cost_price": 200.0},
+            ],
+        })
+        r = client.put("/api/products/bulk-update-cost-price", json={
+            "product_ids": ["p1", "p2"], "cost_price": 175.0,
+        })
+        assert r.status_code == 200
+        assert r.json()["updated_count"] == 2
+        db = products_module.get_supabase()
+        assert [(p["id"], p["name"], p["cost_price"]) for p in db.upserted["shopify_products"]] == [
+            ("p1", "Apple", 175.0), ("p2", "banana", 175.0),
+        ]
+        assert [(v["id"], v["title"], v["product_id"], v["cost_price"]) for v in db.upserted["shopify_variants"]] == [
+            ("v1", "L", "p1", 175.0), ("v2", "M", "p2", 175.0),
+        ]
+
+    def test_bulk_update_cost_price_with_no_ids_is_a_no_op(self, make_client):
+        r = make_client({"shopify_products": []}).put(
+            "/api/products/bulk-update-cost-price", json={"product_ids": [], "cost_price": 10.0}
+        )
+        assert r.status_code == 200
+        assert r.json()["updated_count"] == 0
+
+    def test_recalculate_order_costs_accepts_multiple_product_ids(self, make_client):
+        client = make_client({
+            "shopify_products": [
+                {"id": "p1", "name": "Apple", "cost_price": 50.0},
+                {"id": "p2", "name": "Banana", "cost_price": 30.0},
+            ],
+            "shopify_variants": [],
+            "shopify_orders": [
+                {"id": "o1", "order_number": 1001, "order_status": "delivered",
+                 "replacement_of_order_no": None,
+                 "line_items": [{"product_id": "p2", "qty": 2, "name": "Banana"}],
+                 "cost_price": 0.0},
+            ],
+        })
+        r = client.post("/api/products/recalculate-order-costs", json={
+            "product_ids": ["p1", "p2"], "created_after": "2024-01-01T00:00:00Z",
+        })
+        assert r.status_code == 200
+        body = r.json()
+        assert body["updated"] == 1
+        assert body["updated_order_numbers"] == [1001]
+
+    def test_recalculate_order_costs_still_accepts_a_single_product_id(self, make_client):
+        client = make_client({
+            "shopify_products": [{"id": "p1", "name": "Apple", "cost_price": 50.0}],
+            "shopify_variants": [],
+            "shopify_orders": [
+                {"id": "o1", "order_number": 1001, "order_status": "delivered",
+                 "replacement_of_order_no": None,
+                 "line_items": [{"product_id": "p1", "qty": 3, "name": "Apple"}],
+                 "cost_price": 0.0},
+            ],
+        })
+        r = client.post("/api/products/recalculate-order-costs", json={
+            "product_id": "p1", "created_after": "2024-01-01T00:00:00Z",
+        })
+        assert r.status_code == 200
+        assert r.json()["updated"] == 1
+
+    def test_recalculate_order_costs_requires_a_product(self, make_client):
+        r = make_client({"shopify_products": []}).post(
+            "/api/products/recalculate-order-costs", json={"created_after": "2024-01-01T00:00:00Z"}
+        )
+        assert r.status_code == 400
+
+
+class TestProductAnalytics:
+    """The get_product_analytics RPC does the line_items aggregation; the route
+    merges it with the catalog (names, collections, variant counts, stock),
+    name-matches the unresolved rows, and adds products with no sales."""
+
+    def _rpc(self):
+        return {
+            "products": [
+                {"phase": "current", "product_id": "p1", "item_name": "Silk Cami Set",
+                 "units": 30, "revenue": 96000, "sizes": {"S": 18, "M": 12}},
+                {"phase": "current", "product_id": "p2", "item_name": "Linen PJ Set",
+                 "units": 8, "revenue": 24000, "sizes": {"M": 8}},
+                {"phase": "current", "product_id": None, "item_name": "Linen PJ Set",
+                 "units": 2, "revenue": 6000, "sizes": {"S": 2}},
+                {"phase": "previous", "product_id": "p1", "item_name": "Silk Cami Set",
+                 "units": 20, "revenue": 64000, "sizes": {"S": 12, "M": 8}},
+                {"phase": "current", "product_id": None, "item_name": "Mystery Kaftan",
+                 "units": 3, "revenue": 9000, "sizes": {"OS": 3}},
+            ],
+            "orders": [
+                {"phase": "current", "collection": "Silk Collection", "order_count": 25},
+                {"phase": "current", "collection": "__all__", "order_count": 30},
+                {"phase": "previous", "collection": "__all__", "order_count": 18},
+            ],
+            "trend": [
+                {"phase": "current", "bucket": "2025-05-01", "collection": "Silk Collection", "units": 10, "revenue": 32000},
+                {"phase": "current", "bucket": "2025-05-02", "collection": "Silk Collection", "units": 20, "revenue": 64000},
+            ],
+        }
+
+    def _client(self, make_client):
+        return make_client(
+            {
+                "shopify_products": [
+                    {"id": "p1", "name": "Silk Cami Set", "collection": "Silk Collection", "image_url": "u", "is_active": True},
+                    {"id": "p2", "name": "Linen PJ Set", "collection": "Linen PJs", "image_url": None, "is_active": True},
+                    {"id": "p3", "name": "Discontinued Robe", "collection": "Silk Collection", "image_url": None, "is_active": False},
+                ],
+                "shopify_variants": [
+                    {"product_id": "p1", "quantity": 10},
+                    {"product_id": "p1", "quantity": 5},
+                    {"product_id": "p2", "quantity": 3},
+                ],
+            },
+            rpc_results={"get_product_analytics": self._rpc()},
+        )
+
+    def test_merges_rpc_aggregates_with_the_catalog(self, make_client):
+        r = self._client(make_client).get("/api/products/analytics?start=2025-05-01&end=2025-05-31")
+        assert r.status_code == 200
+        body = r.json()
+
+        assert body["has_prev"] is True
+        assert body["grain"] == "day"
+        assert body["prev_start"] == "2025-03-31" and body["prev_end"] == "2025-04-30"
+
+        rows = {row["name"]: row for row in body["rows"]}
+
+        silk = rows["Silk Cami Set"]
+        assert silk["product_id"] == "p1"
+        assert silk["units"] == 30 and silk["revenue"] == 96000.0
+        assert silk["prev_units"] == 20 and silk["prev_revenue"] == 64000.0
+        assert silk["sizes"] == {"S": 18, "M": 12}
+        assert silk["variant_count"] == 2 and silk["stock"] == 15
+        assert silk["collection"] == "Silk Collection" and silk["image_url"] == "u"
+
+        # the product_id-less "Linen PJ Set" row is name-matched and folded into p2
+        linen = rows["Linen PJ Set"]
+        assert linen["units"] == 10 and linen["sizes"] == {"M": 8, "S": 2}
+        assert linen["prev_units"] == 0
+
+        # unmatched name stays as its own row
+        assert rows["Mystery Kaftan"]["product_id"] is None and rows["Mystery Kaftan"]["units"] == 3
+
+        # inactive product with no sales in the window is dropped
+        assert "Discontinued Robe" not in rows
+
+        assert body["orders"]["current"]["__all__"] == 30
+        assert body["orders"]["previous"]["__all__"] == 18
+        assert len(body["trend"]) == 2
+
+    def test_passes_the_comparison_window_to_the_rpc(self, make_client):
+        import app.routes.products as products_module
+
+        client = self._client(make_client)
+        client.get("/api/products/analytics?start=2025-05-01&end=2025-05-07")
+        name, params = products_module.get_supabase().rpc_calls[0]
+        assert name == "get_product_analytics"
+        assert params["p_start"] == "2025-05-01" and params["p_end"] == "2025-05-07"
+        # equal-length window immediately before: Apr 24 – Apr 30
+        assert params["p_prev_start"] == "2025-04-24" and params["p_prev_end"] == "2025-04-30"
+        assert params["p_grain"] == "day"
+
+    def test_no_comparison_window_before_the_oldest_data(self, make_client):
+        import app.routes.products as products_module
+
+        client = self._client(make_client)
+        r = client.get("/api/products/analytics?start=2024-10-22&end=2024-11-21")
+        assert r.status_code == 200
+        assert r.json()["has_prev"] is False
+        _, params = products_module.get_supabase().rpc_calls[0]
+        assert params["p_prev_start"] is None and params["p_prev_end"] is None
+
+    def test_end_before_start_is_a_400(self, make_client):
+        r = self._client(make_client).get("/api/products/analytics?start=2025-05-31&end=2025-05-01")
+        assert r.status_code == 400
+
 
 class TestTransactions:
     """An entry names both of its sides; a None side means cash. Only entries

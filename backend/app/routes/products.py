@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Dict, Tuple
 from app.models import (
     ProductCreate, ProductUpdate, ProductWithVariants,
-    ProductBatchCostPriceUpdate, RecalculateOrderCostsByProductBody,
+    ProductBatchCostPriceUpdate, ProductBulkSetCostPrice, RecalculateOrderCostsByProductBody,
     Variant, VariantCreate, VariantUpdate, VariantBatchCostPriceUpdate,
 )
 from app.auth import get_org_id
@@ -13,7 +13,7 @@ from app.db_utils import fetch_all
 from app.money import money
 from app.org_scope import org_table
 from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
-from datetime import datetime, timezone
+from datetime import datetime, timezone, date, timedelta
 from supabase import create_client
 import asyncio
 import logging
@@ -436,6 +436,58 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.put("/bulk-update-cost-price")
+async def bulk_update_cost_price(body: ProductBulkSetCostPrice, org_id: str = Depends(get_org_id)):
+    """Set one cost price on every given product at once, cascading it onto each product's
+    variants (see batch_update_cost_prices for the per-id variant and the
+    upsert-carries-NOT-NULL-columns reasoning - identical, just one shared price here)."""
+    try:
+        supabase = get_supabase()
+        current_time = datetime.now(timezone.utc).isoformat()
+
+        product_ids = list(dict.fromkeys(body.product_ids))
+        updated_count = 0
+        if product_ids:
+            existing = (
+                org_table(supabase, org_id, "shopify_products")
+                .select("id, name")
+                .in_("id", product_ids)
+                .execute().data or []
+            )
+            if existing:
+                response = org_table(supabase, org_id, "shopify_products").upsert(
+                    [{"id": p["id"], "name": p["name"], "cost_price": body.cost_price, "updated_at": current_time} for p in existing],
+                    on_conflict="id",
+                ).execute()
+                updated_count = len(response.data or [])
+
+                existing_variants = (
+                    org_table(supabase, org_id, "shopify_variants")
+                    .select("id, title, product_id")
+                    .in_("product_id", [p["id"] for p in existing])
+                    .execute().data or []
+                )
+                if existing_variants:
+                    org_table(supabase, org_id, "shopify_variants").upsert(
+                        [
+                            {"id": v["id"], "title": v["title"], "product_id": v["product_id"],
+                             "cost_price": body.cost_price, "updated_at": current_time}
+                            for v in existing_variants
+                        ],
+                        on_conflict="id",
+                    ).execute()
+
+        return {
+            "message": f"Successfully updated {updated_count} product(s)",
+            "updated_count": updated_count,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.put("/batch-update-variant-cost-prices")
 async def batch_update_variant_cost_prices(batch_update: VariantBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
     """Batch update cost prices for individual variants (see batch_update_cost_prices,
@@ -478,21 +530,24 @@ async def batch_update_variant_cost_prices(batch_update: VariantBatchCostPriceUp
 
 @router.post("/recalculate-order-costs")
 async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProductBody, org_id: str = Depends(get_org_id)):
-    """Recompute order cost_price from product costs for orders that include the given product (line starts with \"Name - \")."""
+    """Recompute order cost_price from product costs for orders that include any of the given products."""
     try:
         supabase = get_supabase()
-        product_id = (body.product_id or "").strip()
-        if not product_id:
-            raise HTTPException(status_code=400, detail="product_id is required")
+        requested_ids = {
+            pid.strip()
+            for pid in ([body.product_id] if body.product_id else []) + (body.product_ids or [])
+            if pid and pid.strip()
+        }
+        if not requested_ids:
+            raise HTTPException(status_code=400, detail="product_id or product_ids is required")
 
-        prod = (
-            org_table(supabase, org_id, "shopify_products").select("name").eq("id", product_id).limit(1).execute().data
+        prods = (
+            org_table(supabase, org_id, "shopify_products").select("id, name").in_("id", list(requested_ids)).execute().data or []
         )
-        if not prod:
+        if not prods:
             raise HTTPException(status_code=404, detail="Product not found")
-        pname = (prod[0].get("name") or "").strip()
-        if not pname:
-            raise HTTPException(status_code=400, detail="Product has no name")
+        target_ids = {p["id"] for p in prods}
+        target_names = {(p.get("name") or "").strip().lower() for p in prods if (p.get("name") or "").strip()}
 
         # Cost lookup by variant id (preferred - a line item's own variant may cost more
         # or less than its product's other variants), else product id, else lowercased
@@ -551,11 +606,11 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
                 continue
             line_items = row.get("line_items") if isinstance(row.get("line_items"), list) else []
 
-            # Does this order include the target product?
+            # Does this order include any of the target products?
             includes_product = any(
                 isinstance(li, dict) and (
-                    li.get("product_id") == product_id
-                    or (li.get("name") or "").strip().lower() == pname.lower()
+                    li.get("product_id") in target_ids
+                    or (li.get("name") or "").strip().lower() in target_names
                 )
                 for li in line_items
             )
@@ -605,6 +660,168 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             "scanned": scanned,
             "updated": updated,
             "updated_order_numbers": updated_order_numbers,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+# Oldest order period the frontend offers ("Maximum" range start) - see
+# ORDERS_PERIOD_OLDEST_* in frontend/js/data-api.js. Used only to clamp the
+# comparison window, never the main range.
+_ANALYTICS_OLDEST = date(2024, 10, 22)
+
+
+def _pa_resolve_key(row: dict, by_id: Dict[str, dict], by_name: Dict[str, str]) -> str:
+    """Fold an RPC product row onto a catalog product id. The RPC already resolved
+    variant_id/product_id; this only has to name-match the leftovers (same tiers as
+    the month-summary breakdown: exact name, then name with the variant suffix
+    stripped)."""
+    pid = row.get("product_id")
+    if pid and pid in by_id:
+        return pid
+    name = (row.get("item_name") or "").strip().lower()
+    if not name:
+        return "name:"
+    if name in by_name:
+        return by_name[name]
+    if " - " in name:
+        base = name.rsplit(" - ", 1)[0].strip()
+        if base in by_name:
+            return by_name[base]
+    return f"name:{name}"
+
+
+@router.get("/analytics")
+async def get_product_analytics(
+    start: date = Query(..., description="Range start, inclusive (YYYY-MM-DD)"),
+    end: date = Query(..., description="Range end, inclusive (YYYY-MM-DD)"),
+    org_id: str = Depends(get_org_id),
+):
+    """Per-product units/revenue for [start, end] and the equal-length window right
+    before it, with a size breakdown, per-collection distinct order counts and a
+    bucketed sales trend. Aggregation is done in one RPC over line_items; this route
+    only merges the result with the product catalog (names, collections, images,
+    variant counts, stock) and adds rows for products with no sales in the window."""
+    try:
+        if end < start:
+            raise HTTPException(status_code=400, detail="end must be on or after start")
+
+        span_days = (end - start).days + 1
+        prev_end = start - timedelta(days=1)
+        prev_start = start - timedelta(days=span_days)
+        has_prev = prev_end >= _ANALYTICS_OLDEST
+        if has_prev and prev_start < _ANALYTICS_OLDEST:
+            prev_start = _ANALYTICS_OLDEST
+        grain = "day" if span_days <= 92 else "week" if span_days <= 550 else "month"
+
+        supabase = get_supabase()
+        rpc_resp = supabase.rpc("get_product_analytics", {
+            "p_org_id": org_id,
+            "p_start": start.isoformat(),
+            "p_end": end.isoformat(),
+            "p_prev_start": prev_start.isoformat() if has_prev else None,
+            "p_prev_end": prev_end.isoformat() if has_prev else None,
+            "p_grain": grain,
+        }).execute()
+        rpc = rpc_resp.data or {}
+        rpc_products = rpc.get("products") or []
+        rpc_orders = rpc.get("orders") or []
+        rpc_trend = rpc.get("trend") or []
+
+        catalog = fetch_all(lambda: org_table(supabase, org_id, "shopify_products")
+                            .select("id, name, collection, image_url, is_active"))
+        variants = fetch_all(lambda: org_table(supabase, org_id, "shopify_variants")
+                             .select("product_id, quantity"))
+
+        variant_stats: Dict[str, Dict[str, int]] = {}
+        for v in variants:
+            pid = v.get("product_id")
+            if not pid:
+                continue
+            st = variant_stats.setdefault(pid, {"count": 0, "stock": 0})
+            st["count"] += 1
+            st["stock"] += int(v.get("quantity") or 0)
+
+        by_id = {p["id"]: p for p in catalog}
+        by_name: Dict[str, str] = {}
+        for p in catalog:
+            nm = (p.get("name") or "").strip().lower()
+            if nm:
+                by_name.setdefault(nm, p["id"])
+                if " - " in nm:
+                    by_name.setdefault(nm.rsplit(" - ", 1)[0].strip(), p["id"])
+
+        agg: Dict[str, Dict[str, dict]] = {"current": {}, "previous": {}}
+        for row in rpc_products:
+            phase = row.get("phase")
+            if phase not in agg:
+                continue
+            key = _pa_resolve_key(row, by_id, by_name)
+            b = agg[phase].setdefault(key, {"units": 0, "revenue": 0.0, "sizes": {}, "name": row.get("item_name")})
+            b["units"] += int(row.get("units") or 0)
+            b["revenue"] += float(row.get("revenue") or 0)
+            for sz, u in (row.get("sizes") or {}).items():
+                b["sizes"][sz] = b["sizes"].get(sz, 0) + int(u or 0)
+
+        cur, prev = agg["current"], agg["previous"]
+        keys = set(cur) | set(prev) | {p["id"] for p in catalog if p.get("is_active")}
+
+        rows = []
+        for key in keys:
+            c = cur.get(key)
+            pv = prev.get(key)
+            product = by_id.get(key)
+            if product:
+                if not product.get("is_active") and not c and not pv:
+                    continue
+                st = variant_stats.get(key, {"count": 0, "stock": 0})
+                rows.append({
+                    "product_id": key,
+                    "name": product.get("name") or "",
+                    "collection": (product.get("collection") or "").strip() or "Uncategorized",
+                    "image_url": product.get("image_url"),
+                    "variant_count": st["count"],
+                    "stock": st["stock"],
+                    "units": (c or {}).get("units", 0),
+                    "revenue": money((c or {}).get("revenue", 0.0)),
+                    "sizes": (c or {}).get("sizes", {}),
+                    "prev_units": (pv or {}).get("units", 0),
+                    "prev_revenue": money((pv or {}).get("revenue", 0.0)),
+                })
+            else:
+                rows.append({
+                    "product_id": None,
+                    "name": (c or {}).get("name") or (pv or {}).get("name") or "(unknown product)",
+                    "collection": "Uncategorized",
+                    "image_url": None,
+                    "variant_count": 0,
+                    "stock": 0,
+                    "units": (c or {}).get("units", 0),
+                    "revenue": money((c or {}).get("revenue", 0.0)),
+                    "sizes": (c or {}).get("sizes", {}),
+                    "prev_units": (pv or {}).get("units", 0),
+                    "prev_revenue": money((pv or {}).get("revenue", 0.0)),
+                })
+
+        orders = {"current": {}, "previous": {}}
+        for o in rpc_orders:
+            ph = o.get("phase")
+            if ph in orders and o.get("collection") is not None:
+                orders[ph][o["collection"]] = int(o.get("order_count") or 0)
+
+        return {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat() if has_prev else None,
+            "prev_end": prev_end.isoformat() if has_prev else None,
+            "has_prev": has_prev,
+            "grain": grain,
+            "rows": rows,
+            "orders": orders,
+            "trend": rpc_trend,
         }
     except HTTPException:
         raise

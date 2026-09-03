@@ -265,6 +265,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
+        'productAnalytics': 'Product Analytics',
         'orderFulfillment': 'Order Fulfillment',
         'orderFulfillmentProgress': 'Order Fulfillment',
         'loadSheetLogs': 'Load Sheet Logs',
@@ -284,6 +285,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     };
 
     show('syncShopifyBtn', isProducts);
+    show('bulkUpdateCostPriceBtn', isProducts);
     if (isProducts) updateSyncShopifyLastSyncLabel();
 
     show('syncOrdersLastSync', isOrders, 'inline-block');
@@ -314,6 +316,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         setTimeout(() => {
             sizeGridColumns(productsGridApi);
         }, 100);
+    } else if (viewName === 'productAnalytics') {
+        initProductAnalyticsView();
     } else if (viewName === 'orders') {
         if (!skipReload) loadOrders();
         setTimeout(() => {

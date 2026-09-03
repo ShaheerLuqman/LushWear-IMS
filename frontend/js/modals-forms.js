@@ -160,6 +160,136 @@ async function submitBulkUpdateDeliveryCharges() {
     }
 }
 
+// Bulk cost price update: one value onto every checkbox-selected product in the
+// products grid. The endpoint cascades it onto each product's variants too, so
+// multi-variant products are handled without touching them per variant here.
+function getSelectedProductIds() {
+    if (currentView !== 'products' || !productsGridApi) return [];
+    return productsGridApi.getSelectedRows().map(r => r && r.id).filter(Boolean);
+}
+
+function openBulkUpdateCostPriceModal() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const ids = getSelectedProductIds();
+    if (ids.length === 0) {
+        showToast('Select at least one product first', 'error');
+        return;
+    }
+    const countEl = document.getElementById('bulkUpdateCostPriceCount');
+    if (countEl) countEl.textContent = ids.length === 1 ? '1 product' : `${ids.length} products`;
+    const valueEl = document.getElementById('bulkUpdateCostPriceValue');
+    if (valueEl) {
+        valueEl.value = '';
+        valueEl.focus();
+    }
+    const dtEl = document.getElementById('bulkUpdateCostPriceRecalcCreatedAfter');
+    if (dtEl) dtEl.value = '';
+    const recalcBtn = document.getElementById('bulkUpdateCostPriceRecalcSubmit');
+    if (recalcBtn) recalcBtn.disabled = true;
+    document.getElementById('bulkUpdateCostPriceModal')?.classList.add('active');
+}
+
+function closeBulkUpdateCostPriceModal() {
+    document.getElementById('bulkUpdateCostPriceModal')?.classList.remove('active');
+}
+
+// Validates the input and persists the shared cost onto every selected product.
+// Returns the selected ids on success, null on a validation failure (a toast is
+// shown). Shared by the plain Confirm and Save and recalculate orders buttons.
+async function saveBulkCostPrices() {
+    const ids = getSelectedProductIds();
+    if (ids.length === 0) {
+        showToast('Select at least one product first', 'error');
+        return null;
+    }
+    const raw = document.getElementById('bulkUpdateCostPriceValue')?.value?.trim();
+    const cost = raw === '' ? NaN : parseFloat(raw);
+    if (isNaN(cost) || cost < 0) {
+        showToast('Enter a valid cost price (0 or more)', 'error');
+        return null;
+    }
+    await apiJson('/products/bulk-update-cost-price', {
+        method: 'PUT',
+        body: { product_ids: ids, cost_price: cost },
+        fallback: 'Failed to update cost prices'
+    });
+    return ids;
+}
+
+async function submitBulkUpdateCostPrice() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const confirmBtn = document.getElementById('bulkUpdateCostPriceConfirm');
+    if (confirmBtn) {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'Updating...';
+    }
+    try {
+        const ids = await saveBulkCostPrices();
+        if (!ids) return;
+        closeBulkUpdateCostPriceModal();
+        showToast(`Updated ${ids.length} product(s)`, 'success');
+        await loadProducts();
+    } catch (error) {
+        showToast(error.message || 'Bulk update failed', 'error');
+    } finally {
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.textContent = 'Confirm';
+        }
+    }
+}
+
+// Saves the costs above, then recalculates order cost totals from them for orders
+// on/after the chosen date that include any of the selected products - one action
+// so the recalc never runs against costs that weren't actually saved.
+async function submitBulkUpdateCostPriceSaveAndRecalc() {
+    if (!isEditingAllowed()) {
+        showToast('Editing is locked', 'error');
+        return;
+    }
+    const raw = document.getElementById('bulkUpdateCostPriceRecalcCreatedAfter')?.value;
+    if (!raw) {
+        showToast('Select date and time', 'error');
+        return;
+    }
+    const d = new Date(raw);
+    if (isNaN(d.getTime())) {
+        showToast('Invalid date and time', 'error');
+        return;
+    }
+    const submitBtn = document.getElementById('bulkUpdateCostPriceRecalcSubmit');
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Saving...';
+    }
+    try {
+        const ids = await saveBulkCostPrices();
+        if (!ids) return;
+        if (submitBtn) submitBtn.textContent = 'Recalculating...';
+        const result = await apiJson('/products/recalculate-order-costs', {
+            method: 'POST',
+            body: { product_ids: ids, created_after: d.toISOString() },
+            fallback: 'Failed to recalculate'
+        });
+        closeBulkUpdateCostPriceModal();
+        showToast(`Saved. Updated ${result.updated ?? 0} order(s) (${result.scanned ?? 0} checked)`, 'success');
+        await loadProducts();
+    } catch (error) {
+        showToast(error.message || 'Recalculation failed', 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Save and recalculate orders';
+        }
+    }
+}
+
 // Cost is per-variant for a product with variants; for one with none, this
 // falls back to a single row for the product itself, saved through the
 // product-level batch endpoint instead - same modal either way, opened from
@@ -365,6 +495,20 @@ document.getElementById('bulkUpdateDeliveryChargesModal')?.addEventListener('cli
 document.getElementById('closeBulkUpdateDeliveryChargesModal')?.addEventListener('click', closeBulkUpdateDeliveryChargesModal);
 document.getElementById('bulkUpdateDeliveryChargesCancel')?.addEventListener('click', closeBulkUpdateDeliveryChargesModal);
 document.getElementById('bulkUpdateDeliveryChargesConfirm')?.addEventListener('click', submitBulkUpdateDeliveryCharges);
+
+// Bulk update cost price modal (products view)
+document.getElementById('bulkUpdateCostPriceBtn')?.addEventListener('click', openBulkUpdateCostPriceModal);
+document.getElementById('bulkUpdateCostPriceModal')?.addEventListener('click', (e) => {
+    if (e.target.id === 'bulkUpdateCostPriceModal') closeBulkUpdateCostPriceModal();
+});
+document.getElementById('closeBulkUpdateCostPriceModal')?.addEventListener('click', closeBulkUpdateCostPriceModal);
+document.getElementById('bulkUpdateCostPriceCancel')?.addEventListener('click', closeBulkUpdateCostPriceModal);
+document.getElementById('bulkUpdateCostPriceConfirm')?.addEventListener('click', submitBulkUpdateCostPrice);
+document.getElementById('bulkUpdateCostPriceRecalcSubmit')?.addEventListener('click', submitBulkUpdateCostPriceSaveAndRecalc);
+document.getElementById('bulkUpdateCostPriceRecalcCreatedAfter')?.addEventListener('input', (e) => {
+    const btn = document.getElementById('bulkUpdateCostPriceRecalcSubmit');
+    if (btn) btn.disabled = !e.target.value;
+});
 
 // Edit variant costs modal (also holds the save-and-recalculate-order-costs action)
 document.getElementById('editVariantCostsModal')?.addEventListener('click', (e) => {

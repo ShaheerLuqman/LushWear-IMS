@@ -54,17 +54,14 @@ const PAYMENT_PROGRESS_COLORS = {
     remaining: '#7c3aed',
 };
 
-/** Default pickup-date range shown on first load: all of last month (local calendar,
- * matching pickupDateKey's own convention) - courier payouts land after the pickup
- * month closes, so last month is the range you actually reconcile against. */
+/** Default pickup-date range shown on first load: the last 30 days (local calendar,
+ * matching pickupDateKey's own convention). */
 function defaultCourierPaymentReportDateRange() {
-    const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
-    const firstOfLastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-    const y = firstOfLastMonth.getFullYear();
-    const m = firstOfLastMonth.getMonth(); // 0-indexed
-    const lastDay = new Date(y, m + 1, 0).getDate();
-    return { from: `${y}-${pad(m + 1)}-01`, to: `${y}-${pad(m + 1)}-${pad(lastDay)}` };
+    const ymd = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    const now = new Date();
+    const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29);
+    return { from: ymd(from), to: ymd(now) };
 }
 
 let courierPaymentReportDateRange = defaultCourierPaymentReportDateRange();

@@ -154,6 +154,10 @@
                             <span class="nav-icon"><i data-lucide="shopping-bag"></i></span>
                             <span class="nav-tooltip">Products</span>
                         </button>
+                        <button class="nav-item" data-view="productAnalytics" title="Product Analytics">
+                            <span class="nav-icon"><i data-lucide="bar-chart-2"></i></span>
+                            <span class="nav-tooltip">Product Analytics</span>
+                        </button>
                         <button class="nav-item" data-view="monthSummary" title="Month Summary">
                             <span class="nav-icon"><i data-lucide="calendar-days"></i></span>
                             <span class="nav-tooltip">Month Summary</span>
@@ -235,6 +239,7 @@
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
                         <span id="syncShopifyBtnLabel">Sync from Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
                     </button>
+                    <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Set one cost price on all selected products">Bulk update cost price</button>
                     <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
                         <button type="button" id="ordersMoreActionsBtn" class="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded="false" title="More order actions">
                             <span>More actions</span><span class="orders-more-actions__caret" aria-hidden="true"></span>
@@ -993,6 +998,11 @@
                     <div id="productsGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
+                <!-- Product Analytics View -->
+                <div id="productAnalyticsView" class="view">
+                    <div class="pa-scroll" id="productAnalyticsRoot"></div>
+                </div>
+
                 <!-- Load Sheet Logs View -->
                 <div id="loadSheetLogsView" class="view">
                     <div class="load-sheet-logs-container">
@@ -1221,6 +1231,39 @@
             <div class="bulk-update-actions modal-pinned-footer">
                 <button type="button" id="bulkUpdateDeliveryChargesCancel" class="btn btn-secondary">Cancel</button>
                 <button type="button" id="bulkUpdateDeliveryChargesConfirm" class="btn btn-primary">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Set one cost price on every selected product (cascades to each product's variants) -->
+    <div id="bulkUpdateCostPriceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Bulk update cost price</h2>
+                <button type="button" class="modal-close" id="closeBulkUpdateCostPriceModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description">Set the cost price (Rs) for <span id="bulkUpdateCostPriceCount">0 products</span>. This also applies to every variant of each selected product.</p>
+                <div class="form-group" style="margin-top: 16px;">
+                    <label for="bulkUpdateCostPriceValue">Cost price (Rs) *</label>
+                    <input type="number" id="bulkUpdateCostPriceValue" class="form-input" min="0" step="0.01" placeholder="0.00">
+                </div>
+
+                <div class="edit-variant-costs-recalc">
+                    <h3>Recalculate order costs</h3>
+                    <p class="modal-description">
+                        Refresh order cost totals from the new costs. Only orders on or after the date below that include one of the selected products are updated.
+                    </p>
+                    <div class="form-group">
+                        <label for="bulkUpdateCostPriceRecalcCreatedAfter">Update orders created on or after *</label>
+                        <input type="datetime-local" id="bulkUpdateCostPriceRecalcCreatedAfter" class="form-input">
+                    </div>
+                </div>
+            </div>
+            <div class="bulk-update-actions modal-pinned-footer">
+                <button type="button" id="bulkUpdateCostPriceCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="bulkUpdateCostPriceConfirm" class="btn btn-primary">Confirm</button>
+                <button type="button" id="bulkUpdateCostPriceRecalcSubmit" class="btn btn-secondary" disabled>Save and recalculate orders</button>
             </div>
         </div>
     </div>
@@ -1497,6 +1540,7 @@
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/delivery-status.js"></script>
+    <script src="js/product-analytics.js"></script>
 </body>
 
 </html>

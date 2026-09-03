@@ -66,6 +66,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Bulk cost price update on products** — header button on the Products view opens a modal that sets one cost price on every checkbox-selected product via a new `PUT /products/bulk-update-cost-price` endpoint, cascading it to each product's variants; the modal also has a "Save and recalculate orders" option (date-gated) that refreshes order cost totals for orders including any selected product (`recalculate-order-costs` now takes `product_ids`).
 - [x] **PostEx airway bills in one PDF** — backend chunks get-invoice at 100/call and merges; selection cap raised from 10 to 500, one tab instead of many.
 - [x] **Courier Payment Report defaults to last month** — first-load pickup-date range is now all of the previous calendar month instead of this-month-to-date.
 - [x] **Courier Payment Report courier default actually applies** — the PostEx-only default filter now refetches once the courier list is known, so the grid matches the filter chip instead of showing every courier.
