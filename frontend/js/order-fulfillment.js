@@ -269,9 +269,17 @@ function createFulfillmentCourierCityDropdown(order) {
 
         document.body.appendChild(dropdownPanel);
         const rect = button.getBoundingClientRect();
-        dropdownPanel.style.top = (rect.bottom + 2) + 'px';
         dropdownPanel.style.left = rect.left + 'px';
         dropdownPanel.style.minWidth = Math.max(rect.width, 200) + 'px';
+        // Flip above the button when a row near the bottom of the viewport wouldn't
+        // leave room for the panel below it.
+        const panelHeight = dropdownPanel.offsetHeight;
+        const spaceBelow = window.innerHeight - rect.bottom;
+        if (spaceBelow < panelHeight + 2 && rect.top > spaceBelow) {
+            dropdownPanel.style.top = Math.max(2, rect.top - panelHeight - 2) + 'px';
+        } else {
+            dropdownPanel.style.top = (rect.bottom + 2) + 'px';
+        }
 
         searchInput.addEventListener('input', (e) => renderOptions(optionsList, e.target.value));
         searchInput.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeDropdown(); });
@@ -1013,12 +1021,7 @@ function updateFulfillmentFulfillBtnState() {
 
 function renderFulfillmentSidePanel() {
     const content = document.getElementById('fulfillmentSidePanelContent');
-    const count = fulfillmentSelectedIds.size;
-    if (content) content.style.display = count === 0 ? 'none' : 'flex';
-    if (count === 0) return;
-
-    const orderIdEl = document.getElementById('fulfillmentSidePanelOrderId');
-    if (orderIdEl) orderIdEl.textContent = count === 1 ? '1 order selected' : `${count} orders selected`;
+    if (content) content.style.display = fulfillmentSelectedIds.size === 0 ? 'none' : 'flex';
 }
 
 function renderFulfillmentTable() {
@@ -1029,9 +1032,7 @@ function renderFulfillmentTable() {
     const filtered = getFulfillmentFilteredOrders();
 
     const totalOrdersLabel = document.getElementById('fulfillmentTotalOrdersLabel');
-    const unfulfilledBadge = document.getElementById('fulfillmentUnfulfilledBadge');
     if (totalOrdersLabel) totalOrdersLabel.textContent = `Total Orders: ${fulfillmentOrders.length}`;
-    if (unfulfilledBadge) unfulfilledBadge.textContent = `Unfulfilled: ${fulfillmentOrders.length}`;
 
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
@@ -1055,7 +1056,10 @@ function renderFulfillmentTable() {
     });
 
     const selectedCountLabel = document.getElementById('fulfillmentSelectedCountLabel');
-    if (selectedCountLabel) selectedCountLabel.textContent = `${fulfillmentSelectedIds.size} selected`;
+    if (selectedCountLabel) {
+        selectedCountLabel.textContent = `${fulfillmentSelectedIds.size} selected`;
+        selectedCountLabel.style.display = fulfillmentSelectedIds.size === 0 ? 'none' : '';
+    }
 
     renderFulfillmentSidePanel();
     updateFulfillmentFulfillBtnState();

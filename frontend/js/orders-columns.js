@@ -428,13 +428,27 @@ function buildOrdersGridColumns() {
             },
             valueSetter: (params) => {
                 const newValue = (params.newValue || '').trim();
-                if (['Pending', 'Done', 'Received'].includes(newValue)) {
+                if (!['Pending', 'Done', 'Received'].includes(newValue)) return false;
+                if (newValue === (params.data.piece_received || '').trim()) return false;
+
+                const applyChange = () => {
                     params.data.piece_received = newValue;
                     saveOrderField(params.data.id, 'piece_received', newValue);
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
-                    return true;
+                };
+
+                // Marking the piece received on an already delivered/returned order is usually a
+                // slip - confirm first. The confirm is async, so commit from its callback and
+                // tell AG Grid the synchronous set didn't take.
+                if (newValue === 'Received'
+                    && ['delivered', 'returned'].includes((params.data.order_status || '').toLowerCase())) {
+                    confirmActionOnTerminalOrders([params.data.order_number], 'mark the piece received')
+                        .then((ok) => { if (ok) applyChange(); });
+                    return false;
                 }
-                return false;
+
+                applyChange();
+                return true;
             }
         },
         {

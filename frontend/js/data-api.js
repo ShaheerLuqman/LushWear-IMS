@@ -174,15 +174,18 @@ function populateOrdersPeriodFilterDropdown() {
     const currentVal = selectEl.value;
     const options = [{ value: ALL_ORDERS_VALUE, label: 'Recent Orders' }, ...buildStaticPeriodOptions()];
     selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
-    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : ALL_ORDERS_VALUE;
+    const { month, year } = getCurrentOrdersPeriod();
+    selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : `${month}-${year}`;
 }
 
 /** Loads orders for whichever period is currently selected in the period dropdown, defaulting
- * to "Recent Orders" when none is selected yet (e.g. initial load). Single entry point for
- * reloading orders - safe to call after any mutation without silently dropping the user out
- * of a selected past period back to "Recent Orders". */
+ * to the current month period when none is selected yet (e.g. initial load). Single entry point
+ * for reloading orders - safe to call after any mutation without silently dropping the user out
+ * of a selected period back to the default. */
 async function loadOrders() {
-    const periodVal = document.getElementById('ordersPeriodFilter')?.value;
+    const selectEl = document.getElementById('ordersPeriodFilter');
+    if (selectEl && !selectEl.value) populateOrdersPeriodFilterDropdown();
+    const periodVal = selectEl?.value;
     if (periodVal && periodVal !== ALL_ORDERS_VALUE) {
         const [month, year] = periodVal.split('-');
         await loadOrdersForPeriod(Number(month), Number(year));

@@ -121,9 +121,10 @@ function airwayBillsPdfFilename() {
  * through the backend, since only GetOrderList.php - not any tracking lookup - ever
  * returns their internal order_id again after booking).
  *
- * Every destination tab is opened blank up front, before any await, and navigated once
- * its URL is known (see openBlankTab/navigateTab) - exactly one tab per document, opened
- * the instant the button is clicked, with no popup-blocker delay or duplicate fallback tab.
+ * The PostEx PDF is downloaded as a file; Couriers Next's HTML page is opened in a tab,
+ * blank up front before any await and navigated once its URL is known (see
+ * openBlankTab/navigateTab) - opened the instant the button is clicked, with no
+ * popup-blocker delay or duplicate fallback tab.
  *
  * Returns the count of orders that had nothing to print (no tracking number yet, or an
  * unsupported courier) so the caller can report it. */
@@ -138,7 +139,6 @@ async function printAirwayBillsForOrders(orders) {
     const couriersNextOrders = eligible.filter(o => getCourierDisplayName(o) === 'Couriers Next');
 
     // Opened synchronously, still within this click's call stack, before any fetch starts.
-    const postexTab = postexOrders.length > 0 ? openBlankTab() : null;
     const couriersNextTab = couriersNextOrders.length > 0 ? openBlankTab() : null;
 
     if (postexOrders.length > 0) {
@@ -150,7 +150,12 @@ async function printAirwayBillsForOrders(orders) {
         });
         const blob = await res.blob();
         const url = window.URL.createObjectURL(blob);
-        navigateTab(postexTab, url);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = airwayBillsPdfFilename();
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
         setTimeout(() => window.URL.revokeObjectURL(url), 60000);
     }
 

@@ -1525,6 +1525,9 @@ $$;
 -- net_profit was replaced by cost_of_goods_sold/tax_total/gross_profit - the
 -- true bottom-line Net Profit is Gross Profit minus the per-ledger expense
 -- lines (get_month_summary_expense_lines), computed in the orders route.
+-- cost_of_goods_sold counts delivered orders only (goods on en-route,
+-- unfulfilled, or returned orders are still in stock); Net Sales and Tax stay
+-- on the wider non-cancelled basis.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
@@ -1570,7 +1573,7 @@ AS $$
             COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('fulfilled', 'cna', 'rfd', 'ica'))::INT AS enroute_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'unfulfilled')::INT AS unfulfilled_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'cancelled')::INT AS cancelled_orders_count,
-            COALESCE(SUM(cost_price) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS cost_of_goods_sold,
+            COALESCE(SUM(cost_price) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS cost_of_goods_sold,
             COALESCE(SUM(tax_amount) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS tax_total,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned

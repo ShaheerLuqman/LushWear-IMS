@@ -464,9 +464,10 @@ body {
     margin-left: auto;
 }
 
-/* Only the orders toolbar is wide enough to need scrolling; applying this to every
-   view puts a scrollbar under the transactions row, whose controls can't shrink. */
-body:has(#ordersView.active) .header-actions {
+/* Only the orders and order-fulfillment toolbars are wide enough to need scrolling; applying
+   this to every view puts a scrollbar under the transactions row, whose controls can't shrink. */
+body:has(#ordersView.active) .header-actions,
+body:has(#orderFulfillmentView.active) .header-actions {
     overflow-x: auto;
     overflow-y: visible;
     -webkit-overflow-scrolling: touch;
@@ -5431,44 +5432,32 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
    Order Fulfillment view
    ============================================ */
 
-.fulfillment-subtitle {
-    color: var(--text-muted);
-    font-size: 13px;
-    margin: -8px 0 18px;
-}
-
+/* Lives in the header row, left of Export/Refresh - so it lays out inline and pins its
+   controls to the same 36px as the rest of the header toolbar, rather than the stacked-label
+   card it used to be above the table. */
 .fulfillment-filters-bar {
     display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 16px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 16px 20px;
-    margin-bottom: 20px;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
 }
 
 .fulfillment-filter-group {
     display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 160px;
+    align-items: center;
+    flex-shrink: 0;
 }
 
+/* The control's own default text ("All Cities" / "All Tags" / the date placeholder) already
+   names it in the compact header row. */
 .fulfillment-filter-group label {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: .4px;
+    display: none;
 }
 
 /* The multi-select filters (grid-filters.js) replace their <select> with a button inside a
-   wrapper, which has to fill the column-flex group the same way a bare field would. */
+   wrapper, which has to fill the group the same way a bare field would. */
 .fulfillment-filter-group .checkbox-filter-control {
     display: flex;
-    width: 100%;
 }
 
 /* .form-input on these <select>s is only a marker class with no rules of its own (see the
@@ -5478,9 +5467,9 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
    here rather than inherit anything from the element name. */
 .fulfillment-filter-group select,
 .fulfillment-filter-group .checkbox-filter-control__btn {
-    width: 100%;
-    height: 40px;
-    padding: 0 36px 0 12px;
+    min-width: 150px;
+    height: 36px;
+    padding: 0 32px 0 12px;
     background-color: var(--bg-secondary);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
@@ -5517,7 +5506,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-radius: var(--radius-md);
     background: var(--bg-secondary);
     padding: 0 10px;
-    height: 40px;
+    height: 36px;
     color: var(--text-muted);
 }
 
@@ -5527,12 +5516,13 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     outline: none;
     font-size: 13px;
     color: var(--text-primary);
-    width: 150px;
+    width: 140px;
     cursor: pointer;
 }
 
 .fulfillment-clear-filters-btn {
-    height: 40px;
+    height: 36px;
+    flex-shrink: 0;
 }
 
 .fulfillment-body {
@@ -5552,7 +5542,9 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-radius: var(--radius-lg);
     display: flex;
     flex-direction: column;
-    overflow: hidden;
+    /* Not clipped: the courier dropdown in the toolbar has to be able to overflow the panel.
+       The table's own rounded bottom corners are handled on .fulfillment-table-wrap. */
+    overflow: visible;
 }
 
 .fulfillment-table-toolbar {
@@ -5607,6 +5599,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex: 1;
     min-height: 0;
     overflow: auto;
+    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 
 .fulfillment-table {
@@ -5994,13 +5987,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: flex;
     align-items: center;
     gap: 10px;
-    margin-left: auto;
-}
-
-.fulfillment-side-panel-order-id {
-    font-size: 13px;
-    color: var(--text-muted);
-    white-space: nowrap;
 }
 
 /* Order Fulfillment: live booking progress screen (#orderFulfillmentProgressView) */

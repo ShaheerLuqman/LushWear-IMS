@@ -111,7 +111,7 @@ function initOrdersActions() {
         try {
             const skipped = await printAirwayBillsForOrders(selectedRows);
             showToast(
-                `Airway bills opened${skipped > 0 ? ` (${skipped} order(s) skipped - not fulfilled or unsupported courier)` : ''}`,
+                `Airway bills ready${skipped > 0 ? ` (${skipped} order(s) skipped - not fulfilled or unsupported courier)` : ''}`,
                 'success'
             );
         } catch (e) {
@@ -231,6 +231,33 @@ async function saveOrderField(orderId, field, value) {
         console.error(`Error saving ${field}:`, error);
         showToast(`Failed to save ${field}`, 'error');
     }
+}
+
+/** Order numbers from `orderNumbers` whose currently-loaded row is already delivered or
+ * returned. Only orders in the loaded period are checked - a number not on the grid isn't
+ * known here and is left for the backend to handle. */
+function alreadyTerminalOrderNumbers(orderNumbers) {
+    const wanted = new Set(orderNumbers.map(String));
+    return (orders || [])
+        .filter((o) => o && o.id !== '__footer__' && wanted.has(String(o.order_number))
+            && ['delivered', 'returned'].includes((o.order_status || '').toLowerCase()))
+        .map((o) => o.order_number);
+}
+
+/** Confirm before a "mark Returned / piece received" action lands on orders that are already
+ * delivered or returned (usually a slip). Resolves true when there's nothing to warn about
+ * or the user confirms. */
+async function confirmActionOnTerminalOrders(orderNumbers, actionLabel) {
+    const already = alreadyTerminalOrderNumbers(orderNumbers);
+    if (already.length === 0) return true;
+    const list = [...already].sort((a, b) => a - b).join(', ');
+    return showAppConfirm({
+        title: 'Order already delivered or returned',
+        message: `${already.length} order(s) are already delivered or returned: ${list}.\n\n`
+            + `Are you sure you want to ${actionLabel}?`,
+        confirmText: 'Continue',
+        danger: true
+    });
 }
 
 // ============================================

@@ -294,6 +294,24 @@
                         <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
                     <div id="orderFulfillmentHeaderWrap" class="header-inline" style="display: none;">
+                        <div class="fulfillment-filters-bar">
+                            <div class="fulfillment-filter-group">
+                                <label for="fulfillmentCityFilter">City</label>
+                                <select id="fulfillmentCityFilter" class="form-input"></select>
+                            </div>
+                            <div class="fulfillment-filter-group">
+                                <label for="fulfillmentTagsFilter">Tags</label>
+                                <select id="fulfillmentTagsFilter" class="form-input"></select>
+                            </div>
+                            <div class="fulfillment-filter-group">
+                                <label for="fulfillmentDateRangeInput">Date Range</label>
+                                <div class="fulfillment-date-range-input-wrap">
+                                    <i class="fa-regular fa-calendar"></i>
+                                    <input type="text" id="fulfillmentDateRangeInput" class="fulfillment-date-range-input" placeholder="Select date range" readonly>
+                                </div>
+                            </div>
+                            <button type="button" id="fulfillmentClearFiltersBtn" class="btn btn-secondary fulfillment-clear-filters-btn">Clear Filters</button>
+                        </div>
                         <button type="button" id="orderFulfillmentExportBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export</button>
                         <button type="button" id="orderFulfillmentRefreshBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrows-rotate"></i> Refresh</button>
                     </div>
@@ -479,63 +497,40 @@
 
                 <!-- Order Fulfillment View -->
                 <div id="orderFulfillmentView" class="view">
-                    <p class="fulfillment-subtitle">Manage and fulfill your unfulfilled orders</p>
-
-                    <div class="fulfillment-filters-bar">
-                        <div class="fulfillment-filter-group">
-                            <label for="fulfillmentCityFilter">City</label>
-                            <select id="fulfillmentCityFilter" class="form-input"></select>
-                        </div>
-                        <div class="fulfillment-filter-group">
-                            <label for="fulfillmentTagsFilter">Tags</label>
-                            <select id="fulfillmentTagsFilter" class="form-input"></select>
-                        </div>
-                        <div class="fulfillment-filter-group">
-                            <label for="fulfillmentDateRangeInput">Date Range</label>
-                            <div class="fulfillment-date-range-input-wrap">
-                                <i class="fa-regular fa-calendar"></i>
-                                <input type="text" id="fulfillmentDateRangeInput" class="fulfillment-date-range-input" placeholder="Select date range" readonly>
-                            </div>
-                        </div>
-                        <button type="button" id="fulfillmentClearFiltersBtn" class="btn btn-secondary fulfillment-clear-filters-btn">Clear Filters</button>
-
-                        <div id="fulfillmentSidePanelContent" class="fulfillment-side-panel-content" style="display: none;">
-                            <span id="fulfillmentSidePanelOrderId" class="fulfillment-side-panel-order-id"></span>
-
-                            <div class="fulfillment-courier-select-wrap">
-                                <button type="button" id="fulfillmentCourierSelectBtn" class="fulfillment-courier-select-btn">
-                                    <span id="fulfillmentCourierSelectLabel" class="fulfillment-courier-select-label">Select Courier</span>
-                                    <i data-lucide="chevron-down" class="fulfillment-courier-select-caret"></i>
-                                </button>
-                                <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
-                            </div>
-
-                            <!-- The courier assigns the tracking number at booking time, so there is
-                                 deliberately no tracking-number field here. A pickup location is required:
-                                 PostEx rejects a booking that names no pickup address, and Couriers Next
-                                 needs the shipper profile the parcel ships under. -->
-                            <div class="form-group fulfillment-pickup-group" id="fulfillmentPickupGroup">
-                                <select id="fulfillmentPickupSelect" class="form-input" disabled>
-                                    <option value="">Select courier first</option>
-                                </select>
-                            </div>
-
-                            <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn" disabled><i data-lucide="check-circle-2"></i> Fulfill Order</button>
-                            <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
-                        </div>
-                    </div>
-
                     <div class="fulfillment-body">
                         <div class="fulfillment-table-panel">
                             <div class="fulfillment-table-toolbar">
                                 <label class="fulfillment-select-all">
                                     <input type="checkbox" id="fulfillmentSelectAll">
-                                    <span id="fulfillmentSelectedCountLabel">0 selected</span>
+                                    <span>Select all</span>
                                 </label>
                                 <button type="button" id="fulfillmentClearSelectionBtn" class="fulfillment-link-btn">Clear Selection</button>
                                 <div class="fulfillment-table-toolbar-spacer"></div>
                                 <span id="fulfillmentTotalOrdersLabel" class="fulfillment-toolbar-stat">Total Orders: 0</span>
-                                <span id="fulfillmentUnfulfilledBadge" class="fulfillment-toolbar-badge">Unfulfilled: 0</span>
+                                <span id="fulfillmentSelectedCountLabel" class="fulfillment-toolbar-badge" style="display: none;">0 selected</span>
+
+                                <div id="fulfillmentSidePanelContent" class="fulfillment-side-panel-content" style="display: none;">
+                                    <div class="fulfillment-courier-select-wrap">
+                                        <button type="button" id="fulfillmentCourierSelectBtn" class="fulfillment-courier-select-btn">
+                                            <span id="fulfillmentCourierSelectLabel" class="fulfillment-courier-select-label">Select Courier</span>
+                                            <i data-lucide="chevron-down" class="fulfillment-courier-select-caret"></i>
+                                        </button>
+                                        <div id="fulfillmentCourierMenu" class="fulfillment-courier-menu"></div>
+                                    </div>
+
+                                    <!-- The courier assigns the tracking number at booking time, so there is
+                                         deliberately no tracking-number field here. A pickup location is required:
+                                         PostEx rejects a booking that names no pickup address, and Couriers Next
+                                         needs the shipper profile the parcel ships under. -->
+                                    <div class="form-group fulfillment-pickup-group" id="fulfillmentPickupGroup">
+                                        <select id="fulfillmentPickupSelect" class="form-input" disabled>
+                                            <option value="">Select courier first</option>
+                                        </select>
+                                    </div>
+
+                                    <button type="button" id="fulfillmentFulfillBtn" class="btn btn-primary fulfillment-fulfill-btn" disabled><i data-lucide="check-circle-2"></i> Fulfill Order</button>
+                                    <button type="button" id="fulfillmentCancelSelectionBtn" class="btn btn-secondary fulfillment-cancel-btn">Cancel</button>
+                                </div>
                             </div>
                             <div class="fulfillment-table-wrap">
                                 <table class="fulfillment-table">

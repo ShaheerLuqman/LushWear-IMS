@@ -198,7 +198,11 @@ function openEditVariantCostsModal(product) {
     const sharedInput = document.getElementById('editVariantCostsSharedInput');
     if (toggleWrap) toggleWrap.style.display = multiVariant ? 'flex' : 'none';
     if (toggle) toggle.checked = false;
-    if (sharedInput) sharedInput.value = product.cost_price ?? '';
+    // Shared field saves onto every variant, so seed it from the variants' own cost
+    // (blank when they disagree - that's what the per-variant toggle is for), not from
+    // product.cost_price, which this modal never writes for a product that has variants.
+    const sharedCost = rows.every(r => r.cost === rows[0].cost) ? rows[0].cost : null;
+    if (sharedInput) sharedInput.value = sharedCost ?? '';
     if (sharedRow) sharedRow.style.display = multiVariant ? 'block' : 'none';
     listEl.style.display = multiVariant ? 'none' : 'flex';
 
@@ -479,11 +483,15 @@ async function bulkUpdateOrderStatus(orderStatus) {
         showToast('Enter at least one valid order number (one per line).', 'error');
         return;
     }
+    if (orderStatus === 'returned'
+        && !(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned'))) {
+        return;
+    }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
     const btnReturned = document.getElementById('bulkUpdateSetReturned');
     const btnCancelled = document.getElementById('bulkUpdateSetCancelled');
     const btnPieceReceived = document.getElementById('bulkUpdateSetPieceReceived');
-    
+
     // Determine which button was clicked based on orderStatus
     let activeButton = null;
     if (orderStatus === 'delivered') {
@@ -541,6 +549,9 @@ async function bulkUpdatePieceReceived() {
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
         showToast('Enter at least one valid order number (one per line).', 'error');
+        return;
+    }
+    if (!(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned + Piece Received'))) {
         return;
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
