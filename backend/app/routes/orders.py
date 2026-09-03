@@ -2580,8 +2580,8 @@ async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], o
         except Exception:
             logger.exception(f"[delivery-status-bulk] Failed to save {len(batch)} orders")
 
-    # This is the only place courier_pickup_date is ever set, so it is also the only place
-    # bill membership can change on its own. Best-effort: a failure here leaves the orders
+    # Every write site that fills courier_pickup_date re-runs assignment (get_delivery_status
+    # does the single-order equivalent). Best-effort: a failure here leaves the orders
     # correctly saved but unassigned, and the next run picks them up (assign is idempotent).
     await _assign_courier_bills(org_id, [u["id"] for u in updates if "courier_pickup_date" in u])
 
@@ -2678,7 +2678,7 @@ async def _fetch_postex_payment_statuses(
 
 
 @router.get("/{order_id}/delivery-status")
-async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status"), org_id: str = Depends(get_org_id)):
+async def get_delivery_status(order_id: str, save: bool = Query(False, description="If true, store fetched status in order.delivery_status"), force: bool = Query(False, description="If true, skip the cached-value check and always hit the courier API"), org_id: str = Depends(get_org_id)):
     """Fetch delivery status from courier API. Optionally store in order.delivery_status when save=true."""
     try:
         supabase = get_supabase()
@@ -2705,7 +2705,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         delivery_status_data = None
         existing_delivery = order.get("delivery_status")
 
-        if _delivery_status_is_fresh(existing_delivery):
+        if not force and _delivery_status_is_fresh(existing_delivery):
             return existing_delivery
 
         if courier_normalized in ("postex",):
@@ -2758,6 +2758,9 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
                 logger.info(f"[delivery-status] No derived_status, order_status not updated")
             org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
             logger.info(f"[delivery-status] Update payload: {update_payload.keys()}")
+
+            if "courier_pickup_date" in update_payload:
+                await _assign_courier_bills(org_id, [order_id])
 
         return delivery_status_data
         

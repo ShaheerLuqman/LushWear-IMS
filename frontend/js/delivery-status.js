@@ -333,7 +333,7 @@ async function fetchOrderCustomerInfo(orderId) {
     }
 }
 
-async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
+async function fetchDeliveryStatus(orderId, courier, trackingNumber, force = false) {
     if (!orderId) {
         showToast('Order ID not available', 'error');
         return;
@@ -377,7 +377,7 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber) {
     }
 
     try {
-        const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true`;
+        const url = `${API_BASE}/orders/${orderId}/delivery-status?save=true${force ? '&force=true' : ''}`;
         const [response, customerInfo] = await Promise.all([
             fetch(url, {
                 method: 'GET',
@@ -488,7 +488,7 @@ function displayDeliveryStatus(data, orderId, customerInfo) {
     html += '<div class="delivery-status-modal-actions"><button type="button" class="btn btn-primary delivery-status-btn">Refresh status</button></div>';
     content.innerHTML = html;
     content.querySelector('.delivery-status-btn')?.addEventListener('click', () => {
-        fetchDeliveryStatus(orderId, data.courier, data.tracking_number);
+        fetchDeliveryStatus(orderId, data.courier, data.tracking_number, true);
     });
 }
 
