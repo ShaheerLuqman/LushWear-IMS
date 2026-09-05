@@ -503,16 +503,6 @@ class Bill(BillBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-class ApAgeingRow(BaseModel):
-    supplier_id: str
-    supplier_name: str
-    outstanding: float = 0.0
-    current: float = 0.0
-    d1_30: float = 0.0
-    d31_60: float = 0.0
-    d61_90: float = 0.0
-    d90_plus: float = 0.0
-
 # ==================== ORGANIZATION / USER / AUTH MODELS ====================
 
 def _normalize_email(v):

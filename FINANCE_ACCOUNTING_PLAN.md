@@ -41,9 +41,16 @@ entry** names both of its accounts and is projected to a journal entry by
 trigger. Payments are ordinary transaction entries against the supplier's ledger;
 what a bill still owes is derived FIFO from that ledger rather than stored.
 
-Reports reading the journal: **Trial Balance**, **ledger statement**, **AP
-Ageing**. Month Summary still blends order data with transaction data and is an
-operations report, not a financial statement.
+Reports reading the journal: **Trial Balance**, **ledger statement**. Month
+Summary still blends order data with transaction data and is an operations
+report, not a financial statement.
+
+**AP Ageing removed, AR Ageing dropped from the plan** (2026-09-05, product
+decision: not needed). The shipped `get_ap_ageing` RPC, `GET
+/bills/ap-ageing`, and the Outstanding Payables page were torn out (migration
+`20260905010000_bills_drop_ap_ageing.sql`); `finances_bills_with_paid`, the
+FIFO settlement view it read, stays — bill payment status still depends on it.
+AR Ageing was never built. See gap #11 and Phase 4 below.
 
 **New since the last review:** an org's fiscal calendar is now its own
 setting rather than a hardcoded constant. `system_organizations` gained
@@ -100,10 +107,12 @@ in this document still resolve.
 
 #### 🟠 B5. The statements that report on the books are still missing
 
-Trial Balance, the per-ledger statement and AP Ageing exist and read the
-journal. **Profit & Loss, Balance Sheet, Cash Flow, Day Book and AR Ageing do
-not**, and neither does a date-ranged account statement with opening and closing
-figures — the ledger statement always runs from the beginning.
+Trial Balance and the per-ledger statement exist and read the journal.
+**Profit & Loss, Balance Sheet, Cash Flow and Day Book do not**, and neither
+does a date-ranged account statement with opening and closing figures — the
+ledger statement always runs from the beginning. (AP Ageing existed and read
+the journal too, but was removed as unwanted; AR Ageing was never built and is
+no longer planned — see "Where this stands".)
 
 "Month Summary" is an *order* report, not a financial statement: it blends
 order-level data with transaction spending, so it cannot be reconciled against the
@@ -208,12 +217,12 @@ Grouped by whether it's foundational, the modules you asked about, or optional.
 | # | Gap | Status | Notes |
 |---|---|---|---|
 | 5 | **Purchase Bills (AP)** — *the one you named* | **done** | Header + lines + tax + totals + `draft`/`received`/`cancelled` + number series + stock on receive. Attachments and bill PDFs deferred. |
-| 6 | **Payments / receipts against a document** | **superseded** | No allocation table: a payment is a transaction entry against the supplier, and settlement is derived FIFO from that ledger. Partial payments and AP ageing both work. |
+| 6 | **Payments / receipts against a document** | **superseded** | No allocation table: a payment is a transaction entry against the supplier, and settlement is derived FIFO from that ledger. Partial payments work; ageing on top of it was removed as unwanted (see "Where this stands"). |
 | 7 | **Sales Invoices (AR)** | **open** | Shopify covers D2C; no way to invoice a wholesale/B2B customer, no AR balance. Gated on open question 3. |
 | 8 | **Expenses with real categories** | **done** | `report_category` replaced the name-substring buckets. |
 | 9 | **Inventory ↔ accounting link (COGS + stock valuation)** | **half** | Bills now debit Inventory and move stock. Nothing credits it — delivered orders post no COGS — so the asset only grows. The largest remaining gap; Phase 5. |
 | 10 | **Credit notes / returns / refunds** | **open** | Orders carry a `returned` status with no financial document behind it. Phase 5. |
-| 11 | **Financial statements** | **partly** | Trial Balance, Account statement (per ledger), AP Ageing done. P&L, Balance Sheet, Cash Flow, Day Book, AR Ageing outstanding. |
+| 11 | **Financial statements** | **partly** | Trial Balance, Account statement (per ledger) done. P&L, Balance Sheet, Cash Flow, Day Book outstanding. AP/AR Ageing not planned — dropped as unwanted. |
 
 ### Controls & hygiene
 
@@ -431,10 +440,12 @@ would double-count every one of them.
 
 ### Phase 2 — Purchase Bills (AP) — **shipped**
 
-Closes gaps 5, 6 and half of 9. Bills, AP Ageing and the supplier's own ledger
-statement are in the sidebar; `receive_bill()` posts `Dr Inventory` /
-`Dr Tax on Purchases` / `Cr supplier` through `post_journal_entry()` and moves
-stock in the same call, and `unreceive_bill()` undoes both.
+Closes gaps 5, 6 and half of 9. Bills and the supplier's own ledger statement
+are in the sidebar; `receive_bill()` posts `Dr Inventory` / `Dr Tax on
+Purchases` / `Cr supplier` through `post_journal_entry()` and moves stock in
+the same call, and `unreceive_bill()` undoes both. (An AP Ageing report also
+shipped in this phase, reading `finances_bills_with_paid` — removed 2026-09-05
+as an unwanted report; see "Where this stands".)
 
 **Decision: no `contacts` table — a supplier IS a ledger.** The plan originally
 copied Akaunting's `contacts`, but Akaunting needs it because its core has no
@@ -465,8 +476,7 @@ When this would need revisiting: a few hundred suppliers (the trial balance
 would fill with party accounts and want a control account), or one entity traded
 with as both customer and supplier. Both are recoverable later — a contacts
 table can be layered over existing party ledgers without redoing the bills or
-the journal, because the accounting lives in the ledger either way. AP ageing is
-*not* a reason: it comes from bill dates, not from a party record.
+the journal, because the accounting lives in the ledger either way.
 
 Two further decisions taken while building it:
 

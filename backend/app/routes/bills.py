@@ -13,7 +13,6 @@ stock, flip the status — so it is a Postgres function rather than a sequence o
 PostgREST calls. unreceive_bill is its exact reverse.
 """
 import math
-from datetime import date
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -22,7 +21,7 @@ from pydantic import BaseModel
 from app import shopify
 from app.auth import get_org_id, require_auth
 from app.database import get_supabase
-from app.models import ApAgeingRow, Bill, BillCreate, BillUpdate
+from app.models import Bill, BillCreate, BillUpdate
 from app.org_scope import org_table
 from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 
@@ -185,20 +184,6 @@ async def list_bills(
     if supplier_id:
         query = query.eq("supplier_id", supplier_id)
     return _attach_items(supabase, org_id, query.execute().data or [])
-
-
-@router.get("/ap-ageing", response_model=List[ApAgeingRow])
-async def get_ap_ageing(
-    as_of: Optional[date] = Query(None, description="Ageing as at this date (default today)"),
-    org_id: str = Depends(get_org_id),
-):
-    """What is owed to each supplier, bucketed by how overdue it is. Only
-    received bills are debts — drafts and cancelled bills are not."""
-    resp = get_supabase().rpc("get_ap_ageing", {
-        "p_org_id": org_id,
-        "p_as_of": (as_of or date.today()).isoformat(),
-    }).execute()
-    return resp.data or []
 
 
 @router.get("/{bill_id}", response_model=Bill)

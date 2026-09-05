@@ -7,13 +7,11 @@
 // still owes is derived from that ledger balance, applied oldest-bill-first.
 
 let billsGridApi = null;
-let apAgeingGridApi = null;
 let bills = [];
 const BILL_STATUSES = ['draft', 'received', 'cancelled'];
 // Multi-select checkbox filter (grid-filters.js); its selection goes to the API as repeated
 // ?status= params. null while nothing is narrowed, which reads as "every status".
 let billsStatusFilterControl = null;
-let apAgeingAsOf = null;
 let editingBillId = null;
 // Line rows live here while the modal is open rather than being read back out
 // of the DOM on save, so a half-typed row can't silently become a zero line.
@@ -1096,63 +1094,8 @@ function initBillsGrid() {
     });
 }
 
-async function loadApAgeing() {
-    if (!apAgeingAsOf) apAgeingAsOf = getTodayDateString();
-    const input = document.getElementById('apAgeingAsOf');
-    if (input) input.value = apAgeingAsOf;
-
-    if (apAgeingGridApi) apAgeingGridApi.showLoadingOverlay();
-    let rows;
-    try {
-        rows = await apiJson(`/bills/ap-ageing?as_of=${apAgeingAsOf}`, { fallback: 'Failed to load outstanding payables' });
-    } catch (error) {
-        console.error('Error loading outstanding payables:', error);
-        showToast('Failed to load outstanding payables', 'error');
-        if (apAgeingGridApi) apAgeingGridApi.hideOverlay();
-        return;
-    }
-
-    const total = rows.reduce((sum, r) => sum + (parseFloat(r.outstanding) || 0), 0);
-    const totalEl = document.getElementById('apAgeingTotal');
-    if (totalEl) {
-        totalEl.className = 'trial-balance-status';
-        totalEl.textContent = `Rs ${formatMoney(total)} payable`;
-    }
-    if (apAgeingGridApi) {
-        apAgeingGridApi.setGridOption('rowData', rows);
-        apAgeingGridApi.hideOverlay();
-    }
-}
-
-function initApAgeingGrid() {
-    const gridDiv = document.getElementById('apAgeingGrid');
-    if (!gridDiv) return;
-
-    const money = (params) => (params.value ? formatMoney(params.value) : '');
-    const columnDefs = [
-        { headerName: 'Supplier', field: 'supplier_name', flex: 1, minWidth: 180 },
-        { headerName: 'Current', field: 'current', width: 130, type: 'rightAligned', valueFormatter: money },
-        { headerName: '1–30 days', field: 'd1_30', width: 130, type: 'rightAligned', valueFormatter: money },
-        { headerName: '31–60 days', field: 'd31_60', width: 130, type: 'rightAligned', valueFormatter: money },
-        { headerName: '61–90 days', field: 'd61_90', width: 130, type: 'rightAligned', valueFormatter: money },
-        { headerName: '90+ days', field: 'd90_plus', width: 130, type: 'rightAligned', valueFormatter: money },
-        { headerName: 'Total (Rs)', field: 'outstanding', width: 150, type: 'rightAligned', valueFormatter: money },
-    ];
-
-    agGrid.createGrid(gridDiv, {
-        columnDefs,
-        rowData: [],
-        defaultColDef: { sortable: true, resizable: true, filter: true, minWidth: 90 },
-        pagination: false,
-        domLayout: 'normal',
-        getRowId: (params) => params.data.supplier_id,
-        onGridReady: (params) => { apAgeingGridApi = params.api; },
-    });
-}
-
 function initBills() {
     initBillsGrid();
-    initApAgeingGrid();
 
     document.getElementById('createBillBtn')?.addEventListener('click', () => openBillModal());
     billsStatusFilterControl = createCheckboxFilterControl('billsStatusFilter', {
@@ -1185,10 +1128,5 @@ function initBills() {
     });
     document.getElementById('billRevertBtn')?.addEventListener('click', async () => {
         if (editingBillId && await unreceiveBill(editingBillId)) closeBillModal();
-    });
-
-    document.getElementById('apAgeingAsOf')?.addEventListener('change', (e) => {
-        apAgeingAsOf = e.target.value || getTodayDateString();
-        loadApAgeing();
     });
 }

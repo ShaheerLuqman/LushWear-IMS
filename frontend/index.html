@@ -184,10 +184,6 @@
                             <span class="nav-icon"><i data-lucide="scale"></i></span>
                             <span class="nav-tooltip">Trial Balance</span>
                         </button>
-                        <button class="nav-item" data-view="apAgeing" title="Outstanding Payables">
-                            <span class="nav-icon"><i data-lucide="hourglass"></i></span>
-                            <span class="nav-tooltip">Outstanding Payables</span>
-                        </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
                         <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
@@ -292,11 +288,6 @@
                         <label for="trialBalanceAsOf">As at</label>
                         <input type="date" id="trialBalanceAsOf" class="form-input trial-balance-date">
                         <span id="trialBalanceStatus" class="trial-balance-status"></span>
-                    </div>
-                    <div id="apAgeingHeaderWrap" class="header-inline" style="display: none;">
-                        <label for="apAgeingAsOf">As at</label>
-                        <input type="date" id="apAgeingAsOf" class="form-input trial-balance-date">
-                        <span id="apAgeingTotal" class="trial-balance-status"></span>
                     </div>
                     <div id="orderFulfillmentHeaderWrap" class="header-inline" style="display: none;">
                         <div class="fulfillment-filters-bar">
@@ -421,10 +412,6 @@
 
                 <div id="billsView" class="view">
                     <div id="billsGrid" class="ag-theme-alpine grid-container"></div>
-                </div>
-
-                <div id="apAgeingView" class="view">
-                    <div id="apAgeingGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
                 <!-- Courier Payment Report View -->
@@ -749,7 +736,7 @@
                                 </div>
                             </form>
                         </div>
-                        <div class="bill-modal-footer">
+                        <div class="modal-pinned-footer">
                             <button type="button" id="billCancelBtn" class="btn btn-secondary">Cancel</button>
                             <button type="button" id="billRevertBtn" class="btn btn-secondary" style="display: none;">Revert to Draft</button>
                             <button type="button" id="billConfirmBtn" class="btn btn-primary" style="display: none;">Confirm Bill</button>
@@ -890,7 +877,7 @@
                                 <div id="bulkEntryProgress" class="bulk-entry-progress" style="display: none;"></div>
                             </div>
                         </div>
-                        <div class="transaction-entry-footer">
+                        <div class="modal-pinned-footer">
                             <button type="button" id="transactionEntryCancelBtn" class="btn btn-secondary">Cancel</button>
                             <button type="submit" form="transactionEntryForm" id="transactionEntrySubmitBtn" class="btn btn-primary">Create</button>
                             <button type="button" id="bulkEntrySubmitBtn" class="btn btn-primary" style="display: none;" disabled>Create entries</button>
@@ -1144,7 +1131,7 @@
                                 <div class="form-group">
                                     <label for="settingsShopifyStoreUrl">Shopify store URL</label>
                                     <input type="text" id="settingsShopifyStoreUrl" class="form-input" placeholder="your-store.myshopify.com">
-                                    <div class="form-actions">
+                                    <div class="settings-inline-actions">
                                         <button type="button" id="settingsShopifyConnectBtn" class="btn btn-secondary">Connect Shopify</button>
                                         <span class="form-hint" id="settingsShopifyConnectStatus"></span>
                                     </div>
@@ -1519,45 +1506,6 @@
                 <button type="button" class="btn btn-secondary" id="appConfirmCancelBtn">Cancel</button>
                 <button type="button" class="btn btn-primary" id="appConfirmOkBtn"></button>
             </div>
-        </div>
-    </div>
-
-    <!-- Edit Modal -->
-    <div id="editModal" class="modal">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h2>Edit Product</h2>
-                <button class="modal-close" onclick="closeModal()">&times;</button>
-            </div>
-            <form id="editForm" class="product-form">
-                <input type="hidden" id="editProductId">
-                <div class="form-grid">
-                    <div class="form-group">
-                        <label for="editProductName">Product Name *</label>
-                        <input type="text" id="editProductName" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="editProductQuantity">Quantity</label>
-                        <input type="number" id="editProductQuantity" min="0">
-                    </div>
-                    <div class="form-group">
-                        <label for="editProductPrice">Price</label>
-                        <input type="number" id="editProductPrice" min="0" step="0.01">
-                    </div>
-                    <div class="form-group">
-                        <label for="editProductCostPrice">Cost Price</label>
-                        <input type="number" id="editProductCostPrice" min="0" step="0.01">
-                    </div>
-                    <div class="form-group">
-                        <label for="editProductImageUrl">Image URL</label>
-                        <input type="url" id="editProductImageUrl">
-                    </div>
-                </div>
-                <div class="form-actions">
-                    <button type="button" class="btn btn-secondary" onclick="closeModal()">Cancel</button>
-                    <button type="submit" class="btn btn-primary">Save Changes</button>
-                </div>
-            </form>
         </div>
     </div>
 

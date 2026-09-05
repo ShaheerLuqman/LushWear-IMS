@@ -763,6 +763,3 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('closeDeliveryStatusReportBtn')?.addEventListener('click', closeDeliveryStatusReportModal);
 });
 
-// Referenced by inline onclick handlers in index.html.
-window.closeModal = closeModal;
-

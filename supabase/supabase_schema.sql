@@ -1974,7 +1974,7 @@ CREATE INDEX IF NOT EXISTS idx_bill_items_bill_id ON finances_bill_items (bill_i
 CREATE INDEX IF NOT EXISTS idx_bill_items_org_id  ON finances_bill_items (org_id);
 CREATE INDEX IF NOT EXISTS idx_bill_items_variant ON finances_bill_items (variant_id) WHERE variant_id IS NOT NULL;
 
--- Phase 2, part 2: bill numbering, totals, posting, stock, and AP ageing.
+-- Phase 2, part 2: bill numbering, totals, posting, and stock.
 
 -- Inventory and Tax on Purchases (what bills post to) are seeded with every org
 -- alongside the other system ledgers, above. Deliberately NOT accounts_payable:
@@ -2306,47 +2306,6 @@ SELECT b.*,
        END AS payment_status
   FROM finances_bills b
   LEFT JOIN allocated a ON a.id = b.id;
-
--- Ageing now reads the view, so it inherits the same FIFO settlement. Bills
--- carry no due date, so buckets are days-since-bill-date rather than overdue.
-CREATE OR REPLACE FUNCTION get_ap_ageing(p_org_id UUID, p_as_of DATE)
-RETURNS TABLE(
-    supplier_id   UUID,
-    supplier_name VARCHAR,
-    outstanding   NUMERIC,
-    current       NUMERIC,
-    d1_30         NUMERIC,
-    d31_60        NUMERIC,
-    d61_90        NUMERIC,
-    d90_plus      NUMERIC
-)
-LANGUAGE sql
-STABLE
-AS $$
-    WITH open_bills AS (
-        SELECT b.supplier_id,
-               b.outstanding,
-               p_as_of - b.bill_date AS days_since_bill
-          FROM finances_bills_with_paid b
-         WHERE b.org_id = p_org_id
-           AND b.status = 'received'
-           AND b.bill_date <= p_as_of
-           AND b.outstanding > 0
-    )
-    SELECT l.id,
-           l.name,
-           SUM(ob.outstanding),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill <= 0), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN  1 AND 30), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN 31 AND 60), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill BETWEEN 61 AND 90), 0),
-           COALESCE(SUM(ob.outstanding) FILTER (WHERE ob.days_since_bill > 90), 0)
-      FROM open_bills ob
-      JOIN finances_ledgers l ON l.id = ob.supplier_id
-     GROUP BY l.id, l.name
-     ORDER BY l.name;
-$$;
-
 
 -- ============================================================================
 -- Journal backfill — MUST stay after recalc_ledger_balance is redefined above

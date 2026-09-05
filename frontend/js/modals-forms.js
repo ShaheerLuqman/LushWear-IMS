@@ -1,20 +1,5 @@
 // Shared modal helpers, form wiring, and the bulk-update modals.
 
-// ============================================
-// Modal
-// ============================================
-
-function closeModal() {
-    document.getElementById('editModal').classList.remove('active');
-}
-
-// Close modal on backdrop click
-document.getElementById('editModal')?.addEventListener('click', (e) => {
-    if (e.target.id === 'editModal') {
-        closeModal();
-    }
-});
-
 // Bulk Update Order modal
 function openBulkUpdateOrderModal() {
     const formEl = document.getElementById('bulkUpdateOrderForm');

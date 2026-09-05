@@ -289,23 +289,3 @@ class TestDerivedPaymentStatus:
 
         assert body["payment_status"] == "paid"
         assert body["outstanding"] == 0.0
-
-
-class TestApAgeing:
-    def test_buckets_are_returned(self, make_client):
-        client = make_client(rpc_results={"get_ap_ageing": [{
-            "supplier_id": SUPPLIER, "supplier_name": "Fabric Supplier",
-            "outstanding": 5000.0, "current": 1000.0, "d1_30": 4000.0,
-            "d31_60": 0.0, "d61_90": 0.0, "d90_plus": 0.0,
-        }]})
-        response = client.get("/api/bills/ap-ageing?as_of=2026-09-15")
-
-        assert response.status_code == 200, response.text
-        row = response.json()[0]
-        assert row["supplier_name"] == "Fabric Supplier"
-        assert row["outstanding"] == 5000.0
-        assert row["d1_30"] == 4000.0
-
-    def test_no_payables_returns_empty(self, make_client):
-        client = make_client(rpc_results={"get_ap_ageing": []})
-        assert client.get("/api/bills/ap-ageing").json() == []

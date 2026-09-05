@@ -15,17 +15,9 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 ### Frontend / UX
 
-- [ ] **Better column filtering** — replace the current filter mechanism.
-- [ ] **Per-user view persistence** — remember each user's column widths/layout.
 - [ ] **Keyboard shortcuts** — add shortcuts for common actions.
 - [ ] **Reduce base font size** — tighten the type scale app-wide.
 - [ ] **Refresh color theme** — update the UI's color palette.
-- [ ] **Consistent modal sizing** — make content modals (forms/reports/bill/transaction entry) 80vw/80vh; keep small confirm dialogs compact.
-- [ ] **Pin modal action buttons** — keep buttons fixed in view instead of scrolling with modal content.
-
-#### Full-stack
-
-- [ ] **Notifications** — UI panel + API/storage for notifications.
 
 ### Backend
 
@@ -38,17 +30,12 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Caching** — cache hot reads (products, ledgers) to cut Supabase round-trips.
 
 #### Data & reporting
-- [ ] **Generalize `KNOWN_COLLECTIONS`** — replace the hardcoded collection list with a data-driven one.
-- [ ] **Resolve "Best Sellers"-tagged products' real collection** — 6 products stuck on `Best Sellers` instead of their real category.
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
 - [ ] **Shopify webhooks** — trigger order reconciliation on webhook events, not just polling.
 - [ ] **Shopify REST → GraphQL** — migrate Shopify API calls to GraphQL before REST is retired.
 
 #### Couriers
 - [ ] **Couriers Next status lag** — `TrackOrder.php` shows stale status vs `CurrentStatus.php`; ask their team before fixing.
-
-#### Finance / Bills
-- [ ] **Unit type on bill lines?** — decide if bill line items need an explicit unit column.
 
 #### New capabilities
 - [ ] **AI chatbot** — natural-language querying of the data.
@@ -66,6 +53,9 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Consistent modal sizing** — transaction-entry and delivery-status-report modals now scale as 80vw/80vh (were fixed px) matching bill/PostEx-upload-report; widened the cramped 8-column PostEx settlements table modal; left short forms and confirm dialogs compact (80vw/80vh would've been mostly dead space).
+- [x] **Notifications** — header bell + panel logs every toast that's a real action outcome (saves/syncs/exports/generations/fetches, success or failure); in-memory only, resets each session; validation-guard toasts and routine auto-sync stay out of history.
+- [x] **Pin modal action buttons** — all modals with footer buttons now use shared `.modal-pinned-footer` (deduped `.bill-modal-footer`/`.transaction-entry-footer`); removed the dead, unwired `editModal`.
 - [x] **Bulk cost price update on products** — header button on the Products view opens a modal that sets one cost price on every checkbox-selected product via a new `PUT /products/bulk-update-cost-price` endpoint, cascading it to each product's variants; the modal also has a "Save and recalculate orders" option (date-gated) that refreshes order cost totals for orders including any selected product (`recalculate-order-costs` now takes `product_ids`).
 - [x] **PostEx airway bills in one PDF** — backend chunks get-invoice at 100/call and merges; selection cap raised from 10 to 500, one tab instead of many.
 - [x] **Courier Payment Report defaults to last month** — first-load pickup-date range is now all of the previous calendar month instead of this-month-to-date.

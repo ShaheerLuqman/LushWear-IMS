@@ -261,7 +261,6 @@ function switchView(viewName, { skipReload = false } = {}) {
         'ledgerDetail': 'Ledger',
         'trialBalance': 'Trial Balance',
         'bills': 'Purchase Bills',
-        'apAgeing': 'Outstanding Payables',
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
         'products': 'Products',
@@ -299,7 +298,6 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('billsHeaderWrap', viewName === 'bills');
     show('ledgersHeaderWrap', viewName === 'ledgers');
     show('trialBalanceHeaderWrap', viewName === 'trialBalance');
-    show('apAgeingHeaderWrap', viewName === 'apAgeing');
     show('courierPaymentReportHeaderWrap', viewName === 'courierPaymentReport', 'flex');
     show('orderFulfillmentHeaderWrap', viewName === 'orderFulfillment', 'flex');
 
@@ -345,11 +343,6 @@ function switchView(viewName, { skipReload = false } = {}) {
         (ledgers.length ? Promise.resolve() : loadLedgersList()).then(loadBills);
         setTimeout(() => {
             sizeGridColumns(billsGridApi);
-        }, 100);
-    } else if (viewName === 'apAgeing') {
-        loadApAgeing();
-        setTimeout(() => {
-            sizeGridColumns(apAgeingGridApi);
         }, 100);
     } else if (viewName === 'courierPaymentReport') {
         loadCourierPaymentReport();
