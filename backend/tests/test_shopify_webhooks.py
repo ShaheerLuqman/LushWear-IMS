@@ -143,3 +143,42 @@ class TestDispatch:
         resp = _post(client, {"order_number": 1}, topic="orders/create")
 
         assert resp.status_code == 500
+
+    def test_product_topic_reconciles_the_payload(self, client, monkeypatch):
+        calls = []
+
+        async def _fake_reconcile(org_id, payload):
+            calls.append((org_id, payload))
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_product", _fake_reconcile)
+
+        resp = _post(client, {"id": 42, "title": "Test Product"}, topic="products/update")
+
+        assert resp.status_code == 200
+        assert calls == [("org-1", {"id": 42, "title": "Test Product"})]
+
+    def test_product_delete_deactivates_by_shopify_id(self, client, monkeypatch):
+        calls = []
+
+        async def _fake_deactivate(org_id, shopify_product_id):
+            calls.append((org_id, shopify_product_id))
+
+        monkeypatch.setattr(shopify_webhooks, "deactivate_product_by_shopify_id", _fake_deactivate)
+
+        resp = _post(client, {"id": 42}, topic="products/delete")
+
+        assert resp.status_code == 200
+        assert calls == [("org-1", 42)]
+
+    def test_inventory_level_update_applies_the_new_quantity(self, client, monkeypatch):
+        calls = []
+
+        async def _fake_apply(org_id, inventory_item_id, available):
+            calls.append((org_id, inventory_item_id, available))
+
+        monkeypatch.setattr(shopify_webhooks, "apply_inventory_level_update", _fake_apply)
+
+        resp = _post(client, {"inventory_item_id": 55, "location_id": 1, "available": 3}, topic="inventory_levels/update")
+
+        assert resp.status_code == 200
+        assert calls == [("org-1", 55, 3)]

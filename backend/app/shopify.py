@@ -20,8 +20,13 @@ _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
 
 # Topics app/routes/shopify_webhooks.py handles - kept in sync with that module's
-# _ORDER_TOPICS/app-uninstalled handling. GraphQL enum names, not REST's slash form.
-WEBHOOK_TOPICS = ["ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_FULFILLED", "APP_UNINSTALLED"]
+# _ORDER_TOPICS/_PRODUCT_TOPICS/app-uninstalled/inventory handling. GraphQL enum names,
+# not REST's slash form.
+WEBHOOK_TOPICS = [
+    "ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_FULFILLED",
+    "PRODUCTS_CREATE", "PRODUCTS_UPDATE", "PRODUCTS_DELETE", "INVENTORY_LEVELS_UPDATE",
+    "APP_UNINSTALLED",
+]
 
 _WEBHOOK_SUBSCRIPTION_MUTATION = """
 mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {

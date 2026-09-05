@@ -21,6 +21,11 @@ from fastapi import APIRouter, Request, Response
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import resolve_org_id_for_shopify_store, upsert_org_integration_settings
+from app.services.shopify_products_sync import (
+    apply_inventory_level_update,
+    deactivate_product_by_shopify_id,
+    reconcile_and_persist_single_product,
+)
 from app.services.shopify_sync import reconcile_and_persist_single_order
 
 router = APIRouter(prefix="/webhooks", tags=["shopify-webhooks"])
@@ -31,6 +36,11 @@ logger = logging.getLogger("app.shopify_webhooks")
 # also covers refunds - Shopify fires it for the affected order whenever a refund posts -
 # so there's no separate refunds/create handler.
 _ORDER_TOPICS = {"orders/create", "orders/updated", "orders/cancelled", "orders/fulfilled"}
+
+# Same idea for products - payload is the product resource itself (same shape
+# reconcile_one_product expects). products/delete's payload is too sparse (just an id) to
+# go through reconciliation, so it's handled separately below.
+_PRODUCT_TOPICS = {"products/create", "products/update"}
 
 
 def _verify_hmac(body: bytes, received: str) -> bool:
@@ -80,6 +90,17 @@ async def shopify_webhook(request: Request):
         if topic in _ORDER_TOPICS:
             payload = await request.json()
             await reconcile_and_persist_single_order(org_id, payload)
+        elif topic in _PRODUCT_TOPICS:
+            payload = await request.json()
+            await reconcile_and_persist_single_product(org_id, payload)
+        elif topic == "products/delete":
+            payload = await request.json()
+            if payload.get("id"):
+                await deactivate_product_by_shopify_id(org_id, payload["id"])
+        elif topic == "inventory_levels/update":
+            payload = await request.json()
+            if payload.get("inventory_item_id") is not None:
+                await apply_inventory_level_update(org_id, payload["inventory_item_id"], payload.get("available"))
         elif topic == "app/uninstalled":
             # Empty string (not None) so upsert_org_integration_settings actually clears the
             # stored token/refresh_token/expiry instead of leaving them untouched - see its
