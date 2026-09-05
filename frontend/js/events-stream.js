@@ -46,10 +46,12 @@ async function connectEventsStream() {
         return;
     }
 
-    // API_BASE is http(s)://host/api - same origin/port, just a different scheme.
+    // API_BASE is http(s)://host/api - same origin/port, just a different scheme. Also
+    // needs to be allowed by index.html's connect-src CSP directive alongside the http(s) origin.
     const wsBase = API_BASE.replace(/^http/, 'ws');
     const socket = new WebSocket(`${wsBase}/events/ws?ticket=${encodeURIComponent(ticket)}`);
     eventsSocket = socket;
+    socket.onerror = (error) => console.error('Events WebSocket error:', error);
     socket.onmessage = (event) => {
         let payload;
         try {
