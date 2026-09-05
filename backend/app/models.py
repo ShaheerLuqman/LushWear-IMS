@@ -3,10 +3,6 @@ from typing import Annotated, Literal, Optional, List, Dict, Any
 from datetime import datetime, date
 
 
-def _lower(v):
-    return v.strip().lower() if isinstance(v, str) else v
-
-
 PieceReceived = Literal["Pending", "Done", "Received"]
 # Standard accounting Nature — closed set, not free text, since a typo here
 # silently creates an untracked bucket. Drives display grouping only;
@@ -545,9 +541,6 @@ FeatureKey = Literal["orders", "finance"]
 
 class OrganizationBase(BaseModel):
     name: NonBlankStr
-
-class OrganizationCreate(OrganizationBase):
-    pass
 
 class Organization(OrganizationBase):
     id: str

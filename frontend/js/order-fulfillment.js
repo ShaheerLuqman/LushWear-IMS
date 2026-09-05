@@ -47,7 +47,6 @@ let fulfillmentFilters = { cities: null, tags: null, dateFrom: null, dateTo: nul
 let fulfillmentCityFilterControl = null;
 let fulfillmentTagsFilterControl = null;
 let fulfillmentDatePicker = null;
-let fulfillmentOpenMenuOrderId = null; // tags or actions menu currently open, if any
 let fulfillmentSelectedCourier = null; // the courier picked in the side panel, or null
 let fulfillmentFulfilling = false; // a booking request is in flight - guards against double-submit
 let fulfillmentPickupAddresses = []; // warehouses the picked courier can collect from

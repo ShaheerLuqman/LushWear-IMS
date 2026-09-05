@@ -11,7 +11,6 @@ Read-only: it never writes. Exits 1 when any discrepancy is found so it can gate
 
 import argparse
 import sys
-from collections import Counter
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))

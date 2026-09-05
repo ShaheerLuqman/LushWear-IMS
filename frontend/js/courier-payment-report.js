@@ -27,7 +27,6 @@ let courierPaymentReportStatusFilter = null;
 // same as plain unfulfilled/fulfilled. Cancelled orders never shipped, so they're left out
 // of this page entirely (neither bucket, not shown in the table).
 const COURIER_RESOLVED_STATUSES = new Set(['delivered', 'returned']);
-const COURIER_IN_TRANSIT_STATUSES = new Set(['unfulfilled', 'fulfilled', 'rfd', 'cna', 'ica']);
 
 function billPickupDateLabel(bill) {
     return formatDateDDMMYYYY(bill.pickupDate);

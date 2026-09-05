@@ -542,12 +542,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     cursor: not-allowed;
 }
 
-.orders-more-actions__sep {
-    height: 1px;
-    margin: 6px 4px;
-    background: var(--border-color);
-}
-
 /* Consistent toolbar buttons — fixed height across header */
 .header-actions .header-toolbar-btn {
     display: inline-flex;
@@ -687,41 +681,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     font-size: 13px;
     color: var(--text-secondary);
     margin-left: 4px;
-}
-
-.search-box {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.search-icon {
-    position: absolute;
-    left: 14px;
-    color: var(--text-muted);
-    font-size: 16px;
-}
-
-.search-box input {
-    width: 280px;
-    padding: 12px 16px 12px 42px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 14px;
-    transition: var(--transition);
-}
-
-.search-box input::placeholder {
-    color: var(--text-muted);
-}
-
-.search-box input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 /* Content Area */
@@ -1118,79 +1077,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     margin-bottom: 32px;
 }
 
-.section-title {
-    font-size: 18px;
-    font-weight: 600;
-    margin-bottom: 16px;
-    color: var(--text-primary);
-}
-
-/* Table */
-.table-container {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    overflow-x: auto;
-    overflow-y: auto;
-    flex: 1;
-    min-height: 0;
-}
-
-.data-table {
-    width: 100%;
-    min-width: 1200px;
-    border-collapse: collapse;
-}
-
-.data-table th,
-.data-table td {
-    padding: 16px 20px;
-    text-align: left;
-}
-
-.data-table th {
-    background: var(--bg-tertiary);
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border-color);
-    position: sticky;
-    top: 0;
-    z-index: 10;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
-}
-
-.data-table td {
-    font-size: 14px;
-    color: var(--text-primary);
-    border-bottom: 1px solid var(--border-color);
-}
-
-.data-table tbody tr {
-    transition: var(--transition);
-}
-
-.data-table tbody tr:hover {
-    background: var(--bg-tertiary);
-}
-
-.data-table tbody tr:last-child td {
-    border-bottom: none;
-}
-
-.items-cell {
-    width: 10vw;
-    max-width: 10vw;
-}
-
-.items-content {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
 .empty-state {
     text-align: center;
     color: var(--text-muted);
@@ -1264,18 +1150,10 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
 }
 
 /* Forms */
-.form-container {
-    max-width: 700px;
-}
-
 .form-group {
     display: flex;
     flex-direction: column;
     gap: 8px;
-}
-
-.form-group.full-width {
-    grid-column: span 2;
 }
 
 .form-group label {
@@ -1824,61 +1702,6 @@ input[type="number"] {
     font-size: 11px;
 }
 
-/* Action buttons in table */
-.action-buttons {
-    display: flex;
-    gap: 8px;
-}
-
-/* Quantity badge */
-.quantity-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 12px;
-    border-radius: 20px;
-    font-family: var(--font-mono);
-    font-size: 13px;
-    font-weight: 500;
-}
-
-.quantity-badge.low {
-    background: rgba(196, 163, 92, 0.2);
-    color: var(--warning);
-}
-
-.quantity-badge.ok {
-    background: rgba(139, 92, 246, 0.2);
-    color: var(--success);
-}
-
-/* Variants display */
-.variants-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    max-width: 300px;
-}
-
-.variant-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 4px 10px;
-    border-radius: 16px;
-    font-family: var(--font-mono);
-    font-size: 11px;
-    font-weight: 500;
-    background: rgba(139, 92, 246, 0.15);
-    color: var(--accent-primary);
-    border: 1px solid rgba(139, 92, 246, 0.3);
-    white-space: nowrap;
-}
-
-.variant-tag.low {
-    background: rgba(196, 163, 92, 0.15);
-    color: var(--warning);
-    border-color: rgba(196, 163, 92, 0.3);
-}
-
 /* Scrollbar */
 ::-webkit-scrollbar {
     width: 8px;
@@ -1909,9 +1732,6 @@ input[type="number"] {
         grid-column: 1 / -1;
     }
 
-    .transaction-toolbar {
-        grid-template-columns: 1fr;
-    }
 }
 
 .postex-mismatches-table-wrap {
@@ -2015,8 +1835,7 @@ input[type="number"] {
     z-index: 1;
 }
 
-#deliveryStatusReportModal .modal-description,
-#deliveryStatusReportModal .modal-actions {
+#deliveryStatusReportModal .modal-description {
     flex-shrink: 0;
 }
 
@@ -2736,36 +2555,6 @@ input[type="number"] {
     box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* Date range floating filter wrapper */
-.date-range-floating-filter.grid-floating-filter-wrap {
-    display: flex;
-    justify-content: center;
-    align-items: center;
-}
-
-/* Date range floating filter trigger button */
-.date-range-floating-filter .grid-floating-filter-btn {
-    width: 100%;
-    padding: 4px 8px;
-    font-size: 12px;
-    font-family: var(--font-primary);
-    color: var(--text-secondary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-}
-.date-range-floating-filter .grid-floating-filter-btn:hover {
-    border-color: var(--accent-primary);
-    color: var(--text-primary);
-}
-.date-range-floating-filter .grid-floating-filter-btn:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
 /* Date range context menu (popup) */
 .date-range-menu {
     position: absolute;
@@ -2794,8 +2583,7 @@ input[type="number"] {
 .date-range-menu .date-range-menu__field:last-of-type {
     margin-bottom: 12px;
 }
-.date-range-menu .grid-floating-filter-date,
-.date-range-menu .date-range-menu__input {
+.date-range-menu .grid-floating-filter-date {
     width: 100%;
     padding: 8px 10px;
     font-size: 13px;
@@ -2806,16 +2594,13 @@ input[type="number"] {
     border-radius: var(--radius-sm);
     transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-.date-range-menu .grid-floating-filter-date::placeholder,
-.date-range-menu .date-range-menu__input::placeholder {
+.date-range-menu .grid-floating-filter-date::placeholder {
     color: var(--text-muted);
 }
-.date-range-menu .grid-floating-filter-date:hover,
-.date-range-menu .date-range-menu__input:hover {
+.date-range-menu .grid-floating-filter-date:hover {
     border-color: var(--text-muted);
 }
-.date-range-menu .grid-floating-filter-date:focus,
-.date-range-menu .date-range-menu__input:focus {
+.date-range-menu .grid-floating-filter-date:focus {
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 2px var(--accent-glow);
@@ -3199,7 +2984,6 @@ input[type="number"] {
     color: #16a34a;
 }
 
-.grid-status-pending,
 .grid-status-unfulfilled {
     background: rgba(139, 92, 246, 0.15);
     color: #7c3aed;
@@ -3542,21 +3326,6 @@ body.orders-table-fullscreen #ordersView {
 body.orders-table-fullscreen #ordersView #ordersGrid {
     flex: 1;
     min-height: 0;
-}
-
-.btn-icon-only {
-    padding: 0;
-    min-width: 44px;
-    width: 44px;
-    height: 44px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.btn-icon-only span {
-    font-size: 1.1em;
-    line-height: 1;
 }
 
 /* AG Grid Footer Row Styles */
@@ -4844,17 +4613,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-}
-
-.month-summary-card-description {
-    font-size: 14px;
-    color: var(--text-secondary);
-    margin: 0;
-}
-
-.month-summary-card-footer {
-    display: flex;
-    justify-content: flex-end;
 }
 
 /* Month Detail Styles */
@@ -7537,18 +7295,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 /* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
-.admin-portal-badge {
-    display: inline-block;
-    align-self: center;
-    padding: 3px 10px;
-    margin-bottom: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.6px;
-    color: var(--accent-primary);
-    background: var(--accent-glow);
-    border-radius: var(--radius-sm);
-}
 
 /* admin.html is a standalone page (not the main app's fixed-viewport layout
    with its own internal scroll areas) - it needs the page itself to scroll. */
@@ -7593,11 +7339,6 @@ body.admin-portal-page {
     font-size: 19px;
     font-weight: 600;
     margin: 0 0 2px;
-}
-
-.admin-portal-header .admin-portal-badge {
-    margin: 0;
-    display: inline-block;
 }
 
 .admin-portal-section {
@@ -7907,8 +7648,7 @@ body.admin-portal-page {
     }
 
     /* Two-column modal forms are cramped well before the modal itself shrinks. */
-    .transaction-entry-sides,
-    .repl-form-grid {
+    .transaction-entry-sides {
         grid-template-columns: 1fr;
     }
 

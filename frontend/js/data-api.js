@@ -53,13 +53,6 @@ function ordersPeriodStartEnd(month, year) {
     return { start, end };
 }
 
-function isOrderInPeriod(order, month, year) {
-    const date = getOrderDateForPeriod(order);
-    if (!date) return false;
-    const { start, end } = ordersPeriodStartEnd(month, year);
-    return date >= start && date <= end;
-}
-
 function formatOrdersPeriodLabel(month, year) {
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const { end } = ordersPeriodStartEnd(month, year);
@@ -69,12 +62,6 @@ function formatOrdersPeriodLabel(month, year) {
 /** Current period that contains today in PKT */
 function getCurrentOrdersPeriod() {
     return getPeriodForDate(getPKTDate());
-}
-
-/** True if the given period has fully ended in PKT */
-function isPeriodPassed(month, year) {
-    const { end } = ordersPeriodStartEnd(month, year);
-    return getPKTDate() > end;
 }
 
 /** Oldest period in dropdown: the October 2024 period */

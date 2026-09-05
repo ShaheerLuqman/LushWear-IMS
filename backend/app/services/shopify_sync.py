@@ -650,27 +650,6 @@ async def _sync_shopify_orders(org_id: str) -> dict:
                 return "fulfilled"
             return "unfulfilled"
 
-        def extract_delivery_status(order):
-            fulfillment_status = order.get("fulfillment_status")
-            if fulfillment_status == "fulfilled":
-                return "delivered"
-            elif fulfillment_status == "partial":
-                return "partially_delivered"
-            elif fulfillment_status is None:
-                return "not_delivered"
-            else:
-                return fulfillment_status or "not_delivered"
-
-        def extract_advance_amount(order):
-            if "note_attributes" in order:
-                for attr in order["note_attributes"]:
-                    if attr.get("name") in ["advance", "Advance", "advance_amount"]:
-                        try:
-                            return float(attr.get("value", 0))
-                        except (TypeError, ValueError):
-                            return None
-            return None
-
         def extract_tax_amount(order):
             # Prefer current_* (reflects edits/refunds; avoids discrepancies when order is updated)
             if "current_total_tax_set" in order and order["current_total_tax_set"]:
