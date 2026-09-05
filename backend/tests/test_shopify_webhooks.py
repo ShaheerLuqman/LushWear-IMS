@@ -113,6 +113,8 @@ class TestDispatch:
         monkeypatch.setattr(shopify_webhooks, "org_table", lambda supabase, org_id, table: _FakeTable())
 
     def test_order_topic_reconciles_the_payload(self, client, monkeypatch):
+        # Doesn't publish "orders_changed" itself - reconcile_and_persist_single_order
+        # does (see test_shopify_sync.py), same as every other order-mutating path.
         calls = []
 
         async def _fake_reconcile(org_id, payload):
@@ -124,6 +126,16 @@ class TestDispatch:
 
         assert resp.status_code == 200
         assert calls == [("org-1", {"order_number": 6563})]
+
+    def test_a_failed_reconciliation_is_a_500(self, client, monkeypatch):
+        async def _boom(org_id, payload):
+            raise RuntimeError("db is down")
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _boom)
+
+        resp = _post(client, {"order_number": 1}, topic="orders/create")
+
+        assert resp.status_code == 500
 
     def test_app_uninstalled_clears_stored_credentials(self, client, monkeypatch):
         calls = []
@@ -151,11 +163,14 @@ class TestDispatch:
             calls.append((org_id, payload))
 
         monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_product", _fake_reconcile)
+        published = []
+        monkeypatch.setattr(shopify_webhooks.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
 
         resp = _post(client, {"id": 42, "title": "Test Product"}, topic="products/update")
 
         assert resp.status_code == 200
         assert calls == [("org-1", {"id": 42, "title": "Test Product"})]
+        assert published == [("org-1", {"type": "products_changed"})]
 
     def test_product_delete_deactivates_by_shopify_id(self, client, monkeypatch):
         calls = []
@@ -164,11 +179,14 @@ class TestDispatch:
             calls.append((org_id, shopify_product_id))
 
         monkeypatch.setattr(shopify_webhooks, "deactivate_product_by_shopify_id", _fake_deactivate)
+        published = []
+        monkeypatch.setattr(shopify_webhooks.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
 
         resp = _post(client, {"id": 42}, topic="products/delete")
 
         assert resp.status_code == 200
         assert calls == [("org-1", 42)]
+        assert published == [("org-1", {"type": "products_changed"})]
 
     def test_inventory_level_update_applies_the_new_quantity(self, client, monkeypatch):
         calls = []
@@ -177,8 +195,11 @@ class TestDispatch:
             calls.append((org_id, inventory_item_id, available))
 
         monkeypatch.setattr(shopify_webhooks, "apply_inventory_level_update", _fake_apply)
+        published = []
+        monkeypatch.setattr(shopify_webhooks.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
 
         resp = _post(client, {"inventory_item_id": 55, "location_id": 1, "available": 3}, topic="inventory_levels/update")
 
         assert resp.status_code == 200
         assert calls == [("org-1", 55, 3)]
+        assert published == [("org-1", {"type": "products_changed"})]

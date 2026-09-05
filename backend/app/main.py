@@ -11,7 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, courier_bills, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth, shopify_webhooks
+from app.routes import products, orders, courier_bills, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth, shopify_webhooks, events
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.features import require_feature
@@ -131,6 +131,10 @@ app.include_router(shopify_webhooks.router, prefix="/api")
 # admin_portal's routes carry mixed per-route dependencies (some superadmin-only,
 # some also allow an already-impersonating token) - see app/routes/admin_portal.py.
 app.include_router(admin_portal.router, prefix="/api")
+# events' routes carry mixed per-route dependencies too - /ticket is behind
+# require_auth+require_feature, /ws self-authenticates via that ticket instead
+# (a WebSocket handshake can't carry an Authorization header) - see app/routes/events.py.
+app.include_router(events.router, prefix="/api")
 # Open router — self-gates via login/bootstrap, so it bootstraps login itself.
 app.include_router(auth_routes.router, prefix="/api")
 

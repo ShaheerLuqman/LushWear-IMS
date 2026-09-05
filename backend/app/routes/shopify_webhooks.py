@@ -8,6 +8,11 @@ and scripts/register_shopify_webhooks.py).
 One endpoint dispatching on X-Shopify-Topic rather than one route per topic - Shopify lets
 a single callback URL subscribe to many topics, and every topic here needs the same
 HMAC/org-resolution/idempotency preamble anyway.
+
+Product topics here publish to app/services/event_bus.py directly (see that module's
+docstring); order topics don't need to - they persist through
+shopify_sync.reconcile_and_persist_single_order, which publishes "orders_changed"
+itself alongside every other order-mutating code path.
 """
 
 import base64
@@ -21,6 +26,7 @@ from fastapi import APIRouter, Request, Response
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import resolve_org_id_for_shopify_store, upsert_org_integration_settings
+from app.services import event_bus
 from app.services.shopify_products_sync import (
     apply_inventory_level_update,
     deactivate_product_by_shopify_id,
@@ -93,14 +99,17 @@ async def shopify_webhook(request: Request):
         elif topic in _PRODUCT_TOPICS:
             payload = await request.json()
             await reconcile_and_persist_single_product(org_id, payload)
+            event_bus.publish(org_id, {"type": "products_changed"})
         elif topic == "products/delete":
             payload = await request.json()
             if payload.get("id"):
                 await deactivate_product_by_shopify_id(org_id, payload["id"])
+                event_bus.publish(org_id, {"type": "products_changed"})
         elif topic == "inventory_levels/update":
             payload = await request.json()
             if payload.get("inventory_item_id") is not None:
                 await apply_inventory_level_update(org_id, payload["inventory_item_id"], payload.get("available"))
+                event_bus.publish(org_id, {"type": "products_changed"})
         elif topic == "app/uninstalled":
             # Empty string (not None) so upsert_org_integration_settings actually clears the
             # stored token/refresh_token/expiry instead of leaving them untouched - see its

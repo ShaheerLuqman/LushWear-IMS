@@ -10,7 +10,7 @@ from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.money import money
 from app.org_scope import org_table
-from app.services import shopify_products_sync
+from app.services import event_bus, shopify_products_sync
 from datetime import datetime, timezone, date, timedelta
 import logging
 
@@ -332,6 +332,8 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             if num is not None:
                 updated_order_numbers.append(num)
 
+        if updated:
+            event_bus.publish(org_id, {"type": "orders_changed"})
         logger.info("[recalculate-order-costs] updated %d order(s): %s", updated, updated_order_numbers)
 
         return {

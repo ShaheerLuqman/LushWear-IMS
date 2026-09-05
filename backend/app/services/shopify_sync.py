@@ -28,6 +28,7 @@ from app.config import settings
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
+from app.services import event_bus
 from app.services.shopify_orders import _customer_info_from_shopify_order
 
 logger = logging.getLogger("app.orders")
@@ -1168,6 +1169,7 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
     org_table(supabase, org_id, "shopify_orders").upsert(
         result.order_data, on_conflict="org_id,order_number"
     ).execute()
+    event_bus.publish(org_id, {"type": "orders_changed"})
 
     # Same replacement_of_order_no -> reset-the-original's-piece_received step
     # _sync_shopify_orders does after its own batch upsert, scoped to this one order.
@@ -1356,6 +1358,8 @@ async def _sync_shopify_orders(org_id: str) -> dict:
 
         synced_count = created_count + updated_count
         skipped_count = len(orders_to_skip)
+        if synced_count:
+            event_bus.publish(org_id, {"type": "orders_changed"})
 
         # Shopify advance amounts may have changed; recompute advance statuses, scoped to the
         # orders Shopify actually returned (same reasoning as existing_orders_all above).

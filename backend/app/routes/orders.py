@@ -26,7 +26,7 @@ from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
-from app.services import couriers_next, postex
+from app.services import couriers_next, event_bus, postex
 from app.services.courier_cities import get_courier_cities
 from app.services.pdf.courier_bill_summary import generate_courier_bill_summary_pdf
 from app.services.pdf.invoice import _build_invoice_order_context, _generate_pdf_invoice
@@ -683,6 +683,7 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                 yield json.dumps({"type": "order", "result": result.model_dump()}) + "\n"
 
         if booked:
+            event_bus.publish(org_id, {"type": "orders_changed"})
             yield json.dumps({"type": "shopify_sync"}) + "\n"
             await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)
 
@@ -995,6 +996,7 @@ async def upload_postex_csv(
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + batch_size], on_conflict="id").execute()
+            event_bus.publish(org_id, {"type": "orders_changed"})
             # The CSV forces courier to PostEx, which re-bills any order that was previously
             # under another courier. Charges/taxes/settled changing needs no bill write at
             # all - the totals view derives those from the orders on every read.
@@ -1442,6 +1444,8 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
         for i in range(0, len(to_update), batch_size):
             batch = to_update[i:i + batch_size]
             org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
+        if to_insert or to_update:
+            event_bus.publish(org_id, {"type": "orders_changed"})
 
         return {
             "requested_count": len(order_numbers_input),
@@ -1545,6 +1549,7 @@ async def create_load_sheet_log(body: LoadSheetLogCreate, org_id: str = Depends(
         if dc is not None:
             update_data["delivery_charge"] = float(dc)
         org_table(supabase, org_id, "shopify_orders").update(update_data).in_("order_number", order_numbers).execute()
+        event_bus.publish(org_id, {"type": "orders_changed"})
         result = dict(response.data[0])
         if cancelled_order_numbers:
             result["cancelled_order_numbers"] = cancelled_order_numbers
@@ -1668,6 +1673,7 @@ async def delete_load_sheet_log(log_id: str, org_id: str = Depends(get_org_id)):
                 "folio": None,
                 "updated_at": datetime.now(timezone.utc).isoformat(),
             }).in_("order_number", order_numbers).execute()
+            event_bus.publish(org_id, {"type": "orders_changed"})
         # Delete the load sheet log
         response = (
             org_table(supabase, org_id, "shopify_load_sheet_logs")
@@ -2063,6 +2069,7 @@ async def create_order(order: OrderCreate, org_id: str = Depends(get_org_id)):
         if not order_data.get("order_receiving_date"):
             order_data["order_receiving_date"] = now
         response = org_table(supabase, org_id, "shopify_orders").insert(order_data).execute()
+        event_bus.publish(org_id, {"type": "orders_changed"})
         return response.data[0]
     except HTTPException:
         raise
@@ -2166,6 +2173,8 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
             onum = order.get("order_number")
             if onum is not None:
                 updated_order_numbers.append(onum)
+        if updated_order_numbers:
+            event_bus.publish(org_id, {"type": "orders_changed"})
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -2213,6 +2222,8 @@ async def bulk_update_delivery_charges(body: BulkUpdateDeliveryChargeBody, org_i
         )
         updated_rows = response.data or []
         updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
+        if updated_order_numbers:
+            event_bus.publish(org_id, {"type": "orders_changed"})
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -2249,6 +2260,8 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody, org_id: 
         )
         updated_rows = response.data or []
         updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
+        if updated_order_numbers:
+            event_bus.publish(org_id, {"type": "orders_changed"})
         requested_set = set(body.order_numbers)
         updated_set = set(updated_order_numbers)
         not_found_order_numbers = sorted(requested_set - updated_set)
@@ -2290,6 +2303,8 @@ async def bulk_update_order_settled(body: BulkUpdateOrderSettledBody, org_id: st
         )
         updated_rows = response.data or []
         updated_order_numbers = [o["order_number"] for o in updated_rows if o.get("order_number") is not None]
+        if updated_order_numbers:
+            event_bus.publish(org_id, {"type": "orders_changed"})
         # Only settling pushes to Shopify - un-settling can't retract a payment already
         # recorded there, so that stays a local-only correction. Every settled order is
         # tagged there, but only delivered ones are marked paid (see mark_order_settled).
@@ -2328,6 +2343,7 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
         response = org_table(supabase, org_id, "shopify_orders").update(update_data).eq("id", order_id).execute()
         if not response.data:
             raise HTTPException(status_code=404, detail="Order not found")
+        event_bus.publish(org_id, {"type": "orders_changed"})
         updated = response.data[0]
         if "courier" in update_data or "courier_pickup_date" in update_data:
             await _assign_courier_bills(org_id, [order_id])
@@ -2587,6 +2603,8 @@ async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], o
         except Exception:
             logger.exception(f"[delivery-status-bulk] Failed to save {len(batch)} orders")
 
+    event_bus.publish(org_id, {"type": "orders_changed"})
+
     # Every write site that fills courier_pickup_date re-runs assignment (get_delivery_status
     # does the single-order equivalent). Best-effort: a failure here leaves the orders
     # correctly saved but unassigned, and the next run picks them up (assign is idempotent).
@@ -2764,6 +2782,7 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
             else:
                 logger.info(f"[delivery-status] No derived_status, order_status not updated")
             org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
+            event_bus.publish(org_id, {"type": "orders_changed"})
             logger.info(f"[delivery-status] Update payload: {update_payload.keys()}")
 
             if "courier_pickup_date" in update_payload:
@@ -3040,6 +3059,7 @@ async def fetch_postex_settlements(
         if orders_to_upsert:
             for i in range(0, len(orders_to_upsert), 1000):
                 org_table(supabase, org_id, "shopify_orders").upsert(orders_to_upsert[i:i + 1000], on_conflict="id").execute()
+            event_bus.publish(org_id, {"type": "orders_changed"})
 
         updated = len(orders_to_upsert)
         corrected = sum(1 for s in settlements if s["corrected"])
@@ -3079,6 +3099,7 @@ async def delete_order(order_id: str, org_id: str = Depends(get_org_id)):
     try:
         supabase = get_supabase()
         response = org_table(supabase, org_id, "shopify_orders").delete().eq("id", order_id).execute()
+        event_bus.publish(org_id, {"type": "orders_changed"})
         return {"message": "Order deleted successfully"}
     except HTTPException:
         raise

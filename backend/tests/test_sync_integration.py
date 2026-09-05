@@ -133,6 +133,10 @@ class _FakeOrdersQuery:
         return self
 
     def upsert(self, batch, on_conflict=None, **_k):
+        # Real supabase-py accepts a single row dict or a list of them (org_scope.py's
+        # OrgScopedTable.upsert passes a lone dict for a single-order write, e.g.
+        # reconcile_and_persist_single_order) - always returns .data as a list either way.
+        rows = batch if isinstance(batch, list) else [batch]
         # on_conflict may be a composite string ("org_id,order_number") - this
         # fixture only ever holds one org, so the last component (order_number)
         # alone is still a unique key here. The raw value is still recorded
@@ -141,7 +145,7 @@ class _FakeOrdersQuery:
         # or missing on_conflict target.
         self._store.last_on_conflict = on_conflict
         key_col = (on_conflict or "").split(",")[-1].strip()
-        for row in batch:
+        for row in rows:
             for col in _NOT_NULL_ORDER_COLUMNS:
                 if col in row and row[col] is None:
                     raise AssertionError(
@@ -152,7 +156,7 @@ class _FakeOrdersQuery:
             merged = {**self._store.rows_by_number.get(key, {}), **row}
             merged.setdefault("id", f"gen-{key}")
             self._store.rows_by_number[key] = merged
-        self._pending = ("upsert", batch)
+        self._pending = ("upsert", rows)
         return self
 
     def update(self, payload):
@@ -292,6 +296,64 @@ def test_second_sync_on_unchanged_data_is_a_no_op(synced_once):
     assert second_result["updated"] == 0
     assert second_result["skipped"] == len(orders_fixture)
     assert second_result["synced"] == 0
+
+
+class TestOrdersChangedBroadcast:
+    """_sync_shopify_orders and reconcile_and_persist_single_order (the periodic/manual
+    and webhook-driven entry points into the same reconciliation rules) each publish
+    "orders_changed" - see app/routes/events.py's module docstring for the full set of
+    order-mutating call sites this covers."""
+
+    def test_a_sync_that_creates_orders_publishes_once(self, monkeypatch):
+        # Not the `synced_once` fixture - that already runs a sync (creating every order)
+        # before a test body gets a chance to install the publish() monkeypatch below.
+        orders_fixture = _load_fixture_orders()
+        _run_sync_with_fixture(monkeypatch, orders_fixture)
+        published = []
+        monkeypatch.setattr(shopify_sync.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
+
+        result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert result["created"] == len(orders_fixture)
+        assert published == [(TEST_ORG_ID, {"type": "orders_changed"})]
+
+    def test_a_true_no_op_sync_does_not_publish(self, synced_once, monkeypatch):
+        synced_once  # already ran once, creating every fixture order
+        published = []
+        monkeypatch.setattr(shopify_sync.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
+
+        second_result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        assert second_result["synced"] == 0
+        assert published == []
+
+    def test_reconcile_and_persist_single_order_publishes_on_a_real_change(self, synced_once, monkeypatch):
+        _fake_db, _result, orders_fixture = synced_once
+        # order_status is compared unconditionally by has_changed() regardless of
+        # skip_assigned_courier_fields (unlike total_amount, frozen once a courier is
+        # assigned - see test_fulfilled_order_freezes_total_amount_against_a_manual_edit).
+        # An unfulfilled order with cancelled_at newly set becomes "cancelled" per
+        # extract_order_status - a reliable, unconditional change.
+        order_number = _find_order_number(orders_fixture, fulfilled=False)
+        sp_order = dict(next(o for o in orders_fixture if int(o["order_number"]) == order_number))
+        sp_order["cancelled_at"] = "2026-01-01T00:00:00Z"
+        published = []
+        monkeypatch.setattr(shopify_sync.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
+
+        result = asyncio.run(shopify_sync.reconcile_and_persist_single_order(TEST_ORG_ID, sp_order))
+
+        assert result.action == "update"
+        assert published == [(TEST_ORG_ID, {"type": "orders_changed"})]
+
+    def test_reconcile_and_persist_single_order_does_not_publish_when_skipped(self, synced_once, monkeypatch):
+        fake_db, _result, orders_fixture = synced_once
+        published = []
+        monkeypatch.setattr(shopify_sync.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
+
+        result = asyncio.run(shopify_sync.reconcile_and_persist_single_order(TEST_ORG_ID, orders_fixture[0]))
+
+        assert result.action == "skip"
+        assert published == []
 
 
 def _find_order_number(orders_fixture, *, fulfilled: bool) -> int:

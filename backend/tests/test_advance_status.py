@@ -1,5 +1,6 @@
 import pytest
 
+import app.advance_status as advance_status
 from app.advance_status import (
     ADV_TRANSACTION_ONLY,
     ADV_MATCH,
@@ -93,7 +94,7 @@ def _orders_ledger_table():
 
 
 class TestRecomputeAdvanceStatuses:
-    def test_persists_changed_orders_as_a_single_batched_upsert(self):
+    def test_persists_changed_orders_as_a_single_batched_upsert(self, monkeypatch):
         orders_table = _FakeTable([
             {"id": "o1", "order_number": 100, "advance_amount": 500.0, "advance_status": ADV_NONE,
              "courier": "PostEx", "order_status": "delivered", "total_amount": 2598.0,
@@ -110,6 +111,8 @@ class TestRecomputeAdvanceStatuses:
             "finances_transaction_entries": transaction_table,
             "finances_ledgers": _orders_ledger_table(),
         })
+        published = []
+        monkeypatch.setattr(advance_status.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100", "101"])
 
@@ -124,8 +127,9 @@ class TestRecomputeAdvanceStatuses:
             "order_receiving_date": "2026-07-18T13:23:08+00:00",
             "org_id": "test-org",
         }]]
+        assert published == [("test-org", {"type": "orders_changed"})]
 
-    def test_no_changed_orders_means_no_write(self):
+    def test_no_changed_orders_means_no_write_and_no_publish(self, monkeypatch):
         orders_table = _FakeTable([
             {"id": "o1", "order_number": 100, "advance_amount": 0.0, "advance_status": ADV_NONE},
         ])
@@ -135,8 +139,11 @@ class TestRecomputeAdvanceStatuses:
             "finances_transaction_entries": transaction_table,
             "finances_ledgers": _orders_ledger_table(),
         })
+        published = []
+        monkeypatch.setattr(advance_status.event_bus, "publish", lambda org_id, event: published.append((org_id, event)))
 
         updated = recompute_advance_statuses(supabase, "test-org", order_numbers=["100"])
 
         assert updated == 0
         assert orders_table.upsert_calls == []
+        assert published == []

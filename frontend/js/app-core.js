@@ -133,11 +133,12 @@ let updateFooterRow = null; // Will be set in initOrdersGrid
 let loadSheetRiderNames = [];
 /** Next assignment number for load sheet (format LW-N). Updated when load sheet logs are fetched. */
 let nextLoadSheetAssignmentNumber = 1;
-// Orders sync once on app load, then every 5 minutes; the timer is reset whenever a sync
-// completes. The backend's lock (sync_status.in_progress, capped at
-// _SYNC_LOCK_STALE_AFTER=5min in orders.py) keeps overlapping tabs/devices from ever
-// syncing concurrently - a load-time sync racing another tab's gets already_syncing back.
-const ORDERS_AUTO_SYNC_INTERVAL_MS = 5 * 60 * 1000;
+// Orders no longer sync at app load itself - webhooks (see shopify_webhooks.py) now cover
+// that in near-real-time, so this timer is just a 30-minute backstop for missed/failed
+// deliveries. It's reset whenever a sync completes. The backend's lock
+// (sync_status.in_progress, capped at _SYNC_LOCK_STALE_AFTER=5min in orders.py) keeps
+// overlapping tabs/devices from ever syncing concurrently.
+const ORDERS_AUTO_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
 let lastOrdersSyncAt = null; // ms epoch
 /** Orders grid date column id (for header date range filter). */
@@ -622,6 +623,7 @@ function runAuthGate() {
 
 function lockApp() {
     exitOrdersFullScreen();
+    stopEventsStream();
     const appContainer = document.querySelector('.app-container');
     const root = document.getElementById('authGateRoot');
     if (!root) {
@@ -638,6 +640,7 @@ function lockApp() {
             setTimeout(() => {
                 appContainer.style.opacity = '1';
             }, 10);
+            if (hasFeature('orders')) initEventsStream();
         }
     });
 }
@@ -760,6 +763,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (ordersEnabled) {
             syncShopifyProducts();
             initOrdersAutoSync();
+            initEventsStream();
             fetchLoadSheetRiderNames();
             autoFetchRecentDeliveryStatus();
         }

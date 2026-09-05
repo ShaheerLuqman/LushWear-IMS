@@ -437,12 +437,13 @@ function buildOrdersGridColumns() {
                     params.api.refreshCells({ rowNodes: [params.node], force: true });
                 };
 
-                // Marking the piece received on an already delivered/returned order is usually a
-                // slip - confirm first. The confirm is async, so commit from its callback and
-                // tell AG Grid the synchronous set didn't take.
+                // Marking the piece received on an already delivered order is usually a slip -
+                // confirm first. Already returned is the normal case (return recorded, piece
+                // received later), so it's not warned about. The confirm is async, so commit
+                // from its callback and tell AG Grid the synchronous set didn't take.
                 if (newValue === 'Received'
-                    && ['delivered', 'returned'].includes((params.data.order_status || '').toLowerCase())) {
-                    confirmActionOnTerminalOrders([params.data.order_number], 'mark the piece received')
+                    && (params.data.order_status || '').toLowerCase() === 'delivered') {
+                    confirmActionOnTerminalOrders([params.data.order_number], 'mark the piece received', ['delivered'])
                         .then((ok) => { if (ok) applyChange(); });
                     return false;
                 }

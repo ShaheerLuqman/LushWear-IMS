@@ -23,6 +23,7 @@ from app.db_utils import fetch_all
 from app.money import money
 from app.ledger_roles import get_system_ledger_id
 from app.org_scope import org_table
+from app.services import event_bus
 
 # Cap on order numbers per `.in_()` query - keeps the request URL well under server/proxy
 # length limits when scoped to a large set (e.g. every order Shopify returned for a sync).
@@ -155,5 +156,10 @@ def recompute_advance_statuses(supabase, org_id: str, order_numbers=None) -> int
         batch_size = 1000
         for i in range(0, len(to_update), batch_size):
             org_table(supabase, org_id, "shopify_orders").upsert(to_update[i:i + batch_size], on_conflict="id").execute()
+        # Centralizes the "orders_changed" broadcast for every caller (routes/orders.py's
+        # update_order and routes/transactions.py's advance-affecting entries, plus
+        # shopify_sync.py's own reconciliation, which also broadcasts on its own write) -
+        # one place instead of repeating this at each of the half-dozen call sites.
+        event_bus.publish(org_id, {"type": "orders_changed"})
 
     return len(to_update)

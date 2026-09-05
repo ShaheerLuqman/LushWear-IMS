@@ -893,7 +893,7 @@ async function syncShopifyOrders() {
             method: 'POST',
             fallback: 'Failed to sync orders from Shopify'
         });
-        // This runs unattended every 5 minutes (see the auto-sync timer in app-core.js), not
+        // This runs unattended every 30 minutes (see the auto-sync timer in app-core.js), not
         // from a button click - success is routine, so it isn't worth saving to notification
         // history; only a failure below (which needs a look) is.
         if (result.already_syncing) {
@@ -920,9 +920,9 @@ async function syncShopifyOrders() {
     }
 }
 
-/** Always syncs on app load, regardless of how recently the last sync ran, then lets
- *  syncShopifyOrders' reschedule resume the normal interval from that point. The server's
- *  last-sync time is fetched first only so the "Synced X ago" label isn't blank meanwhile. */
+/** Does not sync on app load/reload - webhooks keep orders current in near-real-time, so
+ *  the initial page just shows the server's last-sync time and arms the 30-minute backstop
+ *  timer (scheduleOrdersAutoSync) from here instead of syncing right away. */
 async function initOrdersAutoSync() {
     try {
         const status = await apiJson('/orders/sync-status', { fallback: 'Failed to fetch sync status' });
@@ -934,7 +934,7 @@ async function initOrdersAutoSync() {
         console.error('Error fetching orders sync status:', error);
     }
 
-    await syncShopifyOrders();
+    scheduleOrdersAutoSync();
 }
 
 function scheduleOrdersAutoSync(delayMs = ORDERS_AUTO_SYNC_INTERVAL_MS) {

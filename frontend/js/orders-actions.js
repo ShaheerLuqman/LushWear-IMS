@@ -233,27 +233,27 @@ async function saveOrderField(orderId, field, value) {
     }
 }
 
-/** Order numbers from `orderNumbers` whose currently-loaded row is already delivered or
- * returned. Only orders in the loaded period are checked - a number not on the grid isn't
- * known here and is left for the backend to handle. */
-function alreadyTerminalOrderNumbers(orderNumbers) {
+/** Order numbers from `orderNumbers` whose currently-loaded row already has one of `statuses`.
+ * Only orders in the loaded period are checked - a number not on the grid isn't known here
+ * and is left for the backend to handle. */
+function alreadyTerminalOrderNumbers(orderNumbers, statuses = ['delivered', 'returned']) {
     const wanted = new Set(orderNumbers.map(String));
     return (orders || [])
         .filter((o) => o && o.id !== '__footer__' && wanted.has(String(o.order_number))
-            && ['delivered', 'returned'].includes((o.order_status || '').toLowerCase()))
+            && statuses.includes((o.order_status || '').toLowerCase()))
         .map((o) => o.order_number);
 }
 
-/** Confirm before a "mark Returned / piece received" action lands on orders that are already
- * delivered or returned (usually a slip). Resolves true when there's nothing to warn about
- * or the user confirms. */
-async function confirmActionOnTerminalOrders(orderNumbers, actionLabel) {
-    const already = alreadyTerminalOrderNumbers(orderNumbers);
+/** Confirm before an action lands on orders already in one of `statuses` (usually a slip).
+ * Resolves true when there's nothing to warn about or the user confirms. */
+async function confirmActionOnTerminalOrders(orderNumbers, actionLabel, statuses = ['delivered', 'returned']) {
+    const already = alreadyTerminalOrderNumbers(orderNumbers, statuses);
     if (already.length === 0) return true;
     const list = [...already].sort((a, b) => a - b).join(', ');
+    const statusLabel = statuses.join(' or ');
     return showAppConfirm({
-        title: 'Order already delivered or returned',
-        message: `${already.length} order(s) are already delivered or returned: ${list}.\n\n`
+        title: `Order already ${statusLabel}`,
+        message: `${already.length} order(s) are already ${statusLabel}: ${list}.\n\n`
             + `Are you sure you want to ${actionLabel}?`,
         confirmText: 'Continue',
         danger: true

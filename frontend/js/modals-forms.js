@@ -613,7 +613,10 @@ async function bulkUpdateOrderStatus(orderStatus) {
         return;
     }
     const statusActionLabels = { delivered: 'mark them Delivered', returned: 'mark them Returned', cancelled: 'mark them Cancelled' };
-    if (!(await confirmActionOnTerminalOrders(orderNumbers, statusActionLabels[orderStatus] || `mark them ${orderStatus}`))) {
+    // Only warn about a prior status that conflicts with the target - assigning a status an
+    // order already has isn't a conflict, so it's excluded from the check.
+    const conflictingStatuses = ['delivered', 'returned'].filter((s) => s !== orderStatus);
+    if (!(await confirmActionOnTerminalOrders(orderNumbers, statusActionLabels[orderStatus] || `mark them ${orderStatus}`, conflictingStatuses))) {
         return;
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
@@ -680,7 +683,7 @@ async function bulkUpdatePieceReceived() {
         showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
-    if (!(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned + Piece Received'))) {
+    if (!(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned + Piece Received', ['delivered']))) {
         return;
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
