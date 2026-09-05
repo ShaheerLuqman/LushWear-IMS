@@ -23,6 +23,7 @@ BUSINESS_TABLES = {
     "finances_ledger_balances",
     "finances_transaction_entry_audit_log",
     "shopify_sync_status",
+    "shopify_webhook_events",
     "finances_journal_entries",
     "finances_journal_lines",
     "finances_bills",

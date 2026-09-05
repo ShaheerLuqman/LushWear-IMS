@@ -13,6 +13,7 @@ import asyncio
 import logging
 import re
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -435,6 +436,763 @@ def _release_sync_lock(supabase, org_id: str) -> None:
 _BULK_CONCURRENCY = 20
 
 
+def extract_courier(order: dict) -> str:
+    """Extract courier from the latest non-cancelled fulfillment.
+
+    A cancelled fulfillment is explicitly NOT a fallback: cancelling every
+    fulfillment is how a booking is undone in Shopify, so reading the courier back
+    off one would re-assign a booking that no longer exists (and fight any local
+    reset of it on every sync)."""
+    if "fulfillments" not in order or len(order["fulfillments"]) == 0:
+        return "Unassigned"
+
+    fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
+
+    if not fulfillments_to_check:
+        return "Unassigned"
+
+    # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
+    latest_fulfillment = None
+    latest_timestamp = None
+
+    for fulfillment in fulfillments_to_check:
+        # Prefer updated_at as it reflects the latest change
+        timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+        if not timestamp_str:
+            continue
+
+        timestamp = _parse_iso(timestamp_str)
+        if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
+            latest_timestamp = timestamp
+            latest_fulfillment = fulfillment
+
+    # If we couldn't find by timestamp, use the last one in the list
+    if not latest_fulfillment:
+        latest_fulfillment = fulfillments_to_check[-1]
+
+    tracking_company = latest_fulfillment.get("tracking_company")
+    if tracking_company:
+        tracking_company = str(tracking_company).strip()
+        if tracking_company:
+            return tracking_company
+    return "Unassigned"
+
+
+def extract_tracking_number(order: dict) -> Optional[str]:
+    """Extract tracking number from the latest non-cancelled fulfillment. See
+    extract_courier for why a cancelled fulfillment is not used as a fallback."""
+    if "fulfillments" not in order or len(order["fulfillments"]) == 0:
+        return None
+
+    fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
+
+    if not fulfillments_to_check:
+        return None
+
+    # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
+    latest_fulfillment = None
+    latest_timestamp = None
+
+    for fulfillment in fulfillments_to_check:
+        # Prefer updated_at as it reflects the latest change
+        timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
+        if not timestamp_str:
+            continue
+
+        timestamp = _parse_iso(timestamp_str)
+        if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
+            latest_timestamp = timestamp
+            latest_fulfillment = fulfillment
+
+    # If we couldn't find by timestamp, use the last one in the list
+    if not latest_fulfillment:
+        latest_fulfillment = fulfillments_to_check[-1]
+
+    tracking_number = latest_fulfillment.get("tracking_number")
+    if tracking_number:
+        tracking_number = str(tracking_number).strip()
+        if tracking_number:
+            return tracking_number
+    return None
+
+
+def _parse_iso(s):
+    if not s:
+        return None
+    if isinstance(s, datetime):
+        return s
+    s = str(s).strip().replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return None
+
+
+def extract_order_status(order: dict) -> str:
+    cancelled_at_raw = order.get("cancelled_at")
+    fulfillment_dt = None
+    for f in order.get("fulfillments") or []:
+        # A cancelled fulfillment never shipped, so it can't make a later
+        # order cancellation a "return".
+        if f.get("status") == "cancelled":
+            continue
+        ct = f.get("created_at")
+        if ct:
+            parsed = _parse_iso(ct)
+            if parsed and (fulfillment_dt is None or parsed > fulfillment_dt):
+                fulfillment_dt = parsed
+    if cancelled_at_raw and fulfillment_dt is not None:
+        cancelled_at = _parse_iso(cancelled_at_raw)
+        if cancelled_at and cancelled_at > fulfillment_dt:
+            return "returned"
+    if cancelled_at_raw is not None:
+        return "cancelled"
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status == "fulfilled":
+        return "fulfilled"
+    return "unfulfilled"
+
+
+def extract_delivery_status(order: dict) -> str:
+    fulfillment_status = order.get("fulfillment_status")
+    if fulfillment_status == "fulfilled":
+        return "delivered"
+    elif fulfillment_status == "partial":
+        return "partially_delivered"
+    elif fulfillment_status is None:
+        return "not_delivered"
+    else:
+        return fulfillment_status or "not_delivered"
+
+
+def extract_advance_amount(order: dict) -> Optional[float]:
+    if "note_attributes" in order:
+        for attr in order["note_attributes"]:
+            if attr.get("name") in ["advance", "Advance", "advance_amount"]:
+                try:
+                    return float(attr.get("value", 0))
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def extract_tax_amount(order: dict) -> float:
+    # Prefer current_* (reflects edits/refunds; avoids discrepancies when order is updated)
+    if "current_total_tax_set" in order and order["current_total_tax_set"]:
+        shop_money = order["current_total_tax_set"].get("shop_money", {})
+        if shop_money:
+            return float(shop_money.get("amount", "0.00"))
+    try:
+        return float(order.get("current_total_tax") or 0)
+    except (TypeError, ValueError):
+        pass
+    if "total_tax_set" in order and order["total_tax_set"]:
+        shop_money = order["total_tax_set"].get("shop_money", {})
+        if shop_money:
+            return float(shop_money.get("amount", "0.00"))
+    return float(order.get("total_tax", "0.00"))
+
+
+def extract_cost_price(order: dict) -> Optional[float]:
+    if "note_attributes" in order:
+        for attr in order["note_attributes"]:
+            if attr.get("name") in ["cost_price", "Cost Price", "cost"]:
+                try:
+                    return float(attr.get("value", 0))
+                except (TypeError, ValueError):
+                    return None
+    return None
+
+
+def extract_line_items(
+    order: dict,
+    product_id_by_shopify: Dict[int, Any],
+    variant_id_by_shopify: Dict[int, Any],
+    costs_by_id: Dict[Any, float],
+    products_cost_map: Dict[str, float],
+    costs_by_variant_id: Dict[Any, float],
+    order_status: Optional[str] = None,
+) -> List[dict]:
+    """Build structured line_items (one object per line, real qty) from Shopify line_items.
+    Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price
+    so old orders survive product renames/deletes/cost changes. Excludes removed lines
+    (current_quantity 0) - except for "returned" orders, where current_quantity is 0 on
+    every line by definition (the whole order was refunded back), so falling back to it
+    would erase the historical record of what was actually shipped/invoiced; use the
+    original quantity there instead."""
+    if "line_items" not in order or not order["line_items"]:
+        return []
+    rows = []
+    for item in order["line_items"]:
+        qty = item.get("quantity") if order_status == "returned" else item.get("current_quantity")
+        if qty is None:
+            qty = item.get("quantity") or 0
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        sp_product_id = item.get("product_id")
+        sp_variant_id = item.get("variant_id")
+        try:
+            unit_price = float(item.get("price") or 0)
+        except (TypeError, ValueError):
+            unit_price = 0.0
+        resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
+        resolved_variant_id = variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None
+        name = (item.get("title") or item.get("name") or "").strip()
+        rows.append({
+            "variant_id": resolved_variant_id,
+            "product_id": resolved_product_id,
+            "name": name,
+            "variant_title": (item.get("variant_title") or "").strip() or "-",
+            "qty": qty,
+            "unit_price": unit_price,
+            "cost_price": _resolve_line_item_cost(
+                name, resolved_product_id, costs_by_id, products_cost_map,
+                resolved_variant_id, costs_by_variant_id,
+            ),
+        })
+    return rows
+
+
+def subtotal_line_items_excluding_removed(order: dict) -> Optional[float]:
+    """Sum line item totals excluding removed items. Uses current_quantity (Shopify's quantity after removals) when present, else quantity. Removed lines have current_quantity=0."""
+    if "line_items" not in order or not order["line_items"]:
+        return None
+    total = 0.0
+    for item in order["line_items"]:
+        # current_quantity is the quantity after edits/removals; when a line is removed it is 0
+        qty = item.get("current_quantity")
+        if qty is None:
+            qty = item.get("quantity") or 0
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        if qty <= 0:
+            continue
+        try:
+            price = float(item.get("price") or 0)
+            total += price * qty
+        except (TypeError, ValueError):
+            pass
+    return total if total > 0 else None
+
+
+def normalize_value(val):
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return round(float(val), 2)
+    return str(val).strip() if val else None
+
+
+def has_changed(shopify_data: dict, existing_data: dict, skip_assigned_courier_fields: bool = False) -> bool:
+    """
+    skip_assigned_courier_fields: when True, do not compare courier, tracking_number,
+    total_amount, delivery_charge, tax_amount, cost_price (used when courier is assigned).
+    """
+    fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]
+    if skip_assigned_courier_fields:
+        fields_to_compare = ["order_status", "piece_received", "advance_amount"]
+    for field in fields_to_compare:
+        shopify_val = normalize_value(shopify_data.get(field))
+        existing_val = normalize_value(existing_data.get(field))
+        if field in ["total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]:
+            shopify_num = float(shopify_val) if shopify_val is not None else 0.0
+            existing_num = float(existing_val) if existing_val is not None else 0.0
+            if abs(shopify_num - existing_num) > 0.01:
+                return True
+        elif field == "courier":
+            shopify_str = (shopify_val or "").strip() or "Unassigned"
+            existing_str = (existing_val or "").strip() or "Unassigned"
+            if shopify_str.lower() != existing_str.lower():
+                return True
+        elif field == "tracking_number":
+            shopify_str = (shopify_val or "").strip() if shopify_val else None
+            existing_str = (existing_val or "").strip() if existing_val else None
+            if shopify_str != existing_str:
+                return True
+        else:
+            if shopify_val != existing_val:
+                return True
+    return False
+
+
+@dataclass
+class OrderReconciliation:
+    """One Shopify order's reconciliation outcome against `existing_orders_map` - what
+    _sync_shopify_orders (looping over every order the periodic fetch returned) and the
+    webhook handler (reconciling the single order an event carries) both act on identically.
+    `action` is "insert" | "update" | "skip". `replacement_of` is set whenever this order
+    carries a `<n>-R` tag, independent of `action` - the caller resets the original order's
+    piece_received off it regardless of whether this order was inserted, updated, or skipped."""
+    action: str
+    order_number: int
+    order_data: Optional[dict] = None
+    replacement_of: Optional[int] = None
+
+
+def _reconcile_one_order(
+    sp_order: dict,
+    existing_orders_map: Dict[int, dict],
+    product_id_by_shopify: Dict[int, Any],
+    variant_id_by_shopify: Dict[int, Any],
+    costs_by_id: Dict[Any, float],
+    costs_by_variant_id: Dict[Any, float],
+    products_cost_map: Dict[str, float],
+    current_time: str,
+) -> Optional[OrderReconciliation]:
+    """Reconcile one Shopify order against `existing_orders_map` (order_number -> DB row).
+    Returns None if `sp_order` carries no order_number - nothing to reconcile. Shared by
+    _sync_shopify_orders (called once per order in its periodic fetch) and the webhook
+    handler (called for the single order an event carries) so the reconciliation rules
+    below - the freeze-after-fulfilled logic, voided-booking detection, `<n>-R` replacement
+    handling - live in exactly one place."""
+    order_number = sp_order.get("order_number")
+    if not order_number:
+        return None
+
+    order_number = int(order_number)
+    customer_info = _customer_info_from_shopify_order(sp_order)
+
+    courier = extract_courier(sp_order)
+    tracking_number = extract_tracking_number(sp_order)
+    order_status = extract_order_status(sp_order)
+
+    # Calculate total amount: use only non-removed line items (exclude quantity 0 / removed products)
+    total_line_items_price = subtotal_line_items_excluding_removed(sp_order)
+    if total_line_items_price is None:
+        total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
+    shopify_tax = extract_tax_amount(sp_order) or 0.0  # Used only for total_amount calc; we never store tax from Shopify
+
+    # Shopify shipping: we never store it as total_amount; delivery_charge is set in-app. If delivery was removed manually in Shopify, subtract it so total_amount excludes it.
+    shipping_price = 0.0
+    if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
+        shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
+        if shop_money:
+            shipping_price = float(shop_money.get("amount", "0.00"))
+    elif "total_shipping_price" in sp_order:
+        shipping_price = float(sp_order.get("total_shipping_price") or 0)
+
+    # Treat only configured discount codes as true price reductions.
+    discount_codes = sp_order.get("discount_codes") or []
+    normalized_discount_codes = {
+        str(code_obj.get("code") or "").strip().upper()
+        for code_obj in discount_codes
+        if isinstance(code_obj, dict)
+    }
+    has_price_reduction_discount_code = any(
+        code in PRICE_REDUCTION_DISCOUNT_CODES
+        for code in normalized_discount_codes
+    )
+    total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+
+    # Total amount:
+    # Prefer fulfillment-derived merchandise + shipping for all orders.
+    # If unavailable, fall back to Shopify totals.
+    financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
+    current_total = sp_order.get("current_total_price")
+    total_price_val = sp_order.get("total_price")
+    fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+    if fulfillment_based_total is not None:
+        total_amount = fulfillment_based_total + shopify_tax
+    elif current_total is not None and str(current_total).strip() != "":
+        total_amount = float(current_total)
+    elif total_price_val is not None and str(total_price_val).strip() != "":
+        total_amount = float(total_price_val) - shipping_price
+    else:
+        total_amount = total_line_items_price + shopify_tax
+
+    # A courier payout is marked paid in Shopify too (see shopify.mark_order_settled),
+    # so "paid" alone can't mean the customer paid up front - only an untagged one can.
+    settled_payout = has_settled_tag(sp_order.get("tags"))
+    financial_status = financial_status_peek
+    paid_in_advance = financial_status == "paid" and not settled_payout
+
+    if has_price_reduction_discount_code:
+        # Code-based discounts reduce selling price instead of being treated as advance.
+        total_amount = max(0.0, total_amount - total_discounts)
+        advance_amount = total_amount if paid_in_advance else 0.0
+    elif paid_in_advance:
+        advance_amount = total_amount
+    else:
+        # Includes a settled payout: that money came from the courier, so whatever
+        # advance the customer paid is still only what the discount field records.
+        advance_amount = total_discounts
+
+    # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
+    # cancelled order - mirror that instead of carrying forward a stale amount.
+    if order_status == "cancelled":
+        total_amount = 0.0
+        advance_amount = 0.0
+
+    # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
+    delivery_charge = 0.0
+    tax_amount = 0.0
+    cost_price = extract_cost_price(sp_order) or 0.0
+
+    # Set fixed delivery charge for SCS courier
+    if courier.upper() == "SCS":
+        delivery_charge = 180.0
+    else:
+        other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+        if other_charge is not None:
+            delivery_charge = other_charge
+    structured_line_items = extract_line_items(
+        sp_order, product_id_by_shopify, variant_id_by_shopify, costs_by_id, products_cost_map,
+        costs_by_variant_id, order_status,
+    )
+    calculated_cost_from_items = _cost_from_line_items(structured_line_items) if structured_line_items else 0.0
+
+    # If cost_price is 0, calculate it from items using products table
+    if cost_price == 0.0 and structured_line_items:
+        cost_price = calculated_cost_from_items
+
+    order_received_date = sp_order.get("created_at")
+    if order_received_date:
+        try:
+            order_received_date = datetime.fromisoformat(order_received_date.replace('Z', '+00:00')).isoformat()
+        except (TypeError, ValueError, AttributeError):
+            try:
+                order_received_date = datetime.strptime(order_received_date, "%Y-%m-%dT%H:%M:%S%z").isoformat()
+            except (TypeError, ValueError):
+                order_received_date = current_time
+    else:
+        order_received_date = current_time
+
+    replacement_of = None
+    is_replacement_order = False
+    tags_raw = sp_order.get("tags")
+    tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
+    for tag in tags_str.split(","):
+        tag = tag.strip()
+        if re.match(r"^\d+-R$", tag, re.IGNORECASE):
+            replacement_of = int(re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1))
+            is_replacement_order = True
+            break
+
+    # Replacement orders (XXXX-R) always have 0 cost price
+    order_cost_price = 0.0 if is_replacement_order else cost_price
+
+    order_data = {
+        "order_number": order_number,
+        "courier": courier,
+        "tracking_number": tracking_number,
+        "order_status": order_status,
+        "piece_received": "Pending",
+        "total_amount": total_amount,
+        "advance_amount": advance_amount,
+        "delivery_charge": delivery_charge,
+        "tax_amount": tax_amount,
+        "cost_price": order_cost_price,
+        "order_receiving_date": order_received_date,
+        "line_items": structured_line_items,
+        "replacement_of_order_no": replacement_of,
+        "updated_at": current_time,
+    }
+
+    if order_number not in existing_orders_map:
+        # First-time create: sync all fields from Shopify
+        order_data["created_at"] = current_time
+        _apply_customer_fields(order_data, customer_info)
+        return OrderReconciliation("insert", order_number, order_data, replacement_of)
+
+    existing_order = existing_orders_map[order_number]
+    existing_status = (existing_order.get("order_status") or "").strip().lower()
+    booking_was_voided = False
+    if existing_status in ("delivered", "returned"):
+        existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
+        shopify_courier_lower = (courier or "").strip().lower()
+        if existing_courier_lower == "other" or shopify_courier_lower == "other":
+            # "Other" has no tracking API, so the courier name / delivery charge can
+            # only ever be corrected via the courier tag - keep pulling that (and the
+            # fulfillment's own courier/tracking_number) in even past the
+            # delivered/returned freeze below.
+            existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
+            shopify_tracking_frozen = (tracking_number or "").strip() or None
+            existing_delivery_charge_frozen = float(existing_order.get("delivery_charge") or 0)
+            other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+            new_delivery_charge_frozen = other_charge if other_charge is not None else existing_delivery_charge_frozen
+            if (
+                shopify_courier_lower != existing_courier_lower
+                or shopify_tracking_frozen != existing_tracking_frozen
+                or abs(new_delivery_charge_frozen - existing_delivery_charge_frozen) > 0.01
+            ):
+                update_payload = {
+                    **existing_order,
+                    "courier": courier,
+                    "tracking_number": tracking_number,
+                    "delivery_charge": new_delivery_charge_frozen,
+                    "updated_at": current_time,
+                }
+                if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
+                    update_payload["replacement_of_order_no"] = replacement_of
+                _apply_customer_fields(update_payload, customer_info, existing_order)
+                return OrderReconciliation("update", order_number, update_payload, replacement_of)
+        # Once an order has left "unfulfilled" (e.g. delivered/returned), do not overwrite totals/items/cost.
+        # Allow only replacement_of_order_no to be set if it was missing.
+        if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
+            # Only set replacement_of_order_no (e.g. first time we see tag 5404-R); do not overwrite advance/total
+            update_payload = {
+                **existing_order,
+                "replacement_of_order_no": replacement_of,
+                "updated_at": current_time,
+            }
+            _apply_customer_fields(update_payload, customer_info, existing_order)
+            return OrderReconciliation("update", order_number, update_payload, replacement_of)
+        return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
+
+    shopify_order_status = (order_data.get("order_status") or "").strip().lower()
+    if shopify_order_status == "cancelled":
+        order_data["order_status"] = shopify_order_status
+    elif shopify_order_status == "returned" and existing_status == "fulfilled" and not _parcel_has_moved(existing_order):
+        # We booked a parcel, then the order was cancelled on Shopify before the
+        # courier ever scanned it. extract_order_status calls that "returned" off
+        # the cancelled_at/fulfillment timestamps alone, but nothing shipped and
+        # nothing is coming back - it must not reach the courier bill as a return.
+        # Reset it to bookable instead; the booking fields are cleared below.
+        order_data["order_status"] = "unfulfilled"
+        booking_was_voided = True
+    elif shopify_order_status == "fulfilled" and existing_status == "unfulfilled":
+        order_data["order_status"] = shopify_order_status
+    elif (
+        shopify_order_status == "unfulfilled"
+        and existing_status not in _TERMINAL_ORDER_STATUSES
+        # Only when there is actually a booking to void. Without this an ordinary
+        # never-booked order matches on every sync and is rewritten forever.
+        and _has_booking(existing_order)
+    ):
+        # Shopify reports "unfulfilled" for an order whose every fulfillment has
+        # been cancelled. That is a deliberate undo of the fulfillment - the parcel
+        # is not going out under this booking - so it outranks whatever courier
+        # tracking last told us and the order goes back to bookable. Statuses that
+        # already resolved into money (delivered/returned) or a cancellation are
+        # left alone; they are not waiting on a booking.
+        order_data["order_status"] = "unfulfilled"
+        booking_was_voided = True
+    else:
+        order_data["order_status"] = existing_order.get("order_status")
+    # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
+    order_data["advance_amount"] = advance_amount
+    # Preserve tax_amount (never from Shopify; set manually or via CSV)
+    order_data["tax_amount"] = existing_order.get("tax_amount", 0)
+    # Preserve last fetched delivery status (from courier tracking)
+    order_data["delivery_status"] = existing_order.get("delivery_status")
+    # Preserve piece_received (set by delivery status or manually; default Pending)
+    order_data["piece_received"] = existing_order.get("piece_received") or "Pending"
+
+    existing_courier = (existing_order.get("courier") or "").strip()
+    existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
+    courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
+    freeze_amounts_items_cost = existing_status != "unfulfilled"
+    # advance_amount keeps syncing from Shopify through "fulfilled" (payment/financial_status can
+    # still change post-fulfillment); it only freezes once the order reaches delivered/returned
+    # (handled above via early return) or another terminal-ish status.
+    freeze_advance = existing_status not in ("unfulfilled", "fulfilled")
+    existing_line_items = existing_order.get("line_items")
+    items_changed = (
+        _line_items_signature(structured_line_items) != _line_items_signature(existing_line_items)
+        or _line_items_incomplete(existing_line_items)
+    )
+
+    # Compare and update courier and tracking_number from Shopify if they differ
+    shopify_courier = (courier or "").strip()
+    shopify_tracking = (tracking_number or "").strip() if tracking_number else None
+
+    # Normalize for comparison (handle "Unassigned" vs empty)
+    existing_courier_normalized = existing_courier.lower() if existing_courier else "unassigned"
+    shopify_courier_normalized = shopify_courier.lower() if shopify_courier else "unassigned"
+
+    # Update courier and tracking_number from Shopify if they differ
+    courier_changed = existing_courier_normalized != shopify_courier_normalized
+    tracking_changed = existing_tracking != shopify_tracking
+
+    if courier_changed or tracking_changed:
+        # Update courier and tracking_number from Shopify
+        order_data["courier"] = courier
+        order_data["tracking_number"] = tracking_number
+    else:
+        # Keep existing values if they match
+        order_data["courier"] = existing_order.get("courier")
+        order_data["tracking_number"] = existing_order.get("tracking_number")
+
+    # Set delivery_charge: 180 for SCS courier only if not already set to a non-zero value
+    # Preserve any manually set delivery_charge (never from Shopify; set manually or via CSV)
+    final_courier = (order_data.get("courier") or "").strip().upper()
+    existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
+    if final_courier == "SCS" and existing_delivery_charge == 0:
+        # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
+        order_data["delivery_charge"] = 180.0
+    elif final_courier == "OTHER":
+        # The courier tag is the authoritative source (unlike the free-text
+        # tracking-number field, it's not stored anywhere to diff against, so
+        # just re-derive from Shopify's live tags on every sync); falls back to
+        # whatever's on file when no tag matches, so a manually set charge isn't
+        # zeroed out just because the order has no courier tag.
+        other_charge = _delivery_charge_from_other_tags(order_data.get("courier"), sp_order.get("tags"))
+        order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
+    else:
+        # Preserve existing delivery_charge (including any non-zero values)
+        order_data["delivery_charge"] = existing_delivery_charge
+    delivery_charge_changed = abs(order_data["delivery_charge"] - existing_delivery_charge) > 0.01
+
+    # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
+    order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
+
+    # Update total_amount/line_items/cost_price only while status is unfulfilled.
+    # After it changes from unfulfilled, freeze these fields.
+    if freeze_amounts_items_cost:
+        order_data["total_amount"] = existing_order.get("total_amount")
+        order_data["advance_amount"] = existing_order.get("advance_amount") if freeze_advance else advance_amount
+        # Replacement orders (XXXX-R) always have 0 cost price
+        order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
+        order_data["line_items"] = existing_order.get("line_items")
+        skip_fields = True
+    else:
+        order_data["total_amount"] = total_amount
+        order_data["advance_amount"] = advance_amount
+        # Only refresh line_items (which snapshots each line's cost_price) when the
+        # order's own items actually changed - not on every sync just because the
+        # order is still unfulfilled. Otherwise a product's cost_price changing later
+        # would silently overwrite an old order's cost snapshot with today's price.
+        if items_changed:
+            order_data["line_items"] = structured_line_items
+        else:
+            order_data["line_items"] = existing_order.get("line_items")
+        # Replacement orders (XXXX-R) always have 0 cost price.
+        if is_replacement_order:
+            order_data["cost_price"] = 0.0
+        elif items_changed:
+            order_data["cost_price"] = calculated_cost_from_items
+        else:
+            order_data["cost_price"] = existing_order.get("cost_price")
+        # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
+        skip_fields = courier_is_assigned
+
+    # Cancellation overrides the freeze above: a cancelled order's total is 0
+    # even if it was already fulfilled (and therefore otherwise frozen).
+    cancelled_total_needs_fix = False
+    if order_data["order_status"] == "cancelled":
+        order_data["total_amount"] = 0.0
+        order_data["advance_amount"] = 0.0
+        cancelled_total_needs_fix = (
+            abs(float(existing_order.get("total_amount") or 0)) > 0.01
+            or abs(float(existing_order.get("advance_amount") or 0)) > 0.01
+        )
+
+    _apply_customer_fields(order_data, customer_info, existing_order)
+    customer_info_changed = any(order_data[key] != existing_order.get(key) for key in CUSTOMER_INFO_FIELDS)
+
+    # Always update if courier or tracking_number changed, otherwise check other fields.
+    # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
+    # total_amount, so an already-cancelled order whose advance_amount was already 0 would
+    # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers
+    # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
+    # invisible to has_changed's skip mode once courier is assigned); customer_info_changed
+    # covers the same blind spot for a customer's name/phone/address/city/id.
+    # booking_was_voided is listed explicitly: it clears courier/tracking to values
+    # that differ from BOTH Shopify (which still carries the cancelled fulfillment)
+    # and the existing row, so neither courier_changed nor has_changed sees it.
+    if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+        order_data["id"] = existing_order["id"]
+        return OrderReconciliation("update", order_number, order_data, replacement_of)
+    return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
+
+
+async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Optional[OrderReconciliation]:
+    """Reconcile and persist one Shopify order - the webhook-driven counterpart to
+    _sync_shopify_orders' batch loop, sharing the same _reconcile_one_order rules so a
+    webhook-triggered update and a periodic-sync-triggered update of the same order can
+    never disagree. Called by app/routes/shopify_webhooks.py for orders/create,
+    orders/updated, orders/cancelled and orders/fulfilled - `sp_order` is that event's
+    payload, which for these topics is the same REST-shaped order object
+    _fetch_shopify_orders_in_range returns. Returns None if `sp_order` carried no
+    order_number; otherwise the OrderReconciliation describing what was done (or that
+    nothing needed to change)."""
+    order_number = sp_order.get("order_number")
+    if not order_number:
+        return None
+    order_number = int(order_number)
+
+    supabase = get_supabase()
+    # Scoped the same way _sync_shopify_orders scopes its own reads (see that function's
+    # docstring) - just this one order's row, plus every product/variant for cost
+    # resolution's name-matching fallback (extract_line_items), which can't be narrowed to
+    # this order's line items alone.
+    products_data = org_table(supabase, org_id, "shopify_products").select(
+        "id, name, cost_price, shopify_product_id"
+    ).execute().data or []
+    variants_data = org_table(supabase, org_id, "shopify_variants").select(
+        "id, shopify_variant_id, cost_price"
+    ).execute().data or []
+    existing_rows = org_table(supabase, org_id, "shopify_orders").select(
+        "id, order_number, order_status, delivery_charge, tax_amount, "
+        "delivery_status, piece_received, courier, tracking_number, "
+        "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
+        "replacement_of_order_no, customer_id, customer_name, customer_phone, "
+        "customer_address, customer_city"
+    ).eq("order_number", order_number).execute().data or []
+
+    products_cost_map: Dict[str, float] = {}
+    costs_by_id: Dict[Any, float] = {}
+    product_id_by_shopify: Dict[int, Any] = {}
+    for p in products_data:
+        if p.get("name") and p.get("cost_price") is not None:
+            products_cost_map[p["name"].lower().strip()] = float(p["cost_price"])
+        if p.get("shopify_product_id") is not None and p.get("id"):
+            product_id_by_shopify[int(p["shopify_product_id"])] = p["id"]
+        if p.get("id") and p.get("cost_price") is not None:
+            costs_by_id[p["id"]] = float(p["cost_price"])
+
+    variant_id_by_shopify: Dict[int, Any] = {}
+    costs_by_variant_id: Dict[Any, float] = {}
+    for v in variants_data:
+        if v.get("shopify_variant_id") is not None and v.get("id"):
+            variant_id_by_shopify[int(v["shopify_variant_id"])] = v["id"]
+        if v.get("id") and v.get("cost_price") is not None:
+            costs_by_variant_id[v["id"]] = float(v["cost_price"])
+
+    existing_orders_map = {order_number: existing_rows[0]} if existing_rows else {}
+    current_time = datetime.now(timezone.utc).isoformat()
+
+    result = _reconcile_one_order(
+        sp_order, existing_orders_map, product_id_by_shopify, variant_id_by_shopify,
+        costs_by_id, costs_by_variant_id, products_cost_map, current_time,
+    )
+    if result is None or result.action == "skip":
+        return result
+
+    org_table(supabase, org_id, "shopify_orders").upsert(
+        result.order_data, on_conflict="org_id,order_number"
+    ).execute()
+
+    # Same replacement_of_order_no -> reset-the-original's-piece_received step
+    # _sync_shopify_orders does after its own batch upsert, scoped to this one order.
+    if result.replacement_of:
+        originals = org_table(supabase, org_id, "shopify_orders").select("id, piece_received").eq(
+            "order_number", result.replacement_of
+        ).execute().data or []
+        ids_to_reset = [
+            row["id"] for row in originals
+            if (row.get("piece_received") or "").strip().lower() == "done"
+        ]
+        if ids_to_reset:
+            org_table(supabase, org_id, "shopify_orders").update({
+                "piece_received": "Pending",
+                "updated_at": current_time,
+            }).in_("id", ids_to_reset).execute()
+
+    try:
+        recompute_advance_statuses(supabase, org_id, order_numbers={order_number})
+    except Exception:
+        logger.warning("[webhook] advance status recompute failed for order %s", order_number)
+
+    return result
+
+
 async def _sync_shopify_orders(org_id: str) -> dict:
     """The frontend decides when to auto-sync (see ledgers.js); this just guarantees
     at most one sync runs at a time per org, whether triggered by one tab, several
@@ -537,250 +1295,6 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             if order_num is not None:
                 existing_orders_map[order_num] = o
 
-        def extract_courier(order):
-            """Extract courier from the latest non-cancelled fulfillment.
-
-            A cancelled fulfillment is explicitly NOT a fallback: cancelling every
-            fulfillment is how a booking is undone in Shopify, so reading the courier back
-            off one would re-assign a booking that no longer exists (and fight any local
-            reset of it on every sync)."""
-            if "fulfillments" not in order or len(order["fulfillments"]) == 0:
-                return "Unassigned"
-
-            fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
-
-            if not fulfillments_to_check:
-                return "Unassigned"
-
-            # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
-            latest_fulfillment = None
-            latest_timestamp = None
-
-            for fulfillment in fulfillments_to_check:
-                # Prefer updated_at as it reflects the latest change
-                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
-                if not timestamp_str:
-                    continue
-
-                timestamp = _parse_iso(timestamp_str)
-                if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
-                    latest_timestamp = timestamp
-                    latest_fulfillment = fulfillment
-
-            # If we couldn't find by timestamp, use the last one in the list
-            if not latest_fulfillment:
-                latest_fulfillment = fulfillments_to_check[-1]
-
-            tracking_company = latest_fulfillment.get("tracking_company")
-            if tracking_company:
-                tracking_company = str(tracking_company).strip()
-                if tracking_company:
-                    return tracking_company
-            return "Unassigned"
-
-        def extract_tracking_number(order):
-            """Extract tracking number from the latest non-cancelled fulfillment. See
-            extract_courier for why a cancelled fulfillment is not used as a fallback."""
-            if "fulfillments" not in order or len(order["fulfillments"]) == 0:
-                return None
-
-            fulfillments_to_check = [f for f in order["fulfillments"] if f.get("status") != "cancelled"]
-
-            if not fulfillments_to_check:
-                return None
-
-            # Find the latest fulfillment by updated_at (or created_at if updated_at is missing)
-            latest_fulfillment = None
-            latest_timestamp = None
-
-            for fulfillment in fulfillments_to_check:
-                # Prefer updated_at as it reflects the latest change
-                timestamp_str = fulfillment.get("updated_at") or fulfillment.get("created_at")
-                if not timestamp_str:
-                    continue
-
-                timestamp = _parse_iso(timestamp_str)
-                if timestamp and (latest_timestamp is None or timestamp > latest_timestamp):
-                    latest_timestamp = timestamp
-                    latest_fulfillment = fulfillment
-
-            # If we couldn't find by timestamp, use the last one in the list
-            if not latest_fulfillment:
-                latest_fulfillment = fulfillments_to_check[-1]
-
-            tracking_number = latest_fulfillment.get("tracking_number")
-            if tracking_number:
-                tracking_number = str(tracking_number).strip()
-                if tracking_number:
-                    return tracking_number
-            return None
-
-        def _parse_iso(s):
-            if not s:
-                return None
-            if isinstance(s, datetime):
-                return s
-            s = str(s).strip().replace("Z", "+00:00")
-            try:
-                return datetime.fromisoformat(s)
-            except (ValueError, TypeError):
-                return None
-
-        def extract_order_status(order):
-            cancelled_at_raw = order.get("cancelled_at")
-            fulfillment_dt = None
-            for f in order.get("fulfillments") or []:
-                # A cancelled fulfillment never shipped, so it can't make a later
-                # order cancellation a "return".
-                if f.get("status") == "cancelled":
-                    continue
-                ct = f.get("created_at")
-                if ct:
-                    parsed = _parse_iso(ct)
-                    if parsed and (fulfillment_dt is None or parsed > fulfillment_dt):
-                        fulfillment_dt = parsed
-            if cancelled_at_raw and fulfillment_dt is not None:
-                cancelled_at = _parse_iso(cancelled_at_raw)
-                if cancelled_at and cancelled_at > fulfillment_dt:
-                    return "returned"
-            if cancelled_at_raw is not None:
-                return "cancelled"
-            fulfillment_status = order.get("fulfillment_status")
-            if fulfillment_status == "fulfilled":
-                return "fulfilled"
-            return "unfulfilled"
-
-        def extract_tax_amount(order):
-            # Prefer current_* (reflects edits/refunds; avoids discrepancies when order is updated)
-            if "current_total_tax_set" in order and order["current_total_tax_set"]:
-                shop_money = order["current_total_tax_set"].get("shop_money", {})
-                if shop_money:
-                    return float(shop_money.get("amount", "0.00"))
-            try:
-                return float(order.get("current_total_tax") or 0)
-            except (TypeError, ValueError):
-                pass
-            if "total_tax_set" in order and order["total_tax_set"]:
-                shop_money = order["total_tax_set"].get("shop_money", {})
-                if shop_money:
-                    return float(shop_money.get("amount", "0.00"))
-            return float(order.get("total_tax", "0.00"))
-
-        def extract_cost_price(order):
-            if "note_attributes" in order:
-                for attr in order["note_attributes"]:
-                    if attr.get("name") in ["cost_price", "Cost Price", "cost"]:
-                        try:
-                            return float(attr.get("value", 0))
-                        except (TypeError, ValueError):
-                            return None
-            return None
-
-        def extract_line_items(order, order_status=None):
-            """Build structured line_items (one object per line, real qty) from Shopify line_items.
-            Resolves product_id/variant_id via Shopify ids; snapshots name/variant_title/cost_price
-            so old orders survive product renames/deletes/cost changes. Excludes removed lines
-            (current_quantity 0) - except for "returned" orders, where current_quantity is 0 on
-            every line by definition (the whole order was refunded back), so falling back to it
-            would erase the historical record of what was actually shipped/invoiced; use the
-            original quantity there instead."""
-            if "line_items" not in order or not order["line_items"]:
-                return []
-            rows = []
-            for item in order["line_items"]:
-                qty = item.get("quantity") if order_status == "returned" else item.get("current_quantity")
-                if qty is None:
-                    qty = item.get("quantity") or 0
-                try:
-                    qty = int(qty)
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty <= 0:
-                    continue
-                sp_product_id = item.get("product_id")
-                sp_variant_id = item.get("variant_id")
-                try:
-                    unit_price = float(item.get("price") or 0)
-                except (TypeError, ValueError):
-                    unit_price = 0.0
-                resolved_product_id = product_id_by_shopify.get(int(sp_product_id)) if sp_product_id is not None else None
-                resolved_variant_id = variant_id_by_shopify.get(int(sp_variant_id)) if sp_variant_id is not None else None
-                name = (item.get("title") or item.get("name") or "").strip()
-                rows.append({
-                    "variant_id": resolved_variant_id,
-                    "product_id": resolved_product_id,
-                    "name": name,
-                    "variant_title": (item.get("variant_title") or "").strip() or "-",
-                    "qty": qty,
-                    "unit_price": unit_price,
-                    "cost_price": _resolve_line_item_cost(
-                        name, resolved_product_id, costs_by_id, products_cost_map,
-                        resolved_variant_id, costs_by_variant_id,
-                    ),
-                })
-            return rows
-
-        def subtotal_line_items_excluding_removed(order):
-            """Sum line item totals excluding removed items. Uses current_quantity (Shopify's quantity after removals) when present, else quantity. Removed lines have current_quantity=0."""
-            if "line_items" not in order or not order["line_items"]:
-                return None
-            total = 0.0
-            for item in order["line_items"]:
-                # current_quantity is the quantity after edits/removals; when a line is removed it is 0
-                qty = item.get("current_quantity")
-                if qty is None:
-                    qty = item.get("quantity") or 0
-                try:
-                    qty = int(qty)
-                except (TypeError, ValueError):
-                    qty = 0
-                if qty <= 0:
-                    continue
-                try:
-                    price = float(item.get("price") or 0)
-                    total += price * qty
-                except (TypeError, ValueError):
-                    pass
-            return total if total > 0 else None
-
-        def normalize_value(val):
-            if val is None:
-                return None
-            if isinstance(val, (int, float)):
-                return round(float(val), 2)
-            return str(val).strip() if val else None
-
-        def has_changed(shopify_data, existing_data, skip_assigned_courier_fields=False):
-            """
-            skip_assigned_courier_fields: when True, do not compare courier, tracking_number,
-            total_amount, delivery_charge, tax_amount, cost_price (used when courier is assigned).
-            """
-            fields_to_compare = ["courier", "tracking_number", "order_status", "total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]
-            if skip_assigned_courier_fields:
-                fields_to_compare = ["order_status", "piece_received", "advance_amount"]
-            for field in fields_to_compare:
-                shopify_val = normalize_value(shopify_data.get(field))
-                existing_val = normalize_value(existing_data.get(field))
-                if field in ["total_amount", "advance_amount", "delivery_charge", "tax_amount", "cost_price"]:
-                    shopify_num = float(shopify_val) if shopify_val is not None else 0.0
-                    existing_num = float(existing_val) if existing_val is not None else 0.0
-                    if abs(shopify_num - existing_num) > 0.01:
-                        return True
-                elif field == "courier":
-                    shopify_str = (shopify_val or "").strip() or "Unassigned"
-                    existing_str = (existing_val or "").strip() or "Unassigned"
-                    if shopify_str.lower() != existing_str.lower():
-                        return True
-                elif field == "tracking_number":
-                    shopify_str = (shopify_val or "").strip() if shopify_val else None
-                    existing_str = (existing_val or "").strip() if existing_val else None
-                    if shopify_str != existing_str:
-                        return True
-                else:
-                    if shopify_val != existing_val:
-                        return True
-            return False
-
         orders_to_insert = []
         orders_to_update = []
         orders_to_skip = []
@@ -788,357 +1302,20 @@ async def _sync_shopify_orders(org_id: str) -> dict:
         current_time = datetime.now(timezone.utc).isoformat()
 
         for sp_order in all_orders:
-            order_number = sp_order.get("order_number")
-            if not order_number:
-                continue
-
-            order_number = int(order_number)
-            customer_info = _customer_info_from_shopify_order(sp_order)
-
-            courier = extract_courier(sp_order)
-            tracking_number = extract_tracking_number(sp_order)
-            order_status = extract_order_status(sp_order)
-
-            # Calculate total amount: use only non-removed line items (exclude quantity 0 / removed products)
-            total_line_items_price = subtotal_line_items_excluding_removed(sp_order)
-            if total_line_items_price is None:
-                total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
-            shopify_tax = extract_tax_amount(sp_order) or 0.0  # Used only for total_amount calc; we never store tax from Shopify
-
-            # Shopify shipping: we never store it as total_amount; delivery_charge is set in-app. If delivery was removed manually in Shopify, subtract it so total_amount excludes it.
-            shipping_price = 0.0
-            if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
-                shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
-                if shop_money:
-                    shipping_price = float(shop_money.get("amount", "0.00"))
-            elif "total_shipping_price" in sp_order:
-                shipping_price = float(sp_order.get("total_shipping_price") or 0)
-
-            # Treat only configured discount codes as true price reductions.
-            discount_codes = sp_order.get("discount_codes") or []
-            normalized_discount_codes = {
-                str(code_obj.get("code") or "").strip().upper()
-                for code_obj in discount_codes
-                if isinstance(code_obj, dict)
-            }
-            has_price_reduction_discount_code = any(
-                code in PRICE_REDUCTION_DISCOUNT_CODES
-                for code in normalized_discount_codes
+            result = _reconcile_one_order(
+                sp_order, existing_orders_map, product_id_by_shopify, variant_id_by_shopify,
+                costs_by_id, costs_by_variant_id, products_cost_map, current_time,
             )
-            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
-
-            # Total amount:
-            # Prefer fulfillment-derived merchandise + shipping for all orders.
-            # If unavailable, fall back to Shopify totals.
-            financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
-            current_total = sp_order.get("current_total_price")
-            total_price_val = sp_order.get("total_price")
-            fulfillment_based_total = _order_total_from_fulfillments(sp_order)
-            if fulfillment_based_total is not None:
-                total_amount = fulfillment_based_total + shopify_tax
-            elif current_total is not None and str(current_total).strip() != "":
-                total_amount = float(current_total)
-            elif total_price_val is not None and str(total_price_val).strip() != "":
-                total_amount = float(total_price_val) - shipping_price
+            if result is None:
+                continue
+            if result.replacement_of:
+                original_orders_to_reset_piece_received.add(result.replacement_of)
+            if result.action == "insert":
+                orders_to_insert.append(result.order_data)
+            elif result.action == "update":
+                orders_to_update.append(result.order_data)
             else:
-                total_amount = total_line_items_price + shopify_tax
-
-            # A courier payout is marked paid in Shopify too (see shopify.mark_order_settled),
-            # so "paid" alone can't mean the customer paid up front - only an untagged one can.
-            settled_payout = has_settled_tag(sp_order.get("tags"))
-            financial_status = financial_status_peek
-            paid_in_advance = financial_status == "paid" and not settled_payout
-
-            if has_price_reduction_discount_code:
-                # Code-based discounts reduce selling price instead of being treated as advance.
-                total_amount = max(0.0, total_amount - total_discounts)
-                advance_amount = total_amount if paid_in_advance else 0.0
-            elif paid_in_advance:
-                advance_amount = total_amount
-            else:
-                # Includes a settled payout: that money came from the courier, so whatever
-                # advance the customer paid is still only what the discount field records.
-                advance_amount = total_discounts
-
-            # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
-            # cancelled order - mirror that instead of carrying forward a stale amount.
-            if order_status == "cancelled":
-                total_amount = 0.0
-                advance_amount = 0.0
-
-            # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
-            delivery_charge = 0.0
-            tax_amount = 0.0
-            cost_price = extract_cost_price(sp_order) or 0.0
-
-            # Set fixed delivery charge for SCS courier
-            if courier.upper() == "SCS":
-                delivery_charge = 180.0
-            else:
-                other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
-                if other_charge is not None:
-                    delivery_charge = other_charge
-            structured_line_items = extract_line_items(sp_order, order_status)
-            calculated_cost_from_items = _cost_from_line_items(structured_line_items) if structured_line_items else 0.0
-
-            # If cost_price is 0, calculate it from items using products table
-            if cost_price == 0.0 and structured_line_items:
-                cost_price = calculated_cost_from_items
-
-            order_received_date = sp_order.get("created_at")
-            if order_received_date:
-                try:
-                    order_received_date = datetime.fromisoformat(order_received_date.replace('Z', '+00:00')).isoformat()
-                except (TypeError, ValueError, AttributeError):
-                    try:
-                        order_received_date = datetime.strptime(order_received_date, "%Y-%m-%dT%H:%M:%S%z").isoformat()
-                    except (TypeError, ValueError):
-                        order_received_date = current_time
-            else:
-                order_received_date = current_time
-
-            replacement_of = None
-            is_replacement_order = False
-            tags_raw = sp_order.get("tags")
-            tags_str = (tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")).strip() or ""
-            for tag in tags_str.split(","):
-                tag = tag.strip()
-                if re.match(r"^\d+-R$", tag, re.IGNORECASE):
-                    replacement_of = int(re.match(r"^(\d+)-R$", tag, re.IGNORECASE).group(1))
-                    is_replacement_order = True
-                    break
-
-            # Replacement orders (XXXX-R) always have 0 cost price
-            order_cost_price = 0.0 if is_replacement_order else cost_price
-
-            order_data = {
-                "order_number": order_number,
-                "courier": courier,
-                "tracking_number": tracking_number,
-                "order_status": order_status,
-                "piece_received": "Pending",
-                "total_amount": total_amount,
-                "advance_amount": advance_amount,
-                "delivery_charge": delivery_charge,
-                "tax_amount": tax_amount,
-                "cost_price": order_cost_price,
-                "order_receiving_date": order_received_date,
-                "line_items": structured_line_items,
-                "replacement_of_order_no": replacement_of,
-                "updated_at": current_time
-            }
-            if replacement_of:
-                original_orders_to_reset_piece_received.add(replacement_of)
-
-            if order_number in existing_orders_map:
-                existing_order = existing_orders_map[order_number]
-                existing_status = (existing_order.get("order_status") or "").strip().lower()
-                booking_was_voided = False
-                if existing_status in ("delivered", "returned"):
-                    existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
-                    shopify_courier_lower = (courier or "").strip().lower()
-                    if existing_courier_lower == "other" or shopify_courier_lower == "other":
-                        # "Other" has no tracking API, so the courier name / delivery charge can
-                        # only ever be corrected via the courier tag - keep pulling that (and the
-                        # fulfillment's own courier/tracking_number) in even past the
-                        # delivered/returned freeze below.
-                        existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
-                        shopify_tracking_frozen = (tracking_number or "").strip() or None
-                        existing_delivery_charge_frozen = float(existing_order.get("delivery_charge") or 0)
-                        other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
-                        new_delivery_charge_frozen = other_charge if other_charge is not None else existing_delivery_charge_frozen
-                        if (
-                            shopify_courier_lower != existing_courier_lower
-                            or shopify_tracking_frozen != existing_tracking_frozen
-                            or abs(new_delivery_charge_frozen - existing_delivery_charge_frozen) > 0.01
-                        ):
-                            update_payload = {
-                                **existing_order,
-                                "courier": courier,
-                                "tracking_number": tracking_number,
-                                "delivery_charge": new_delivery_charge_frozen,
-                                "updated_at": current_time,
-                            }
-                            if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
-                                update_payload["replacement_of_order_no"] = replacement_of
-                            _apply_customer_fields(update_payload, customer_info, existing_order)
-                            orders_to_update.append(update_payload)
-                            continue
-                    # Once an order has left "unfulfilled" (e.g. delivered/returned), do not overwrite totals/items/cost.
-                    # Allow only replacement_of_order_no to be set if it was missing.
-                    if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
-                        # Only set replacement_of_order_no (e.g. first time we see tag 5404-R); do not overwrite advance/total
-                        update_payload = {
-                            **existing_order,
-                            "replacement_of_order_no": replacement_of,
-                            "updated_at": current_time,
-                        }
-                        _apply_customer_fields(update_payload, customer_info, existing_order)
-                        orders_to_update.append(update_payload)
-                    else:
-                        orders_to_skip.append(order_number)
-                    continue
-                shopify_order_status = (order_data.get("order_status") or "").strip().lower()
-                if shopify_order_status == "cancelled":
-                    order_data["order_status"] = shopify_order_status
-                elif shopify_order_status == "returned" and existing_status == "fulfilled" and not _parcel_has_moved(existing_order):
-                    # We booked a parcel, then the order was cancelled on Shopify before the
-                    # courier ever scanned it. extract_order_status calls that "returned" off
-                    # the cancelled_at/fulfillment timestamps alone, but nothing shipped and
-                    # nothing is coming back - it must not reach the courier bill as a return.
-                    # Reset it to bookable instead; the booking fields are cleared below.
-                    order_data["order_status"] = "unfulfilled"
-                    booking_was_voided = True
-                elif shopify_order_status == "fulfilled" and existing_status == "unfulfilled":
-                    order_data["order_status"] = shopify_order_status
-                elif (
-                    shopify_order_status == "unfulfilled"
-                    and existing_status not in _TERMINAL_ORDER_STATUSES
-                    # Only when there is actually a booking to void. Without this an ordinary
-                    # never-booked order matches on every sync and is rewritten forever.
-                    and _has_booking(existing_order)
-                ):
-                    # Shopify reports "unfulfilled" for an order whose every fulfillment has
-                    # been cancelled. That is a deliberate undo of the fulfillment - the parcel
-                    # is not going out under this booking - so it outranks whatever courier
-                    # tracking last told us and the order goes back to bookable. Statuses that
-                    # already resolved into money (delivered/returned) or a cancellation are
-                    # left alone; they are not waiting on a booking.
-                    order_data["order_status"] = "unfulfilled"
-                    booking_was_voided = True
-                else:
-                    order_data["order_status"] = existing_order.get("order_status")
-                # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
-                order_data["advance_amount"] = advance_amount
-                # Preserve tax_amount (never from Shopify; set manually or via CSV)
-                order_data["tax_amount"] = existing_order.get("tax_amount", 0)
-                # Preserve last fetched delivery status (from courier tracking)
-                order_data["delivery_status"] = existing_order.get("delivery_status")
-                # Preserve piece_received (set by delivery status or manually; default Pending)
-                order_data["piece_received"] = existing_order.get("piece_received") or "Pending"
-
-                existing_courier = (existing_order.get("courier") or "").strip()
-                existing_tracking = (existing_order.get("tracking_number") or "").strip() if existing_order.get("tracking_number") else None
-                courier_is_assigned = bool(existing_courier and existing_courier.lower() != "unassigned")
-                freeze_amounts_items_cost = existing_status != "unfulfilled"
-                # advance_amount keeps syncing from Shopify through "fulfilled" (payment/financial_status can
-                # still change post-fulfillment); it only freezes once the order reaches delivered/returned
-                # (handled above via early continue) or another terminal-ish status.
-                freeze_advance = existing_status not in ("unfulfilled", "fulfilled")
-                existing_line_items = existing_order.get("line_items")
-                items_changed = (
-                    _line_items_signature(structured_line_items) != _line_items_signature(existing_line_items)
-                    or _line_items_incomplete(existing_line_items)
-                )
-
-                # Compare and update courier and tracking_number from Shopify if they differ
-                shopify_courier = (courier or "").strip()
-                shopify_tracking = (tracking_number or "").strip() if tracking_number else None
-
-                # Normalize for comparison (handle "Unassigned" vs empty)
-                existing_courier_normalized = existing_courier.lower() if existing_courier else "unassigned"
-                shopify_courier_normalized = shopify_courier.lower() if shopify_courier else "unassigned"
-
-                # Update courier and tracking_number from Shopify if they differ
-                courier_changed = existing_courier_normalized != shopify_courier_normalized
-                tracking_changed = existing_tracking != shopify_tracking
-
-                if courier_changed or tracking_changed:
-                    # Update courier and tracking_number from Shopify
-                    order_data["courier"] = courier
-                    order_data["tracking_number"] = tracking_number
-                else:
-                    # Keep existing values if they match
-                    order_data["courier"] = existing_order.get("courier")
-                    order_data["tracking_number"] = existing_order.get("tracking_number")
-
-                # Set delivery_charge: 180 for SCS courier only if not already set to a non-zero value
-                # Preserve any manually set delivery_charge (never from Shopify; set manually or via CSV)
-                final_courier = (order_data.get("courier") or "").strip().upper()
-                existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
-                if final_courier == "SCS" and existing_delivery_charge == 0:
-                    # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
-                    order_data["delivery_charge"] = 180.0
-                elif final_courier == "OTHER":
-                    # The courier tag is the authoritative source (unlike the free-text
-                    # tracking-number field, it's not stored anywhere to diff against, so
-                    # just re-derive from Shopify's live tags on every sync); falls back to
-                    # whatever's on file when no tag matches, so a manually set charge isn't
-                    # zeroed out just because the order has no courier tag.
-                    other_charge = _delivery_charge_from_other_tags(order_data.get("courier"), sp_order.get("tags"))
-                    order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
-                else:
-                    # Preserve existing delivery_charge (including any non-zero values)
-                    order_data["delivery_charge"] = existing_delivery_charge
-                delivery_charge_changed = abs(order_data["delivery_charge"] - existing_delivery_charge) > 0.01
-
-                # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
-                order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
-
-                # Update total_amount/line_items/cost_price only while status is unfulfilled.
-                # After it changes from unfulfilled, freeze these fields.
-                if freeze_amounts_items_cost:
-                    order_data["total_amount"] = existing_order.get("total_amount")
-                    order_data["advance_amount"] = existing_order.get("advance_amount") if freeze_advance else advance_amount
-                    # Replacement orders (XXXX-R) always have 0 cost price
-                    order_data["cost_price"] = 0.0 if is_replacement_order else existing_order.get("cost_price")
-                    order_data["line_items"] = existing_order.get("line_items")
-                    skip_fields = True
-                else:
-                    order_data["total_amount"] = total_amount
-                    order_data["advance_amount"] = advance_amount
-                    # Only refresh line_items (which snapshots each line's cost_price) when the
-                    # order's own items actually changed - not on every sync just because the
-                    # order is still unfulfilled. Otherwise a product's cost_price changing later
-                    # would silently overwrite an old order's cost snapshot with today's price.
-                    if items_changed:
-                        order_data["line_items"] = structured_line_items
-                    else:
-                        order_data["line_items"] = existing_order.get("line_items")
-                    # Replacement orders (XXXX-R) always have 0 cost price.
-                    if is_replacement_order:
-                        order_data["cost_price"] = 0.0
-                    elif items_changed:
-                        order_data["cost_price"] = calculated_cost_from_items
-                    else:
-                        order_data["cost_price"] = existing_order.get("cost_price")
-                    # When courier is assigned, we already avoid overwriting some fields via has_changed's skip mode.
-                    skip_fields = courier_is_assigned
-
-                # Cancellation overrides the freeze above: a cancelled order's total is 0
-                # even if it was already fulfilled (and therefore otherwise frozen).
-                cancelled_total_needs_fix = False
-                if order_data["order_status"] == "cancelled":
-                    order_data["total_amount"] = 0.0
-                    order_data["advance_amount"] = 0.0
-                    cancelled_total_needs_fix = (
-                        abs(float(existing_order.get("total_amount") or 0)) > 0.01
-                        or abs(float(existing_order.get("advance_amount") or 0)) > 0.01
-                    )
-
-                _apply_customer_fields(order_data, customer_info, existing_order)
-                customer_info_changed = any(order_data[key] != existing_order.get(key) for key in CUSTOMER_INFO_FIELDS)
-
-                # Always update if courier or tracking_number changed, otherwise check other fields.
-                # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
-                # total_amount, so an already-cancelled order whose advance_amount was already 0 would
-                # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers
-                # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
-                # invisible to has_changed's skip mode once courier is assigned); customer_info_changed
-                # covers the same blind spot for a customer's name/phone/address/city/id.
-                # booking_was_voided is listed explicitly: it clears courier/tracking to values
-                # that differ from BOTH Shopify (which still carries the cancelled fulfillment)
-                # and the existing row, so neither courier_changed nor has_changed sees it.
-                if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
-                    order_data["id"] = existing_order["id"]
-                    orders_to_update.append(order_data)
-                else:
-                    orders_to_skip.append(order_number)
-            else:
-                # First-time create: sync all fields from Shopify
-                order_data["created_at"] = current_time
-                _apply_customer_fields(order_data, customer_info)
-                orders_to_insert.append(order_data)
+                orders_to_skip.append(result.order_number)
         t_diff_loop = time.perf_counter()
 
         created_count = 0

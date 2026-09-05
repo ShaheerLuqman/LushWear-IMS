@@ -1,0 +1,145 @@
+"""app/routes/shopify_webhooks.py - HMAC verification, org resolution, idempotency, and
+dispatch. Exercised directly against the mounted app (the route is public - no auth
+dependency to bypass) with its collaborators monkeypatched, rather than through conftest's
+FakeSupabase (which doesn't model Postgres's upsert-on-conflict "empty data means the row
+already existed" contract that idempotency here relies on)."""
+import base64
+import hashlib
+import hmac
+import json
+from types import SimpleNamespace
+
+import pytest
+from fastapi.testclient import TestClient
+
+import app.main as main
+import app.routes.shopify_webhooks as shopify_webhooks
+
+_SECRET = "test-shopify-app-secret"
+
+
+def _sign(body: bytes) -> str:
+    digest = hmac.new(_SECRET.encode("utf-8"), body, hashlib.sha256).digest()
+    return base64.b64encode(digest).decode("ascii")
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("SHOPIFY_APP_CLIENT_SECRET", _SECRET)
+    yield TestClient(main.app)
+
+
+def _post(client, body: dict, *, shop="test-shop.myshopify.com", topic="orders/create",
+          webhook_id="wh-1", bad_hmac=False, missing_header=None):
+    raw = json.dumps(body).encode("utf-8")
+    headers = {
+        "X-Shopify-Hmac-Sha256": "not-the-real-signature" if bad_hmac else _sign(raw),
+        "X-Shopify-Shop-Domain": shop,
+        "X-Shopify-Topic": topic,
+        "X-Shopify-Webhook-Id": webhook_id,
+    }
+    if missing_header:
+        headers.pop(missing_header)
+    return client.post("/api/webhooks/shopify", content=raw, headers=headers)
+
+
+class TestHmacVerification:
+    def test_bad_signature_is_rejected(self, client):
+        resp = _post(client, {"order_number": 123}, bad_hmac=True)
+        assert resp.status_code == 401
+
+    def test_missing_signature_header_is_rejected(self, client):
+        resp = _post(client, {"order_number": 123}, missing_header="X-Shopify-Hmac-Sha256")
+        assert resp.status_code == 401
+
+    def test_missing_shop_or_topic_or_id_is_a_bad_request(self, client, monkeypatch):
+        monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
+        for header in ("X-Shopify-Shop-Domain", "X-Shopify-Topic", "X-Shopify-Webhook-Id"):
+            resp = _post(client, {"order_number": 123}, missing_header=header)
+            assert resp.status_code == 400
+
+
+class TestOrgResolutionAndIdempotency:
+    def test_unrecognized_shop_is_acknowledged_without_processing(self, client, monkeypatch):
+        monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: None)
+        called = []
+        monkeypatch.setattr(
+            shopify_webhooks, "reconcile_and_persist_single_order",
+            lambda org_id, payload: called.append((org_id, payload)),
+        )
+        resp = _post(client, {"order_number": 123})
+        assert resp.status_code == 200
+        assert called == []
+
+    def test_a_repeated_webhook_id_is_not_reprocessed(self, client, monkeypatch):
+        monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
+        monkeypatch.setattr(shopify_webhooks, "get_supabase", lambda: object())
+
+        seen_ids = set()
+
+        class _FakeTable:
+            def upsert(self, row, **_kwargs):
+                is_new = row["webhook_id"] not in seen_ids
+                seen_ids.add(row["webhook_id"])
+                return SimpleNamespace(execute=lambda: SimpleNamespace(data=[row] if is_new else []))
+
+        monkeypatch.setattr(shopify_webhooks, "org_table", lambda supabase, org_id, table: _FakeTable())
+
+        calls = []
+
+        async def _fake_reconcile(org_id, payload):
+            calls.append((org_id, payload))
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _fake_reconcile)
+
+        first = _post(client, {"order_number": 123}, webhook_id="wh-dup")
+        second = _post(client, {"order_number": 123}, webhook_id="wh-dup")
+
+        assert first.status_code == 200
+        assert second.status_code == 200
+        assert len(calls) == 1
+
+
+class TestDispatch:
+    @pytest.fixture(autouse=True)
+    def _stub_idempotency(self, monkeypatch):
+        monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
+        monkeypatch.setattr(shopify_webhooks, "get_supabase", lambda: object())
+
+        class _FakeTable:
+            def upsert(self, row, **_kwargs):
+                return SimpleNamespace(execute=lambda: SimpleNamespace(data=[row]))
+
+        monkeypatch.setattr(shopify_webhooks, "org_table", lambda supabase, org_id, table: _FakeTable())
+
+    def test_order_topic_reconciles_the_payload(self, client, monkeypatch):
+        calls = []
+
+        async def _fake_reconcile(org_id, payload):
+            calls.append((org_id, payload))
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _fake_reconcile)
+
+        resp = _post(client, {"order_number": 6563}, topic="orders/updated")
+
+        assert resp.status_code == 200
+        assert calls == [("org-1", {"order_number": 6563})]
+
+    def test_app_uninstalled_clears_stored_credentials(self, client, monkeypatch):
+        calls = []
+        monkeypatch.setattr(shopify_webhooks, "upsert_org_integration_settings", lambda org_id, **kw: calls.append((org_id, kw)))
+
+        resp = _post(client, {}, topic="app/uninstalled")
+
+        assert resp.status_code == 200
+        assert calls == [("org-1", {"shopify_access_token": ""})]
+
+    def test_processing_failure_returns_500_so_shopify_retries(self, client, monkeypatch):
+        async def _boom(org_id, payload):
+            raise RuntimeError("db is down")
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _boom)
+
+        resp = _post(client, {"order_number": 1}, topic="orders/create")
+
+        assert resp.status_code == 500

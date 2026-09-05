@@ -173,6 +173,43 @@ def get_org_integration_settings(org_id: str) -> OrgIntegrationSettings:
     )
 
 
+def _normalize_store_url(store_url: str) -> str:
+    """Bare lowercase domain, for comparing a stored shopify_store_url (which may carry a
+    protocol prefix from manual entry - see app/shopify.py's _credentials) against the bare
+    domain Shopify's own webhook headers and OAuth callback always send."""
+    store_url = store_url.strip().rstrip("/").lower()
+    if store_url.startswith("http://"):
+        return store_url[7:]
+    if store_url.startswith("https://"):
+        return store_url[8:]
+    return store_url
+
+
+def resolve_org_id_for_shopify_store(shop_domain: str) -> Optional[str]:
+    """org_id for the org whose shopify_store_url matches `shop_domain` (Shopify's own bare
+    domain, e.g. from a webhook's X-Shopify-Shop-Domain header) - or None if no org is
+    connected to that store. Used by app/routes/shopify_webhooks.py to route an inbound
+    webhook; scans every row (like any_org_courier_credential above) since shopify_store_url
+    isn't guaranteed to be stored in exactly Shopify's bare-domain form, so an exact-match
+    query could miss a legacy manually-entered row."""
+    shop_domain = _normalize_store_url(shop_domain)
+    if not shop_domain:
+        return None
+    rows = (
+        get_supabase()
+        .table("system_integration_settings")
+        .select("org_id, shopify_store_url")
+        .execute()
+        .data
+        or []
+    )
+    for row in rows:
+        stored = row.get("shopify_store_url")
+        if stored and _normalize_store_url(stored) == shop_domain:
+            return row.get("org_id")
+    return None
+
+
 def any_org_courier_credential(courier: str) -> Optional[str]:
     """Any one org's credential for `courier`, for callers populating data that
     isn't org-specific (app/services/courier_cities.py's shared city cache).

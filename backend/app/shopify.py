@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import os
 import re
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import unquote, urlparse, parse_qs
@@ -8,12 +10,27 @@ from fastapi import HTTPException
 
 from app.org_settings import OrgIntegrationSettings
 
+logger = logging.getLogger("app.shopify")
+
 PAGE_LIMIT = 250
 
 # Marks a COD order whose courier payout has arrived - see mark_order_settled().
 SETTLED_TAG = "Settled"
 _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
+
+# Topics app/routes/shopify_webhooks.py handles - kept in sync with that module's
+# _ORDER_TOPICS/app-uninstalled handling. GraphQL enum names, not REST's slash form.
+WEBHOOK_TOPICS = ["ORDERS_CREATE", "ORDERS_UPDATED", "ORDERS_CANCELLED", "ORDERS_FULFILLED", "APP_UNINSTALLED"]
+
+_WEBHOOK_SUBSCRIPTION_MUTATION = """
+mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $webhookSubscription: WebhookSubscriptionInput!) {
+  webhookSubscriptionCreate(topic: $topic, webhookSubscription: $webhookSubscription) {
+    webhookSubscription { id }
+    userErrors { field message }
+  }
+}
+"""
 
 # The only collection names the month-summary "products sold by collection" breakdown
 # and the packaging list (routes/orders.py) recognize - anything else falls into
@@ -409,3 +426,45 @@ async def fetch_product_collections(
         if names:
             product_collections[product_id] = names
     return product_collections
+
+
+async def register_webhooks(org_creds: OrgIntegrationSettings) -> None:
+    """Subscribe this org's store to WEBHOOK_TOPICS, via the GraphQL Admin API (the modern
+    way to manage webhook subscriptions regardless of whether the rest of the app has moved
+    off REST yet). Called right after OAuth connects (routes/shopify_oauth.py's callback) and
+    by scripts/register_shopify_webhooks.py for orgs that connected before webhooks existed.
+
+    Safe to re-run: Shopify returns a userError ("Address for this topic has already been
+    taken") for a subscription that already exists at this callback URL rather than erroring
+    the request, so this only logs it.
+
+    No-ops (logging why) if SHOPIFY_WEBHOOK_CALLBACK_URL isn't configured - webhooks are an
+    enhancement over the periodic poll, not a requirement for the app to function, so a
+    missing callback URL shouldn't block the OAuth connect flow that calls this.
+    """
+    callback_url = os.getenv("SHOPIFY_WEBHOOK_CALLBACK_URL")
+    if not callback_url:
+        logger.warning("SHOPIFY_WEBHOOK_CALLBACK_URL not set - skipping Shopify webhook registration")
+        return
+
+    store_url, access_token = _credentials(org_creds)
+    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/graphql.json"
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        for topic in WEBHOOK_TOPICS:
+            response = await client.post(url, headers=headers, json={
+                "query": _WEBHOOK_SUBSCRIPTION_MUTATION,
+                "variables": {
+                    "topic": topic,
+                    "webhookSubscription": {"callbackUrl": callback_url, "format": "JSON"},
+                },
+            })
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("errors"):
+                logger.warning("webhookSubscriptionCreate(%s) GraphQL errors: %s", topic, payload["errors"])
+                continue
+            user_errors = (payload.get("data", {}).get("webhookSubscriptionCreate") or {}).get("userErrors") or []
+            if user_errors:
+                logger.warning("webhookSubscriptionCreate(%s) userErrors: %s", topic, user_errors)

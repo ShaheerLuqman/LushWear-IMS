@@ -25,8 +25,9 @@ import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
+from app import shopify
 from app.auth import verify_state_token
-from app.org_settings import upsert_org_integration_settings
+from app.org_settings import get_org_integration_settings, upsert_org_integration_settings
 
 router = APIRouter(prefix="/shopify", tags=["shopify-oauth"])
 logger = logging.getLogger("app.shopify_oauth")
@@ -100,5 +101,13 @@ async def shopify_callback(request: Request):
     except Exception:
         logger.exception("Shopify OAuth token exchange failed for %s", shop)
         return _popup_result("error")
+
+    try:
+        # Best-effort: webhooks are an enhancement over the periodic poll, not a
+        # requirement for the connection itself, so a failure here shouldn't turn a
+        # successful token exchange into a reported "could not connect".
+        await shopify.register_webhooks(get_org_integration_settings(claims["org_id"]))
+    except Exception:
+        logger.exception("Shopify webhook registration failed for %s", shop)
 
     return _popup_result("connected")

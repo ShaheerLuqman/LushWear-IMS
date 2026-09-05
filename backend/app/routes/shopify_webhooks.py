@@ -1,0 +1,92 @@
+"""Shopify webhook receiver - the near-real-time counterpart to the periodic poll in
+app/services/shopify_sync.py. Mounted publicly (no require_auth), like
+routes/shopify_oauth.py, since Shopify calls this directly; it authenticates itself via
+the HMAC signature on the raw request body instead of a bearer token. Subscriptions are
+registered per org via shopify.register_webhooks (see routes/shopify_oauth.py's callback
+and scripts/register_shopify_webhooks.py).
+
+One endpoint dispatching on X-Shopify-Topic rather than one route per topic - Shopify lets
+a single callback URL subscribe to many topics, and every topic here needs the same
+HMAC/org-resolution/idempotency preamble anyway.
+"""
+
+import base64
+import hashlib
+import hmac
+import logging
+import os
+
+from fastapi import APIRouter, Request, Response
+
+from app.database import get_supabase
+from app.org_scope import org_table
+from app.org_settings import resolve_org_id_for_shopify_store, upsert_org_integration_settings
+from app.services.shopify_sync import reconcile_and_persist_single_order
+
+router = APIRouter(prefix="/webhooks", tags=["shopify-webhooks"])
+logger = logging.getLogger("app.shopify_webhooks")
+
+# Topics whose payload is the order resource itself (same REST shape _reconcile_one_order
+# already expects), reconciled the same way the periodic sync would. orders/updated alone
+# also covers refunds - Shopify fires it for the affected order whenever a refund posts -
+# so there's no separate refunds/create handler.
+_ORDER_TOPICS = {"orders/create", "orders/updated", "orders/cancelled", "orders/fulfilled"}
+
+
+def _verify_hmac(body: bytes, received: str) -> bool:
+    secret = os.getenv("SHOPIFY_APP_CLIENT_SECRET", "")
+    if not secret or not received:
+        return False
+    digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).digest()
+    computed = base64.b64encode(digest).decode("ascii")
+    return hmac.compare_digest(computed, received)
+
+
+@router.post("/shopify")
+async def shopify_webhook(request: Request):
+    body = await request.body()
+    if not _verify_hmac(body, request.headers.get("X-Shopify-Hmac-Sha256", "")):
+        logger.warning(
+            "Rejected Shopify webhook (bad HMAC) from shop=%s", request.headers.get("X-Shopify-Shop-Domain")
+        )
+        return Response(status_code=401)
+
+    shop = (request.headers.get("X-Shopify-Shop-Domain") or "").strip().lower()
+    topic = (request.headers.get("X-Shopify-Topic") or "").strip().lower()
+    webhook_id = request.headers.get("X-Shopify-Webhook-Id", "")
+    if not shop or not topic or not webhook_id:
+        return Response(status_code=400)
+
+    org_id = resolve_org_id_for_shopify_store(shop)
+    if not org_id:
+        # Not a store we have configured (stale subscription from a disconnected org, or a
+        # misconfiguration) - 200 so Shopify doesn't keep retrying a delivery we can never route.
+        logger.warning("Shopify webhook for unrecognized shop=%s topic=%s", shop, topic)
+        return Response(status_code=200)
+
+    supabase = get_supabase()
+    # Idempotency: Shopify webhook delivery is at-least-once. ignore_duplicates mirrors
+    # shopify_sync._try_acquire_sync_lock's upsert-then-check-resp.data idiom - resp.data is
+    # empty exactly when a row for this (org_id, webhook_id) already existed.
+    seen = org_table(supabase, org_id, "shopify_webhook_events").upsert(
+        {"webhook_id": webhook_id, "topic": topic},
+        on_conflict="org_id,webhook_id",
+        ignore_duplicates=True,
+    ).execute()
+    if not seen.data:
+        return Response(status_code=200)
+
+    try:
+        if topic in _ORDER_TOPICS:
+            payload = await request.json()
+            await reconcile_and_persist_single_order(org_id, payload)
+        elif topic == "app/uninstalled":
+            # Empty string (not None) so upsert_org_integration_settings actually clears the
+            # stored token/refresh_token/expiry instead of leaving them untouched - see its
+            # docstring on why an omitted field vs. an explicit clear are different there.
+            upsert_org_integration_settings(org_id, shopify_access_token="")
+    except Exception:
+        logger.exception("Failed processing Shopify webhook topic=%s org=%s", topic, org_id)
+        return Response(status_code=500)  # non-2xx - Shopify retries
+
+    return Response(status_code=200)

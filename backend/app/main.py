@@ -11,7 +11,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-from app.routes import products, orders, courier_bills, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth
+from app.routes import products, orders, courier_bills, transactions, ledger, journal, bills, auth as auth_routes, users, org_settings, admin_portal, shopify_oauth, shopify_webhooks
 from app.auth import require_auth, require_role
 from app.database import get_supabase
 from app.features import require_feature
@@ -125,6 +125,9 @@ app.include_router(org_settings.router, prefix="/api", dependencies=[Depends(req
 # OAuth handshake org_settings' /shopify/install started. Authenticates itself
 # via Shopify's HMAC + the signed state instead. See routes/shopify_oauth.py.
 app.include_router(shopify_oauth.router, prefix="/api")
+# Public - Shopify calls this directly to deliver webhooks. Authenticates itself via
+# the HMAC signature on the raw body instead. See routes/shopify_webhooks.py.
+app.include_router(shopify_webhooks.router, prefix="/api")
 # admin_portal's routes carry mixed per-route dependencies (some superadmin-only,
 # some also allow an already-impersonating token) - see app/routes/admin_portal.py.
 app.include_router(admin_portal.router, prefix="/api")
