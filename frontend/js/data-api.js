@@ -23,7 +23,9 @@ async function loadProducts() {
     }
 }
 
-// Period = month's 22 to next month's 21 (same as backend)
+// Period = month's ordersFiscalMonthStartDay to next month's (ordersFiscalMonthStartDay - 1)
+// (same as backend - see app/fiscal_settings.py). ordersFiscalMonthStartDay (app-core.js)
+// is resolved once at boot from the org's own setting; defaults to 22 until it loads.
 function getOrderDateForPeriod(order) {
     const raw = order.order_receiving_date || order.created_at;
     return raw ? new Date(raw) : null;
@@ -35,16 +37,19 @@ function getPeriodForDate(date) {
     const day = d.getDate();
     const month = d.getMonth() + 1;
     const year = d.getFullYear();
-    if (day >= 22) return { month, year };
+    if (day >= ordersFiscalMonthStartDay) return { month, year };
     if (month === 1) return { month: 12, year: year - 1 };
     return { month: month - 1, year };
 }
 
 function ordersPeriodStartEnd(month, year) {
-    const start = new Date(year, month - 1, 22, 0, 0, 0);
+    const start = new Date(year, month - 1, ordersFiscalMonthStartDay, 0, 0, 0);
     const nextMonth = month === 12 ? 1 : month + 1;
     const nextYear = month === 12 ? year + 1 : year;
-    const end = new Date(nextYear, nextMonth - 1, 21, 23, 59, 59);
+    // Day 0 of nextMonth rolls back to the last day of the month before it - the same
+    // trick backend/app/routes/orders.py's _period_start_end_dates uses, so a start day
+    // of 1 (a plain calendar month) correctly ends on the month's actual last day.
+    const end = new Date(nextYear, nextMonth - 1, ordersFiscalMonthStartDay - 1, 23, 59, 59);
     return { start, end };
 }
 
@@ -57,36 +62,26 @@ function isOrderInPeriod(order, month, year) {
 
 function formatOrdersPeriodLabel(month, year) {
     const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const nextMonth = month === 12 ? 1 : month + 1;
-    const nextYear = month === 12 ? year + 1 : year;
-    return `${monthNames[month - 1]} 22 – ${monthNames[nextMonth - 1]} 21, ${nextMonth === 1 ? nextYear : year}`;
+    const { end } = ordersPeriodStartEnd(month, year);
+    return `${monthNames[month - 1]} ${ordersFiscalMonthStartDay} – ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
 }
 
-/** Current period (month 22 – next 21) that contains today in PKT */
+/** Current period that contains today in PKT */
 function getCurrentOrdersPeriod() {
     return getPeriodForDate(getPKTDate());
 }
 
-/** True if the given period (month 22 – next 21) has fully ended in PKT */
+/** True if the given period has fully ended in PKT */
 function isPeriodPassed(month, year) {
-    const pkt = getPKTDate();
-    const todayY = pkt.getFullYear();
-    const todayM = pkt.getMonth() + 1;
-    const todayD = pkt.getDate();
-    const nextMonth = month === 12 ? 1 : month + 1;
-    const nextYear = month === 12 ? year + 1 : year;
-    if (todayY > nextYear) return true;
-    if (todayY < nextYear) return false;
-    if (todayM > nextMonth) return true;
-    if (todayM < nextMonth) return false;
-    return todayD > 21;
+    const { end } = ordersPeriodStartEnd(month, year);
+    return getPKTDate() > end;
 }
 
-/** Oldest period in dropdown: Oct 22 – Nov 21, 2024 */
+/** Oldest period in dropdown: the October 2024 period */
 const ORDERS_PERIOD_OLDEST_MONTH = 10;
 const ORDERS_PERIOD_OLDEST_YEAR = 2024;
 
-/** Build dropdown options: periods from current down to Oct 22 – Nov 21, 2024 */
+/** Build dropdown options: periods from current down to the October 2024 period */
 function buildStaticPeriodOptions() {
     const options = [];
     let { month, year } = getCurrentOrdersPeriod();

@@ -358,7 +358,7 @@ let createLedgerOnCreateCallback = null;
 
 async function createLedger(name, type, includeInCashInHand, showInMonthSummary, openingBalance, partyFields) {
     if (findLedgerByName(name)) {
-        showToast('A ledger with this name already exists', 'error');
+        showToast('A ledger with this name already exists', 'error', { silent: true });
         return;
     }
     try {
@@ -469,12 +469,12 @@ async function saveEditLedger() {
     const showInMonthSummary = document.getElementById('editLedgerMonthSummary').checked;
     const openingBalance = parseFloat(document.getElementById('editLedgerOpeningBalance').value) || 0;
     if (!name || !type) {
-        showToast('Name and type are required', 'error');
+        showToast('Name and type are required', 'error', { silent: true });
         return;
     }
     const existing = findLedgerByName(name);
     if (existing && existing.id !== editLedgerId) {
-        showToast('A ledger with this name already exists', 'error');
+        showToast('A ledger with this name already exists', 'error', { silent: true });
         return;
     }
     const confirmed = await showAppConfirm({ title: 'Update Ledger', message: 'Are you sure you want to update this ledger?', confirmText: 'Save' });
@@ -671,7 +671,7 @@ function initLedgerModals() {
         createLedgerForm.addEventListener('submit', (e) => {
             e.preventDefault();
             if (!isEditingAllowed()) {
-                showToast('Editing is locked', 'error');
+                showToast('Editing is locked', 'error', { silent: true });
                 return;
             }
             const name = document.getElementById('createLedgerName').value.trim();
@@ -680,11 +680,11 @@ function initLedgerModals() {
             const showInMonthSummary = document.getElementById('createLedgerMonthSummary').checked;
             const openingBalance = parseFloat(document.getElementById('createLedgerOpeningBalance').value) || 0;
             if (!name) {
-                showToast('Enter a ledger name', 'error');
+                showToast('Enter a ledger name', 'error', { silent: true });
                 return;
             }
             if (!type) {
-                showToast('Select a type', 'error');
+                showToast('Select a type', 'error', { silent: true });
                 return;
             }
             createLedger(name, type, includeInCashInHand, showInMonthSummary, openingBalance, readLedgerPartyFields('create'));
@@ -709,7 +709,7 @@ function initLedgerModals() {
         editLedgerForm.addEventListener('submit', (e) => {
             e.preventDefault();
             if (!isEditingAllowed()) {
-                showToast('Editing is locked', 'error');
+                showToast('Editing is locked', 'error', { silent: true });
                 return;
             }
             saveEditLedger();
@@ -718,7 +718,7 @@ function initLedgerModals() {
     document.getElementById('editLedgerDeleteBtn')?.addEventListener('click', (e) => {
         e.preventDefault();
         if (!isEditingAllowed()) {
-            showToast('Editing is locked', 'error');
+            showToast('Editing is locked', 'error', { silent: true });
             return;
         }
         deleteLedgerFromEditModal();
@@ -893,12 +893,16 @@ async function syncShopifyOrders() {
             method: 'POST',
             fallback: 'Failed to sync orders from Shopify'
         });
+        // This runs unattended every 5 minutes (see the auto-sync timer in app-core.js), not
+        // from a button click - success is routine, so it isn't worth saving to notification
+        // history; only a failure below (which needs a look) is.
         if (result.already_syncing) {
-            showToast(result.message || 'Sync already in progress', 'info');
+            showToast(result.message || 'Sync already in progress', 'info', { silent: true });
         } else {
             showToast(
                 `Sync complete! ${result.synced} orders synced (${result.created} created, ${result.updated} updated)`,
-                'success'
+                'success',
+                { silent: true }
             );
             await loadOrders();
         }

@@ -207,7 +207,7 @@ function handleLedgerSelectChange(e) {
 
 function openTransactionEntryModal() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const from = document.getElementById('transactionEntryFrom');
@@ -227,7 +227,7 @@ function openTransactionEntryModal() {
     setTransactionEntryOrderAdvance(false);
 
     if (ledgers.length === 0) {
-        showToast('No ledgers available. Create a ledger first.', 'error');
+        showToast('No ledgers available. Create a ledger first.', 'error', { silent: true });
     }
 
     refreshTransactionEntryParticularPlaceholder();
@@ -276,28 +276,28 @@ function setTransactionEntryMode(mode) {
 
 async function submitTransactionEntryModal() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const isAdvance = isTransactionEntryOrderAdvance();
     // A select silently drops a value with no matching option, so a missing Orders
     // ledger would otherwise surface as a confusing "select an account" error.
     if (isAdvance && !getOrdersLedgerId()) {
-        showToast('No Orders ledger is set. Assign the Orders role in Edit Ledger.', 'error');
+        showToast('No Orders ledger is set. Assign the Orders role in Edit Ledger.', 'error', { silent: true });
         return;
     }
     const orderNumber = isAdvance
         ? document.getElementById('transactionEntryOrderNumber').value.trim().replace(/^#/, '')
         : '';
-    if (isAdvance && !orderNumber) { showToast('Enter an order number', 'error'); return; }
+    if (isAdvance && !orderNumber) { showToast('Enter an order number', 'error', { silent: true }); return; }
 
     const fromId = (isAdvance ? getOrdersLedgerId() : document.getElementById('transactionEntryFrom').value) || null;
     const toId = document.getElementById('transactionEntryTo').value || null;
     const amount = parseFloat(document.getElementById('transactionEntryAmount').value);
 
-    if (Number.isNaN(amount) || amount <= 0) { showToast('Enter a valid amount', 'error'); return; }
-    if (!fromId && !toId) { showToast(`Both sides are ${cashSideLabel()} — name an account on one side`, 'error'); return; }
-    if (fromId && fromId === toId) { showToast('From and To must be different accounts', 'error'); return; }
+    if (Number.isNaN(amount) || amount <= 0) { showToast('Enter a valid amount', 'error', { silent: true }); return; }
+    if (!fromId && !toId) { showToast(`Both sides are ${cashSideLabel()} — name an account on one side`, 'error', { silent: true }); return; }
+    if (fromId && fromId === toId) { showToast('From and To must be different accounts', 'error', { silent: true }); return; }
 
     const payload = {
         entry_date: transactionSelectedDate || getTodayDateString(),
@@ -331,7 +331,7 @@ function initTransactionsActions() {
                 transactionDateFilter.value = formatDateDDMMYYYY(parsed);
                 reloadTransactionsForCurrentDate();
             } else if (transactionDateFilter.value.trim() !== '') {
-                showToast('Enter date as DD/MM/YYYY', 'error');
+                showToast('Enter date as DD/MM/YYYY', 'error', { silent: true });
                 transactionDateFilter.value = formatDateDDMMYYYY(transactionSelectedDate || getTodayDateString());
             }
         };
@@ -762,11 +762,11 @@ function formatBulkAmount(val) {
 }
 
 async function submitBulkEntry() {
-    if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }
+    if (!isEditingAllowed()) { showToast('Editing is locked', 'error', { silent: true }); return; }
     // Re-validate to be safe (the textarea may have changed since last validate).
     const parsed = validateBulkEntry();
-    if (!parsed.hasAny) { showToast('No entries to create', 'error'); return; }
-    if (parsed.hasError) { showToast('Fix the highlighted entries first', 'error'); return; }
+    if (!parsed.hasAny) { showToast('No entries to create', 'error', { silent: true }); return; }
+    if (parsed.hasError) { showToast('Fix the highlighted entries first', 'error', { silent: true }); return; }
 
     const entryDate = transactionSelectedDate || getTodayDateString();
     const payloads = [];
@@ -887,18 +887,18 @@ function tryCreateTransactionEntryFromNewRow(row) {
     const amount = parseTransactionAmount(row.amount);
     if (amount === null || amount <= 0) return;
     if (!entryDate) {
-        showToast('Select an entry date for this row.', 'error');
+        showToast('Select an entry date for this row.', 'error', { silent: true });
         return;
     }
 
     const fromId = row.from_account_id || null;
     const toId = row.to_account_id || null;
     if (!fromId && !toId) {
-        showToast(`Both sides are ${cashSideLabel()} — name an account on one side`, 'error');
+        showToast(`Both sides are ${cashSideLabel()} — name an account on one side`, 'error', { silent: true });
         return;
     }
     if (fromId && fromId === toId) {
-        showToast('From and To must be different accounts', 'error');
+        showToast('From and To must be different accounts', 'error', { silent: true });
         return;
     }
 

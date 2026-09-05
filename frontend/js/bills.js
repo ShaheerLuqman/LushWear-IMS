@@ -736,8 +736,8 @@ function closeBillModal() {
 function collectBillPayload() {
     const supplierId = document.getElementById('billSupplier').value;
     const billDate = document.getElementById('billDate').value;
-    if (!supplierId) { showToast('Select a supplier', 'error'); return null; }
-    if (!billDate) { showToast('Enter a bill date', 'error'); return null; }
+    if (!supplierId) { showToast('Select a supplier', 'error', { silent: true }); return null; }
+    if (!billDate) { showToast('Enter a bill date', 'error', { silent: true }); return null; }
 
     // A blank trailing row is normal (the form always keeps one), so drop empties
     // rather than failing on them — but a row with only some fields filled is a
@@ -759,11 +759,11 @@ function collectBillPayload() {
                 }))
                 .filter(({ qty }) => qty > 0);
             if (!picked.length) {
-                showToast(`Enter a quantity for at least one variant of ${product.name}`, 'error');
+                showToast(`Enter a quantity for at least one variant of ${product.name}`, 'error', { silent: true });
                 return null;
             }
             if (picked.some(({ cost }) => Number.isNaN(cost) || cost < 0)) {
-                showToast(`Enter a cost for every variant with a quantity on ${product.name}`, 'error');
+                showToast(`Enter a cost for every variant with a quantity on ${product.name}`, 'error', { silent: true });
                 return null;
             }
             for (const { variant, qty, cost } of picked) {
@@ -780,13 +780,13 @@ function collectBillPayload() {
 
         const cost = parseFloat(line.unit_cost);
         if (Number.isNaN(cost) || cost < 0) {
-            showToast('Every line needs a unit cost', 'error');
+            showToast('Every line needs a unit cost', 'error', { silent: true });
             return null;
         }
 
         const qty = parseFloat(line.quantity);
         if (Number.isNaN(qty) || qty <= 0) {
-            showToast('Every line needs a quantity above 0', 'error');
+            showToast('Every line needs a quantity above 0', 'error', { silent: true });
             return null;
         }
 
@@ -803,14 +803,14 @@ function collectBillPayload() {
                 productId = line.product_id;
                 variantId = line.variant_id || null;
             } else {
-                showToast('Select a product for every product line', 'error');
+                showToast('Select a product for every product line', 'error', { silent: true });
                 return null;
             }
         }
 
         items.push({ description, quantity: qty, unit_cost: cost, product_id: productId, variant_id: variantId });
     }
-    if (!items.length) { showToast('Add at least one line', 'error'); return null; }
+    if (!items.length) { showToast('Add at least one line', 'error', { silent: true }); return null; }
 
     return {
         supplier_id: supplierId,
@@ -1173,7 +1173,7 @@ function initBills() {
     document.getElementById('billOtherExpense')?.addEventListener('input', onTotalsInputChanged);
     document.getElementById('billForm')?.addEventListener('submit', (e) => {
         e.preventDefault();
-        if (!isEditingAllowed()) { showToast('Editing is locked', 'error'); return; }
+        if (!isEditingAllowed()) { showToast('Editing is locked', 'error', { silent: true }); return; }
         saveBill();
     });
     document.getElementById('billConfirmBtn')?.addEventListener('click', async () => {

@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from app.auth import create_token, hash_password, require_auth, verify_password
 from app.database import get_supabase
 from app.features import get_org_enabled_features
+from app.fiscal_settings import get_org_fiscal_settings
 from app.models import (
     AccountPublic,
     BootstrapBody,
@@ -222,6 +223,7 @@ async def auth_login(body: LoginBody, request: Request):
     account = {
         **user, "org_id": org_id, "role": role,
         "enabled_features": get_org_enabled_features(org_id) if org_id else [],
+        **(get_org_fiscal_settings(org_id) if org_id else {}),
     }
     return {"ok": True, "token": token, "user": AccountPublic.model_validate(account)}
 
@@ -240,6 +242,7 @@ async def auth_me(payload: dict = Depends(require_auth)):
     account = {
         **rows[0], "org_id": org_id, "role": payload.get("role"),
         "enabled_features": get_org_enabled_features(org_id) if org_id else [],
+        **(get_org_fiscal_settings(org_id) if org_id else {}),
     }
     return AccountPublic.model_validate(account)
 

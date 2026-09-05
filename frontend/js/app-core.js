@@ -88,6 +88,13 @@ let _prefetchOrdersPromise = null;
  * is the real access control; this is only the UI-hiding half of it. */
 let enabledFeatures = [];
 
+/** Day of the month a financial-month period starts (Financial Settings), from
+ * /auth/me's fiscal_month_start_day - resolved once at boot alongside
+ * enabledFeatures and read by data-api.js's period helpers instead of a
+ * hardcoded 22. Defaults to 22 (LushWear's original 22nd-to-21st cycle) until
+ * the account loads. */
+let ordersFiscalMonthStartDay = 22;
+
 function hasFeature(key) {
     return enabledFeatures.includes(key);
 }
@@ -662,6 +669,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initSettingsView();
     initInstallPrompt();
     initOrderFulfillment();
+    initNotifications();
 
     const impersonating = consumeImpersonationToken();
     let resumedAccount = impersonating ? null : await tryResumeSession();
@@ -681,6 +689,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Already fetched by tryResumeSession() above - no need to ask twice.
         account = resumedAccount || await apiJson('/auth/me');
         enabledFeatures = account.enabled_features || [];
+        ordersFiscalMonthStartDay = account.fiscal_month_start_day || 22;
     } catch (e) {
         enabledFeatures = [];
     }

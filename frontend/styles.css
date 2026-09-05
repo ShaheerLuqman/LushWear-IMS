@@ -1745,6 +1745,131 @@ input[type="number"] {
     background: linear-gradient(135deg, rgba(196, 92, 92, 0.2), var(--bg-card));
 }
 
+/* Notifications - history of every toast fired this session (see notifications.js) */
+.header-notif-wrap {
+    position: relative;
+    flex-shrink: 0;
+}
+
+.header-notif-btn {
+    position: relative;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    line-height: 0;
+}
+
+.header-notif-btn .lucide {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 2;
+}
+
+.notif-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--danger);
+    color: #fff;
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 16px;
+}
+
+.notif-panel {
+    display: none;
+    position: fixed;
+    width: 340px;
+    max-width: calc(100vw - 24px);
+    max-height: 420px;
+    flex-direction: column;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 10050;
+    overflow: hidden;
+}
+
+.header-notif-wrap.open .notif-panel {
+    display: flex;
+}
+
+.notif-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 13px;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
+.notif-clear-btn {
+    padding: 0;
+    background: transparent;
+    border: none;
+    color: var(--accent-primary);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+}
+
+.notif-clear-btn:disabled {
+    color: var(--text-muted);
+    cursor: default;
+}
+
+.notif-list {
+    overflow-y: auto;
+}
+
+.notif-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.notif-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border-color);
+    border-left: 3px solid transparent;
+    font-size: 13px;
+}
+
+.notif-item:last-child {
+    border-bottom: none;
+}
+
+.notif-item.unread {
+    background: var(--bg-tertiary);
+}
+
+.notif-item.success { border-left-color: var(--success); }
+.notif-item.error { border-left-color: var(--danger); }
+.notif-item.warning { border-left-color: var(--warning); }
+.notif-item.info { border-left-color: var(--accent-primary); }
+
+.notif-item-message {
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.notif-item-time {
+    margin-top: 2px;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
 /* Action buttons in table */
 .action-buttons {
     display: flex;
@@ -7344,6 +7469,23 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .settings-row__hint {
     font-size: 12px;
     color: var(--text-muted);
+}
+
+.settings-fiscal-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.settings-fiscal-preview strong {
+    color: var(--text-primary);
 }
 
 .settings-theme-toggle {

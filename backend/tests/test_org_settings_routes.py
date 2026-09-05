@@ -178,3 +178,67 @@ class TestTimestampParsing:
         }]})
         r = client.get("/api/org-settings/")
         assert r.status_code == 200
+
+
+class TestOrgFiscalSettings:
+    """/api/org-settings/fiscal - the org's fiscal calendar (app/fiscal_settings.py)."""
+
+    def test_no_row_defaults_to_the_22nd_to_21st_calendar_year_cycle(self, make_client):
+        client = make_client({"system_organizations": [{"id": "test-org", "name": "Test Org"}]})
+        r = client.get("/api/org-settings/fiscal")
+        assert r.status_code == 200
+        assert r.json() == {"fiscal_month_start_day": 22, "fiscal_year_start_month": 1}
+
+    def test_reads_the_stored_values(self, make_client):
+        client = make_client({"system_organizations": [{
+            "id": "test-org", "name": "Test Org",
+            "fiscal_month_start_day": 1, "fiscal_year_start_month": 7,
+        }]})
+        r = client.get("/api/org-settings/fiscal")
+        assert r.status_code == 200
+        assert r.json() == {"fiscal_month_start_day": 1, "fiscal_year_start_month": 7}
+
+    def test_put_replaces_both_fields(self, make_client, monkeypatch):
+        # The shared FakeQuery (conftest.py) doesn't simulate update() merging into
+        # the stored row - same "fake must remember the write" reasoning as
+        # test_admin_portal.py's TestFeatures.test_update_is_reflected_on_read.
+        import app.fiscal_settings as fiscal_settings
+
+        store = {"id": "test-org", "name": "Test Org"}
+
+        class _StatefulQuery:
+            def __getattr__(self, _name):
+                def _chain(*_args, **_kwargs):
+                    return self
+                return _chain
+
+            def update(self, payload):
+                store.update(payload)
+                return self
+
+            def execute(self):
+                return type("Response", (), {"data": [dict(store)]})()
+
+        class _FakeSupabase:
+            def table(self, _name):
+                return _StatefulQuery()
+
+        client = make_client()
+        monkeypatch.setattr(fiscal_settings, "get_supabase", lambda: _FakeSupabase())
+
+        r = client.put("/api/org-settings/fiscal", json={
+            "fiscal_month_start_day": 5,
+            "fiscal_year_start_month": 7,
+        })
+        assert r.status_code == 200
+        assert r.json() == {"fiscal_month_start_day": 5, "fiscal_year_start_month": 7}
+
+    @pytest.mark.parametrize("body", [
+        {"fiscal_month_start_day": 29, "fiscal_year_start_month": 1},   # > 28, unsafe for February
+        {"fiscal_month_start_day": 0, "fiscal_year_start_month": 1},
+        {"fiscal_month_start_day": 22, "fiscal_year_start_month": 13},
+    ])
+    def test_put_rejects_out_of_range_values(self, make_client, body):
+        client = make_client({"system_organizations": [{"id": "test-org", "name": "Test Org"}]})
+        r = client.put("/api/org-settings/fiscal", json=body)
+        assert r.status_code == 422

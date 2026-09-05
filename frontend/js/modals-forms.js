@@ -104,7 +104,7 @@ function closeBulkUpdateOrderModal() {
 function openBulkUpdateDeliveryChargesModal() {
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     const valueEl = document.getElementById('bulkUpdateDeliveryChargesValue');
@@ -121,19 +121,19 @@ function closeBulkUpdateDeliveryChargesModal() {
 
 async function submitBulkUpdateDeliveryCharges() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     const valueEl = document.getElementById('bulkUpdateDeliveryChargesValue');
     const raw = valueEl?.value?.trim();
     const deliveryCharge = raw === '' ? NaN : parseFloat(raw);
     if (isNaN(deliveryCharge) || deliveryCharge < 0) {
-        showToast('Enter a valid delivery charge (0 or more)', 'error');
+        showToast('Enter a valid delivery charge (0 or more)', 'error', { silent: true });
         return;
     }
     const confirmBtn = document.getElementById('bulkUpdateDeliveryChargesConfirm');
@@ -170,12 +170,12 @@ function getSelectedProductIds() {
 
 function openBulkUpdateCostPriceModal() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const ids = getSelectedProductIds();
     if (ids.length === 0) {
-        showToast('Select at least one product first', 'error');
+        showToast('Select at least one product first', 'error', { silent: true });
         return;
     }
     const countEl = document.getElementById('bulkUpdateCostPriceCount');
@@ -202,13 +202,13 @@ function closeBulkUpdateCostPriceModal() {
 async function saveBulkCostPrices() {
     const ids = getSelectedProductIds();
     if (ids.length === 0) {
-        showToast('Select at least one product first', 'error');
+        showToast('Select at least one product first', 'error', { silent: true });
         return null;
     }
     const raw = document.getElementById('bulkUpdateCostPriceValue')?.value?.trim();
     const cost = raw === '' ? NaN : parseFloat(raw);
     if (isNaN(cost) || cost < 0) {
-        showToast('Enter a valid cost price (0 or more)', 'error');
+        showToast('Enter a valid cost price (0 or more)', 'error', { silent: true });
         return null;
     }
     await apiJson('/products/bulk-update-cost-price', {
@@ -221,7 +221,7 @@ async function saveBulkCostPrices() {
 
 async function submitBulkUpdateCostPrice() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const confirmBtn = document.getElementById('bulkUpdateCostPriceConfirm');
@@ -250,17 +250,17 @@ async function submitBulkUpdateCostPrice() {
 // so the recalc never runs against costs that weren't actually saved.
 async function submitBulkUpdateCostPriceSaveAndRecalc() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const raw = document.getElementById('bulkUpdateCostPriceRecalcCreatedAfter')?.value;
     if (!raw) {
-        showToast('Select date and time', 'error');
+        showToast('Select date and time', 'error', { silent: true });
         return;
     }
     const d = new Date(raw);
     if (isNaN(d.getTime())) {
-        showToast('Invalid date and time', 'error');
+        showToast('Invalid date and time', 'error', { silent: true });
         return;
     }
     const submitBtn = document.getElementById('bulkUpdateCostPriceRecalcSubmit');
@@ -298,7 +298,7 @@ async function submitBulkUpdateCostPriceSaveAndRecalc() {
 // product, so both actions live in one place instead of two separate modals.
 function openEditVariantCostsModal(product) {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const variants = sortVariantsBySize(product.variants || []);
@@ -363,7 +363,7 @@ async function saveVariantCosts() {
         const raw = sharedInput?.value.trim() || '';
         const cost = raw === '' ? null : parseFloat(raw);
         if (raw !== '' && (isNaN(cost) || cost < 0)) {
-            showToast('Enter a valid cost price (0 or more)', 'error');
+            showToast('Enter a valid cost price (0 or more)', 'error', { silent: true });
             return false;
         }
         const ids = JSON.parse(listEl.dataset.variantIds || '[]');
@@ -382,7 +382,7 @@ async function saveVariantCosts() {
         const raw = input.value.trim();
         const cost = raw === '' ? null : parseFloat(raw);
         if (raw !== '' && (isNaN(cost) || cost < 0)) {
-            showToast('Enter a valid cost (0 or more) for every row', 'error');
+            showToast('Enter a valid cost (0 or more) for every row', 'error', { silent: true });
             return false;
         }
         const update = { id: input.dataset.id, cost_price: cost };
@@ -405,7 +405,7 @@ async function saveVariantCosts() {
 
 async function submitEditVariantCosts() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const saveBtn = document.getElementById('editVariantCostsSave');
@@ -432,22 +432,22 @@ async function submitEditVariantCosts() {
 // action so the recalc never runs against costs that weren't actually saved.
 async function submitEditVariantCostsSaveAndRecalc() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const productId = document.getElementById('editVariantCostsRecalcProductId')?.value?.trim();
     const raw = document.getElementById('editVariantCostsRecalcCreatedAfter')?.value;
     if (!productId) {
-        showToast('No product selected', 'error');
+        showToast('No product selected', 'error', { silent: true });
         return;
     }
     if (!raw) {
-        showToast('Select date and time', 'error');
+        showToast('Select date and time', 'error', { silent: true });
         return;
     }
     const d = new Date(raw);
     if (isNaN(d.getTime())) {
-        showToast('Invalid date and time', 'error');
+        showToast('Invalid date and time', 'error', { silent: true });
         return;
     }
     const submitBtn = document.getElementById('editVariantCostsRecalcSubmit');
@@ -535,12 +535,12 @@ document.getElementById('bulkUpdateResultsClose')?.addEventListener('click', () 
  * the Bulk Update Order modal's textarea/results panel with the order-status actions above. */
 async function submitBulkUpdateOrderSettled(settled) {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     const btn = document.getElementById(settled ? 'bulkUpdateSetOrderSettled' : 'bulkUpdateSetOrderUnsettled');
@@ -583,11 +583,11 @@ function parseOrderNumbersFromTextarea() {
 function bulkUpdateSelectInGrid() {
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     if (!ordersGridApi) {
-        showToast('Orders grid is not available', 'error');
+        showToast('Orders grid is not available', 'error', { silent: true });
         return;
     }
     const wanted = new Set(orderNumbers.map(String));
@@ -619,16 +619,16 @@ function bulkUpdateSelectInGrid() {
 
 async function bulkUpdateOrderStatus(orderStatus) {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
-    if (orderStatus === 'returned'
-        && !(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned'))) {
+    const statusActionLabels = { delivered: 'mark them Delivered', returned: 'mark them Returned', cancelled: 'mark them Cancelled' };
+    if (!(await confirmActionOnTerminalOrders(orderNumbers, statusActionLabels[orderStatus] || `mark them ${orderStatus}`))) {
         return;
     }
     const btnDelivered = document.getElementById('bulkUpdateSetDelivered');
@@ -687,12 +687,12 @@ async function bulkUpdateOrderStatus(orderStatus) {
 
 async function bulkUpdatePieceReceived() {
     if (!isEditingAllowed()) {
-        showToast('Editing is locked', 'error');
+        showToast('Editing is locked', 'error', { silent: true });
         return;
     }
     const orderNumbers = parseOrderNumbersFromTextarea();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     if (!(await confirmActionOnTerminalOrders(orderNumbers, 'mark them Returned + Piece Received'))) {

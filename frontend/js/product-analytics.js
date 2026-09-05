@@ -730,9 +730,9 @@ async function paRefreshData() {
 }
 
 function paExport() {
-    if (typeof XLSX === 'undefined') { showToast('Excel export library is not loaded', 'error'); return; }
+    if (typeof XLSX === 'undefined') { showToast('Excel export library is not loaded', 'error', { silent: true }); return; }
     const view = paDeriveView();
-    if (!view.segmentRows.length) { showToast('Nothing to export', 'warning'); return; }
+    if (!view.segmentRows.length) { showToast('Nothing to export', 'warning', { silent: true }); return; }
     const rows = view.segmentRows.map((r) => {
         const out = {
             Rank: r.rank, Product: r.name, Collection: r.collection,

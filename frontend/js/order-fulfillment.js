@@ -444,7 +444,7 @@ function initOrderFulfillment() {
     document.getElementById('fulfillmentProgressDoneBtn')?.addEventListener('click', () => switchView('orderFulfillment'));
 
     document.getElementById('orderFulfillmentExportBtn')?.addEventListener('click', () => {
-        showToast('Export not implemented yet', 'info');
+        showToast('Export not implemented yet', 'info', { silent: true });
     });
     document.getElementById('orderFulfillmentRefreshBtn')?.addEventListener('click', async () => {
         if (await renderOrderFulfillmentView()) showToast('Refreshed', 'success');
@@ -785,13 +785,13 @@ function attachFulfillmentRowHandlers(tbody) {
 async function fulfillSelectedOrders() {
     if (fulfillmentFulfilling) return;
     if (!fulfillmentSelectedCourier) {
-        showToast('Select a courier first', 'error');
+        showToast('Select a courier first', 'error', { silent: true });
         return;
     }
 
     const selectedOrders = fulfillmentOrders.filter(o => fulfillmentSelectedIds.has(o.id));
     if (selectedOrders.length === 0) {
-        showToast('Select at least one order', 'error');
+        showToast('Select at least one order', 'error', { silent: true });
         return;
     }
 
@@ -801,7 +801,8 @@ async function fulfillSelectedOrders() {
             fulfillmentPickupAddresses.length === 0
                 ? 'No pickup location is configured for this courier - add one in the courier portal first'
                 : 'Select a pickup location first',
-            'error'
+            'error',
+            { silent: true }
         );
         return;
     }
@@ -812,7 +813,8 @@ async function fulfillSelectedOrders() {
     if (missingCity.length > 0) {
         showToast(
             `Pick a courier city for ${missingCity.length === 1 ? `order #${missingCity[0].order_number}` : `${missingCity.length} orders`} first`,
-            'error'
+            'error',
+            { silent: true }
         );
         return;
     }

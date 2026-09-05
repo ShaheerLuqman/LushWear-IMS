@@ -45,13 +45,20 @@ function showAppConfirm(options) {
     });
 }
 
-function showToast(message, type = 'info') {
+/** `silent: true` is for instant client-side guard/validation messages (locked editing,
+ * missing selection, invalid input) shown while the form/modal that triggered them is
+ * still open - the user sees and fixes those in place, so they'd only be noise in
+ * notification history. Leave it unset for actual action outcomes (saves, syncs,
+ * exports, generations, fetches - success or failure) so those survive the 3s toast. */
+function showToast(message, type = 'info', { silent = false } = {}) {
     toast.textContent = message;
     toast.className = `toast ${type} show`;
 
     setTimeout(() => {
         toast.classList.remove('show');
     }, 3000);
+
+    if (!silent) addNotification(message, type);
 }
 
 function _collectGridRowsForExport(gridApi) {
@@ -123,7 +130,7 @@ function _buildExportSheetRows(gridApi) {
 
 function exportCurrentGridToExcel() {
     if (typeof XLSX === 'undefined') {
-        showToast('Excel export library is not loaded', 'error');
+        showToast('Excel export library is not loaded', 'error', { silent: true });
         return;
     }
 
@@ -148,7 +155,7 @@ function exportCurrentGridToExcel() {
         XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Ledger Detail');
         sheetCount = 1;
     } else {
-        showToast('No AG Grid is available to export in this view', 'warning');
+        showToast('No AG Grid is available to export in this view', 'warning', { silent: true });
         return;
     }
 
@@ -186,7 +193,7 @@ async function fetchDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && (row.order_status || '').toLowerCase() !== 'cancelled');
     if (selected.length === 0) {
-        showToast('Select orders to fetch delivery status for', 'warning');
+        showToast('Select orders to fetch delivery status for', 'warning', { silent: true });
         return;
     }
     const fetchable = selected.filter(row => {
@@ -237,7 +244,7 @@ function refreshDeliveryStatusSelected() {
     if (!ordersGridApi) return;
     const selected = ordersGridApi.getSelectedRows().filter(row => (row.order_status || '').toLowerCase() !== 'cancelled');
     if (selected.length === 0) {
-        showToast('Select orders to include in the report', 'warning');
+        showToast('Select orders to include in the report', 'warning', { silent: true });
         return;
     }
     const report = { delivered: [], returned: [], unfulfilled: [], transit: [], issues: [], failed: [] };
@@ -335,31 +342,31 @@ async function fetchOrderCustomerInfo(orderId) {
 
 async function fetchDeliveryStatus(orderId, courier, trackingNumber, force = false) {
     if (!orderId) {
-        showToast('Order ID not available', 'error');
+        showToast('Order ID not available', 'error', { silent: true });
         return;
     }
-    
+
     const courierNormalized = (courier || '').trim().toUpperCase();
     const supportsDeliveryRefresh = (
         courierNormalized === 'POSTEX' ||
         courierNormalized === 'COURIERS NEXT'
     );
     if (!supportsDeliveryRefresh) {
-        showToast('Delivery status is only available for PostEx and Couriers Next courier', 'warning');
+        showToast('Delivery status is only available for PostEx and Couriers Next courier', 'warning', { silent: true });
         return;
     }
-    
+
     if (!trackingNumber || trackingNumber === '' || trackingNumber === '-') {
-        showToast('Tracking number not available', 'error');
+        showToast('Tracking number not available', 'error', { silent: true });
         return;
     }
-    
+
     const modal = document.getElementById('deliveryStatusModal');
     const content = document.getElementById('deliveryStatusContent');
-    
+
     if (!modal || !content) {
         console.error('Modal elements not found');
-        showToast('Error: Modal not found', 'error');
+        showToast('Error: Modal not found', 'error', { silent: true });
         return;
     }
     

@@ -611,6 +611,10 @@ class AccountPublic(BaseModel):
     # Empty when org_id is None (a pure superadmin's own session has no org
     # context) - see app/features.py's get_org_enabled_features.
     enabled_features: List[str] = []
+    # Defaults (22/January) when org_id is None, same reasoning as
+    # enabled_features - see app/fiscal_settings.py's get_org_fiscal_settings.
+    fiscal_month_start_day: int = 22
+    fiscal_year_start_month: int = 1
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -656,6 +660,15 @@ class OrgIntegrationSettingsPublic(BaseModel):
     shopify_access_token_configured: bool
     postex_merchant_token_configured: bool
     couriers_next_auth_key_configured: bool
+
+class OrgFiscalSettingsUpdate(BaseModel):
+    """PUT /org-settings/fiscal body - both fields required, the whole fiscal
+    calendar is replaced together rather than merged (see app/fiscal_settings.py)."""
+    fiscal_month_start_day: int = Field(ge=1, le=28)
+    fiscal_year_start_month: int = Field(ge=1, le=12)
+
+class OrgFiscalSettingsPublic(OrgFiscalSettingsUpdate):
+    pass
 
 class SuperadminOrgCreate(BaseModel):
     """POST /admin/organizations body - creates an org and its first admin

@@ -5,7 +5,13 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import create_state_token, get_org_id
-from app.models import OrgIntegrationSettingsPublic, OrgIntegrationSettingsUpdate
+from app.fiscal_settings import get_org_fiscal_settings, set_org_fiscal_settings
+from app.models import (
+    OrgFiscalSettingsPublic,
+    OrgFiscalSettingsUpdate,
+    OrgIntegrationSettingsPublic,
+    OrgIntegrationSettingsUpdate,
+)
 from app.org_settings import get_org_integration_settings, to_public_shape, upsert_org_integration_settings
 
 router = APIRouter(prefix="/org-settings", tags=["org-settings"])
@@ -33,6 +39,16 @@ async def update_org_settings(body: OrgIntegrationSettingsUpdate, org_id: str = 
         couriers_next_auth_key=body.couriers_next_auth_key,
     )
     return await read_org_settings(org_id)
+
+
+@router.get("/fiscal", response_model=OrgFiscalSettingsPublic)
+async def read_org_fiscal_settings(org_id: str = Depends(get_org_id)):
+    return get_org_fiscal_settings(org_id)
+
+
+@router.put("/fiscal", response_model=OrgFiscalSettingsPublic)
+async def update_org_fiscal_settings(body: OrgFiscalSettingsUpdate, org_id: str = Depends(get_org_id)):
+    return set_org_fiscal_settings(org_id, body.fiscal_month_start_day, body.fiscal_year_start_month)
 
 
 @router.get("/shopify/install")

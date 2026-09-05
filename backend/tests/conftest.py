@@ -115,10 +115,11 @@ def make_client():
         import app.org_settings as org_settings
         import app.memberships as memberships
         import app.features as features
+        import app.fiscal_settings as fiscal_settings
 
         patched = [
             orders, products, transactions, ledger, journal, bills, auth_routes, users, admin_portal,
-            shopify_sync, org_settings, memberships, features, main,
+            shopify_sync, org_settings, memberships, features, fiscal_settings, main,
         ]
         originals = [m.get_supabase for m in patched]
         for m in patched:

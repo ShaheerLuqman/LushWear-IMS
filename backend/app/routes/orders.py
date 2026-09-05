@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
@@ -18,6 +18,7 @@ from app.auth import get_org_id
 from app.config import settings
 from app.database import get_supabase
 from app.db_utils import fetch_all
+from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
 from app.models import Order, OrderCreate, OrderUpdate
 from app.money import money
 from app.order_pdf import extract_order_numbers
@@ -73,27 +74,29 @@ MAX_PDF_BATCH_ORDERS = 500
 _BULK_CONCURRENCY = 20
 
 
-def _period_start_end(month: int, year: int):
-    """Return (start_iso, end_iso) for period: month's 22 00:00:00 PKT to next month's 22 00:00:00 PKT (exclusive).
-    Returns dates in UTC for database comparison.
+def _period_start_end(month: int, year: int, start_day: int = DEFAULT_FISCAL_MONTH_START_DAY):
+    """Return (start_iso, end_iso) for period: month's `start_day` 00:00:00 PKT to next
+    month's `start_day` 00:00:00 PKT (exclusive). `start_day` is the org's own
+    fiscal_month_start_day (app.fiscal_settings) - defaults to 22, LushWear's original
+    22nd-to-21st cycle. Returns dates in UTC for database comparison.
     PKT (Pakistan Time) is UTC+5, so 00:00 PKT = 19:00 UTC (previous day).
-    Example: December period = Dec 22 00:00 PKT (inclusive) to Jan 22 00:00 PKT (exclusive).
-    This ensures all of Jan 21 up to 23:59:59.999999 PKT is included."""
-    # Create start date: month's 22 at 00:00:00 PKT
-    start_pkt = datetime(year, month, 22, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
-    
+    Example: with start_day=22, the December period = Dec 22 00:00 PKT (inclusive) to
+    Jan 22 00:00 PKT (exclusive), so all of Jan 21 up to 23:59:59.999999 PKT is included."""
+    # Create start date: month's start_day at 00:00:00 PKT
+    start_pkt = datetime(year, month, start_day, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
+
     # Calculate next month and year
     next_month = month % 12 + 1
     next_year = year if month != 12 else year + 1
-    
-    # Create end date: next month's 22 at 00:00:00 PKT (exclusive boundary)
+
+    # Create end date: next month's start_day at 00:00:00 PKT (exclusive boundary)
     # This ensures we include everything up to but not including the next period start
-    end_pkt = datetime(next_year, next_month, 22, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
-    
+    end_pkt = datetime(next_year, next_month, start_day, 0, 0, 0, 0, tzinfo=PKT_TIMEZONE)
+
     # Convert to UTC for database comparison
     start_utc = start_pkt.astimezone(timezone.utc)
     end_utc = end_pkt.astimezone(timezone.utc)
-    
+
     # Return ISO format strings with timezone info (Z suffix for UTC)
     return start_utc.isoformat().replace('+00:00', 'Z'), end_utc.isoformat().replace('+00:00', 'Z')
 
@@ -101,9 +104,10 @@ def _period_start_end(month: int, year: int):
 RECENT_ORDERS_MONTHS = 3
 
 
-def _period_containing(dt_pkt: datetime) -> Tuple[int, int]:
-    """(month, year) of the order period (22nd to next 21st) containing a PKT-aware datetime."""
-    if dt_pkt.day >= 22:
+def _period_containing(dt_pkt: datetime, start_day: int = DEFAULT_FISCAL_MONTH_START_DAY) -> Tuple[int, int]:
+    """(month, year) of the order period (`start_day` to next month's `start_day` - 1)
+    containing a PKT-aware datetime."""
+    if dt_pkt.day >= start_day:
         return dt_pkt.month, dt_pkt.year
     month, year = dt_pkt.month - 1, dt_pkt.year
     return (12, year - 1) if month == 0 else (month, year)
@@ -115,25 +119,27 @@ def _shift_period(month: int, year: int, back: int) -> Tuple[int, int]:
     return total % 12 + 1, total // 12
 
 
-def _recent_orders_cutoff_iso() -> str:
+def _recent_orders_cutoff_iso(start_day: int = DEFAULT_FISCAL_MONTH_START_DAY) -> str:
     """UTC ISO instant for the start of the oldest period in "Recent Orders" (the last
-    RECENT_ORDERS_MONTHS periods) - the same 22nd-to-21st boundaries as the period filter,
-    not a raw calendar-months-back date, so a period's oldest order always matches between
-    the two views."""
-    month, year = _period_containing(datetime.now(PKT_TIMEZONE))
+    RECENT_ORDERS_MONTHS periods) - the same period boundaries as the period filter
+    (org's own start_day), not a raw calendar-months-back date, so a period's oldest
+    order always matches between the two views."""
+    month, year = _period_containing(datetime.now(PKT_TIMEZONE), start_day)
     oldest_month, oldest_year = _shift_period(month, year, RECENT_ORDERS_MONTHS - 1)
-    start_iso, _ = _period_start_end(oldest_month, oldest_year)
+    start_iso, _ = _period_start_end(oldest_month, oldest_year, start_day)
     return start_iso
 
 
-def _period_start_end_dates(month: int, year: int):
-    """Return (start_date, end_date) as YYYY-MM-DD for the period (month 22 to next month 21 inclusive)."""
-    start_date = f"{year}-{month:02d}-22"
-    if month == 12:
-        end_date = f"{year + 1}-01-21"
-    else:
-        end_date = f"{year}-{month + 1:02d}-21"
-    return start_date, end_date
+def _period_start_end_dates(month: int, year: int, start_day: int = DEFAULT_FISCAL_MONTH_START_DAY):
+    """Return (start_date, end_date) as YYYY-MM-DD for the period (`start_day` to next
+    month's `start_day` - 1, inclusive). Subtracting a day from next month's start_day
+    (rather than hardcoding `start_day - 1`) is what makes start_day=1 (a plain
+    calendar month) roll back to the current month's actual last day instead of day 0."""
+    start_date = date(year, month, start_day)
+    next_month = month % 12 + 1
+    next_year = year if month != 12 else year + 1
+    end_date = date(next_year, next_month, start_day) - timedelta(days=1)
+    return start_date.isoformat(), end_date.isoformat()
 
 
 # The orders list is the one place `delivery_status` gets fetched at scale (hundreds-1000+
@@ -161,7 +167,7 @@ def _reshape_delivery_status_latest(rows: List[dict]) -> List[dict]:
 
 @router.get("/", response_model=List[Order])
 async def get_all_orders(
-    month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period is 22nd to next 21st."),
+    month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period boundaries follow the org's fiscal_month_start_day."),
     year: int = Query(None, ge=2000, le=2100, description="Filter by period year."),
     org_id: str = Depends(get_org_id),
 ):
@@ -169,9 +175,10 @@ async def get_all_orders(
     try:
         t_start = time.perf_counter()
         supabase = get_supabase()
+        start_day = get_org_fiscal_settings(org_id)["fiscal_month_start_day"]
 
         if month is not None and year is not None:
-            start_iso, end_iso = _period_start_end(month, year)
+            start_iso, end_iso = _period_start_end(month, year, start_day)
             period_orders = fetch_all(
                 lambda: org_table(supabase, org_id, "shopify_orders")
                 .select(ORDERS_LIST_SELECT)
@@ -190,7 +197,7 @@ async def get_all_orders(
 
         # "Recent Orders": orders from the last RECENT_ORDERS_MONTHS periods, ranked by
         # order_receiving_date (the actual recency the feature means, not insertion order).
-        cutoff_iso = _recent_orders_cutoff_iso()
+        cutoff_iso = _recent_orders_cutoff_iso(start_day)
         recent = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select(ORDERS_LIST_SELECT)
@@ -3348,8 +3355,9 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
             raise HTTPException(status_code=400, detail="Invalid year")
 
         # Get period start and end dates
-        start_iso, end_iso = _period_start_end(month, year)
-        start_date, end_date = _period_start_end_dates(month, year)
+        start_day = get_org_fiscal_settings(org_id)["fiscal_month_start_day"]
+        start_iso, end_iso = _period_start_end(month, year, start_day)
+        start_date, end_date = _period_start_end_dates(month, year, start_day)
 
         supabase = get_supabase()
 

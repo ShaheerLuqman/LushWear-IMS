@@ -33,7 +33,7 @@ function initOrdersActions() {
         const fileInput = document.getElementById('uploadPostExFileInput');
         const file = fileInput?.files?.[0];
         if (!file) {
-            showToast('Please select a CSV file', 'error');
+            showToast('Please select a CSV file', 'error', { silent: true });
             return;
         }
         const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
@@ -61,17 +61,17 @@ function initOrdersActions() {
     // Generate Invoice
     document.getElementById('ordersMoreActionGenerateInvoice')?.addEventListener('click', async () => {
         if (!ordersGridApi) {
-            showToast('Orders grid not initialized', 'error');
+            showToast('Orders grid not initialized', 'error', { silent: true });
             return;
         }
         const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
         if (selectedRows.length === 0) {
-            showToast('Please select at least one order', 'error');
+            showToast('Please select at least one order', 'error', { silent: true });
             return;
         }
         const orderIds = selectedRows.map(row => row.id).filter(Boolean);
         if (orderIds.length === 0) {
-            showToast('Selected orders have no ID', 'error');
+            showToast('Selected orders have no ID', 'error', { silent: true });
             return;
         }
         try {
@@ -104,7 +104,7 @@ function initOrdersActions() {
     // in the selection (see printAirwayBillsForOrders in utils.js), not a per-order button.
     document.getElementById('ordersMoreActionPrintAirwayBills')?.addEventListener('click', async () => {
         if (!ordersGridApi) {
-            showToast('Orders grid not initialized', 'error');
+            showToast('Orders grid not initialized', 'error', { silent: true });
             return;
         }
         const selectedRows = ordersGridApi.getSelectedRows().filter(row => row && row.id !== '__footer__' && row.order_number);
@@ -408,7 +408,7 @@ async function handlePackagingListPdfUpload(event) {
 async function generatePackagingListFromNumbers() {
     const orderNumbers = parsePackagingListOrderNumbers();
     if (orderNumbers.length === 0) {
-        showToast('Enter at least one valid order number (one per line).', 'error');
+        showToast('Enter at least one valid order number (one per line).', 'error', { silent: true });
         return;
     }
     const generateBtn = document.getElementById('packagingListGenerateBtn');
@@ -510,15 +510,15 @@ async function confirmGenerateLoadSheet() {
     const deliveryChargeRaw = deliveryChargeEl?.value?.trim();
     const deliveryCharge = deliveryChargeRaw === '' ? null : parseFloat(deliveryChargeRaw);
     if (!assignmentNumber) {
-        showToast('Enter assignment number', 'error');
+        showToast('Enter assignment number', 'error', { silent: true });
         return;
     }
     if (!riderName) {
-        showToast('Enter rider name', 'error');
+        showToast('Enter rider name', 'error', { silent: true });
         return;
     }
     if (deliveryCharge !== null && (Number.isNaN(deliveryCharge) || deliveryCharge < 0)) {
-        showToast('Delivery charges must be 0 or greater', 'error');
+        showToast('Delivery charges must be 0 or greater', 'error', { silent: true });
         return;
     }
     const orderNumbers = parseLoadSheetOrderNumbersFromBox().map(String);

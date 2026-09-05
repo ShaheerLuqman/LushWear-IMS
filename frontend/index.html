@@ -233,7 +233,7 @@
                     <span id="syncOrdersLastSync" class="orders-sync-status" style="display: none;" title="Orders sync automatically from Shopify every 5 minutes"></span>
                     <div id="ordersPeriodFilterWrap" class="orders-period-filter-wrap header-inline" style="display: none;">
                         <label for="ordersPeriodFilter" class="orders-period-filter-label">Period:</label>
-                        <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by period (month 22 – next 21)"></select>
+                        <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by financial-month period"></select>
                     </div>
                     <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Filter by date range">Date range</button>
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
@@ -331,6 +331,19 @@
                         <button type="button" id="courierPaymentReportClearFiltersBtn" class="btn btn-secondary header-toolbar-btn">Clear Filters</button>
                         <button type="button" id="courierPaymentReportImportCsvBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-upload"></i> Import Payment (CSV)</button>
                         <button type="button" id="courierPaymentReportFetchSettlementsBtn" class="btn btn-secondary header-toolbar-btn" title="Check unsettled PostEx orders against the courier API and settle the ones now delivered or returned" style="display: none;"><i class="fa-solid fa-rotate"></i> Fetch PostEx Settlements</button>
+                    </div>
+                </div>
+                <div class="header-notif-wrap" id="notifWrap">
+                    <button type="button" id="notifBtn" class="btn btn-secondary header-notif-btn" aria-haspopup="true" aria-expanded="false" title="Notifications">
+                        <i data-lucide="bell"></i>
+                        <span id="notifBadge" class="notif-badge" style="display: none;"></span>
+                    </button>
+                    <div id="notifPanel" class="notif-panel" role="menu" aria-label="Notifications">
+                        <div class="notif-panel-header">
+                            <span>Notifications</span>
+                            <button type="button" id="notifClearBtn" class="notif-clear-btn" disabled>Clear all</button>
+                        </div>
+                        <div id="notifList" class="notif-list"></div>
                     </div>
                 </div>
             </header>
@@ -1089,6 +1102,42 @@
                             </form>
                         </section>
 
+                        <section class="settings-section" id="settingsFiscalSection" style="display: none;">
+                            <h2 class="settings-section__title">Financial calendar</h2>
+                            <form id="settingsFiscalForm">
+                                <div class="form-group">
+                                    <label for="settingsFiscalMonthStartDay">Financial month starts on</label>
+                                    <input type="number" id="settingsFiscalMonthStartDay" class="form-input" min="1" max="28" required>
+                                    <span class="form-hint">Day of the month a reporting period begins, e.g. 22 means each period runs the 22nd to the 21st of the next month.</span>
+                                </div>
+                                <div class="form-group">
+                                    <label for="settingsFiscalYearStartMonth">Financial year starts in</label>
+                                    <select id="settingsFiscalYearStartMonth" class="form-input">
+                                        <option value="1">January</option>
+                                        <option value="2">February</option>
+                                        <option value="3">March</option>
+                                        <option value="4">April</option>
+                                        <option value="5">May</option>
+                                        <option value="6">June</option>
+                                        <option value="7">July</option>
+                                        <option value="8">August</option>
+                                        <option value="9">September</option>
+                                        <option value="10">October</option>
+                                        <option value="11">November</option>
+                                        <option value="12">December</option>
+                                    </select>
+                                </div>
+                                <div class="settings-fiscal-preview" id="settingsFiscalPreview">
+                                    <span>Financial year: <strong id="settingsFiscalYearPreview">—</strong></span>
+                                    <span>Financial month: <strong id="settingsFiscalMonthPreview">—</strong></span>
+                                </div>
+                                <p id="settingsFiscalError" class="auth-gate-error" role="alert"></p>
+                                <div class="form-actions">
+                                    <button type="submit" class="btn btn-primary">Save financial calendar</button>
+                                </div>
+                            </form>
+                        </section>
+
                         <section class="settings-section" id="settingsIntegrationsSection" style="display: none;">
                             <h2 class="settings-section__title">Integrations</h2>
                             <form id="settingsIntegrationsForm">
@@ -1523,6 +1572,7 @@
          top-level `let`s (orders, ordersGridApi, ...) that are reassigned across
          files, which imported bindings do not allow. Load order matters -
          app-core.js patches window.fetch and must come first. -->
+    <script src="js/notifications.js"></script>
     <script src="js/app-core.js"></script>
     <script src="js/auth-users.js"></script>
     <script src="js/grid-filters.js"></script>

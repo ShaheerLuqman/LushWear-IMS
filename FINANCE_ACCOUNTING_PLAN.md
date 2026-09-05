@@ -15,7 +15,7 @@ books that are *correct* without asking the user to think in debits and credits.
 
 ---
 
-## Where this stands (2026-08-02)
+## Where this stands (2026-09-05)
 
 | Phase | State |
 |---|---|
@@ -44,6 +44,19 @@ what a bill still owes is derived FIFO from that ledger rather than stored.
 Reports reading the journal: **Trial Balance**, **ledger statement**, **AP
 Ageing**. Month Summary still blends order data with transaction data and is an
 operations report, not a financial statement.
+
+**New since the last review:** an org's fiscal calendar is now its own
+setting rather than a hardcoded constant. `system_organizations` gained
+`fiscal_month_start_day` (default 22, the original 22nd-to-21st cycle) and
+`fiscal_year_start_month` (default January) — migration
+`20260905000000_org_fiscal_settings.sql`, edited from Settings → Financial
+calendar, read via `app/fiscal_settings.py`. Today only `fiscal_month_start_day`
+is consumed, by `get_month_summary_periods()` and the orders period
+filter/dropdown — Month Summary is still the operations report described above,
+just no longer pinned to the 22nd. `fiscal_year_start_month` is stored and
+returned from `/auth/me` but nothing reads it yet; it exists so Phase 6's
+fiscal year has an org-level setting already in place rather than one more
+thing that phase has to add.
 
 **The one incoherence in the current books:** Inventory is only ever debited.
 Bills increase it; nothing decreases it, because delivered orders post no COGS
@@ -118,6 +131,11 @@ edit-in-place path. The exposure is the transaction's own write path.
 Nothing prevents backdating an entry into a month already reported on, or into a
 prior year. Both reference systems block this — Akaunting via reconciliations,
 ERPNext via `Accounting Period` + `Fiscal Year` + a period-closing voucher.
+
+Narrowed since the review: an org now has a stored `fiscal_year_start_month`
+(Settings → Financial calendar), so "financial year" is a real per-org setting
+rather than an assumption. Nothing reads it yet and there is still no locking —
+see the note under "Where this stands" and Phase 6.
 
 #### 🟡 C4. A genuinely-zero account disappears from the books
 
@@ -201,7 +219,7 @@ Grouped by whether it's foundational, the modules you asked about, or optional.
 
 | # | Gap | Status |
 |---|---|---|
-| 12 | **Fiscal year + period locking** (C2) | open |
+| 12 | **Fiscal year + period locking** (C2) | half — `fiscal_year_start_month` now stored per org (Settings → Financial calendar); nothing reads it, and there is still no locking |
 | 13 | **Reversing entries instead of edit/delete** (C1) | open |
 | 14 | **`created_by` attribution on every financial write** | partly — bills carry it; transaction entries and journal entries do not |
 | 15 | **Bank reconciliation** — mark entries reconciled against a statement, then lock | open |
@@ -591,6 +609,10 @@ answered — if every sale is Shopify D2C, this phase *is* the whole of AR.
 Last deliberately: controls constrain a model, and the model is still changing.
 
 - [ ] **Fiscal years + period locking** — block posting into a closed period (C2).
+      The org-level `fiscal_year_start_month` setting (Settings → Financial
+      calendar, migration `20260905000000_org_fiscal_settings.sql`) already
+      exists for this to read; the fiscal-year and period-closing machinery
+      itself is still to build.
 - [ ] **Reversing entries** replace edit/delete on posted transactions (C1). Note
       that `post_journal_entry` already replaces a document's entry idempotently,
       so this is about the *transaction's* edit/delete path, not the journal's.
@@ -635,5 +657,4 @@ New, arising from the current state:
    `is_cash_equivalent` also on `ledgers` and set for system accounts, there are
    two overlapping notions of "this is liquid" — worth collapsing to one before
    the Balance Sheet has to pick a definition of cash.
-6. **Fixed assets** — confirming these are out of scope, per Part 2.
- As a payable aging page purpose payment. Transaction As a payable aging page purpose payment. Transaction accounting As a payable aging page purpose payment. Transaction accounting professional As a payable aging page, purpose payment transaction accounting professional. As a payable aging page, purpose payment transaction accounting professional. nine As a payable aging page, purpose payment transaction accounting professional. nine fourteen ninety As a payable aging page, purpose payment transaction accounting professional. nine fourteen ninety seven As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen Shop As a payable aging page, purpose payment. Transaction accounting professional, nine fourteen ninety-seven. nine fourteen Shopify As a payable aging page purpose payment. Transaction accounting professional nine fourteen ninety seven nine fourteen Shopify settings Shopify black and white and white purpose or parking purple
+8. **Fixed assets** — confirming these are out of scope, per Part 2.

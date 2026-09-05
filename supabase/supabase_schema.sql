@@ -36,11 +36,19 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- (Shopify order management, Finance) this org's users can see/use -
 -- enforced server-side by app/features.py's require_feature, not just a
 -- sidebar hint. See supabase/migrations/20260801000000_org_feature_flags.sql.
+-- fiscal_month_start_day/fiscal_year_start_month (Financial Settings) are the
+-- org's fiscal calendar: which day of the month a "financial month" starts
+-- (default 22, LushWear's original hardcoded 22nd-to-21st cycle - capped at 28
+-- so it exists in every month) and which calendar month its financial year
+-- starts in (default 1/January). See
+-- supabase/migrations/20260905000000_org_fiscal_settings.sql.
 CREATE TABLE IF NOT EXISTS system_organizations (
-    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name             TEXT NOT NULL,
-    enabled_features TEXT[] NOT NULL DEFAULT ARRAY['orders', 'finance'],
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    id                       UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    name                     TEXT NOT NULL,
+    enabled_features         TEXT[] NOT NULL DEFAULT ARRAY['orders', 'finance'],
+    fiscal_month_start_day   INT NOT NULL DEFAULT 22 CHECK (fiscal_month_start_day BETWEEN 1 AND 28),
+    fiscal_year_start_month  INT NOT NULL DEFAULT 1 CHECK (fiscal_year_start_month BETWEEN 1 AND 12),
+    created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 -- name defaults to '' for identities created before it existed - see
@@ -1476,6 +1484,9 @@ DROP FUNCTION IF EXISTS get_month_summary_periods(UUID);
 -- "OK" only if delivered with delivery_charge > 0, or returned with
 -- delivery_charge > 0 and piece_received = 'Received'; everything else
 -- (non-cancelled) counts as Warning.
+-- The day threshold used to bucket orders into periods comes from the org's own
+-- fiscal_month_start_day (Financial Settings) rather than a hardcoded 22 - see
+-- supabase/migrations/20260905000000_org_fiscal_settings.sql.
 CREATE OR REPLACE FUNCTION get_month_summary_periods(p_org_id UUID)
 RETURNS TABLE(month INT, year INT, warning_orders_count INT)
 LANGUAGE sql
@@ -1488,18 +1499,20 @@ AS $$
             EXTRACT(YEAR FROM local_ts)::INT  AS yr,
             order_status,
             delivery_charge,
-            piece_received
+            piece_received,
+            COALESCE(o.fiscal_month_start_day, 22) AS start_day
         FROM (
             SELECT order_receiving_date AT TIME ZONE INTERVAL '+05:00' AS local_ts,
                    order_status, delivery_charge, piece_received
             FROM shopify_orders
             WHERE org_id = p_org_id
         ) t
+        LEFT JOIN system_organizations o ON o.id = p_org_id
     ),
     bucketed AS (
         SELECT
-            CASE WHEN day < 22 THEN (CASE WHEN mon = 1 THEN 12 ELSE mon - 1 END) ELSE mon END AS month,
-            CASE WHEN day < 22 AND mon = 1 THEN yr - 1 ELSE yr END AS year,
+            CASE WHEN day < start_day THEN (CASE WHEN mon = 1 THEN 12 ELSE mon - 1 END) ELSE mon END AS month,
+            CASE WHEN day < start_day AND mon = 1 THEN yr - 1 ELSE yr END AS year,
             order_status,
             delivery_charge,
             piece_received

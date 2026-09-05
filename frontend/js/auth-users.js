@@ -229,17 +229,109 @@ function initIntegrationsForm() {
     });
 }
 
-/** Populates the Settings > Account row, and (admin only) the Users/Integrations sections. */
+const FISCAL_MONTH_NAMES = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December',
+];
+
+/** "1st"/"2nd"/"3rd"/"4th"... (11th-13th stay "th"). */
+function ordinal(n) {
+    const suffixes = ['th', 'st', 'nd', 'rd'];
+    const v = n % 100;
+    return n + (suffixes[(v - 20) % 10] || suffixes[v] || suffixes[0]);
+}
+
+/** Live preview of what the two Financial calendar fields mean, updated as the
+ * admin edits them (before saving) - e.g. "January – December" / "22nd – 21st
+ * of the next month". */
+function updateFiscalPreview() {
+    const dayEl = document.getElementById('settingsFiscalMonthStartDay');
+    const monthEl = document.getElementById('settingsFiscalYearStartMonth');
+    const yearPreviewEl = document.getElementById('settingsFiscalYearPreview');
+    const monthPreviewEl = document.getElementById('settingsFiscalMonthPreview');
+    if (!dayEl || !monthEl || !yearPreviewEl || !monthPreviewEl) return;
+
+    const startMonth = parseInt(monthEl.value, 10);
+    if (startMonth >= 1 && startMonth <= 12) {
+        const endMonth = startMonth === 1 ? 12 : startMonth - 1;
+        yearPreviewEl.textContent = `${FISCAL_MONTH_NAMES[startMonth - 1]} – ${FISCAL_MONTH_NAMES[endMonth - 1]}`;
+    } else {
+        yearPreviewEl.textContent = '—';
+    }
+
+    const startDay = parseInt(dayEl.value, 10);
+    if (startDay >= 1 && startDay <= 28) {
+        // A start day of 1 is a plain calendar month - "last day of the month" rather
+        // than a literal "0th", same start_day=1 special case as data-api.js's
+        // ordersPeriodStartEnd/backend's _period_start_end_dates.
+        monthPreviewEl.textContent = startDay === 1
+            ? `${ordinal(1)} – last day of the month`
+            : `${ordinal(startDay)} – ${ordinal(startDay - 1)} of the next month`;
+    } else {
+        monthPreviewEl.textContent = '—';
+    }
+}
+
+async function loadFiscalSection() {
+    try {
+        const settings = await apiJson('/org-settings/fiscal', { fallback: 'Failed to load financial calendar' });
+        const dayEl = document.getElementById('settingsFiscalMonthStartDay');
+        const monthEl = document.getElementById('settingsFiscalYearStartMonth');
+        if (dayEl) dayEl.value = settings.fiscal_month_start_day;
+        if (monthEl) monthEl.value = String(settings.fiscal_year_start_month);
+        updateFiscalPreview();
+        return settings;
+    } catch (ex) {
+        showToast(ex.message || 'Failed to load financial calendar', 'error');
+        return null;
+    }
+}
+
+function initFiscalForm() {
+    const form = document.getElementById('settingsFiscalForm');
+    const errEl = document.getElementById('settingsFiscalError');
+    if (!form || form.dataset.bound) return;
+    form.dataset.bound = '1';
+
+    document.getElementById('settingsFiscalMonthStartDay').addEventListener('input', updateFiscalPreview);
+    document.getElementById('settingsFiscalYearStartMonth').addEventListener('change', updateFiscalPreview);
+
+    form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        if (errEl) errEl.textContent = '';
+        const body = {
+            fiscal_month_start_day: parseInt(document.getElementById('settingsFiscalMonthStartDay').value, 10),
+            fiscal_year_start_month: parseInt(document.getElementById('settingsFiscalYearStartMonth').value, 10),
+        };
+        const submitBtn = form.querySelector('button[type="submit"]');
+        if (submitBtn) submitBtn.disabled = true;
+        try {
+            await apiJson('/org-settings/fiscal', { method: 'PUT', body });
+            showToast('Financial calendar saved - reloading…', 'success');
+            // Period boundaries are computed client-side too (data-api.js) from the
+            // value cached at boot - simplest way to keep everything consistent is
+            // to reload rather than patch every period-dependent view in place.
+            location.reload();
+        } catch (ex) {
+            if (errEl) errEl.textContent = ex.message || 'Could not save financial calendar';
+            if (submitBtn) submitBtn.disabled = false;
+        }
+    });
+}
+
+/** Populates the Settings > Account row, and (admin only) the Users/Integrations/Financial sections. */
 async function loadAccountSettings() {
     initAddUserForm();
     initIntegrationsForm();
     initShopifyConnectButton();
+    initFiscalForm();
 
     const nameEl = document.getElementById('settingsAccountName');
     const emailEl = document.getElementById('settingsAccountEmail');
     const roleEl = document.getElementById('settingsAccountRole');
     const usersSection = document.getElementById('settingsUsersSection');
     const integrationsSection = document.getElementById('settingsIntegrationsSection');
+    const fiscalSection = document.getElementById('settingsFiscalSection');
 
     try {
         currentAccount = await apiJson('/auth/me', { fallback: 'Failed to load account' });
@@ -254,8 +346,9 @@ async function loadAccountSettings() {
     const isAdmin = !!currentAccount && currentAccount.role === 'admin';
     if (usersSection) usersSection.style.display = isAdmin ? '' : 'none';
     if (integrationsSection) integrationsSection.style.display = isAdmin ? '' : 'none';
+    if (fiscalSection) fiscalSection.style.display = isAdmin ? '' : 'none';
 
     if (isAdmin) {
-        await Promise.all([loadUsersSection(), loadIntegrationsSection()]);
+        await Promise.all([loadUsersSection(), loadIntegrationsSection(), loadFiscalSection()]);
     }
 }

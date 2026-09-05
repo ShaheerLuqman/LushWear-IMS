@@ -29,3 +29,15 @@ def test_every_month_produces_a_start_before_its_end():
     for month in range(1, 13):
         start, end = _period_start_end(month, 2026)
         assert start < end
+
+
+def test_custom_start_day_shifts_the_period():
+    start, end = _period_start_end(6, 2026, start_day=5)
+    assert start == "2026-06-04T19:00:00Z"
+    assert end == "2026-07-04T19:00:00Z"
+    assert _period_start_end_dates(6, 2026, start_day=5) == ("2026-06-05", "2026-07-04")
+
+
+def test_start_day_one_is_a_plain_calendar_month():
+    assert _period_start_end_dates(2, 2026, start_day=1) == ("2026-02-01", "2026-02-28")
+    assert _period_start_end_dates(12, 2026, start_day=1) == ("2026-12-01", "2026-12-31")
