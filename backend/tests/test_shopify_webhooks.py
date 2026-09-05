@@ -29,6 +29,33 @@ def client(monkeypatch):
     yield TestClient(main.app)
 
 
+def _fake_org_table(seen_ids: set):
+    """Stands in for org_table() against shopify_webhook_events, modelling the two bits of
+    Postgres the route depends on: upsert-with-ignore_duplicates returning no data when the
+    row already existed, and delete removing it again."""
+    class _FakeTable:
+        def upsert(self, row, **_kwargs):
+            is_new = row["webhook_id"] not in seen_ids
+            seen_ids.add(row["webhook_id"])
+            return SimpleNamespace(execute=lambda: SimpleNamespace(data=[row] if is_new else []))
+
+        def delete(self, **_kwargs):
+            return self
+
+        def eq(self, column, value):
+            if column == "webhook_id":
+                seen_ids.discard(value)
+            return self
+
+        def lt(self, *_args):
+            return self
+
+        def execute(self):
+            return SimpleNamespace(data=[])
+
+    return lambda supabase, org_id, table: _FakeTable()
+
+
 def _post(client, body: dict, *, shop="test-shop.myshopify.com", topic="orders/create",
           webhook_id="wh-1", bad_hmac=False, missing_header=None):
     raw = json.dumps(body).encode("utf-8")
@@ -75,15 +102,7 @@ class TestOrgResolutionAndIdempotency:
         monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
         monkeypatch.setattr(shopify_webhooks, "get_supabase", lambda: object())
 
-        seen_ids = set()
-
-        class _FakeTable:
-            def upsert(self, row, **_kwargs):
-                is_new = row["webhook_id"] not in seen_ids
-                seen_ids.add(row["webhook_id"])
-                return SimpleNamespace(execute=lambda: SimpleNamespace(data=[row] if is_new else []))
-
-        monkeypatch.setattr(shopify_webhooks, "org_table", lambda supabase, org_id, table: _FakeTable())
+        monkeypatch.setattr(shopify_webhooks, "org_table", _fake_org_table(set()))
 
         calls = []
 
@@ -99,6 +118,29 @@ class TestOrgResolutionAndIdempotency:
         assert second.status_code == 200
         assert len(calls) == 1
 
+    def test_a_retry_after_a_failed_delivery_is_reprocessed(self, client, monkeypatch):
+        """The 500 below asks Shopify to retry, so the failed attempt must not leave an
+        idempotency row behind for that retry to be deduped against and dropped."""
+        monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
+        monkeypatch.setattr(shopify_webhooks, "get_supabase", lambda: object())
+        monkeypatch.setattr(shopify_webhooks, "org_table", _fake_org_table(set()))
+
+        attempts = []
+
+        async def _fail_once(org_id, payload):
+            attempts.append(payload)
+            if len(attempts) == 1:
+                raise RuntimeError("db is down")
+
+        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _fail_once)
+
+        first = _post(client, {"order_number": 123}, webhook_id="wh-retry")
+        second = _post(client, {"order_number": 123}, webhook_id="wh-retry")
+
+        assert first.status_code == 500
+        assert second.status_code == 200
+        assert len(attempts) == 2
+
 
 class TestDispatch:
     @pytest.fixture(autouse=True)
@@ -106,11 +148,7 @@ class TestDispatch:
         monkeypatch.setattr(shopify_webhooks, "resolve_org_id_for_shopify_store", lambda shop: "org-1")
         monkeypatch.setattr(shopify_webhooks, "get_supabase", lambda: object())
 
-        class _FakeTable:
-            def upsert(self, row, **_kwargs):
-                return SimpleNamespace(execute=lambda: SimpleNamespace(data=[row]))
-
-        monkeypatch.setattr(shopify_webhooks, "org_table", lambda supabase, org_id, table: _FakeTable())
+        monkeypatch.setattr(shopify_webhooks, "org_table", _fake_org_table(set()))
 
     def test_order_topic_reconciles_the_payload(self, client, monkeypatch):
         # Doesn't publish "orders_changed" itself - reconcile_and_persist_single_order
@@ -145,16 +183,6 @@ class TestDispatch:
 
         assert resp.status_code == 200
         assert calls == [("org-1", {"shopify_access_token": ""})]
-
-    def test_processing_failure_returns_500_so_shopify_retries(self, client, monkeypatch):
-        async def _boom(org_id, payload):
-            raise RuntimeError("db is down")
-
-        monkeypatch.setattr(shopify_webhooks, "reconcile_and_persist_single_order", _boom)
-
-        resp = _post(client, {"order_number": 1}, topic="orders/create")
-
-        assert resp.status_code == 500
 
     def test_product_topic_reconciles_the_payload(self, client, monkeypatch):
         calls = []

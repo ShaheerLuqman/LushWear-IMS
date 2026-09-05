@@ -13,6 +13,11 @@ Product topics here publish to app/services/event_bus.py directly (see that modu
 docstring); order topics don't need to - they persist through
 shopify_sync.reconcile_and_persist_single_order, which publishes "orders_changed"
 itself alongside every other order-mutating code path.
+
+Exempt from the app-wide per-IP rate limit (app/rate_limit.py): Shopify delivers every
+topic for every org from its own small pool of IPs, so one bulk product/inventory edit
+bursts past the default limit and gets 429s - which Shopify counts as failed deliveries
+and eventually unsubscribes the topic over. The HMAC check is this route's gate.
 """
 
 import base64
@@ -20,12 +25,15 @@ import hashlib
 import hmac
 import logging
 import os
+import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Request, Response
 
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import resolve_org_id_for_shopify_store, upsert_org_integration_settings
+from app.rate_limit import limiter
 from app.services import event_bus
 from app.services.shopify_products_sync import (
     apply_inventory_level_update,
@@ -48,6 +56,12 @@ _ORDER_TOPICS = {"orders/create", "orders/updated", "orders/cancelled", "orders/
 # go through reconciliation, so it's handled separately below.
 _PRODUCT_TOPICS = {"products/create", "products/update"}
 
+# An idempotency row only has to outlive Shopify's retry schedule (19 attempts over 48h),
+# so anything older is dead weight - without this the table only ever grows.
+_EVENT_RETENTION_DAYS = 7
+_PRUNE_INTERVAL_SECONDS = 3600
+_last_prune_at = 0.0
+
 
 def _verify_hmac(body: bytes, received: str) -> bool:
     secret = os.getenv("SHOPIFY_APP_CLIENT_SECRET", "")
@@ -58,7 +72,23 @@ def _verify_hmac(body: bytes, received: str) -> bool:
     return hmac.compare_digest(computed, received)
 
 
+def _prune_old_events(supabase, org_id: str) -> None:
+    """Drop expired idempotency rows, at most hourly per process - cheap enough to piggyback
+    on a delivery, and there is no scheduler in this app to hang a real cron job off."""
+    global _last_prune_at
+    now = time.monotonic()
+    if now - _last_prune_at < _PRUNE_INTERVAL_SECONDS:
+        return
+    _last_prune_at = now
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=_EVENT_RETENTION_DAYS)).isoformat()
+    try:
+        org_table(supabase, org_id, "shopify_webhook_events").delete().lt("received_at", cutoff).execute()
+    except Exception:
+        logger.exception("Failed pruning shopify_webhook_events for org=%s", org_id)
+
+
 @router.post("/shopify")
+@limiter.exempt
 async def shopify_webhook(request: Request):
     body = await request.body()
     if not _verify_hmac(body, request.headers.get("X-Shopify-Hmac-Sha256", "")):
@@ -93,20 +123,17 @@ async def shopify_webhook(request: Request):
         return Response(status_code=200)
 
     try:
+        payload = await request.json()
         if topic in _ORDER_TOPICS:
-            payload = await request.json()
             await reconcile_and_persist_single_order(org_id, payload)
         elif topic in _PRODUCT_TOPICS:
-            payload = await request.json()
             await reconcile_and_persist_single_product(org_id, payload)
             event_bus.publish(org_id, {"type": "products_changed"})
         elif topic == "products/delete":
-            payload = await request.json()
             if payload.get("id"):
                 await deactivate_product_by_shopify_id(org_id, payload["id"])
                 event_bus.publish(org_id, {"type": "products_changed"})
         elif topic == "inventory_levels/update":
-            payload = await request.json()
             if payload.get("inventory_item_id") is not None:
                 await apply_inventory_level_update(org_id, payload["inventory_item_id"], payload.get("available"))
                 event_bus.publish(org_id, {"type": "products_changed"})
@@ -117,6 +144,17 @@ async def shopify_webhook(request: Request):
             upsert_org_integration_settings(org_id, shopify_access_token="")
     except Exception:
         logger.exception("Failed processing Shopify webhook topic=%s org=%s", topic, org_id)
+        # Release the idempotency row first: without this, the retry the 500 asks for would
+        # dedupe against this failed attempt and be acknowledged without ever being
+        # processed, silently dropping the event. (A process crash mid-handler still leaks a
+        # row - only an exception can be caught here - but that loses the delivery either way.)
+        try:
+            org_table(supabase, org_id, "shopify_webhook_events").delete().eq(
+                "webhook_id", webhook_id
+            ).execute()
+        except Exception:
+            logger.exception("Failed releasing idempotency row for webhook_id=%s", webhook_id)
         return Response(status_code=500)  # non-2xx - Shopify retries
 
+    _prune_old_events(supabase, org_id)
     return Response(status_code=200)

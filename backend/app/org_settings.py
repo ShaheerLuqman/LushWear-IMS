@@ -189,15 +189,27 @@ def resolve_org_id_for_shopify_store(shop_domain: str) -> Optional[str]:
     """org_id for the org whose shopify_store_url matches `shop_domain` (Shopify's own bare
     domain, e.g. from a webhook's X-Shopify-Shop-Domain header) - or None if no org is
     connected to that store. Used by app/routes/shopify_webhooks.py to route an inbound
-    webhook; scans every row (like any_org_courier_credential above) since shopify_store_url
-    isn't guaranteed to be stored in exactly Shopify's bare-domain form, so an exact-match
-    query could miss a legacy manually-entered row."""
+    webhook, so it runs on every delivery: the common case is one indexed exact match
+    (system_integration_settings_shopify_store_url_idx). Only a miss falls back to scanning
+    every row (like any_org_courier_credential above), since a legacy manually-entered
+    shopify_store_url may carry a protocol prefix or trailing slash the index can't match."""
     shop_domain = _normalize_store_url(shop_domain)
     if not shop_domain:
         return None
+    supabase = get_supabase()
+    exact = (
+        supabase.table("system_integration_settings")
+        .select("org_id")
+        .eq("shopify_store_url", shop_domain)
+        .limit(1)
+        .execute()
+        .data
+        or []
+    )
+    if exact:
+        return exact[0].get("org_id")
     rows = (
-        get_supabase()
-        .table("system_integration_settings")
+        supabase.table("system_integration_settings")
         .select("org_id, shopify_store_url")
         .execute()
         .data
