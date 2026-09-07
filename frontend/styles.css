@@ -4788,6 +4788,21 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
+/* Full-width divider rows (see withLedgerMonthRows) heading each calendar month's
+   entries so a long statement reads as month-by-month blocks. */
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row {
+    display: flex;
+    align-items: center;
+    height: 100%;
+    padding: 0 16px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    background: var(--grid-header-bg);
+}
+
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell,
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .bill-amount-cell {
     color: var(--accent-primary);

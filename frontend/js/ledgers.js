@@ -592,12 +592,42 @@ function renderLedgerDetailGrid() {
     // Read-only: every row is a posted journal line, corrected by posting again
     // rather than by editing history in place. Display is most-recent-first,
     // but the running balance above must stay computed in chronological order.
-    ledgerDetailGridApi.setGridOption('rowData', rowsWithBalance.slice().reverse());
+    ledgerDetailGridApi.setGridOption('rowData', withLedgerMonthRows(rowsWithBalance.slice().reverse()));
     // The Balance column's cellStyle also depends on currentLedger.type, which AG
     // Grid can't see as a dependency. With getRowId in play, setting rowData updates
     // matching rows in place rather than rebuilding them, so cellStyle isn't guaranteed to
     // re-run just from the row data change — force it.
     ledgerDetailGridApi.refreshCells({ force: true });
+}
+
+// Inserts a full-width divider row carrying the month name ahead of each month's
+// first entry, so a long statement reads as month-by-month blocks. Runs on the
+// display order (most-recent-first); balances are already computed. Undated rows
+// (legacy data) get no header.
+function withLedgerMonthRows(rows) {
+    const out = [];
+    let prevMonth = null;
+    rows.forEach(row => {
+        const month = (row.entry_date || '').slice(0, 7);
+        if (month && month !== prevMonth) {
+            out.push({ id: `__month__${month}`, month_row: true, label: ledgerMonthLabel(month) });
+            prevMonth = month;
+        }
+        out.push(row);
+    });
+    return out;
+}
+
+function ledgerMonthLabel(month) {
+    const [year, m] = month.split('-').map(Number);
+    return new Date(year, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+}
+
+function ledgerMonthRowRenderer(params) {
+    const el = document.createElement('div');
+    el.className = 'ledger-month-row';
+    el.textContent = params.data?.label || '';
+    return el;
 }
 
 // Statement lines for a transaction entry or a bill link back to the row that
@@ -810,6 +840,9 @@ function initLedgerDetailGrid() {
         pagination: false,
         domLayout: 'normal',
         getRowId: (params) => params.data.id,
+        isFullWidthRow: (params) => !!params.rowNode.data?.month_row,
+        fullWidthCellRenderer: ledgerMonthRowRenderer,
+        getRowHeight: (params) => (params.data?.month_row ? 40 : undefined),
         onGridReady: (params) => {
             ledgerDetailGridApi = params.api;
         }
