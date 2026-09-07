@@ -13,10 +13,14 @@ async function loadProducts() {
             return nameA.localeCompare(nameB);
         });
 
-        // Update AG Grid
         if (productsGridApi) {
             productsGridApi.setGridOption('rowData', products);
         }
+        refreshInventoryCollectionOptions();
+        // Stat cards only matter on the Inventory view, and the summary RPC also
+        // writes the day's snapshot - so it rides along with every products reload
+        // there (sync, cost edit, stock adjustment, realtime push) and nowhere else.
+        if (currentView === 'products') loadInventorySummary();
     } catch (error) {
         console.error('Error loading products:', error);
         showToast('Failed to load products', 'error');

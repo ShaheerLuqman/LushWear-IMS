@@ -263,7 +263,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'bills': 'Purchase Bills',
         'monthSummary': 'Month Summary',
         'monthDetail': 'Month Details',
-        'products': 'Products',
+        'products': 'Inventory',
         'productAnalytics': 'Product Analytics',
         'orderFulfillment': 'Order Fulfillment',
         'orderFulfillmentProgress': 'Order Fulfillment',
@@ -275,6 +275,13 @@ function switchView(viewName, { skipReload = false } = {}) {
 
     document.getElementById('viewTitle').textContent = titles[viewName];
 
+    // Only the Inventory view carries a subtitle so far; the element stays hidden
+    // elsewhere rather than collapsing to an empty line under the title.
+    const subtitleEl = document.getElementById('viewSubtitle');
+    const subtitle = viewName === 'products' ? 'Manage and track your product inventory in real-time.' : '';
+    subtitleEl.textContent = subtitle;
+    subtitleEl.style.display = subtitle ? 'block' : 'none';
+
     // Show/hide buttons based on view
     const isOrders = viewName === 'orders';
     const isProducts = viewName === 'products';
@@ -284,6 +291,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     };
 
     show('syncShopifyBtn', isProducts);
+    show('inventoryExportBtn', isProducts);
     show('bulkUpdateCostPriceBtn', isProducts);
     if (isProducts) updateSyncShopifyLastSyncLabel();
 

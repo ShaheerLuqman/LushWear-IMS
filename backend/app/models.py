@@ -79,10 +79,16 @@ class ProductCostPriceUpdate(BaseModel):
 
 class ProductBatchCostPriceUpdate(BaseModel):
     updates: List[ProductCostPriceUpdate]
+    # Recorded on shopify_product_cost_history alongside the change (Inventory
+    # screen's Update Cost modal); ignored when nothing actually changed.
+    reason: Optional[str] = None
+    effective_from: Optional[date] = None
 
 class ProductBulkSetCostPrice(BaseModel):
     product_ids: List[str]
     cost_price: Optional[float] = None
+    reason: Optional[str] = None
+    effective_from: Optional[date] = None
 
 class VariantCostPriceUpdate(BaseModel):
     id: str
@@ -90,6 +96,8 @@ class VariantCostPriceUpdate(BaseModel):
 
 class VariantBatchCostPriceUpdate(BaseModel):
     updates: List[VariantCostPriceUpdate]
+    reason: Optional[str] = None
+    effective_from: Optional[date] = None
 
 
 class RecalculateOrderCostsByProductBody(BaseModel):
@@ -97,6 +105,16 @@ class RecalculateOrderCostsByProductBody(BaseModel):
     # One product (single-product cost modal) or many (products bulk cost modal).
     product_id: Optional[str] = None
     product_ids: Optional[List[str]] = None
+
+class StockAdjustmentLine(BaseModel):
+    variant_id: str
+    # Signed: positive adds stock, negative removes it.
+    delta: int
+
+class StockAdjustmentBody(BaseModel):
+    adjustments: List[StockAdjustmentLine]
+    reason: NonBlankStr
+    notes: Optional[str] = None
 
 # ==================== ORDER MODELS ====================
 

@@ -876,7 +876,7 @@ async function syncShopifyProducts() {
         showToast(error.message || 'Failed to sync products from Shopify', 'error');
     } finally {
         btn.disabled = false;
-        labelEl.textContent = 'Sync from Shopify';
+        labelEl.textContent = 'Sync with Shopify';
     }
 }
 

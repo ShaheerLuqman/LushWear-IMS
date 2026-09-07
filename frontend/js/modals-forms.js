@@ -170,6 +170,10 @@ function openBulkUpdateCostPriceModal() {
         valueEl.value = '';
         valueEl.focus();
     }
+    const effectiveEl = document.getElementById('bulkUpdateCostPriceEffectiveFrom');
+    if (effectiveEl) effectiveEl.value = new Date().toISOString().slice(0, 10);
+    const reasonEl = document.getElementById('bulkUpdateCostPriceReason');
+    if (reasonEl) reasonEl.value = '';
     const dtEl = document.getElementById('bulkUpdateCostPriceRecalcCreatedAfter');
     if (dtEl) dtEl.value = '';
     const recalcBtn = document.getElementById('bulkUpdateCostPriceRecalcSubmit');
@@ -198,7 +202,12 @@ async function saveBulkCostPrices() {
     }
     await apiJson('/products/bulk-update-cost-price', {
         method: 'PUT',
-        body: { product_ids: ids, cost_price: cost },
+        body: {
+            product_ids: ids,
+            cost_price: cost,
+            reason: document.getElementById('bulkUpdateCostPriceReason')?.value || null,
+            effective_from: document.getElementById('bulkUpdateCostPriceEffectiveFrom')?.value || null,
+        },
         fallback: 'Failed to update cost prices'
     });
     return ids;
@@ -296,8 +305,10 @@ function openEditVariantCostsModal(product) {
     // per-row list for the rare product that actually varies by variant.
     const multiVariant = variants.length > 1;
 
-    document.getElementById('editVariantCostsTitle').textContent =
-        `${variants.length ? 'Edit variant costs' : 'Edit cost price'} — ${product.name}`;
+    document.getElementById('editVariantCostsTitle').textContent = `Update Cost — ${product.name}`;
+    const currentCost = productUnitCost(product);
+    document.getElementById('editVariantCostsCurrent').textContent =
+        currentCost != null ? `PKR ${formatAmount(currentCost)}` : (variants.length ? 'Mixed across variants' : '—');
     const listEl = document.getElementById('editVariantCostsList');
     listEl.innerHTML = rows.map(r => `
         <div class="edit-variant-costs-row">
@@ -318,8 +329,15 @@ function openEditVariantCostsModal(product) {
     // product.cost_price, which this modal never writes for a product that has variants.
     const sharedCost = rows.every(r => r.cost === rows[0].cost) ? rows[0].cost : null;
     if (sharedInput) sharedInput.value = sharedCost ?? '';
-    if (sharedRow) sharedRow.style.display = multiVariant ? 'block' : 'none';
+    if (sharedRow) sharedRow.style.display = multiVariant ? 'flex' : 'none';
     listEl.style.display = multiVariant ? 'none' : 'flex';
+
+    // Recorded with the change for the cost-history panel. Defaults to today, so
+    // saving without touching it dates the new cost from now.
+    const effectiveEl = document.getElementById('editVariantCostsEffectiveFrom');
+    if (effectiveEl) effectiveEl.value = new Date().toISOString().slice(0, 10);
+    const reasonEl = document.getElementById('editVariantCostsReason');
+    if (reasonEl) reasonEl.value = '';
 
     document.getElementById('editVariantCostsRecalcProductId').value = product.id;
     const dtEl = document.getElementById('editVariantCostsRecalcCreatedAfter');
@@ -339,6 +357,10 @@ function closeEditVariantCostsModal() {
 // "separately for each variant" toggle is on. Returns false without saving if
 // a value is invalid. Shared by the plain Save button and Save and recalculate orders.
 async function saveVariantCosts() {
+    const audit = {
+        reason: document.getElementById('editVariantCostsReason')?.value || null,
+        effective_from: document.getElementById('editVariantCostsEffectiveFrom')?.value || null,
+    };
     const listEl = document.getElementById('editVariantCostsList');
     const toggle = document.getElementById('editVariantCostsPerVariantToggle');
     const sharedMode = listEl.style.display === 'none' && !(toggle && toggle.checked);
@@ -354,7 +376,7 @@ async function saveVariantCosts() {
         const ids = JSON.parse(listEl.dataset.variantIds || '[]');
         if (ids.length) {
             await apiJson('/products/batch-update-variant-cost-prices', {
-                method: 'PUT', body: { updates: ids.map(id => ({ id, cost_price: cost })) }, fallback: 'Failed to update variant costs'
+                method: 'PUT', body: { updates: ids.map(id => ({ id, cost_price: cost })), ...audit }, fallback: 'Failed to update variant costs'
             });
         }
         return true;
@@ -377,12 +399,12 @@ async function saveVariantCosts() {
 
     if (variantUpdates.length) {
         await apiJson('/products/batch-update-variant-cost-prices', {
-            method: 'PUT', body: { updates: variantUpdates }, fallback: 'Failed to update variant costs'
+            method: 'PUT', body: { updates: variantUpdates, ...audit }, fallback: 'Failed to update variant costs'
         });
     }
     if (productUpdates.length) {
         await apiJson('/products/batch-update-cost-prices', {
-            method: 'PUT', body: { updates: productUpdates }, fallback: 'Failed to update cost price'
+            method: 'PUT', body: { updates: productUpdates, ...audit }, fallback: 'Failed to update cost price'
         });
     }
     return true;
@@ -504,7 +526,7 @@ document.getElementById('editVariantCostsCancel')?.addEventListener('click', clo
 document.getElementById('editVariantCostsSave')?.addEventListener('click', submitEditVariantCosts);
 document.getElementById('editVariantCostsRecalcSubmit')?.addEventListener('click', submitEditVariantCostsSaveAndRecalc);
 document.getElementById('editVariantCostsPerVariantToggle')?.addEventListener('change', (e) => {
-    document.getElementById('editVariantCostsSharedRow').style.display = e.target.checked ? 'none' : 'block';
+    document.getElementById('editVariantCostsSharedRow').style.display = e.target.checked ? 'none' : 'flex';
     document.getElementById('editVariantCostsList').style.display = e.target.checked ? 'flex' : 'none';
 });
 document.getElementById('editVariantCostsRecalcCreatedAfter')?.addEventListener('input', (e) => {

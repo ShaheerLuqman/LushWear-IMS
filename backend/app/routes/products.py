@@ -3,14 +3,17 @@ from typing import List, Dict
 from app.models import (
     ProductCreate, ProductUpdate, ProductWithVariants,
     ProductBatchCostPriceUpdate, ProductBulkSetCostPrice, RecalculateOrderCostsByProductBody,
+    StockAdjustmentBody,
     Variant, VariantCreate, VariantUpdate, VariantBatchCostPriceUpdate,
 )
-from app.auth import get_org_id
+from app.auth import get_org_id, require_auth
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.money import money
 from app.org_scope import org_table
+from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 from app.services import event_bus, shopify_products_sync
+from app import shopify
 from datetime import datetime, timezone, date, timedelta
 import logging
 
@@ -18,9 +21,41 @@ logger = logging.getLogger("app.products")
 router = APIRouter(prefix="/products", tags=["products"])
 
 
+# A product is "low stock" below this many units in total, and out of stock at
+# zero. Mirrored by LOW_STOCK_THRESHOLD in frontend/js/orders-grid.js - the grid
+# badges, the status filter and these stat cards must agree on one number.
+LOW_STOCK_THRESHOLD = 10
+
+
 def _is_replacement_order(row: dict) -> bool:
     """Same notion as Shopify sync: an order tagged as a replacement for another."""
     return bool(row.get("replacement_of_order_no"))
+
+
+def _log_cost_history(supabase, org_id: str, user_id, rows: list, reason, effective_from) -> None:
+    """Record cost changes for the Inventory screen's View History panel. Rows whose
+    cost didn't actually move are dropped, so re-saving a modal without editing
+    anything leaves no trail. Never raises: losing the audit row must not fail the
+    price change that already committed."""
+    changed = [r for r in rows if money(r["old_cost_price"]) != money(r["new_cost_price"])]
+    if not changed:
+        return
+    payload = [
+        {
+            "product_id": r["product_id"],
+            "variant_id": r.get("variant_id"),
+            "old_cost_price": r["old_cost_price"],
+            "new_cost_price": r["new_cost_price"],
+            "reason": reason,
+            "changed_by": user_id,
+            **({"effective_from": effective_from.isoformat()} if effective_from else {}),
+        }
+        for r in changed
+    ]
+    try:
+        org_table(supabase, org_id, "shopify_product_cost_history").insert(payload).execute()
+    except Exception:
+        logger.exception("failed to record cost history for %d change(s)", len(payload))
 
 
 @router.get("/", response_model=List[ProductWithVariants])
@@ -57,7 +92,11 @@ async def sync_shopify_products(org_id: str = Depends(get_org_id)):
 
 
 @router.put("/batch-update-cost-prices")
-async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
+async def batch_update_cost_prices(
+    batch_update: ProductBatchCostPriceUpdate,
+    org_id: str = Depends(get_org_id),
+    payload: dict = Depends(require_auth),
+):
     """Batch update cost prices for products - and cascades the same price onto every
     variant of each product, since a product with variants no longer has one cost of
     its own to just update (see batch_update_variant_cost_prices for editing a single
@@ -75,17 +114,23 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
             # belonging to another org - upsert, unlike update, has no WHERE to filter on.
             existing = (
                 org_table(supabase, org_id, "shopify_products")
-                .select("id, name")
+                .select("id, name, cost_price")
                 .in_("id", list(cost_price_by_id))
                 .execute().data or []
             )
-            payload = [
+            upsert_rows = [
                 {"id": p["id"], "name": p["name"], "cost_price": cost_price_by_id[p["id"]], "updated_at": current_time}
                 for p in existing
             ]
-            if payload:
-                response = org_table(supabase, org_id, "shopify_products").upsert(payload, on_conflict="id").execute()
+            if upsert_rows:
+                response = org_table(supabase, org_id, "shopify_products").upsert(upsert_rows, on_conflict="id").execute()
                 updated_count = len(response.data or [])
+                _log_cost_history(
+                    supabase, org_id, payload.get("sub"),
+                    [{"product_id": p["id"], "old_cost_price": p.get("cost_price"),
+                      "new_cost_price": cost_price_by_id[p["id"]]} for p in existing],
+                    batch_update.reason, batch_update.effective_from,
+                )
 
             existing_variants = (
                 org_table(supabase, org_id, "shopify_variants")
@@ -115,7 +160,11 @@ async def batch_update_cost_prices(batch_update: ProductBatchCostPriceUpdate, or
 
 
 @router.put("/bulk-update-cost-price")
-async def bulk_update_cost_price(body: ProductBulkSetCostPrice, org_id: str = Depends(get_org_id)):
+async def bulk_update_cost_price(
+    body: ProductBulkSetCostPrice,
+    org_id: str = Depends(get_org_id),
+    payload: dict = Depends(require_auth),
+):
     """Set one cost price on every given product at once, cascading it onto each product's
     variants (see batch_update_cost_prices for the per-id variant and the
     upsert-carries-NOT-NULL-columns reasoning - identical, just one shared price here)."""
@@ -128,7 +177,7 @@ async def bulk_update_cost_price(body: ProductBulkSetCostPrice, org_id: str = De
         if product_ids:
             existing = (
                 org_table(supabase, org_id, "shopify_products")
-                .select("id, name")
+                .select("id, name, cost_price")
                 .in_("id", product_ids)
                 .execute().data or []
             )
@@ -138,6 +187,12 @@ async def bulk_update_cost_price(body: ProductBulkSetCostPrice, org_id: str = De
                     on_conflict="id",
                 ).execute()
                 updated_count = len(response.data or [])
+                _log_cost_history(
+                    supabase, org_id, payload.get("sub"),
+                    [{"product_id": p["id"], "old_cost_price": p.get("cost_price"),
+                      "new_cost_price": body.cost_price} for p in existing],
+                    body.reason, body.effective_from,
+                )
 
                 existing_variants = (
                     org_table(supabase, org_id, "shopify_variants")
@@ -167,7 +222,11 @@ async def bulk_update_cost_price(body: ProductBulkSetCostPrice, org_id: str = De
 
 
 @router.put("/batch-update-variant-cost-prices")
-async def batch_update_variant_cost_prices(batch_update: VariantBatchCostPriceUpdate, org_id: str = Depends(get_org_id)):
+async def batch_update_variant_cost_prices(
+    batch_update: VariantBatchCostPriceUpdate,
+    org_id: str = Depends(get_org_id),
+    payload: dict = Depends(require_auth),
+):
     """Batch update cost prices for individual variants (see batch_update_cost_prices,
     the product-level equivalent, for the same upsert-carries-NOT-NULL-columns reasoning -
     title and product_id here play the role name does there)."""
@@ -180,20 +239,27 @@ async def batch_update_variant_cost_prices(batch_update: VariantBatchCostPriceUp
         if cost_price_by_id:
             existing = (
                 org_table(supabase, org_id, "shopify_variants")
-                .select("id, title, product_id")
+                .select("id, title, product_id, cost_price")
                 .in_("id", list(cost_price_by_id))
                 .execute().data or []
             )
-            payload = [
+            upsert_rows = [
                 {
                     "id": v["id"], "title": v["title"], "product_id": v["product_id"],
                     "cost_price": cost_price_by_id[v["id"]], "updated_at": current_time,
                 }
                 for v in existing
             ]
-            if payload:
-                response = org_table(supabase, org_id, "shopify_variants").upsert(payload, on_conflict="id").execute()
+            if upsert_rows:
+                response = org_table(supabase, org_id, "shopify_variants").upsert(upsert_rows, on_conflict="id").execute()
                 updated_count = len(response.data or [])
+                _log_cost_history(
+                    supabase, org_id, payload.get("sub"),
+                    [{"product_id": v["product_id"], "variant_id": v["id"],
+                      "old_cost_price": v.get("cost_price"),
+                      "new_cost_price": cost_price_by_id[v["id"]]} for v in existing],
+                    batch_update.reason, batch_update.effective_from,
+                )
 
         return {
             "message": f"Successfully updated {updated_count} variant(s)",
@@ -341,6 +407,158 @@ async def recalculate_order_costs_for_product(body: RecalculateOrderCostsByProdu
             "updated": updated,
             "updated_order_numbers": updated_order_numbers,
         }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/inventory-summary")
+async def get_inventory_summary(org_id: str = Depends(get_org_id)):
+    """The Inventory screen's five stat cards, with month-over-month deltas.
+
+    The RPC aggregates the catalog, writes today's snapshot and hands back the
+    newest snapshot at least a month old. There is no scheduler in this
+    deployment, so opening the screen is what builds that history - `previous`
+    (and every delta) stays null until a snapshot that old exists."""
+    try:
+        result = get_supabase().rpc(
+            "capture_inventory_snapshot",
+            {"p_org_id": org_id, "p_low_stock_threshold": LOW_STOCK_THRESHOLD},
+        ).execute().data or {}
+        current = result.get("current") or {}
+        previous = result.get("previous")
+        return {
+            "low_stock_threshold": LOW_STOCK_THRESHOLD,
+            "current": current,
+            "previous": previous,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/{product_id}/cost-history")
+async def get_product_cost_history(product_id: str, org_id: str = Depends(get_org_id)):
+    """Cost changes recorded for this product and its variants, newest first.
+    Changed-by names come from system_users (not an org-scoped business table,
+    so read directly) in one lookup rather than per row."""
+    try:
+        supabase = get_supabase()
+        rows = (
+            org_table(supabase, org_id, "shopify_product_cost_history")
+            .select("variant_id, old_cost_price, new_cost_price, effective_from, reason, changed_by, created_at")
+            .eq("product_id", product_id)
+            .order("created_at", desc=True)
+            .limit(200)
+            .execute().data or []
+        )
+        if not rows:
+            return []
+
+        user_ids = {r["changed_by"] for r in rows if r.get("changed_by")}
+        names = {}
+        if user_ids:
+            users = supabase.table("system_users").select("id, name, email").in_("id", list(user_ids)).execute().data or []
+            names = {u["id"]: (u.get("name") or u.get("email") or "") for u in users}
+
+        variant_titles = {}
+        variant_ids = {r["variant_id"] for r in rows if r.get("variant_id")}
+        if variant_ids:
+            variants = (
+                org_table(supabase, org_id, "shopify_variants")
+                .select("id, title")
+                .in_("id", list(variant_ids))
+                .execute().data or []
+            )
+            variant_titles = {v["id"]: v["title"] for v in variants}
+
+        for r in rows:
+            r["changed_by_name"] = names.get(r.get("changed_by")) or "System"
+            r["variant_title"] = variant_titles.get(r.get("variant_id"))
+        return rows
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.post("/{product_id}/adjust-stock")
+async def adjust_product_stock(
+    product_id: str,
+    body: StockAdjustmentBody,
+    org_id: str = Depends(get_org_id),
+    payload: dict = Depends(require_auth),
+):
+    """Apply signed per-variant stock corrections to this product.
+
+    Shopify is adjusted first: variant quantities are pulled from Shopify on
+    every sync, so a local-only change would be silently reverted, and doing it
+    in this order means a Shopify failure leaves nothing half-applied here.
+    Shopify's own inventory_levels/update webhook then lands the same numbers
+    again (idempotently - it writes absolute quantities), so the local write
+    below is only what keeps the grid correct in the meantime."""
+    try:
+        supabase = get_supabase()
+        deltas = {a.variant_id: a.delta for a in body.adjustments if a.delta}
+        if not deltas:
+            raise HTTPException(status_code=400, detail="No non-zero adjustment given")
+
+        variants = (
+            org_table(supabase, org_id, "shopify_variants")
+            .select("id, title, quantity, inventory_item_id")
+            .eq("product_id", product_id)
+            .in_("id", list(deltas))
+            .execute().data or []
+        )
+        if len(variants) != len(deltas):
+            raise HTTPException(status_code=404, detail="Unknown variant for this product")
+
+        moves = []
+        for v in variants:
+            before = v.get("quantity") or 0
+            after = before + deltas[v["id"]]
+            if after < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"{v['title']} only has {before} in stock",
+                )
+            moves.append({"variant": v, "before": before, "after": after, "delta": deltas[v["id"]]})
+
+        shopify_moves = [(m["variant"]["inventory_item_id"], m["delta"]) for m in moves if m["variant"].get("inventory_item_id")]
+        if shopify_moves:
+            org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+            location_id = await shopify.get_primary_location_id(org_creds)
+            await shopify.adjust_inventory_levels(shopify_moves, location_id, org_creds)
+
+        current_time = datetime.now(timezone.utc).isoformat()
+        org_table(supabase, org_id, "shopify_variants").upsert(
+            # Same NOT NULL-columns-must-be-carried reasoning as the cost upserts above.
+            [{"id": m["variant"]["id"], "title": m["variant"]["title"], "product_id": product_id,
+              "quantity": m["after"], "updated_at": current_time} for m in moves],
+            on_conflict="id",
+        ).execute()
+
+        org_table(supabase, org_id, "shopify_stock_adjustments").insert([
+            {
+                "product_id": product_id,
+                "variant_id": m["variant"]["id"],
+                "delta": m["delta"],
+                "quantity_before": m["before"],
+                "quantity_after": m["after"],
+                "reason": body.reason,
+                "notes": body.notes,
+                "changed_by": payload.get("sub"),
+            }
+            for m in moves
+        ]).execute()
+
+        event_bus.publish(org_id, {"type": "products_changed"})
+        return {"updated_count": len(moves)}
     except HTTPException:
         raise
     except Exception:

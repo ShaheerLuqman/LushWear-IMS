@@ -26,17 +26,49 @@ const sizeOrder = {
     '4xl': 9, '5xl': 10
 };
 
+// Below this many units in total a product reads as low stock, and at zero as out
+// of stock. Mirrors LOW_STOCK_THRESHOLD in backend/app/routes/products.py - the
+// badges, the status filter and the stat cards must all agree on one number.
+const LOW_STOCK_THRESHOLD = 10;
+
+const STOCK_STATUS_LABELS = { in: 'In Stock', low: 'Low Stock', out: 'Out of Stock' };
+
+function productStockStatus(product) {
+    const qty = product?.total_quantity || 0;
+    if (qty === 0) return 'out';
+    return qty < LOW_STOCK_THRESHOLD ? 'low' : 'in';
+}
+
+/** The one cost each unit of this product is carried at, or null when its variants
+ *  disagree - the grid shows "Mixed" then and the details panel breaks it down. */
+function productUnitCost(product) {
+    const variants = product?.variants || [];
+    if (!variants.length) return product?.cost_price ?? null;
+    const costs = variants.map(v => v.cost_price ?? product.cost_price ?? null);
+    return costs.every(c => c === costs[0]) ? costs[0] : null;
+}
+
+/** Stock at cost: each variant at its own cost, falling back to the product's. */
+function productStockValue(product) {
+    const variants = product?.variants || [];
+    return variants.reduce((sum, v) => sum + (v.quantity || 0) * (v.cost_price ?? product.cost_price ?? 0), 0);
+}
+
+/** Multi-option variants arrive as one joined title ("L / FULL SLEEVES"), so fall
+ *  back to the leading token - otherwise every such variant lands in the unknown
+ *  bucket and sorts alphabetically (L, M, S, XL) instead of by size. */
+function variantSizeOrder(title) {
+    const t = (title || '').toLowerCase().trim();
+    return sizeOrder[t] || sizeOrder[t.split('/')[0].trim()] || 100;
+}
+
 function sortVariantsBySize(variants) {
     if (!variants || !Array.isArray(variants)) return [];
     return [...variants].sort((a, b) => {
-        const titleA = (a.title || '').toLowerCase().trim();
-        const titleB = (b.title || '').toLowerCase().trim();
-        const orderA = sizeOrder[titleA] || 100;
-        const orderB = sizeOrder[titleB] || 100;
-        if (orderA !== 100 || orderB !== 100) {
-            return orderA - orderB;
-        }
-        return titleA.localeCompare(titleB);
+        const orderA = variantSizeOrder(a.title);
+        const orderB = variantSizeOrder(b.title);
+        if (orderA !== orderB) return orderA - orderB;
+        return (a.title || '').toLowerCase().trim().localeCompare((b.title || '').toLowerCase().trim());
     });
 }
 
@@ -130,9 +162,8 @@ function parseDDMMYYYYToYYYYMMDD(str) {
 
 // Row actions menu (triple dot) for a product row, mirroring
 // createBillRowMenu/createTransactionRowMenu's pattern: a menu scales to more
-// actions without another column reshuffle. Currently just the one action -
-// open editVariantCostsModal, which also handles the recalculate-order-costs
-// action for the same product.
+// actions without another column reshuffle. Offers the same four actions as the
+// product details panel, so a row can be acted on without opening it first.
 function createProductRowMenu(params) {
     const product = params.data;
     const wrapper = document.createElement('div');
@@ -171,11 +202,14 @@ function createProductRowMenu(params) {
         menu = document.createElement('div');
         menu.className = 'folio-dropdown-panel product-menu-panel';
 
+        addOption({ label: 'View details', icon: 'fa-circle-info', onClick: () => openProductDetailsModal(product) });
         addOption({
             label: (product.variants || []).length ? 'Update variant price' : 'Update cost price',
             icon: 'fa-tag',
             onClick: () => openEditVariantCostsModal(product)
         });
+        addOption({ label: 'Adjust stock', icon: 'fa-boxes-stacked', onClick: () => openAdjustStockModal(product) });
+        addOption({ label: 'View history', icon: 'fa-clock-rotate-left', onClick: () => openCostHistoryModal(product) });
 
         document.body.appendChild(menu);
         const rect = btn.getBoundingClientRect();
@@ -201,11 +235,33 @@ function createProductRowMenu(params) {
     return wrapper;
 }
 
-function initProductsGrid() {
-    const gridDiv = document.getElementById('productsGrid');
-    if (!gridDiv) return;
+// Opens the product details modal, which carries the per-variant breakdown the
+// grid deliberately doesn't - a column per variant title doesn't generalise, since
+// the titles are an unbounded per-product dimension (multi-option variants like
+// "L / FULL SLEEVES" produce dozens of mostly-empty columns). Mirrors
+// createBillViewButton in bills.js: an explicit button, not a row click.
+function createProductViewButton(params) {
+    const product = params.data;
+    const wrapper = document.createElement('div');
+    wrapper.className = 'bill-cell-center';
+    if (!product || !product.id) return wrapper;
 
-    const columnDefs = [
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'product-view-btn';
+    btn.innerHTML = '<i class="fa-solid fa-eye"></i><span>View</span>';
+    btn.title = 'View product details';
+    btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openProductDetailsModal(product);
+    });
+
+    wrapper.appendChild(btn);
+    return wrapper;
+}
+
+function buildProductsColumnDefs() {
+    return [
         {
             headerName: '',
             colId: 'select',
@@ -217,31 +273,24 @@ function initProductsGrid() {
             headerCheckboxSelectionFilteredOnly: true,
             filter: ProductsClearFiltersPassThroughFilter,
             sortable: false,
-            floatingFilter: true,
             floatingFilterComponent: ProductsClearFiltersFloatingFilter,
             suppressSizeToFit: true
         },
         {
-            headerName: 'Image',
-            field: 'image_url',
-            width: 80,
-            filter: false,
-            sortable: false,
-            cellRenderer: (params) => {
-                if (params.value) {
-                    return `<div class="grid-image-cell"><img src="${escapeHtml(params.value)}" alt="Product"></div>`;
-                }
-                return '<div class="grid-image-cell"><div class="grid-image-placeholder">No Img</div></div>';
-            }
-        },
-        {
-            headerName: 'Product Name',
+            headerName: 'Product',
             field: 'name',
-            flex: 1.8,
+            flex: 2,
+            minWidth: 220,
             filter: 'agTextColumnFilter',
             filterParams: {
                 filterOptions: ['contains', 'startsWith', 'endsWith'],
                 defaultOption: 'contains'
+            },
+            cellRenderer: (params) => {
+                const img = params.data?.image_url
+                    ? `<img src="${escapeHtml(params.data.image_url)}" alt="">`
+                    : '<div class="grid-image-placeholder">No Img</div>';
+                return `<div class="grid-product-cell"><div class="grid-image-cell">${img}</div><span class="grid-product-name">${escapeHtml(params.value || '')}</span></div>`;
             }
         },
         {
@@ -279,57 +328,55 @@ function initProductsGrid() {
             }
         },
         {
-            headerName: 'Variants',
-            field: 'variants',
-            flex: 3.2,
-            filter: 'agTextColumnFilter',
-            filterParams: {
-                filterOptions: ['contains', 'startsWith', 'endsWith'],
-                defaultOption: 'contains'
-            },
-            // Filters on each variant's title, qty and cost (the same fields the
-            // cellRenderer below shows as "Title: qty @ cost") rather than the raw
-            // array field. Commas are stripped so searching "1500" still matches a
-            // "@ 1,500.00" tag.
-            filterValueGetter: (params) => {
-                const variants = params.data?.variants || [];
-                const fallbackCost = params.data?.cost_price;
-                return variants.map(v => {
-                    const cost = v.cost_price ?? fallbackCost;
-                    return `${v.title} ${v.quantity || 0} ${cost != null ? formatAmount(cost).replace(/,/g, '') : ''}`;
-                }).join(' ');
-            },
-            sortable: false,
-            autoHeight: true,
-            wrapText: true,
+            headerName: 'Total Stock',
+            field: 'total_quantity',
+            width: 200,
+            filter: 'agNumberColumnFilter',
             cellRenderer: (params) => {
-                const variants = params.value || [];
-                if (variants.length === 0) {
-                    return '<span class="grid-variant-tag">No variants</span>';
-                }
-                const sortedVariants = sortVariantsBySize(variants);
-                // Falls back to the product's own cost_price for a variant with none of
-                // its own yet - same fallback used when prefilling a purchase bill line.
-                const fallbackCost = params.data?.cost_price;
-                return `<div class="grid-variants-container">${sortedVariants.map(v => {
-                    const qty = v.quantity || 0;
-                    const isLow = qty < 10;
-                    const cost = v.cost_price ?? fallbackCost;
-                    const costText = cost != null ? ` @ ${formatAmount(cost)}` : '';
-                    return `<span class="grid-variant-tag ${isLow ? 'low' : ''}">${escapeHtml(v.title)}: ${qty}${costText}</span>`;
-                }).join('')}</div>`;
+                const badge = `<span class="grid-quantity-badge ${productStockStatus(params.data)}">${params.value || 0}</span>`;
+                const count = (params.data?.variants || []).length;
+                if (!count) return badge;
+                return `${badge}<span class="grid-stock-variants">in stock · ${count} variant${count === 1 ? '' : 's'}</span>`;
             }
         },
         {
-            headerName: 'Total Qty',
-            field: 'total_quantity',
-            width: 100,
+            headerName: 'Status',
+            colId: 'stockStatus',
+            width: 130,
+            filter: StockStatusSetFilter,
+            floatingFilterComponent: StockStatusFloatingFilter,
+            valueGetter: (params) => productStockStatus(params.data),
+            valueFormatter: (params) => STOCK_STATUS_LABELS[params.value] || '',
+            cellRenderer: (params) => `<span class="grid-status-badge ${params.value}">${STOCK_STATUS_LABELS[params.value]}</span>`
+        },
+        {
+            headerName: 'Cost per Unit',
+            colId: 'unitCost',
+            width: 140,
             filter: 'agNumberColumnFilter',
-            cellRenderer: (params) => {
-                const qty = params.value || 0;
-                const cssClass = qty < 10 ? 'low' : 'ok';
-                return `<span class="grid-quantity-badge ${cssClass}">${qty}</span>`;
-            }
+            valueGetter: (params) => productUnitCost(params.data),
+            // Null means the variants carry different costs, not "no cost" - the
+            // details panel and Update Cost modal break those out per variant.
+            valueFormatter: (params) => params.value != null
+                ? `PKR ${formatAmount(params.value)}`
+                : ((params.data?.variants || []).length ? 'Mixed' : '—')
+        },
+        {
+            headerName: 'Value',
+            colId: 'stockValue',
+            width: 150,
+            filter: 'agNumberColumnFilter',
+            valueGetter: (params) => productStockValue(params.data),
+            valueFormatter: (params) => `PKR ${formatAmount(params.value)}`
+        },
+        {
+            headerName: '',
+            colId: 'view',
+            width: 92,
+            minWidth: 92,
+            filter: false,
+            sortable: false,
+            cellRenderer: createProductViewButton
         },
         {
             headerName: 'More actions',
@@ -340,9 +387,14 @@ function initProductsGrid() {
             cellRenderer: createProductRowMenu
         }
     ];
+}
+
+function initProductsGrid() {
+    const gridDiv = document.getElementById('productsGrid');
+    if (!gridDiv) return;
 
     const gridOptions = {
-        columnDefs: columnDefs,
+        columnDefs: buildProductsColumnDefs(),
         rowData: [],
         rowSelection: 'multiple',
         suppressRowClickSelection: true,
@@ -350,7 +402,7 @@ function initProductsGrid() {
             sortable: true,
             resizable: true,
             filter: true,
-            floatingFilter: true,
+            floatingFilter: inventoryFiltersVisible(),
             minWidth: 80
         },
         animateRows: true,
@@ -488,6 +540,12 @@ const CollectionFloatingFilter = makeCheckboxFloatingFilter(
         return ['', ...Array.from(values).filter((v) => v !== '').sort((a, b) => a.localeCompare(b))];
     },
     (v) => (v === '' ? '—' : v)
+);
+
+const StockStatusSetFilter = makeCheckboxSetFilter(productStockStatus);
+const StockStatusFloatingFilter = makeCheckboxFloatingFilter(
+    () => ['in', 'low', 'out'],
+    (v) => STOCK_STATUS_LABELS[v]
 );
 
 const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];

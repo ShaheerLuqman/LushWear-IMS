@@ -150,9 +150,9 @@
                             <span class="nav-icon"><i data-lucide="package"></i></span>
                             <span class="nav-tooltip">Orders</span>
                         </button>
-                        <button class="nav-item" data-view="products" title="Products">
-                            <span class="nav-icon"><i data-lucide="shopping-bag"></i></span>
-                            <span class="nav-tooltip">Products</span>
+                        <button class="nav-item" data-view="products" title="Inventory">
+                            <span class="nav-icon"><i data-lucide="boxes"></i></span>
+                            <span class="nav-tooltip">Inventory</span>
                         </button>
                         <button class="nav-item" data-view="productAnalytics" title="Product Analytics">
                             <span class="nav-icon"><i data-lucide="bar-chart-2"></i></span>
@@ -224,6 +224,7 @@
                 </button>
                 <div class="header-title">
                     <h1 id="viewTitle">Orders</h1>
+                    <p id="viewSubtitle" class="header-subtitle" style="display: none;"></p>
                 </div>
                 <div class="header-actions">
                     <span id="syncOrdersLastSync" class="orders-sync-status" style="display: none;" title="Orders sync automatically from Shopify every 30 minutes"></span>
@@ -232,8 +233,11 @@
                         <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by financial-month period"></select>
                     </div>
                     <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Filter by date range">Date range</button>
+                    <button id="inventoryExportBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Export the rows currently shown to Excel">
+                        <i class="fa-solid fa-arrow-up-from-bracket"></i> Export
+                    </button>
                     <button id="syncShopifyBtn" class="btn btn-primary header-toolbar-btn" style="display: none;">
-                        <span id="syncShopifyBtnLabel">Sync from Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
+                        <span id="syncShopifyBtnLabel">Sync with Shopify</span><span id="syncShopifyLastSync" class="sync-btn-last-sync"></span>
                     </button>
                     <button id="bulkUpdateCostPriceBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Set one cost price on all selected products">Bulk update cost price</button>
                     <div id="ordersMoreActionsWrap" class="orders-more-actions" style="display: none;">
@@ -993,9 +997,72 @@
                     </div>
                 </div>
 
-                <!-- Products View -->
+                <!-- Inventory View (product catalog + stock) -->
                 <div id="productsView" class="view">
-                    <div id="productsGrid" class="ag-theme-alpine grid-container"></div>
+                    <div class="stats-grid inventory-stats">
+                        <div class="stat-card inventory-stat inventory-stat--products">
+                            <div class="inventory-stat-top">
+                                <span class="stat-label">Total Products</span>
+                                <span class="inventory-stat-icon"><i data-lucide="package"></i></span>
+                            </div>
+                            <span class="stat-value" id="invStatTotalProducts">—</span>
+                            <span class="inventory-stat-delta" id="invStatTotalProductsDelta"></span>
+                        </div>
+                        <div class="stat-card inventory-stat inventory-stat--stock">
+                            <div class="inventory-stat-top">
+                                <span class="stat-label">Total Stock</span>
+                                <span class="inventory-stat-icon"><i data-lucide="boxes"></i></span>
+                            </div>
+                            <span class="stat-value" id="invStatTotalStock">—</span>
+                            <span class="inventory-stat-delta" id="invStatTotalStockDelta"></span>
+                        </div>
+                        <div class="stat-card inventory-stat inventory-stat--low">
+                            <div class="inventory-stat-top">
+                                <span class="stat-label">Low Stock Items</span>
+                                <span class="inventory-stat-icon"><i data-lucide="alert-triangle"></i></span>
+                            </div>
+                            <span class="stat-value" id="invStatLowStock">—</span>
+                            <span class="inventory-stat-delta" id="invStatLowStockDelta"></span>
+                        </div>
+                        <div class="stat-card inventory-stat inventory-stat--out">
+                            <div class="inventory-stat-top">
+                                <span class="stat-label">Out of Stock Items</span>
+                                <span class="inventory-stat-icon"><i data-lucide="x-circle"></i></span>
+                            </div>
+                            <span class="stat-value" id="invStatOutOfStock">—</span>
+                            <span class="inventory-stat-delta" id="invStatOutOfStockDelta"></span>
+                        </div>
+                        <div class="stat-card inventory-stat inventory-stat--value">
+                            <div class="inventory-stat-top">
+                                <span class="stat-label">Inventory Value</span>
+                                <span class="inventory-stat-icon"><i data-lucide="circle-dollar-sign"></i></span>
+                            </div>
+                            <span class="stat-value" id="invStatValue">—</span>
+                            <span class="inventory-stat-delta" id="invStatValueDelta"></span>
+                        </div>
+                    </div>
+
+                    <div class="inventory-panel">
+                        <div class="inventory-toolbar">
+                            <div class="inventory-search-wrap">
+                                <i data-lucide="search" class="inventory-search-icon"></i>
+                                <input type="text" id="inventorySearch" class="inventory-search-input" placeholder="Search products..." autocomplete="off">
+                            </div>
+                            <select id="inventoryCollectionFilter" class="inventory-toolbar-select" title="Filter by collection">
+                                <option value="">All Collections</option>
+                            </select>
+                            <select id="inventoryStatusFilter" class="inventory-toolbar-select" title="Filter by stock status">
+                                <option value="">All Status</option>
+                                <option value="in">In Stock</option>
+                                <option value="low">Low Stock</option>
+                                <option value="out">Out of Stock</option>
+                            </select>
+                            <button type="button" id="inventoryFiltersToggle" class="btn btn-secondary inventory-filters-toggle" aria-pressed="false" title="Show per-column filters">
+                                <i data-lucide="sliders-horizontal"></i><span>Filters</span>
+                            </button>
+                        </div>
+                        <div id="productsGrid" class="ag-theme-alpine grid-container"></div>
+                    </div>
                 </div>
 
                 <!-- Product Analytics View -->
@@ -1284,6 +1351,22 @@
                     <label for="bulkUpdateCostPriceValue">Cost price (Rs) *</label>
                     <input type="number" id="bulkUpdateCostPriceValue" class="form-input" min="0" step="0.01" placeholder="0.00">
                 </div>
+                <div class="edit-variant-costs-meta">
+                    <div class="form-group">
+                        <label for="bulkUpdateCostPriceEffectiveFrom">Applicable from</label>
+                        <input type="date" id="bulkUpdateCostPriceEffectiveFrom" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="bulkUpdateCostPriceReason">Reason (optional)</label>
+                        <select id="bulkUpdateCostPriceReason" class="form-input">
+                            <option value="">Select reason</option>
+                            <option value="Price Update">Price Update</option>
+                            <option value="Supplier Change">Supplier Change</option>
+                            <option value="Correction">Correction</option>
+                            <option value="Initial Cost">Initial Cost</option>
+                        </select>
+                    </div>
+                </div>
 
                 <div class="edit-variant-costs-recalc">
                     <h3>Recalculate order costs</h3>
@@ -1317,11 +1400,31 @@
                     <input type="checkbox" id="editVariantCostsPerVariantToggle">
                     <span>Set cost price separately for each variant</span>
                 </label>
+                <div class="edit-variant-costs-current">
+                    <span class="edit-variant-costs-current-label">Current cost per unit</span>
+                    <span class="edit-variant-costs-current-value" id="editVariantCostsCurrent">&mdash;</span>
+                </div>
                 <div id="editVariantCostsSharedRow" class="form-group">
-                    <label for="editVariantCostsSharedInput">Cost price (Rs)</label>
+                    <label for="editVariantCostsSharedInput">New cost per unit (Rs)</label>
                     <input type="number" id="editVariantCostsSharedInput" class="form-input" min="0" step="0.01" placeholder="0.00">
                 </div>
                 <div id="editVariantCostsList" class="edit-variant-costs-list"></div>
+                <div class="edit-variant-costs-meta">
+                    <div class="form-group">
+                        <label for="editVariantCostsEffectiveFrom">Applicable from</label>
+                        <input type="date" id="editVariantCostsEffectiveFrom" class="form-input">
+                    </div>
+                    <div class="form-group">
+                        <label for="editVariantCostsReason">Reason (optional)</label>
+                        <select id="editVariantCostsReason" class="form-input">
+                            <option value="">Select reason</option>
+                            <option value="Price Update">Price Update</option>
+                            <option value="Supplier Change">Supplier Change</option>
+                            <option value="Correction">Correction</option>
+                            <option value="Initial Cost">Initial Cost</option>
+                        </select>
+                    </div>
+                </div>
 
                 <div class="edit-variant-costs-recalc">
                     <h3>Recalculate order costs</h3>
@@ -1339,6 +1442,127 @@
                 <button type="button" id="editVariantCostsCancel" class="btn btn-secondary">Cancel</button>
                 <button type="button" id="editVariantCostsSave" class="btn btn-primary">Save</button>
                 <button type="button" id="editVariantCostsRecalcSubmit" class="btn btn-secondary" disabled>Save and recalculate orders</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Product details: stock by variant, cost/value, and the three per-product actions -->
+    <div id="productDetailsModal" class="modal">
+        <div class="modal-content product-details-modal-content">
+            <div class="modal-header">
+                <h2>Product Details</h2>
+                <button type="button" class="modal-close" id="closeProductDetailsModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="product-details-identity">
+                    <div class="product-details-thumb" id="productDetailsThumb"></div>
+                    <div class="product-details-identity-text">
+                        <div class="product-details-name-row">
+                            <h3 id="productDetailsName"></h3>
+                            <span id="productDetailsStatus" class="grid-status-badge"></span>
+                        </div>
+                        <p class="product-details-sub" id="productDetailsSub"></p>
+                    </div>
+                </div>
+                <div class="product-details-stock" id="productDetailsStock"></div>
+                <dl class="product-details-meta" id="productDetailsMeta"></dl>
+            </div>
+            <div class="modal-pinned-footer product-details-actions">
+                <button type="button" id="productDetailsClose" class="btn btn-secondary">Close</button>
+                <button type="button" id="productDetailsUpdateCost" class="btn btn-secondary"><i data-lucide="tag"></i> Update Cost</button>
+                <button type="button" id="productDetailsAdjustStock" class="btn btn-secondary"><i data-lucide="package-plus"></i> Adjust Stock</button>
+                <button type="button" id="productDetailsHistory" class="btn btn-primary"><i data-lucide="history"></i> View History</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Manual stock correction, per variant. Pushes the delta to Shopify too. -->
+    <div id="adjustStockModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Adjust Stock</h2>
+                <button type="button" class="modal-close" id="closeAdjustStockModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="product-details-identity">
+                    <div class="product-details-thumb" id="adjustStockThumb"></div>
+                    <div class="product-details-identity-text">
+                        <div class="product-details-name-row">
+                            <h3 id="adjustStockName"></h3>
+                            <span id="adjustStockStatus" class="grid-status-badge"></span>
+                        </div>
+                        <p class="product-details-sub" id="adjustStockSub"></p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Adjustment type</label>
+                    <div class="adjust-stock-type">
+                        <label class="adjust-stock-radio"><input type="radio" name="adjustStockType" value="add" checked><span>Add Stock</span></label>
+                        <label class="adjust-stock-radio"><input type="radio" name="adjustStockType" value="remove"><span>Remove Stock</span></label>
+                    </div>
+                </div>
+                <div class="adjust-stock-variants" id="adjustStockVariants"></div>
+                <div class="adjust-stock-meta">
+                    <div class="form-group">
+                        <label for="adjustStockReason">Reason *</label>
+                        <select id="adjustStockReason" class="form-input">
+                            <option value="">Select reason</option>
+                            <option value="Stock Count Correction">Stock Count Correction</option>
+                            <option value="Damaged / Written Off">Damaged / Written Off</option>
+                            <option value="Returned to Supplier">Returned to Supplier</option>
+                            <option value="Customer Return">Customer Return</option>
+                            <option value="Transfer">Transfer</option>
+                            <option value="Other">Other</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="adjustStockNotes">Notes (optional)</label>
+                        <textarea id="adjustStockNotes" class="form-input adjust-stock-notes" rows="3" placeholder="Add a note..."></textarea>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="adjustStockCancel" class="btn btn-secondary">Cancel</button>
+                <button type="button" id="adjustStockSubmit" class="btn btn-primary">Update Stock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cost change history for one product. Manual changes only - a cost moved by
+         receiving a purchase bill is audited on that bill instead. -->
+    <div id="costHistoryModal" class="modal">
+        <div class="modal-content cost-history-modal-content">
+            <div class="modal-header">
+                <h2>Cost History</h2>
+                <button type="button" class="modal-close" id="closeCostHistoryModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="product-details-identity">
+                    <div class="product-details-thumb" id="costHistoryThumb"></div>
+                    <div class="product-details-identity-text">
+                        <div class="product-details-name-row">
+                            <h3 id="costHistoryName"></h3>
+                        </div>
+                        <p class="product-details-sub" id="costHistorySub"></p>
+                    </div>
+                </div>
+                <div class="cost-history-table-wrap">
+                    <table class="cost-history-table">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>Variant</th>
+                                <th>Cost per Unit</th>
+                                <th>Changed By</th>
+                                <th>Reason</th>
+                            </tr>
+                        </thead>
+                        <tbody id="costHistoryBody"></tbody>
+                    </table>
+                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" id="costHistoryClose" class="btn btn-secondary">Close</button>
             </div>
         </div>
     </div>
@@ -1538,6 +1762,7 @@
     <script src="js/order-fulfillment.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
+    <script src="js/inventory.js"></script>
     <script src="js/delivery-status.js"></script>
     <script src="js/product-analytics.js"></script>
 </body>

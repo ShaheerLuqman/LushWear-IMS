@@ -11,6 +11,9 @@ through `org_table()`/`with_org_id()`/`with_org_id_many()` instead of calling
 BUSINESS_TABLES = {
     "shopify_products",
     "shopify_variants",
+    "shopify_product_cost_history",
+    "shopify_stock_adjustments",
+    "shopify_inventory_snapshots",
     "shopify_orders",
     "shopify_courier_bills",
     # A view, not a table (courier bills + their derived money figures), but it carries

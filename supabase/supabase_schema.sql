@@ -233,6 +233,60 @@ CREATE TABLE IF NOT EXISTS shopify_variants (
 );
 
 
+-- Manual cost changes made from the Inventory screen (Update Cost / bulk update),
+-- for its "View History" panel. Purchase-bill-driven cost changes have their own
+-- trail on finances_bills.cost_price_snapshot and are not duplicated here.
+-- See supabase/migrations/20260907000000_inventory_screen.sql.
+CREATE TABLE IF NOT EXISTS shopify_product_cost_history (
+    id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id         UUID NOT NULL REFERENCES system_organizations(id),
+    product_id     UUID NOT NULL REFERENCES shopify_products(id) ON DELETE CASCADE,
+    -- NULL when the cost landed on the product itself rather than one variant.
+    variant_id     UUID REFERENCES shopify_variants(id) ON DELETE CASCADE,
+    old_cost_price DECIMAL(10, 2),
+    new_cost_price DECIMAL(10, 2),
+    -- Date the new cost applies from; backdatable from the Update Cost modal.
+    effective_from DATE NOT NULL DEFAULT CURRENT_DATE,
+    reason         TEXT,
+    -- No FK: a deleted user must not take their history rows with them.
+    changed_by     UUID,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Manual stock corrections from the Inventory screen's Adjust Stock action.
+-- Shopify sync and received purchase bills move stock without writing here.
+CREATE TABLE IF NOT EXISTS shopify_stock_adjustments (
+    id               UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id           UUID NOT NULL REFERENCES system_organizations(id),
+    product_id       UUID NOT NULL REFERENCES shopify_products(id) ON DELETE CASCADE,
+    variant_id       UUID NOT NULL REFERENCES shopify_variants(id) ON DELETE CASCADE,
+    -- Signed, so a reversal is just the negated row.
+    delta            INTEGER NOT NULL,
+    quantity_before  INTEGER NOT NULL,
+    quantity_after   INTEGER NOT NULL,
+    reason           TEXT NOT NULL,
+    notes            TEXT,
+    changed_by       UUID,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- One row per org per day, written by capture_inventory_snapshot() whenever the
+-- Inventory screen fetches its summary - there is no scheduler here, so the page
+-- view is what accumulates the history its month-over-month deltas read from.
+CREATE TABLE IF NOT EXISTS shopify_inventory_snapshots (
+    id                 UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id             UUID NOT NULL REFERENCES system_organizations(id),
+    snapshot_date      DATE NOT NULL,
+    total_products     INTEGER NOT NULL,
+    total_stock        BIGINT NOT NULL,
+    low_stock_count    INTEGER NOT NULL,
+    out_of_stock_count INTEGER NOT NULL,
+    inventory_value    DECIMAL(14, 2) NOT NULL,
+    captured_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    UNIQUE (org_id, snapshot_date)
+);
+
+
 -- ============================================================================
 -- Orders
 -- ============================================================================
@@ -629,6 +683,9 @@ CREATE INDEX IF NOT EXISTS idx_products_is_active            ON shopify_products
 CREATE INDEX IF NOT EXISTS idx_variants_product_id          ON shopify_variants(product_id);
 CREATE INDEX IF NOT EXISTS idx_variants_shopify_variant_id  ON shopify_variants(shopify_variant_id);
 CREATE INDEX IF NOT EXISTS idx_variants_org_id              ON shopify_variants(org_id);
+CREATE INDEX IF NOT EXISTS idx_cost_history_product         ON shopify_product_cost_history(org_id, product_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_stock_adjust_product         ON shopify_stock_adjustments(org_id, product_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_snapshots_date     ON shopify_inventory_snapshots(org_id, snapshot_date DESC);
 
 -- Orders
 CREATE INDEX IF NOT EXISTS idx_orders_number                 ON shopify_orders(order_number);
@@ -2377,6 +2434,9 @@ END $$;
 -- ============================================================================
 ALTER TABLE shopify_products                 ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_variants                 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_product_cost_history     ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_stock_adjustments        ENABLE ROW LEVEL SECURITY;
+ALTER TABLE shopify_inventory_snapshots      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_orders                   ENABLE ROW LEVEL SECURITY;
 ALTER TABLE shopify_load_sheet_logs          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE finances_ledgers                 ENABLE ROW LEVEL SECURITY;

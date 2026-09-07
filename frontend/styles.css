@@ -452,6 +452,9 @@ body {
 .header-title h1 {
     font-size: 18px;
     font-weight: 600;
+    /* Tight enough that adding .header-subtitle underneath still fits the
+       header's 61px min-height, so it doesn't jolt when switching views. */
+    line-height: 1.2;
 }
 
 .header-actions {
@@ -983,7 +986,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
 /* Override content-area padding for table views */
 .content-area:has(#transactionsView.active),
 .content-area:has(#ordersView.active),
-.content-area:has(#productsView.active),
 .content-area:has(#ledgerDetailView.active),
 .content-area:has(#ledgersView.active),
 .content-area:has(#billsView.active),
@@ -992,7 +994,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
 .content-area:has(#courierPaymentReportDetailView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
-body:has(#productsView.active) .content-area,
 body:has(#ledgerDetailView.active) .content-area,
 body:has(#ledgersView.active) .content-area,
 body:has(#billsView.active) .content-area,
@@ -1002,24 +1003,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     padding: 0;
 }
 
-#productsView {
-    overflow: hidden;
-    gap: 0;
-    min-height: 0;
-    padding: 0;
-}
-
-#productsView.active {
-    height: 100%;
-    width: 100%;
-}
-
-#productsView #productsGrid.grid-container {
-    border-radius: 0;
-    border: none;
-    min-height: 0;
-    height: 100%;
-}
 
 .stat-card {
     background: var(--bg-card);
@@ -1070,6 +1053,469 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     font-size: 13px;
     color: var(--text-muted);
     line-height: 1.35;
+}
+
+/* ============================================
+   Inventory view
+   ============================================ */
+
+/* Stat-card accents. Same hues (and the same lift in dark mode) as the Product
+   Analytics palette, which scopes its own copy to .pa-scroll - so the two pages
+   read as one system without either owning the other's tokens. */
+#productsView {
+    min-height: 0;
+    gap: 20px;
+    --inv-accent-products: var(--accent-primary);
+    --inv-accent-stock: #3f7fb8;
+    --inv-accent-low: #b8862b;
+    --inv-accent-out: #cf5a4f;
+    --inv-accent-value: #12855a;
+}
+
+:root[data-theme="dark"] #productsView {
+    --inv-accent-stock: #7fc0ec;
+    --inv-accent-low: #fbbf24;
+    --inv-accent-out: #f87171;
+    --inv-accent-value: #4ade80;
+}
+
+/* Cards keep their height; the table card below takes the rest and scrolls
+   internally, so the page itself never scrolls. */
+.inventory-stats {
+    flex-shrink: 0;
+    margin-bottom: 0;
+}
+
+/* Same treatment as the Product Analytics KPIs (.pa-kpi): a left accent rule and
+   a tint that washes out into the card, each card carrying its own accent. */
+.inventory-stat {
+    min-height: 0;
+    padding: 16px 18px;
+    gap: 6px;
+    border-left: 3px solid var(--inventory-stat-accent, var(--accent-primary));
+    background: linear-gradient(
+        120deg,
+        color-mix(in srgb, var(--inventory-stat-accent, var(--accent-primary)) 12%, transparent),
+        var(--bg-card) 60%
+    );
+}
+
+/* .stat-card:hover recolours all four borders, which would drop the accent rule. */
+.inventory-stat:hover {
+    border-color: var(--accent-primary);
+    border-left-color: var(--inventory-stat-accent, var(--accent-primary));
+}
+
+.inventory-stat-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.inventory-stat .stat-value {
+    margin-top: 6px;
+    font-size: 26px;
+}
+
+.inventory-stat-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    border-radius: var(--radius-sm);
+    color: var(--inventory-stat-accent, var(--accent-primary));
+    background: color-mix(in srgb, var(--inventory-stat-accent, var(--accent-primary)) 16%, transparent);
+}
+
+.inventory-stat-icon svg {
+    width: 17px;
+    height: 17px;
+}
+
+.inventory-stat--products { --inventory-stat-accent: var(--inv-accent-products); }
+.inventory-stat--stock    { --inventory-stat-accent: var(--inv-accent-stock); }
+.inventory-stat--low      { --inventory-stat-accent: var(--inv-accent-low); }
+.inventory-stat--out      { --inventory-stat-accent: var(--inv-accent-out); }
+.inventory-stat--value    { --inventory-stat-accent: var(--inv-accent-value); }
+
+.inventory-stat-delta {
+    font-size: 12px;
+    color: var(--text-muted);
+    min-height: 18px;
+}
+
+.inventory-delta-up   { color: #16a34a; }
+.inventory-delta-down { color: #dc2626; }
+.inventory-delta-flat { color: var(--text-muted); }
+
+.inventory-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.inventory-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 16px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.inventory-search-wrap {
+    position: relative;
+    flex: 1;
+    max-width: 320px;
+}
+
+.inventory-search-icon {
+    position: absolute;
+    left: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 15px;
+    height: 15px;
+    color: var(--text-muted);
+    pointer-events: none;
+}
+
+.inventory-search-input,
+.inventory-toolbar-select {
+    height: 38px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: inherit;
+    font-size: 13px;
+    padding: 0 12px;
+}
+
+.inventory-search-input {
+    width: 100%;
+    padding-left: 34px;
+}
+
+.inventory-search-input:focus,
+.inventory-toolbar-select:focus {
+    outline: none;
+    border-color: var(--accent-primary);
+}
+
+.inventory-toolbar-select {
+    cursor: pointer;
+    min-width: 150px;
+}
+
+.inventory-filters-toggle {
+    height: 38px;
+    gap: 6px;
+}
+
+.inventory-filters-toggle svg {
+    width: 15px;
+    height: 15px;
+}
+
+.inventory-filters-toggle[aria-pressed="true"] {
+    border-color: var(--accent-primary);
+    color: var(--accent-primary);
+}
+
+#productsView #productsGrid.grid-container {
+    border: none;
+    border-radius: 0;
+    min-height: 0;
+}
+
+/* Grid cells specific to the inventory columns */
+.grid-product-cell {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 100%;
+    min-width: 0;
+}
+
+.grid-product-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.grid-stock-variants {
+    margin-left: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.grid-status-badge.in,
+.grid-status-badge.low,
+.grid-status-badge.out {
+    text-transform: none;
+    /* Same row-height line-height inheritance as .grid-quantity-badge above. Scoped
+       to the inventory statuses so the order/courier grids' badges are untouched. */
+    line-height: 1.5;
+}
+
+.grid-status-badge.in {
+    background: rgba(34, 197, 94, 0.15);
+    color: #16a34a;
+}
+
+.grid-status-badge.low {
+    background: rgba(245, 158, 11, 0.15);
+    color: #d97706;
+}
+
+.grid-status-badge.out {
+    background: rgba(220, 38, 38, 0.12);
+    color: #dc2626;
+}
+
+/* ---- Product details / adjust stock / cost history modals ---- */
+
+.product-details-modal-content,
+.cost-history-modal-content {
+    max-width: 720px;
+}
+
+.product-details-identity {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 20px;
+}
+
+.product-details-thumb img,
+.product-details-thumb .grid-image-placeholder {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--radius-md);
+    object-fit: cover;
+}
+
+.product-details-identity-text {
+    min-width: 0;
+}
+
+.product-details-name-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+}
+
+.product-details-name-row h3 {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+}
+
+.product-details-sub {
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.product-details-stock {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+/* auto-fit (not auto-fill) so a row of 3 or 4 cells stretches to fill the width
+   instead of leaving an empty divider-coloured track at the end. */
+.product-details-stock-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+    gap: 1px;
+    background: var(--border-color);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.product-details-stock-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 14px;
+    background: var(--bg-primary);
+}
+
+.product-details-stock-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.product-details-stock-value {
+    font-family: var(--font-mono);
+    font-size: 16px;
+    font-weight: 600;
+}
+
+
+.product-details-meta {
+    margin: 20px 0 0;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+.product-details-meta-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 11px 14px;
+    font-size: 13px;
+}
+
+.product-details-meta-row + .product-details-meta-row {
+    border-top: 1px solid var(--border-color);
+}
+
+.product-details-meta-row dt { color: var(--text-muted); }
+.product-details-meta-row dd { margin: 0; font-weight: 500; }
+
+.product-details-actions .btn {
+    white-space: nowrap;
+}
+
+.product-details-actions svg {
+    width: 15px;
+    height: 15px;
+}
+
+.adjust-stock-type {
+    display: flex;
+    gap: 20px;
+}
+
+.adjust-stock-radio {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    font-size: 14px;
+    cursor: pointer;
+}
+
+.adjust-stock-variants {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+    gap: 12px;
+    margin: 16px 0;
+}
+
+.adjust-stock-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.adjust-stock-row-title {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.adjust-stock-row-current {
+    font-size: 12px;
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.adjust-stock-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+}
+
+.adjust-stock-notes {
+    resize: vertical;
+    padding: 10px 12px;
+    font-family: inherit;
+}
+
+.cost-history-table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+}
+
+.cost-history-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.cost-history-table th {
+    text-align: left;
+    padding: 10px 14px;
+    font-weight: 500;
+    color: var(--text-muted);
+    background: var(--bg-secondary);
+    white-space: nowrap;
+}
+
+.cost-history-table td {
+    padding: 11px 14px;
+    border-top: 1px solid var(--border-color);
+    white-space: nowrap;
+}
+
+.cost-history-empty {
+    text-align: center;
+    color: var(--text-muted);
+    white-space: normal;
+}
+
+/* Applicable-from + reason, side by side under the cost input */
+.edit-variant-costs-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 12px;
+}
+
+.edit-variant-costs-current {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 11px 14px;
+    margin-bottom: 14px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-secondary);
+}
+
+.edit-variant-costs-current-label {
+    font-size: 13px;
+    color: var(--text-muted);
+}
+
+.edit-variant-costs-current-value {
+    font-family: var(--font-mono);
+    font-weight: 600;
+}
+
+.header-subtitle {
+    margin: 1px 0 0;
+    font-size: 12px;
+    line-height: 1.2;
+    color: var(--text-muted);
 }
 
 /* Section */
@@ -3078,33 +3524,6 @@ input[type="number"] {
     font-style: italic;
 }
 
-.grid-variants-container {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-    padding: 4px 0;
-}
-
-.grid-variant-tag {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: 12px;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 11px;
-    font-weight: 500;
-    background: rgba(139, 92, 246, 0.1);
-    color: #7c3aed;
-    border: 1px solid rgba(139, 92, 246, 0.25);
-    white-space: nowrap;
-}
-
-.grid-variant-tag.low {
-    background: rgba(245, 158, 11, 0.1);
-    color: #d97706;
-    border-color: rgba(245, 158, 11, 0.25);
-}
-
 .edit-variant-costs-list {
     display: flex;
     flex-direction: column;
@@ -3175,11 +3594,19 @@ input[type="number"] {
 .grid-quantity-badge {
     display: inline-flex;
     align-items: center;
-    padding: 4px 12px;
+    padding: 3px 12px;
     border-radius: 20px;
     font-family: 'Roboto Mono', monospace;
     font-size: 13px;
     font-weight: 500;
+    /* .ag-cell sets line-height to the full row height so plain text centres in it.
+       Inheriting that makes the pill taller than its own row - size it off the font. */
+    line-height: 1.5;
+}
+
+.grid-quantity-badge.in {
+    background: rgba(139, 92, 246, 0.12);
+    color: #7c3aed;
 }
 
 .grid-quantity-badge.low {
@@ -3187,9 +3614,9 @@ input[type="number"] {
     color: #d97706;
 }
 
-.grid-quantity-badge.ok {
-    background: rgba(139, 92, 246, 0.12);
-    color: #7c3aed;
+.grid-quantity-badge.out {
+    background: rgba(220, 38, 38, 0.12);
+    color: #dc2626;
 }
 
 .grid-profit-positive {
@@ -4400,7 +4827,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     width: 100%;
 }
 
-.bill-view-btn {
+.bill-view-btn,
+.product-view-btn {
     display: inline-flex;
     align-items: center;
     gap: 5px;
@@ -4415,7 +4843,8 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     transition: var(--transition);
 }
 
-.bill-view-btn:hover {
+.bill-view-btn:hover,
+.product-view-btn:hover {
     opacity: 1;
     background: var(--bg-tertiary);
 }
@@ -5697,53 +6126,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     padding: 44px 16px !important;
     color: var(--text-muted);
 }
-
-/* --- pagination --- */
-.pa-pagination {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
-    border-top: 1px solid var(--border-color);
-}
-
-.pa-page-size { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-muted); }
-
-.pa-page-size select {
-    height: 32px;
-    padding: 0 6px;
-    font-family: inherit;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.pa-page-info { flex: 1; font-size: 13px; color: var(--text-muted); }
-
-.pa-pager { display: inline-flex; align-items: center; gap: 4px; }
-
-.pa-pager-btn {
-    min-width: 30px;
-    height: 30px;
-    padding: 0 6px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-family: inherit;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-}
-
-.pa-pager-btn.is-active { background: var(--accent-primary); border-color: var(--accent-primary); color: #fff; font-weight: 700; }
-.pa-pager-btn:disabled { opacity: 0.4; cursor: default; }
-.pa-pager-gap { padding: 0 4px; color: var(--text-muted); }
 
 /* --- widgets --- */
 .pa-widgets {

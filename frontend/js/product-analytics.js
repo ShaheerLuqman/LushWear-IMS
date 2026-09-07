@@ -16,15 +16,12 @@ let paCustomEnd = '';
 let paCollection = '';                // '' = all collections
 let paSegment = 'all';                // 'all' | 'hero' | 'zero'
 let paTrendMetric = 'units';          // 'units' | 'revenue'
-let paPage = 1;
-let paPageSize = 10;
 let _paTimeMenuOpen = false;
 let _paCustomizeOpen = false;
 let _paHeroDefOpen = false;
 let paCols = paLoadCols();
 
 const PA_BASE_SIZES = ['S', 'M', 'L', 'XL'];
-const PA_PAGE_SIZES = [10, 25, 50, 100];
 const PA_OLDEST = { year: 2024, month: 10, day: 22 };
 const PA_TIME_PRESETS = [
     { key: 'max', label: 'Maximum' },
@@ -279,16 +276,11 @@ function paRenderResults() {
     document.querySelectorAll('.pa-seg-btn[data-seg="hero"] .pa-seg-count').forEach((n) => { n.textContent = view.hero.count; });
     document.querySelectorAll('.pa-seg-btn[data-seg="zero"] .pa-seg-count').forEach((n) => { n.textContent = view.zero.count; });
 
-    const pageCount = Math.max(1, Math.ceil(view.segmentRows.length / paPageSize));
-    if (paPage > pageCount) paPage = pageCount;
-    const startIdx = (paPage - 1) * paPageSize;
-    const pageRows = view.segmentRows.slice(startIdx, startIdx + paPageSize);
-
     const showSizes = paCols.sizes && view.sizes.length;
     const sizeHead = showSizes ? view.sizes.map((s) => `<th class="pa-col-size">${escapeHtml(s)}</th>`).join('') : '';
     const colCount = 3 + (paCols.revenue ? 1 : 0) + (paCols.delta ? 1 : 0) + (showSizes ? view.sizes.length : 0) + 2;
 
-    const rowsHtml = pageRows.map((r) => {
+    const rowsHtml = view.segmentRows.map((r) => {
         const sizeCells = showSizes ? view.sizes.map((s) => {
             const q = r.sizes[s] || 0;
             if (!q) return '<td class="pa-col-size pa-size-empty">–</td>';
@@ -312,19 +304,6 @@ function paRenderResults() {
             <td class="pa-col-kebab"><button type="button" class="pa-kebab" data-key="${escapeHtml(r.key)}" aria-label="Product actions"><i class="fa-solid fa-ellipsis-vertical"></i></button></td>
         </tr>`;
     }).join('');
-
-    // pager: 1 … n
-    const pages = [];
-    for (let p = 1; p <= pageCount; p++) {
-        if (p === 1 || p === pageCount || Math.abs(p - paPage) <= 1) pages.push(p);
-        else if (pages[pages.length - 1] !== '…') pages.push('…');
-    }
-    const pagerBtns = pages.map((p) => p === '…'
-        ? '<span class="pa-pager-gap">…</span>'
-        : `<button type="button" class="pa-pager-btn${p === paPage ? ' is-active' : ''}" data-goto="${p}">${p}</button>`).join('');
-
-    const shownFrom = view.segmentRows.length ? startIdx + 1 : 0;
-    const shownTo = Math.min(startIdx + paPageSize, view.segmentRows.length);
 
     el.innerHTML = `
         ${paKpisHtml(view)}
@@ -350,19 +329,8 @@ function paRenderResults() {
                             <th class="pa-col-kebab"></th>
                         </tr>
                     </thead>
-                    <tbody>${pageRows.length ? rowsHtml : `<tr><td colspan="${colCount}" class="pa-empty">No products match these filters.</td></tr>`}</tbody>
+                    <tbody>${view.segmentRows.length ? rowsHtml : `<tr><td colspan="${colCount}" class="pa-empty">No products match these filters.</td></tr>`}</tbody>
                 </table>
-            </div>
-            <div class="pa-pagination">
-                <label class="pa-page-size">Rows per page
-                    <select id="paPageSizeSelect">${PA_PAGE_SIZES.map((n) => `<option value="${n}"${n === paPageSize ? ' selected' : ''}>${n}</option>`).join('')}</select>
-                </label>
-                <span class="pa-page-info">Showing ${shownFrom} to ${shownTo} of ${view.segmentRows.length} products</span>
-                <div class="pa-pager">
-                    <button type="button" class="pa-pager-btn" data-goto="${Math.max(1, paPage - 1)}" ${paPage <= 1 ? 'disabled' : ''}><i class="fa-solid fa-chevron-left"></i></button>
-                    ${pagerBtns}
-                    <button type="button" class="pa-pager-btn" data-goto="${Math.min(pageCount, paPage + 1)}" ${paPage >= pageCount ? 'disabled' : ''}><i class="fa-solid fa-chevron-right"></i></button>
-                </div>
             </div>
         </div>
         ${paWidgetsHtml(view)}`;
@@ -598,31 +566,28 @@ function paBindShellEvents() {
         if (key === 'custom') {
             paTimeRange = 'custom';
             paRenderTimeMenu();
-            if (paCustomStart && paCustomEnd) { paPage = 1; paSyncToolbar(); paRefreshData(); }
+            if (paCustomStart && paCustomEnd) { paSyncToolbar(); paRefreshData(); }
             return;
         }
         paTimeRange = key;
         _paTimeMenuOpen = false;
-        paPage = 1;
         paSyncToolbar();
         paRefreshData();
     });
     document.getElementById('paTimeMenu').addEventListener('change', (e) => {
         if (e.target.id === 'paCustomStart') paCustomStart = e.target.value;
         if (e.target.id === 'paCustomEnd') paCustomEnd = e.target.value;
-        if (paCustomStart && paCustomEnd) { paTimeRange = 'custom'; paPage = 1; paSyncToolbar(); paRefreshData(); }
+        if (paCustomStart && paCustomEnd) { paTimeRange = 'custom'; paSyncToolbar(); paRefreshData(); }
     });
 
     document.getElementById('paCollectionSelect').addEventListener('change', (e) => {
         paCollection = e.target.value;
-        paPage = 1;
         paRenderResults();
     });
     document.querySelector('.pa-segments').addEventListener('click', (e) => {
         const btn = e.target.closest('.pa-seg-btn');
         if (!btn) return;
         paSegment = btn.dataset.seg;
-        paPage = 1;
         paSyncToolbar();
         paRenderResults();
     });
@@ -645,14 +610,11 @@ function paBindShellEvents() {
 
     const results = document.getElementById('paResults');
     results.addEventListener('click', (e) => {
-        const pager = e.target.closest('[data-goto]');
-        if (pager && !pager.disabled) { paPage = Number(pager.dataset.goto); paRenderResults(); return; }
         if (e.target.closest('#paHeroDefBtn')) { _paHeroDefOpen = !_paHeroDefOpen; paRenderResults(); return; }
         const kebab = e.target.closest('.pa-kebab');
         if (kebab) { paKebabMenu(kebab); return; }
     });
     results.addEventListener('change', (e) => {
-        if (e.target.id === 'paPageSizeSelect') { paPageSize = Number(e.target.value); paPage = 1; paRenderResults(); }
         if (e.target.id === 'paTrendMetric') { paTrendMetric = e.target.value; paRenderResults(); }
     });
 }
