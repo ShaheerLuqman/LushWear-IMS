@@ -589,11 +589,13 @@ async def _book_one_order(
         ), None
 
     try:
+        now_iso = datetime.now(timezone.utc).isoformat()
         org_table(supabase, org_id, "shopify_orders").update({
             "courier": courier_name,
             "tracking_number": tracking_number,
             "order_status": "fulfilled",
-            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "fulfilled_at": now_iso,
+            "updated_at": now_iso,
         }).eq("id", order_id).execute()
     except Exception:
         # The parcel exists at the courier regardless, so surface the tracking number
@@ -1756,6 +1758,97 @@ async def get_courier_bill_summary_pdf(
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+class AirwayBillListOrder(BaseModel):
+    id: str
+    order_number: int
+    customer_name: str
+    customer_address: str
+    customer_phone: str
+    customer_city: str
+    courier: str
+    tracking_number: str
+    order_status: str
+    total_amount: float
+    advance_amount: float
+    cod: float
+    fulfilled_at: Optional[datetime]
+
+
+@router.get("/airway-bill-list", response_model=List[AirwayBillListOrder])
+async def get_airway_bill_list(
+    date_from: str = Query(None, description="Earliest fulfillment date (inclusive), YYYY-MM-DD, PKT."),
+    date_to: str = Query(None, description="Latest fulfillment date (inclusive), YYYY-MM-DD, PKT."),
+    courier: str = Query(None, description="Restrict to one courier: 'PostEx' or 'Couriers Next'."),
+    org_id: str = Depends(get_org_id),
+):
+    """Fulfilled orders with a tracking number, for the Print Airway Bill screen.
+
+    Only PostEx / Couriers Next orders - the two couriers whose airway bills the app can
+    fetch. `fulfilled_at` is a TIMESTAMPTZ, so the range is half-open and anchored to PKT
+    (same reasoning as get_courier_bill_summary_pdf)."""
+    try:
+        supabase = get_supabase()
+
+        couriers = list(_FULFILL_COURIER_NAMES.values())
+        if courier:
+            if courier not in couriers:
+                raise HTTPException(status_code=400, detail="Unsupported courier")
+            couriers = [courier]
+
+        def _pkt_day_start(value: str) -> datetime:
+            day = datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime(day.year, day.month, day.day, tzinfo=PKT_TIMEZONE)
+
+        try:
+            from_iso = _pkt_day_start(date_from).isoformat() if date_from else None
+            to_iso = (_pkt_day_start(date_to) + timedelta(days=1)).isoformat() if date_to else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+
+        def _build_query():
+            q = (
+                org_table(supabase, org_id, "shopify_orders")
+                .select(
+                    "id, order_number, customer_name, customer_address, customer_phone, "
+                    "customer_city, courier, tracking_number, order_status, total_amount, "
+                    "advance_amount, fulfilled_at"
+                )
+                .eq("order_status", "fulfilled")
+                .not_.is_("tracking_number", "null")
+                .in_("courier", couriers)
+            )
+            if from_iso:
+                q = q.gte("fulfilled_at", from_iso)
+            if to_iso:
+                q = q.lt("fulfilled_at", to_iso)
+            return q.order("fulfilled_at", desc=True).order("order_number", desc=True)
+
+        rows = fetch_all(_build_query)
+        return [
+            {
+                "id": r["id"],
+                "order_number": r["order_number"],
+                "customer_name": r.get("customer_name") or "-",
+                "customer_address": r.get("customer_address") or "-",
+                "customer_phone": r.get("customer_phone") or "-",
+                "customer_city": r.get("customer_city") or "-",
+                "courier": r["courier"],
+                "tracking_number": r["tracking_number"],
+                "order_status": r["order_status"],
+                "total_amount": r.get("total_amount") or 0,
+                "advance_amount": r.get("advance_amount") or 0,
+                "cod": max(0.0, float(r.get("total_amount") or 0) - float(r.get("advance_amount") or 0)),
+                "fulfilled_at": r.get("fulfilled_at"),
+            }
+            for r in rows
+        ]
     except HTTPException:
         raise
     except Exception:

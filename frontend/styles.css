@@ -6977,6 +6977,20 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-primary);
 }
 
+/* Print Airway Bill: per-row Print button */
+.print-awb-print-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    white-space: nowrap;
+}
+
+.print-awb-print-btn .lucide {
+    width: 14px;
+    height: 14px;
+}
+
 .fulfillment-cod-input:focus {
     outline: none;
     border-color: var(--accent-primary);
@@ -8216,5 +8230,220 @@ body.admin-portal-page {
 @media (hover: none) and (max-width: 820px) {
     .sidebar:hover {
         box-shadow: var(--shadow-lg);
+    }
+}
+
+/* =====================================================================
+   Orders page — Shopify-style chrome (light theme)
+   Metrics strip + status view-tabs + a framed table card wrapping the
+   existing AG Grid. Layout is theme-agnostic (uses app tokens); the
+   Polaris greys are pinned under :root:not([data-theme="dark"]) so the
+   dark grid theme is left as it was.
+   ===================================================================== */
+
+body:has(#ordersView.active) .content-area {
+    background: var(--bg-secondary);
+}
+
+#ordersView.active {
+    padding: 16px;
+    gap: 12px;
+    background: transparent;
+}
+
+.orders-metrics-strip {
+    display: flex;
+    flex-shrink: 0;
+    overflow-x: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+}
+
+.orders-metric {
+    flex: 1 0 auto;
+    min-width: 148px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 12px 18px;
+    border-right: 1px solid var(--border-color);
+}
+
+.orders-metric:last-child {
+    border-right: 0;
+}
+
+.orders-metric__label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.orders-metric__value {
+    font-size: 17px;
+    font-weight: 600;
+    color: var(--text-primary);
+    font-variant-numeric: tabular-nums;
+}
+
+.orders-metric__value--neg {
+    color: var(--danger);
+}
+
+.orders-table-card {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+
+.orders-view-tabs {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    flex-shrink: 0;
+    padding: 6px 8px;
+    overflow-x: auto;
+    background: var(--bg-primary);
+    border-bottom: 1px solid var(--border-color);
+}
+
+.orders-view-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border: 0;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.orders-view-tab:hover {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
+.orders-view-tab.active {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.orders-view-tab__count {
+    padding: 1px 6px;
+    border-radius: 20px;
+    background: var(--bg-secondary);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.orders-view-tab.active .orders-view-tab__count {
+    background: var(--bg-primary);
+}
+
+.orders-view-tab__count:empty {
+    display: none;
+}
+
+/* Grid sits flush inside the card - the card owns the frame now. */
+#ordersView .orders-table-card #ordersGrid.grid-container {
+    border: 0;
+    border-radius: 0;
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+}
+
+#ordersView .ag-theme-alpine {
+    --ag-font-family: 'Inter', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ag-header-height: 40px;
+    --ag-row-height: 44px;
+}
+
+/* Shopify's table headers are sentence-case and quiet, not the app's uppercase. */
+#ordersView .ag-theme-alpine .ag-header {
+    text-transform: none;
+    letter-spacing: 0;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+#ordersView .grid-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 9px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 500;
+    line-height: 1.5;
+}
+
+#ordersView .grid-status-badge::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+}
+
+:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine {
+    --ag-header-background-color: #f7f7f7;
+    --ag-row-hover-color: #f6f6f7;
+    --ag-selected-row-background-color: #ebf3fe;
+    --ag-border-color: #e7e7e9;
+    --ag-checkbox-checked-color: #1a1a1a;
+    --ag-input-focus-border-color: #005bd3;
+}
+
+:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-header {
+    border-bottom: 1px solid #e1e1e1;
+}
+
+:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-header-cell-text {
+    color: #616161;
+}
+
+:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-pinned-bottom-row {
+    background-color: #f7f7f7 !important;
+    border-top: 1px solid #d0d0d0 !important;
+}
+
+/* Full screen: drop the summary strip and the card frame, maximise the grid. */
+body.orders-table-fullscreen #ordersView {
+    padding: 0;
+    gap: 0;
+}
+
+body.orders-table-fullscreen #ordersMetricsStrip {
+    display: none;
+}
+
+body.orders-table-fullscreen .orders-table-card {
+    border: 0;
+    border-radius: 0;
+}
+
+@media (max-width: 720px) {
+    #ordersView.active {
+        padding: 10px;
+        gap: 8px;
+    }
+
+    .orders-metric {
+        min-width: 128px;
+        padding: 10px 14px;
     }
 }

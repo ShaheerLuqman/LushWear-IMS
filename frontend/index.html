@@ -11,7 +11,7 @@
     <link rel="manifest" href="manifest.json">
     <meta name="theme-color" content="#8b5cf6">
     <link
-        href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+        href="https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap"
         rel="stylesheet">
     <!-- AG Grid CSS -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.0.2/styles/ag-grid.css">
@@ -165,6 +165,10 @@
                         <button class="nav-item" data-view="orderFulfillment" title="Order Fulfillment">
                             <span class="nav-icon"><i data-lucide="package-check"></i></span>
                             <span class="nav-tooltip">Order Fulfillment</span>
+                        </button>
+                        <button class="nav-item" data-view="printAirwayBill" title="Print Airway Bill">
+                            <span class="nav-icon"><i data-lucide="printer"></i></span>
+                            <span class="nav-tooltip">Print Airway Bill</span>
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="finance">
@@ -327,6 +331,19 @@
                         <button type="button" id="courierPaymentReportImportCsvBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-upload"></i> Import Payment (CSV)</button>
                         <button type="button" id="courierPaymentReportFetchSettlementsBtn" class="btn btn-secondary header-toolbar-btn" title="Check unsettled PostEx orders against the courier API and settle the ones now delivered or returned" style="display: none;"><i class="fa-solid fa-rotate"></i> Fetch PostEx Settlements</button>
                     </div>
+                    <div id="printAirwayBillHeaderWrap" class="header-inline" style="display: none;">
+                        <button type="button" id="printAirwayBillDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by fulfillment date range">Date range</button>
+                        <select id="printAirwayBillCourierFilter" class="orders-period-filter" title="Filter by courier">
+                            <option value="PostEx" selected>PostEx</option>
+                            <option value="Couriers Next">Couriers Next</option>
+                        </select>
+                        <div class="transaction-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
+                            <input id="printAirwayBillSearch" type="text" class="transaction-search-filter" placeholder="Search order #, name, phone or tracking..." autocomplete="off">
+                        </div>
+                        <button type="button" id="printAirwayBillClearFiltersBtn" class="btn btn-secondary header-toolbar-btn">Clear Filters</button>
+                        <button type="button" id="printAirwayBillBulkBtn" class="btn btn-primary header-toolbar-btn"><i data-lucide="printer"></i> Print Airway Bill</button>
+                    </div>
                 </div>
                 <div class="header-notif-wrap" id="notifWrap">
                     <button type="button" id="notifBtn" class="btn btn-secondary header-notif-btn" aria-haspopup="true" aria-expanded="false" title="Notifications">
@@ -392,7 +409,11 @@
 
                 <!-- Orders View -->
                 <div id="ordersView" class="view active">
-                    <div id="ordersGrid" class="ag-theme-alpine grid-container"></div>
+                    <div id="ordersMetricsStrip" class="orders-metrics-strip" role="group" aria-label="Order summary"></div>
+                    <div class="orders-table-card">
+                        <div id="ordersViewTabs" class="orders-view-tabs" role="tablist" aria-label="Filter orders by status"></div>
+                        <div id="ordersGrid" class="ag-theme-alpine grid-container"></div>
+                    </div>
                     <div id="ordersSelectedCount" class="orders-selected-count" style="display: none;">0 row(s) selected</div>
                 </div>
 
@@ -560,6 +581,44 @@
                                         </tr>
                                     </thead>
                                     <tbody id="fulfillmentTableBody"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Print Airway Bill View -->
+                <div id="printAirwayBillView" class="view">
+                    <div class="fulfillment-body">
+                        <div class="fulfillment-table-panel">
+                            <div class="fulfillment-table-toolbar">
+                                <label class="fulfillment-select-all">
+                                    <input type="checkbox" id="printAirwayBillSelectAll">
+                                    <span>Select all</span>
+                                </label>
+                                <button type="button" id="printAirwayBillClearSelectionBtn" class="fulfillment-link-btn">Clear Selection</button>
+                                <div class="fulfillment-table-toolbar-spacer"></div>
+                                <span id="printAirwayBillTotalLabel" class="fulfillment-toolbar-stat">Total Orders: 0</span>
+                                <span id="printAirwayBillSelectedCountLabel" class="fulfillment-toolbar-badge" style="display: none;">0 selected</span>
+                            </div>
+                            <div class="fulfillment-table-wrap">
+                                <table class="fulfillment-table">
+                                    <thead>
+                                        <tr>
+                                            <th class="fulfillment-col-check"><input type="checkbox" id="printAirwayBillHeaderCheckbox"></th>
+                                            <th>Order ID</th>
+                                            <th>Customer Name</th>
+                                            <th>Complete Address</th>
+                                            <th>Mobile Number</th>
+                                            <th>City</th>
+                                            <th class="fulfillment-th-cod">COD (PKR)</th>
+                                            <th>Tracking ID</th>
+                                            <th>Courier</th>
+                                            <th>Status</th>
+                                            <th class="fulfillment-col-actions">Airway Bill</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="printAirwayBillTableBody"></tbody>
                                 </table>
                             </div>
                         </div>
@@ -1751,6 +1810,7 @@
     <script src="js/orders-columns.js"></script>
     <script src="js/orders-grid.js"></script>
     <script src="js/orders-actions.js"></script>
+    <script src="js/orders-shopify-ui.js"></script>
     <script src="js/navigation.js"></script>
     <script src="js/data-api.js"></script>
     <script src="js/events-stream.js"></script>
@@ -1760,6 +1820,7 @@
     <script src="js/bills.js"></script>
     <script src="js/courier-payment-report.js"></script>
     <script src="js/order-fulfillment.js"></script>
+    <script src="js/print-airway-bill.js"></script>
     <script src="js/sync-summary.js"></script>
     <script src="js/modals-forms.js"></script>
     <script src="js/inventory.js"></script>

@@ -843,6 +843,7 @@ function initOrdersGrid() {
         onFilterChanged: (params) => {
             if (!params.api) return;
             if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
+            if (typeof syncOrdersViewTabsFromFilter === 'function') syncOrdersViewTabsFromFilter();
             // Temporarily added "fetch by number" orders: remove when filter is cleared or Order# is changed
             const filterModel = params.api.getFilterModel() || {};
             const orderNumCol = filterModel.order_number;
@@ -941,6 +942,9 @@ function initOrdersGrid() {
         onCellValueChanged: () => {
             // Update footer when cell values change (e.g., after editing)
             setTimeout(() => updateFooterRow(), 0);
+        },
+        onRowDataUpdated: () => {
+            if (typeof refreshOrdersShopifyUI === 'function') refreshOrdersShopifyUI();
         }
     };
 

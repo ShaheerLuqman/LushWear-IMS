@@ -320,6 +320,11 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     -- else status_history's second entry (oldest-first), since the first is booking, not
     -- pickup. Null until a fetch supplies one or the other.
     courier_pickup_date      TIMESTAMPTZ,
+    -- Datetime the order was booked with the courier from the app (see orders.py's
+    -- _book_one_order). Distinct from courier_pickup_date (when the courier collected
+    -- the parcel) and updated_at (drifts with later edits). Null for orders fulfilled
+    -- outside the app; the Print Airway Bill screen's date range filters on it.
+    fulfilled_at             TIMESTAMPTZ,
     -- Structured order lines (one object per line). Shape: [{ variant_id, product_id, name,
     -- variant_title, qty, unit_price, cost_price }]. name/variant_title/cost_price are
     -- snapshots (survive product rename/delete/later cost changes); ids link to products/variants.
@@ -699,6 +704,8 @@ CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON shopify_orders(o
 -- Groups an order with that same customer's other orders (Order Fulfillment view's
 -- customer-status history - see get_unfulfilled_orders).
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id            ON shopify_orders(customer_id);
+-- Print Airway Bill screen: fulfilled orders within a date range, newest first.
+CREATE INDEX IF NOT EXISTS idx_orders_fulfilled_at           ON shopify_orders(org_id, fulfilled_at DESC);
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
 --   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON shopify_orders USING GIN (delivery_status);

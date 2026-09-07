@@ -267,6 +267,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'productAnalytics': 'Product Analytics',
         'orderFulfillment': 'Order Fulfillment',
         'orderFulfillmentProgress': 'Order Fulfillment',
+        'printAirwayBill': 'Print Airway Bill',
         'loadSheetLogs': 'Load Sheet Logs',
         'courierPaymentReport': 'Courier Payment Report',
         'courierPaymentReportDetail': 'Courier Payment Report',
@@ -308,6 +309,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('trialBalanceHeaderWrap', viewName === 'trialBalance');
     show('courierPaymentReportHeaderWrap', viewName === 'courierPaymentReport', 'flex');
     show('orderFulfillmentHeaderWrap', viewName === 'orderFulfillment', 'flex');
+    show('printAirwayBillHeaderWrap', viewName === 'printAirwayBill', 'flex');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
@@ -359,6 +361,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         }, 100);
     } else if (viewName === 'orderFulfillment') {
         renderOrderFulfillmentView();
+    } else if (viewName === 'printAirwayBill') {
+        renderPrintAirwayBillView();
     } else if (viewName === 'ledgerDetail') {
         // Handled by openLedgerDetail
         setTimeout(() => {

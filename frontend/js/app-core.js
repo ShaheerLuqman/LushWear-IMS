@@ -664,6 +664,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initOrdersPeriodFilter();
     initOrdersDateRangeButton();
     initOrdersActions();
+    initOrdersShopifyUI();
     initTransactionsActions();
     initLedgerModals();
     initMonthSummaryNav();
@@ -672,6 +673,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     initSettingsView();
     initInstallPrompt();
     initOrderFulfillment();
+    initPrintAirwayBill();
     initNotifications();
 
     const impersonating = consumeImpersonationToken();

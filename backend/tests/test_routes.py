@@ -180,6 +180,41 @@ class TestOrders:
         assert r.json()["id"] == "log-1"
 
 
+class TestAirwayBillList:
+    def _row(self, **overrides):
+        return {
+            "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "order_number": 13448,
+            "customer_name": "Waqas Kirmani",
+            "customer_address": "House # 8 Palm View, Sahiwal",
+            "customer_phone": "03219414144",
+            "customer_city": "Sahiwal",
+            "courier": "PostEx",
+            "tracking_number": "TCS789456123",
+            "order_status": "fulfilled",
+            "total_amount": 2598.0,
+            "advance_amount": 100.0,
+            "fulfilled_at": "2026-09-07T09:00:00+00:00",
+            "internal_debug_column": "hidden",
+            **overrides,
+        }
+
+    def test_returns_cod_net_of_advance_and_model_shape(self, make_client):
+        r = make_client({"shopify_orders": [self._row()]}).get("/api/orders/airway-bill-list")
+        assert r.status_code == 200
+        body = r.json()[0]
+        assert body["cod"] == 2498.0
+        assert "internal_debug_column" not in body
+
+    def test_rejects_unsupported_courier(self, make_client):
+        r = make_client({"shopify_orders": []}).get("/api/orders/airway-bill-list?courier=TCS")
+        assert r.status_code == 400
+
+    def test_rejects_malformed_date(self, make_client):
+        r = make_client({"shopify_orders": []}).get("/api/orders/airway-bill-list?date_from=07-09-2026")
+        assert r.status_code == 400
+
+
 class TestMonthSummaryList:
     def test_returns_periods_from_the_rpc_as_is(self, make_client):
         client = make_client({}, rpc_results={

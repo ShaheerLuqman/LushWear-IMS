@@ -14,6 +14,8 @@ let paTimeRange = 'thisMonth';        // preset key or 'custom'
 let paCustomStart = '';
 let paCustomEnd = '';
 let paCollection = '';                // '' = all collections
+let paSearch = '';                    // free-text product filter, table only
+let _paSearchTimer = null;
 let paSegment = 'all';                // 'all' | 'hero' | 'zero'
 let paTrendMetric = 'units';          // 'units' | 'revenue'
 let _paTimeMenuOpen = false;
@@ -36,8 +38,8 @@ const PA_TIME_PRESETS = [
 function paLoadCols() {
     try {
         const saved = JSON.parse(localStorage.getItem('lushwear_pa_cols') || '{}');
-        return { revenue: true, delta: true, sizes: true, ...saved };
-    } catch (e) { return { revenue: true, delta: true, sizes: true }; }
+        return { revenue: true, delta: true, ...saved };
+    } catch (e) { return { revenue: true, delta: true }; }
 }
 function paSaveCols() {
     try { localStorage.setItem('lushwear_pa_cols', JSON.stringify(paCols)); } catch (e) { /* ignore */ }
@@ -171,7 +173,11 @@ function paDeriveView() {
     };
     prevTotals.aov = prevTotals.orders ? prevTotals.revenue / prevTotals.orders : 0;
 
-    const segmentRows = paSegment === 'all' ? rows : rows.filter((r) => r.perf === paSegment);
+    let segmentRows = paSegment === 'all' ? rows : rows.filter((r) => r.perf === paSegment);
+    if (paSearch) {
+        const q = paSearch.toLowerCase();
+        segmentRows = segmentRows.filter((r) => r.name.toLowerCase().includes(q) || r.collection.toLowerCase().includes(q));
+    }
     const heroRows = rows.filter((r) => r.perf === 'hero');
     const zeroRows = rows.filter((r) => r.perf === 'zero');
 
@@ -276,17 +282,10 @@ function paRenderResults() {
     document.querySelectorAll('.pa-seg-btn[data-seg="hero"] .pa-seg-count').forEach((n) => { n.textContent = view.hero.count; });
     document.querySelectorAll('.pa-seg-btn[data-seg="zero"] .pa-seg-count').forEach((n) => { n.textContent = view.zero.count; });
 
-    const showSizes = paCols.sizes && view.sizes.length;
-    const sizeHead = showSizes ? view.sizes.map((s) => `<th class="pa-col-size">${escapeHtml(s)}</th>`).join('') : '';
-    const colCount = 3 + (paCols.revenue ? 1 : 0) + (paCols.delta ? 1 : 0) + (showSizes ? view.sizes.length : 0) + 2;
+    const colCount = 5 + (paCols.revenue ? 1 : 0) + (paCols.delta ? 1 : 0);
 
     const rowsHtml = view.segmentRows.map((r) => {
-        const sizeCells = showSizes ? view.sizes.map((s) => {
-            const q = r.sizes[s] || 0;
-            if (!q) return '<td class="pa-col-size pa-size-empty">–</td>';
-            return `<td class="pa-col-size"><span class="pa-size-q">${paN(q)}</span><span class="pa-size-pct">${((q / r.units) * 100).toFixed(1)}%</span></td>`;
-        }).join('') : '';
-        return `<tr>
+        return `<tr data-key="${escapeHtml(r.key)}">
             <td class="pa-col-rank">${paRankCell(r.rank)}</td>
             <td class="pa-col-product">
                 <div class="pa-product">${paThumb(r)}
@@ -299,7 +298,6 @@ function paRenderResults() {
             <td class="pa-col-total"><span class="pa-total-q">${paN(r.units)}</span><span class="pa-total-sub">${Math.round(paPct(r.units, view.totals.units))}% of shown</span></td>
             ${paCols.revenue ? `<td class="pa-col-rev">${paPKR(r.revenue)}</td>` : ''}
             ${paCols.delta ? `<td class="pa-col-delta"><span class="pa-delta-prev">${paN(r.prevUnits)}</span>${paDeltaHtml(r.units, r.prevUnits, view.hasPrev)}</td>` : ''}
-            ${sizeCells}
             <td class="pa-col-perf">${paPerfBadge(r.perf)}</td>
             <td class="pa-col-kebab"><button type="button" class="pa-kebab" data-key="${escapeHtml(r.key)}" aria-label="Product actions"><i class="fa-solid fa-ellipsis-vertical"></i></button></td>
         </tr>`;
@@ -312,19 +310,12 @@ function paRenderResults() {
             <div class="pa-table-wrap">
                 <table class="pa-table">
                     <thead>
-                        ${showSizes ? `<tr class="pa-thead-group">
-                            <th></th><th></th><th></th>
-                            ${paCols.revenue ? '<th></th>' : ''}${paCols.delta ? '<th></th>' : ''}
-                            <th class="pa-group-variants" colspan="${view.sizes.length}">Variants Sold (Units)</th>
-                            <th></th><th></th>
-                        </tr>` : ''}
                         <tr class="pa-thead-cols">
                             <th class="pa-col-rank">#</th>
                             <th class="pa-col-product">Product</th>
                             <th class="pa-col-total">Total Sold<span>Units</span></th>
                             ${paCols.revenue ? '<th class="pa-col-rev">Revenue<span>PKR</span></th>' : ''}
                             ${paCols.delta ? '<th class="pa-col-delta">vs Previous<span>Units</span></th>' : ''}
-                            ${sizeHead}
                             <th class="pa-col-perf">Performance</th>
                             <th class="pa-col-kebab"></th>
                         </tr>
@@ -515,13 +506,16 @@ function paRenderShell() {
                         <span class="pa-pop-title">Columns</span>
                         <label><input type="checkbox" data-col="revenue"${paCols.revenue ? ' checked' : ''}> Revenue</label>
                         <label><input type="checkbox" data-col="delta"${paCols.delta ? ' checked' : ''}> ${escapeHtml(paComparisonWord())}</label>
-                        <label><input type="checkbox" data-col="sizes"${paCols.sizes ? ' checked' : ''}> Variant sizes</label>
                     </div>
                 </div>
             </div>
         </div>
 
         <div class="pa-toolbar">
+            <div class="pa-field">
+                <label for="paSearchInput">Search</label>
+                <input type="text" id="paSearchInput" class="pa-search" placeholder="Search products…" autocomplete="off" value="${escapeHtml(paSearch)}">
+            </div>
             <div class="pa-field pa-field--time">
                 <label>Time Range</label>
                 <div class="pa-time">
@@ -584,6 +578,11 @@ function paBindShellEvents() {
         paCollection = e.target.value;
         paRenderResults();
     });
+    document.getElementById('paSearchInput').addEventListener('input', (e) => {
+        const value = e.target.value;
+        clearTimeout(_paSearchTimer);
+        _paSearchTimer = setTimeout(() => { paSearch = value.trim(); paRenderResults(); }, 200);
+    });
     document.querySelector('.pa-segments').addEventListener('click', (e) => {
         const btn = e.target.closest('.pa-seg-btn');
         if (!btn) return;
@@ -613,6 +612,8 @@ function paBindShellEvents() {
         if (e.target.closest('#paHeroDefBtn')) { _paHeroDefOpen = !_paHeroDefOpen; paRenderResults(); return; }
         const kebab = e.target.closest('.pa-kebab');
         if (kebab) { paKebabMenu(kebab); return; }
+        const productCell = e.target.closest('.pa-col-product');
+        if (productCell) { paOpenDetailsModal(productCell.closest('tr')?.dataset.key); return; }
     });
     results.addEventListener('change', (e) => {
         if (e.target.id === 'paTrendMetric') { paTrendMetric = e.target.value; paRenderResults(); }
@@ -623,7 +624,9 @@ function paKebabMenu(btn) {
     document.querySelector('.pa-kebab-pop')?.remove();
     const pop = document.createElement('div');
     pop.className = 'pa-pop pa-kebab-pop';
-    pop.innerHTML = '<button type="button" data-act="products">Open in Products</button>';
+    pop.innerHTML = `<button type="button" data-act="details">View details</button>
+        <button type="button" data-act="products">Open in Products</button>`;
+    pop.querySelector('[data-act="details"]').addEventListener('click', () => { pop.remove(); paOpenDetailsModal(btn.dataset.key); });
     pop.querySelector('[data-act="products"]').addEventListener('click', () => { pop.remove(); switchView('products'); });
     const rect = btn.getBoundingClientRect();
     pop.style.position = 'fixed';
@@ -636,6 +639,49 @@ function paKebabMenu(btn) {
 
 function paOnDocClick() {
     if (_paTimeMenuOpen || _paCustomizeOpen) { _paTimeMenuOpen = false; _paCustomizeOpen = false; paSyncToolbar(); }
+}
+
+// -------------------------------------------------------------- details modal
+
+function paCloseDetailsModal() {
+    document.getElementById('paDetailsModal')?.classList.remove('active');
+}
+
+/** Per-product sales + size breakdown, the detail the table no longer spreads
+ *  into a column per size. Shaped from the same derived view the table renders. */
+function paOpenDetailsModal(key) {
+    if (!key) return;
+    const view = paDeriveView();
+    const row = view.rows.find((r) => r.key === key);
+    if (!row) return;
+
+    document.getElementById('paDetailsThumb').innerHTML = row.imageUrl
+        ? `<img src="${escapeHtml(row.imageUrl)}" alt="">`
+        : '<div class="grid-image-placeholder">No Img</div>';
+    document.getElementById('paDetailsName').textContent = row.name;
+    document.getElementById('paDetailsSub').textContent =
+        `${row.collection} · ${paN(row.variantCount)} variant${row.variantCount === 1 ? '' : 's'} · ${paN(row.stock)} in stock`;
+
+    const summary = [
+        ['Rank', `#${row.rank}`],
+        ['Performance', (PA_PERF_META[row.perf] || PA_PERF_META.average).label],
+        ['Units Sold', paN(row.units)],
+        ['Revenue', paPKR(row.revenue)],
+        [paComparisonWord(), view.hasPrev ? `${paN(row.prevUnits)} units` : '—'],
+    ];
+    const sizes = view.sizes
+        .filter((s) => row.sizes[s])
+        .map((s) => [s, `${paN(row.sizes[s])}  (${((row.sizes[s] / row.units) * 100).toFixed(1)}%)`]);
+    const cells = (pairs) => pairs.map(([label, value]) => `
+        <div class="product-details-stock-cell">
+            <span class="product-details-stock-label">${escapeHtml(label)}</span>
+            <span class="product-details-stock-value">${escapeHtml(value)}</span>
+        </div>`).join('');
+    document.getElementById('paDetailsStock').innerHTML =
+        `<div class="product-details-stock-grid">${cells(summary)}</div>` +
+        (sizes.length ? `<div class="product-details-stock-grid">${cells(sizes)}</div>` : '');
+
+    document.getElementById('paDetailsModal')?.classList.add('active');
 }
 
 // ------------------------------------------------------------------- lifecycle
@@ -714,6 +760,11 @@ function initProductAnalyticsView() {
     if (!_paInited) {
         _paInited = true;
         document.addEventListener('click', paOnDocClick);
+        const modal = document.getElementById('paDetailsModal');
+        modal?.addEventListener('click', (e) => { if (e.target === modal) paCloseDetailsModal(); });
+        document.getElementById('paDetailsCloseX')?.addEventListener('click', paCloseDetailsModal);
+        document.getElementById('paDetailsClose')?.addEventListener('click', paCloseDetailsModal);
+        document.getElementById('paDetailsOpenProducts')?.addEventListener('click', () => { paCloseDetailsModal(); switchView('products'); });
     }
     _paTimeMenuOpen = false;
     _paCustomizeOpen = false;
