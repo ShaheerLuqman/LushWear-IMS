@@ -1,8 +1,30 @@
+"""Shopify Admin API access.
+
+Orders go over the REST Admin API; products, collections, locations, inventory and
+webhook subscriptions go over GraphQL. That split is deliberate: GraphQL bills by
+*requested* query cost with a hard 1000-point cap, and a fully nested order (line items,
+fulfillments, fulfillment line items, money bags) costs ~105 points on its own - so
+paging a sync window over GraphQL would move about five orders per request against
+REST's 250.
+
+The catalog read (fetch_products) sidesteps that cost model entirely by running as a
+bulk operation: one mutation starts it, the data it returns is not billed, `first` is
+ignored on every nested connection, and the whole catalog - products, variants and
+collection membership - comes back as one JSONL file. No page sizes to tune, nothing
+truncated, and no second round trip for collections.
+
+The GraphQL reads normalize their records into the REST field shape (`inventory_item_id`,
+`images`, numeric ids) before returning, because Shopify's webhooks deliver REST-shaped
+payloads and services/shopify_products_sync.py reconciles both through one code path.
+"""
+
 import asyncio
+import json
 import logging
 import os
 import re
-from typing import Any, Callable, Dict, List, Optional
+import time
+from typing import Any, Callable, Dict, Iterable, List, Optional
 from urllib.parse import unquote, urlparse, parse_qs
 
 import httpx
@@ -18,6 +40,18 @@ PAGE_LIMIT = 250
 SETTLED_TAG = "Settled"
 _TIMEOUT = 60.0
 _MAX_RATE_LIMIT_RETRIES = 5
+_MAX_GRAPHQL_RETRIES = 5
+
+# The catalog read runs as a bulk operation, whose result is polled for rather than
+# returned inline. Products land in seconds at this store's size; the ceiling only exists
+# so a wedged operation can't hold a request open forever.
+_BULK_POLL_INTERVAL = 1.0
+_BULK_POLL_MAX_INTERVAL = 5.0
+_BULK_TIMEOUT = 300.0
+
+_COLLECTION_PAGE = 10
+# nodes(ids:) is billed per id, and each product there carries a collections connection.
+_COLLECTION_LOOKUP_CHUNK = 50
 
 # Topics app/routes/shopify_webhooks.py handles - kept in sync with that module's
 # _ORDER_TOPICS/_PRODUCT_TOPICS/app-uninstalled/inventory handling. GraphQL enum names,
@@ -102,6 +136,75 @@ def _credentials(org_creds: OrgIntegrationSettings) -> tuple[str, str]:
     return store_url, access_token
 
 
+def _graphql_endpoint(org_creds: OrgIntegrationSettings) -> tuple[str, Dict[str, str]]:
+    store_url, access_token = _credentials(org_creds)
+    return (
+        f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/graphql.json",
+        {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"},
+    )
+
+
+def _throttle_delay(payload: dict, attempt: int) -> float:
+    """How long to wait before retrying a THROTTLED query: exactly the time the shop's
+    leaky bucket needs to refill to this query's cost, since Shopify returns the bucket
+    state alongside the error. Falls back to exponential backoff if it doesn't."""
+    cost = (payload.get("extensions") or {}).get("cost") or {}
+    throttle_status = cost.get("throttleStatus") or {}
+    needed = cost.get("requestedQueryCost")
+    available = throttle_status.get("currentlyAvailable")
+    restore_rate = throttle_status.get("restoreRate")
+    if needed is not None and available is not None and restore_rate:
+        return max((needed - available) / restore_rate, 0.0) + 0.1
+    return 0.5 * (2 ** attempt)
+
+
+async def graphql(
+    query: str, variables: dict, org_creds: OrgIntegrationSettings,
+    client: Optional[httpx.AsyncClient] = None,
+) -> dict:
+    """Run one GraphQL operation and return its `data`, retrying through both kinds of
+    Shopify rate limiting: an HTTP 429 (request-level) and a 200 carrying a THROTTLED
+    error (cost-level, which is the one that actually bites on paged reads)."""
+    if client is None:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as owned_client:
+            return await graphql(query, variables, org_creds, owned_client)
+
+    url, headers = _graphql_endpoint(org_creds)
+    for attempt in range(_MAX_GRAPHQL_RETRIES):
+        response = await client.post(url, headers=headers, json={"query": query, "variables": variables})
+        if response.status_code == 429 or response.status_code >= 500:
+            retry_after = float(response.headers.get("Retry-After", 0) or 0)
+            await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
+            continue
+        response.raise_for_status()
+        payload = response.json()
+        errors = payload.get("errors") or []
+        if not errors:
+            return payload.get("data") or {}
+        if not any((e.get("extensions") or {}).get("code") == "THROTTLED" for e in errors):
+            raise HTTPException(status_code=502, detail=f"Shopify GraphQL error: {errors}")
+        await asyncio.sleep(_throttle_delay(payload, attempt))
+    raise HTTPException(
+        status_code=429, detail=f"Shopify kept rate limiting the request after {_MAX_GRAPHQL_RETRIES} attempts")
+
+
+def _check_user_errors(mutation: str, result: Optional[dict]) -> None:
+    """userErrors are how a mutation reports a rejected input - the HTTP call and the
+    GraphQL execution both succeed, so nothing else surfaces them."""
+    errors = (result or {}).get("userErrors") or []
+    if errors:
+        raise HTTPException(status_code=502, detail=f"Shopify {mutation} failed: {errors}")
+
+
+def _legacy_id(gid: Optional[str]) -> Optional[int]:
+    """Shopify's numeric REST id, out of a GraphQL global id
+    ("gid://shopify/Product/1234" -> 1234). That is the id everything downstream stores,
+    so a GraphQL-synced record and a webhook payload still key against each other."""
+    if not gid:
+        return None
+    return int(str(gid).split("?")[0].rsplit("/", 1)[-1])
+
+
 def _next_page_info(link_header: str) -> str | None:
     """Extract the `page_info` cursor from Shopify's Link header, if there's a next page."""
     match = re.search(r'<([^>]+)>;\s*rel=["\']next["\']', link_header, re.IGNORECASE)
@@ -124,7 +227,8 @@ async def fetch_all(
 ) -> tuple[List[Dict[str, Any]], int]:
     """Page through a Shopify Admin REST collection.
 
-    `resource` is the JSON key and endpoint name (e.g. "orders" -> orders.json).
+    `resource` is the JSON key and endpoint name (e.g. "orders" -> orders.json) - only
+    orders now, since products and collections moved to GraphQL (see fetch_products).
     `org_creds` is the calling org's own store URL/token/API version - see
     app.org_settings.get_org_integration_settings().
     `max_records`, if given, stops paging once at least that many records are collected
@@ -187,20 +291,27 @@ async def fetch_all(
     return records, page_count
 
 
+_PRIMARY_LOCATION_QUERY = """
+query PrimaryLocation { locations(first: 1) { nodes { id } } }
+"""
+
+
 async def get_primary_location_id(org_creds: OrgIntegrationSettings) -> int:
-    """The location inventory_levels/adjust.json posts to. Bills assume a
+    """The location adjust_inventory_levels moves stock at. Bills assume a
     single location - the shop's first one - since there's no location picker
     in Settings; a store with more than one would need one added here."""
-    store_url, access_token = _credentials(org_creds)
-    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/locations.json"
-    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        response = await client.get(url, headers=headers)
-    response.raise_for_status()
-    locations = response.json().get("locations", [])
+    data = await graphql(_PRIMARY_LOCATION_QUERY, {}, org_creds)
+    locations = data["locations"]["nodes"]
     if not locations:
         raise HTTPException(status_code=502, detail="Shopify returned no inventory locations")
-    return locations[0]["id"]
+    return _legacy_id(locations[0]["id"])
+
+
+_INVENTORY_ADJUST_MUTATION = """
+mutation InventoryAdjust($input: InventoryAdjustQuantitiesInput!) {
+  inventoryAdjustQuantities(input: $input) { userErrors { field message } }
+}
+"""
 
 
 async def adjust_inventory_levels(
@@ -209,28 +320,23 @@ async def adjust_inventory_levels(
     """Apply each (inventory_item_id, delta) adjustment at location_id, e.g. so
     a received purchase bill's stock lands in Shopify too - otherwise the next
     products sync (which pulls quantity from Shopify) would silently wipe out
-    the local-only addition. Raises on the first failure; callers roll back
-    whatever local state they already committed."""
-    if not adjustments:
+    the local-only addition. All the changes go in one mutation, so unlike the
+    per-item REST calls this replaces it cannot half-apply; callers still roll
+    back whatever local state they already committed if it fails."""
+    changes = [
+        {
+            "delta": delta,
+            "inventoryItemId": f"gid://shopify/InventoryItem/{inventory_item_id}",
+            "locationId": f"gid://shopify/Location/{location_id}",
+        }
+        for inventory_item_id, delta in adjustments if delta != 0
+    ]
+    if not changes:
         return
-    store_url, access_token = _credentials(org_creds)
-    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/inventory_levels/adjust.json"
-    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        for inventory_item_id, delta in adjustments:
-            if delta == 0:
-                continue
-            for attempt in range(_MAX_RATE_LIMIT_RETRIES):
-                response = await client.post(url, headers=headers, json={
-                    "location_id": location_id,
-                    "inventory_item_id": inventory_item_id,
-                    "available_adjustment": delta,
-                })
-                if response.status_code != 429:
-                    break
-                retry_after = float(response.headers.get("Retry-After", 0) or 0)
-                await asyncio.sleep(max(retry_after, 0.5 * (2 ** attempt)))
-            response.raise_for_status()
+    data = await graphql(_INVENTORY_ADJUST_MUTATION, {
+        "input": {"name": "available", "reason": "correction", "changes": changes},
+    }, org_creds)
+    _check_user_errors("inventoryAdjustQuantities", data.get("inventoryAdjustQuantities"))
 
 
 async def create_fulfillment(
@@ -402,41 +508,209 @@ async def add_order_tag(
         json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [tag])}})
 
 
+# Run as a bulk operation, not a paged query: `first` is ignored on every connection
+# inside one, so this reads the whole catalog - products, their variants and their
+# collection membership - without page-size tuning, truncation repair, or any of it
+# counting against the shop's cost budget. Only the mutation that starts it is billed.
+_BULK_PRODUCTS_QUERY = """
+{
+  products {
+    edges {
+      node {
+        id
+        title
+        status
+        featuredImage { url }
+        variants { edges { node { id title price inventoryQuantity inventoryItem { id } } } }
+        collections { edges { node { id title } } }
+      }
+    }
+  }
+}
+"""
+
+_BULK_RUN_MUTATION = """
+mutation BulkRun($query: String!) {
+  bulkOperationRunQuery(query: $query) {
+    bulkOperation { id status }
+    userErrors { field message }
+  }
+}
+"""
+
+_BULK_STATUS_QUERY = """
+query BulkStatus {
+  currentBulkOperation(type: QUERY) { id status errorCode url }
+}
+"""
+
+
+async def _run_bulk_query(
+    query: str, org_creds: OrgIntegrationSettings, client: httpx.AsyncClient
+) -> Optional[str]:
+    """Run `query` as a bulk operation and return the URL of its JSONL result, or None if
+    it matched nothing (Shopify leaves `url` null rather than serving an empty file).
+
+    Shopify runs one bulk query per app per shop at a time, so a second sync started while
+    one is still running is rejected outright by bulkOperationRunQuery - surfaced here as
+    that userError rather than silently returning a stale operation's data.
+    """
+    data = await graphql(_BULK_RUN_MUTATION, {"query": query}, org_creds, client)
+    result = data["bulkOperationRunQuery"]
+    _check_user_errors("bulkOperationRunQuery", result)
+    operation_id = result["bulkOperation"]["id"]
+
+    deadline = time.monotonic() + _BULK_TIMEOUT
+    delay = _BULK_POLL_INTERVAL
+    while True:
+        await asyncio.sleep(delay)
+        operation = (await graphql(_BULK_STATUS_QUERY, {}, org_creds, client))["currentBulkOperation"]
+        # currentBulkOperation is the app's latest, not necessarily the one just started -
+        # reading another operation's result as this sync's would sync the wrong data.
+        if not operation or operation["id"] != operation_id:
+            raise HTTPException(
+                status_code=502, detail="Another Shopify bulk operation replaced this one")
+        if operation["status"] == "COMPLETED":
+            return operation["url"]
+        if operation["status"] not in ("CREATED", "RUNNING"):
+            raise HTTPException(
+                status_code=502,
+                detail=f"Shopify bulk operation {operation['status']}: {operation.get('errorCode')}")
+        if time.monotonic() > deadline:
+            raise HTTPException(
+                status_code=504, detail="Shopify bulk operation did not finish in time")
+        delay = min(delay * 2, _BULK_POLL_MAX_INTERVAL)
+
+
+def _normalize_product(node: dict, variants: List[dict]) -> dict:
+    """One product in the REST field shape - the same object a products/create or
+    products/update webhook delivers, which is what lets reconcile_one_product handle
+    a synced product and a webhook payload identically."""
+    return {
+        "id": _legacy_id(node["id"]),
+        "title": node.get("title"),
+        # REST's product status was lowercase; reconcile_one_product compares to "active".
+        "status": (node.get("status") or "").lower() or None,
+        "images": [{"src": node["featuredImage"]["url"]}] if node.get("featuredImage") else [],
+        "variants": [
+            {
+                "id": _legacy_id(v["id"]),
+                "title": v.get("title"),
+                "price": v.get("price"),
+                "inventory_quantity": v.get("inventoryQuantity"),
+                "inventory_item_id": _legacy_id((v.get("inventoryItem") or {}).get("id")),
+            }
+            for v in variants
+        ],
+    }
+
+
+def _parse_bulk_products(jsonl: str) -> tuple[List[Dict[str, Any]], Dict[int, List[str]]]:
+    """Reassemble a bulk result into (products, collection names by product id).
+
+    Bulk output is one JSON object per line with every nested connection flattened out to
+    its own line carrying a `__parentId`, so children are grouped back onto their parent
+    here. A child's own id is what says which connection it came from - variants and
+    collections are otherwise indistinguishable.
+    """
+    nodes: List[dict] = []
+    variants: Dict[str, List[dict]] = {}
+    collections: Dict[str, List[str]] = {}
+    for line in jsonl.splitlines():
+        if not line.strip():
+            continue
+        obj = json.loads(line)
+        parent = obj.get("__parentId")
+        if parent is None:
+            nodes.append(obj)
+        elif "/ProductVariant/" in obj["id"]:
+            variants.setdefault(parent, []).append(obj)
+        elif "/Collection/" in obj["id"]:
+            collections.setdefault(parent, []).append(obj["title"])
+
+    products = [_normalize_product(node, variants.get(node["id"], [])) for node in nodes]
+    collections_by_product = {
+        _legacy_id(gid): names for gid, names in collections.items() if names
+    }
+    return products, collections_by_product
+
+
+async def fetch_products(
+    org_creds: OrgIntegrationSettings
+) -> tuple[List[Dict[str, Any]], Dict[int, List[str]]]:
+    """The whole catalog in one bulk operation: every product in the REST field shape
+    with its variants, plus each product's collection names.
+
+    Collection membership rides along because a bulk operation is not billed per field -
+    which is what makes it free here, where the paged query it replaced had to leave it
+    to a second round trip (fetch_product_collections, still used by the webhook path).
+
+    `org_creds` is the calling org's own store URL/token/API version - see
+    app.org_settings.get_org_integration_settings().
+    """
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        url = await _run_bulk_query(_BULK_PRODUCTS_QUERY, org_creds, client)
+        if not url:
+            return [], {}
+        # A signed, already-authenticated URL - deliberately fetched without the Shopify
+        # access token, which has no business being sent to the storage host.
+        response = await client.get(url)
+        response.raise_for_status()
+    return _parse_bulk_products(response.text)
+
+
+_PRODUCT_COLLECTIONS_QUERY = """
+query ProductCollections($ids: [ID!]!, $collectionLimit: Int!) {
+  nodes(ids: $ids) {
+    ... on Product {
+      id
+      collections(first: $collectionLimit) { nodes { title } }
+    }
+  }
+}
+"""
+
+
+def _chunks(items: List[Any], size: int) -> Iterable[List[Any]]:
+    for i in range(0, len(items), size):
+        yield items[i:i + size]
+
+
 async def fetch_product_collections(
     product_ids: List[int], org_creds: OrgIntegrationSettings
 ) -> Dict[int, List[str]]:
     """Map shopify_product_id -> collection names, for just the given products.
 
-    products.json never includes collection membership (Shopify models it as a separate
-    many-to-many resource). Collections rarely change once set, so callers pass only the
-    ids of products still missing one - each becomes a single collects.json?product_id=
-    call instead of paging the whole store's collects table on every sync.
+    Deliberately not folded into fetch_products: collection membership would then cost a
+    nested connection on every product on every sync, while it changes almost never.
+    Callers pass only the ids of products still missing one (see
+    services/shopify_products_sync.py), looked up _COLLECTION_LOOKUP_CHUNK at a time.
     """
     if not product_ids:
         return {}
 
-    (custom_collections, _), (smart_collections, _), collects_by_product = await asyncio.gather(
-        fetch_all("custom_collections", f"limit={PAGE_LIMIT}", org_creds),
-        fetch_all("smart_collections", f"limit={PAGE_LIMIT}", org_creds),
-        asyncio.gather(*(
-            fetch_all("collects", f"product_id={pid}&limit={PAGE_LIMIT}", org_creds)
-            for pid in product_ids
-        )),
-    )
-    titles_by_id = {c["id"]: c["title"] for c in custom_collections + smart_collections}
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        results = await asyncio.gather(*(
+            graphql(_PRODUCT_COLLECTIONS_QUERY, {
+                "ids": [f"gid://shopify/Product/{product_id}" for product_id in chunk],
+                "collectionLimit": _COLLECTION_PAGE,
+            }, org_creds, client)
+            for chunk in _chunks(product_ids, _COLLECTION_LOOKUP_CHUNK)
+        ))
 
     product_collections: Dict[int, List[str]] = {}
-    for product_id, (collects, _) in zip(product_ids, collects_by_product):
-        names = [titles_by_id[c["collection_id"]] for c in collects if c.get("collection_id") in titles_by_id]
-        if names:
-            product_collections[product_id] = names
+    for data in results:
+        for node in data["nodes"]:
+            if not node:
+                continue
+            names = [collection["title"] for collection in node["collections"]["nodes"]]
+            if names:
+                product_collections[_legacy_id(node["id"])] = names
     return product_collections
 
 
 async def register_webhooks(org_creds: OrgIntegrationSettings) -> None:
-    """Subscribe this org's store to WEBHOOK_TOPICS, via the GraphQL Admin API (the modern
-    way to manage webhook subscriptions regardless of whether the rest of the app has moved
-    off REST yet). Called right after OAuth connects (routes/shopify_oauth.py's callback) and
+    """Subscribe this org's store to WEBHOOK_TOPICS. Called right after OAuth connects (routes/shopify_oauth.py's callback) and
     by scripts/register_shopify_webhooks.py for orgs that connected before webhooks existed.
 
     Safe to re-run: Shopify returns a userError ("Address for this topic has already been
@@ -452,24 +726,17 @@ async def register_webhooks(org_creds: OrgIntegrationSettings) -> None:
         logger.warning("SHOPIFY_WEBHOOK_CALLBACK_URL not set - skipping Shopify webhook registration")
         return
 
-    store_url, access_token = _credentials(org_creds)
-    url = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}/graphql.json"
-    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
-
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         for topic in WEBHOOK_TOPICS:
-            response = await client.post(url, headers=headers, json={
-                "query": _WEBHOOK_SUBSCRIPTION_MUTATION,
-                "variables": {
+            try:
+                data = await graphql(_WEBHOOK_SUBSCRIPTION_MUTATION, {
                     "topic": topic,
                     "webhookSubscription": {"callbackUrl": callback_url, "format": "JSON"},
-                },
-            })
-            response.raise_for_status()
-            payload = response.json()
-            if payload.get("errors"):
-                logger.warning("webhookSubscriptionCreate(%s) GraphQL errors: %s", topic, payload["errors"])
+                }, org_creds, client)
+            except HTTPException as e:
+                # One unsupported topic must not cost the store its other subscriptions.
+                logger.warning("webhookSubscriptionCreate(%s) failed: %s", topic, e.detail)
                 continue
-            user_errors = (payload.get("data", {}).get("webhookSubscriptionCreate") or {}).get("userErrors") or []
+            user_errors = (data.get("webhookSubscriptionCreate") or {}).get("userErrors") or []
             if user_errors:
                 logger.warning("webhookSubscriptionCreate(%s) userErrors: %s", topic, user_errors)

@@ -17,9 +17,9 @@ from app.org_settings import get_org_integration_settings, to_public_shape, upse
 router = APIRouter(prefix="/org-settings", tags=["org-settings"])
 
 _SHOP_RE = re.compile(r"^[a-z0-9][a-z0-9\-]*\.myshopify\.com$")
-# read_orders/read_products only - the only two resources app.shopify.fetch_all
-# ever calls (orders.json, products.json). No write scopes: this app never
-# pushes data back to Shopify.
+# read_orders/read_products only - the only two resources app.shopify reads
+# (orders.json over REST, products over GraphQL). No write scopes: this app
+# never pushes data back to Shopify.
 _SHOPIFY_OAUTH_SCOPES = "read_orders,read_products"
 
 

@@ -32,7 +32,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 #### Data & reporting
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
 - [ ] **Shopify webhooks** — trigger order reconciliation on webhook events, not just polling.
-- [ ] **Shopify REST → GraphQL** — migrate Shopify API calls to GraphQL before REST is retired.
+- [ ] **Shopify orders still on REST** — kept on REST deliberately (GraphQL bills ~105 cost points per nested order); revisit before REST is retired.
 
 #### Couriers
 - [ ] **Couriers Next status lag** — `TrackOrder.php` shows stale status vs `CurrentStatus.php`; ask their team before fixing.
@@ -53,6 +53,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Shopify products/inventory on GraphQL** — the catalog now loads in a single bulk operation (cost-exempt, no paging, collections included), so the sync is one call instead of ten paged queries plus a collections round trip; locations, inventory adjustments (one atomic mutation) and webhook registration also on GraphQL, all normalized back to the REST field shape so webhook payloads and synced records stay one code path.
 - [x] **Live WebSocket push on order changes** — new `/events/ws` (ticket-authenticated since a WS handshake can't send a bearer header) pushes `orders_changed` from every order-mutating write path (create/edit/delete, bulk updates, fulfillment, PostEx CSV/settlements, delivery-status refresh, load sheets, cost recalculation, Shopify webhook/sync) and `products_changed` from Shopify product webhooks, so open tabs refresh instantly instead of waiting on the 30-min poll backstop.
 - [x] **Consistent modal sizing** — transaction-entry and delivery-status-report modals now scale as 80vw/80vh (were fixed px) matching bill/PostEx-upload-report; widened the cramped 8-column PostEx settlements table modal; left short forms and confirm dialogs compact (80vw/80vh would've been mostly dead space).
 - [x] **Notifications** — header bell + panel logs every toast that's a real action outcome (saves/syncs/exports/generations/fetches, success or failure); in-memory only, resets each session; validation-guard toasts and routine auto-sync stay out of history.

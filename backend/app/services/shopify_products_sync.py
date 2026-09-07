@@ -167,12 +167,12 @@ async def reconcile_and_persist_single_product(org_id: str, sp_product: dict) ->
     """Reconcile and persist one Shopify product + its variants - the webhook-driven
     counterpart to sync_shopify_products' batch loop. Called for products/create and
     products/update; `sp_product` is that event's payload, the same REST-shaped product
-    object shopify.fetch_all("products", ...) returns.
+    object shopify.fetch_products() returns.
 
-    Collection membership isn't in the webhook payload (same limitation as products.json -
-    Shopify models it as a separate resource), so this only calls back into Shopify
-    (fetch_product_collections, a single-product call) when the product is new or has no
-    collection on file yet - same "missing_collection_ids" cost-saving as the batch sync.
+    Collection membership isn't in the webhook payload, so this calls back into Shopify
+    for it (fetch_product_collections) when the product is new or has no collection on
+    file yet. The batch sync needs no such call - a bulk operation carries collections
+    along with the catalog for free.
     """
     shopify_product_id = sp_product.get("id")
     if not shopify_product_id:
@@ -316,8 +316,8 @@ async def _sync_shopify_products(org_id: str) -> dict:
     org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
     # Shopify fetch and the local DB reads are independent - run them concurrently instead
     # of paying for both durations back to back.
-    (all_products, page_count), (existing_products, existing_variants) = await asyncio.gather(
-        shopify.fetch_all("products", f"limit={shopify.PAGE_LIMIT}", org_creds),
+    (all_products, product_collections), (existing_products, existing_variants) = await asyncio.gather(
+        shopify.fetch_products(org_creds),
         _fetch_products_and_variants(org_id),
     )
 
@@ -330,19 +330,6 @@ async def _sync_shopify_products(org_id: str) -> dict:
     existing_variants_map = {
         v["shopify_variant_id"]: v for v in existing_variants if v.get("shopify_variant_id")
     }
-
-    # Only ask Shopify for collection membership on products that'll actually be synced
-    # and don't already have one stored - collects.json is a per-product call, so this
-    # keeps steady-state syncs from re-fetching collection data for the whole catalog
-    # every time.
-    missing_collection_ids = [
-        p["id"] for p in all_products
-        if p.get("id")
-        and p.get("status") == "active"
-        and p.get("title", "Untitled Product") not in SHOPIFY_SYNC_PRODUCTS_IGNORE
-        and not (existing_products_map.get(p["id"], {}).get("collection") or "").strip()
-    ]
-    product_collections = await shopify.fetch_product_collections(missing_collection_ids, org_creds)
 
     products_to_insert = []
     products_to_update = []
@@ -482,6 +469,5 @@ async def _sync_shopify_products(org_id: str) -> dict:
             "updated": updated_variants_count,
             "total_from_shopify": total_active_variants,
         },
-        "pages_fetched": page_count,
         "total_products_from_shopify": len(all_products),
     }
