@@ -600,17 +600,23 @@ function renderLedgerDetailGrid() {
     ledgerDetailGridApi.refreshCells({ force: true });
 }
 
-// Inserts a full-width divider row carrying the month name ahead of each month's
-// first entry, so a long statement reads as month-by-month blocks. Runs on the
-// display order (most-recent-first); balances are already computed. Undated rows
-// (legacy data) get no header.
+// Inserts a full-width divider row carrying the month name and closing balance
+// ahead of each month's first entry, so a long statement reads as month-by-month
+// blocks. Runs on the display order (most-recent-first), so a month's first row
+// here carries the running balance as of that month's end. Undated rows (legacy
+// data) get no header.
 function withLedgerMonthRows(rows) {
     const out = [];
     let prevMonth = null;
     rows.forEach(row => {
         const month = (row.entry_date || '').slice(0, 7);
         if (month && month !== prevMonth) {
-            out.push({ id: `__month__${month}`, month_row: true, label: ledgerMonthLabel(month) });
+            out.push({
+                id: `__month__${month}`,
+                month_row: true,
+                label: ledgerMonthLabel(month),
+                balance: row.balance
+            });
             prevMonth = month;
         }
         out.push(row);
@@ -626,7 +632,12 @@ function ledgerMonthLabel(month) {
 function ledgerMonthRowRenderer(params) {
     const el = document.createElement('div');
     el.className = 'ledger-month-row';
-    el.textContent = params.data?.label || '';
+    const label = document.createElement('span');
+    label.textContent = params.data?.label || '';
+    const balance = document.createElement('span');
+    balance.className = 'ledger-month-row-balance';
+    balance.textContent = formatBalanceWithSide(params.data?.balance);
+    el.append(label, balance);
     return el;
 }
 

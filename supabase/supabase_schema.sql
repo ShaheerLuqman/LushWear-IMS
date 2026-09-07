@@ -1095,6 +1095,7 @@ BEGIN
     -- owed, so Orders is a liability rather than revenue.
     PERFORM ensure_system_ledger(NEW.id, 'orders', 'Orders', 'Liability', '2200');
     PERFORM ensure_system_ledger(NEW.id, 'inventory', 'Inventory', 'Asset', '1400');
+    PERFORM ensure_system_ledger(NEW.id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
     -- No tax_on_purchases: receive_bill creates it on the first taxed bill.
     RETURN NEW;
 END;
@@ -1116,6 +1117,7 @@ BEGIN
         PERFORM ensure_system_ledger(org.id, 'opening_balance_equity', 'Opening Balance Equity', 'Equity', '3900');
         PERFORM ensure_system_ledger(org.id, 'orders', 'Orders', 'Liability', '2200');
         PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
+        PERFORM ensure_system_ledger(org.id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
     END LOOP;
 END $$;
 
@@ -1602,9 +1604,10 @@ $$;
 -- net_profit was replaced by cost_of_goods_sold/tax_total/gross_profit - the
 -- true bottom-line Net Profit is Gross Profit minus the per-ledger expense
 -- lines (get_month_summary_expense_lines), computed in the orders route.
--- cost_of_goods_sold counts delivered orders only (goods on en-route,
--- unfulfilled, or returned orders are still in stock); Net Sales and Tax stay
--- on the wider non-cancelled basis.
+-- cost_of_goods_sold comes from the posted order_cogs_month journal entries
+-- (sync_month_cogs_journal - one entry per org per fiscal month, Debit
+-- COGS/Credit Inventory), not a live sum of shopify_orders.cost_price;
+-- Net Sales and Tax stay on the wider non-cancelled basis.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
@@ -1650,11 +1653,19 @@ AS $$
             COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('fulfilled', 'cna', 'rfd', 'ica'))::INT AS enroute_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'unfulfilled')::INT AS unfulfilled_orders_count,
             COUNT(*) FILTER (WHERE lower(trim(order_status)) = 'cancelled')::INT AS cancelled_orders_count,
-            COALESCE(SUM(cost_price) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS cost_of_goods_sold,
             COALESCE(SUM(tax_amount) FILTER (WHERE COALESCE(lower(trim(order_status)), '') <> 'cancelled'), 0) AS tax_total,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'delivered'), 0) AS dc_charges_delivered,
             COALESCE(SUM(delivery_charge) FILTER (WHERE lower(trim(order_status)) = 'returned'), 0) AS dc_charges_returned
         FROM period_orders
+    ),
+    cogs AS (
+        SELECT COALESCE(SUM(jl.debit), 0) AS cost_of_goods_sold
+        FROM finances_journal_entries je
+        JOIN finances_journal_lines jl ON jl.journal_id = je.id
+        WHERE je.org_id = p_org_id
+          AND je.source_type = 'order_cogs_month'
+          AND je.entry_date >= p_entry_start
+          AND je.entry_date <= p_entry_end
     )
     SELECT
         ot.total_orders,
@@ -1666,18 +1677,18 @@ AS $$
         ot.unfulfilled_orders_count,
         ot.cancelled_orders_count,
         (ot.total_gross_sale - ot.total_return_amount) AS net_sales,
-        ot.cost_of_goods_sold,
+        c.cost_of_goods_sold,
         ot.tax_total,
         (
             (ot.total_gross_sale - ot.total_return_amount)
-            - ot.cost_of_goods_sold
+            - c.cost_of_goods_sold
             - (ot.dc_charges_delivered + ot.dc_charges_returned)
             - ot.tax_total
         ) AS gross_profit,
         ot.dc_charges_delivered,
         ot.dc_charges_returned,
         (ot.dc_charges_delivered + ot.dc_charges_returned) AS dc_charges_total
-    FROM order_totals ot;
+    FROM order_totals ot, cogs c;
 $$;
 
 -- One row per Expense-type ledger, LEFT JOINed so a ledger with no activity
@@ -2320,6 +2331,112 @@ BEGIN
     UPDATE finances_bills SET status = 'draft', updated_at = NOW() WHERE id = p_bill_id;
 END;
 $$;
+
+-- (month, year) of the fiscal period containing a PKT instant, given the org's
+-- fiscal_month_start_day. Mirrors backend/app/routes/orders.py's
+-- _period_containing exactly (period runs start_day .. next month's start_day - 1).
+CREATE OR REPLACE FUNCTION fiscal_period_of(p_at TIMESTAMPTZ, p_start_day INT)
+RETURNS TABLE(period_month INT, period_year INT)
+LANGUAGE sql
+IMMUTABLE
+AS $$
+    SELECT
+        CASE WHEN d >= p_start_day THEN m ELSE ((m - 2 + 12) % 12) + 1 END,
+        CASE WHEN d >= p_start_day THEN y
+             WHEN m = 1 THEN y - 1
+             ELSE y
+        END
+    FROM (
+        SELECT
+            EXTRACT(DAY   FROM p_at AT TIME ZONE 'Asia/Karachi')::INT AS d,
+            EXTRACT(MONTH FROM p_at AT TIME ZONE 'Asia/Karachi')::INT AS m,
+            EXTRACT(YEAR  FROM p_at AT TIME ZONE 'Asia/Karachi')::INT AS y
+    ) x
+$$;
+
+-- Posts (or retracts) org's Cost of Goods Sold journal entry for one fiscal
+-- month: Debit COGS, Credit Inventory, for the sum of cost_price across every
+-- currently-delivered order whose order_receiving_date falls in that period.
+-- One entry per (org, period), not per order, to match how a real books would
+-- summarize COGS. Always deletes the existing entry for (org, period) first
+-- and reposts only if the total is > 0 - same rebuild-from-scratch idiom as
+-- receive_bill/project_transaction_entry_to_journal.
+CREATE OR REPLACE FUNCTION sync_month_cogs_journal(p_org_id UUID, p_period_month INT, p_period_year INT)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_start_day    INT;
+    v_period_start DATE;
+    v_total        NUMERIC(14, 2);
+    v_cogs         UUID;
+    v_inventory    UUID;
+    v_lines        JSONB;
+BEGIN
+    SELECT fiscal_month_start_day INTO v_start_day
+      FROM system_organizations WHERE id = p_org_id;
+    v_period_start := make_date(p_period_year, p_period_month, v_start_day);
+
+    DELETE FROM finances_journal_entries
+     WHERE org_id = p_org_id AND source_type = 'order_cogs_month' AND entry_date = v_period_start;
+
+    SELECT COALESCE(SUM(o.cost_price), 0) INTO v_total
+      FROM shopify_orders o, fiscal_period_of(o.order_receiving_date, v_start_day) fp
+     WHERE o.org_id = p_org_id
+       AND lower(trim(o.order_status)) = 'delivered'
+       AND fp.period_month = p_period_month
+       AND fp.period_year  = p_period_year;
+
+    IF v_total <= 0 THEN
+        RETURN;
+    END IF;
+
+    v_cogs      := ensure_system_ledger(p_org_id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
+    v_inventory := ensure_system_ledger(p_org_id, 'inventory', 'Inventory', 'Asset', '1400');
+
+    v_lines := jsonb_build_array(
+        jsonb_build_object('account_id', v_cogs,      'debit', v_total, 'credit', 0,
+                            'description', 'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY')),
+        jsonb_build_object('account_id', v_inventory, 'debit', 0, 'credit', v_total,
+                            'description', 'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'))
+    );
+
+    PERFORM post_journal_entry(
+        p_org_id,
+        v_period_start,
+        v_lines,
+        'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'),
+        'order_cogs_month',
+        NULL,
+        'order_cogs_month',
+        NULL);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_shopify_orders_sync_cogs()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_start_day INT;
+    v_row       RECORD;
+    fp          RECORD;
+BEGIN
+    v_row := COALESCE(NEW, OLD);
+    SELECT fiscal_month_start_day INTO v_start_day
+      FROM system_organizations WHERE id = v_row.org_id;
+
+    SELECT * INTO fp FROM fiscal_period_of(v_row.order_receiving_date, v_start_day);
+    PERFORM sync_month_cogs_journal(v_row.org_id, fp.period_month, fp.period_year);
+    RETURN v_row;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS shopify_orders_cogs_journal_trigger ON shopify_orders;
+CREATE TRIGGER shopify_orders_cogs_journal_trigger
+AFTER INSERT OR UPDATE OF order_status, cost_price OR DELETE ON shopify_orders
+FOR EACH ROW
+EXECUTE FUNCTION trg_shopify_orders_sync_cogs();
 
 -- Bills with settlement derived FIFO from the supplier's ledger balance.
 --
