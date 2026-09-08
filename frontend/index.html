@@ -1272,21 +1272,18 @@
                                     <label for="settingsShopifyApiVersion">Shopify API version</label>
                                     <input type="text" id="settingsShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
                                 </div>
-                                <div class="form-group">
-                                    <label for="settingsPostexToken">PostEx merchant token</label>
-                                    <input type="password" id="settingsPostexToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                                    <span class="form-hint" id="settingsPostexTokenStatus"></span>
-                                </div>
-                                <div class="form-group">
-                                    <label for="settingsCouriersNextAuthKey">Couriers Next auth key</label>
-                                    <input type="password" id="settingsCouriersNextAuthKey" class="form-input" placeholder="Leave blank to keep current key" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                                    <span class="form-hint" id="settingsCouriersNextAuthKeyStatus"></span>
-                                </div>
                                 <p id="settingsIntegrationsError" class="auth-gate-error" role="alert"></p>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save integrations</button>
                                 </div>
                             </form>
+                        </section>
+
+                        <section class="settings-section" id="settingsCouriersSection" style="display: none;">
+                            <h2 class="settings-section__title">Couriers</h2>
+                            <p class="settings-section__desc">Turn on the couriers you ship with. Enabling a courier opens its integration keys and creates a ledger for it.</p>
+                            <div id="settingsCouriersList" class="settings-couriers-list"></div>
+                            <p id="settingsCouriersError" class="auth-gate-error" role="alert"></p>
                         </section>
                     </div>
                 </div>

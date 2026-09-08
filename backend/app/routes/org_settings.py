@@ -1,12 +1,16 @@
 import os
 import re
+from typing import List
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException
 
 from app.auth import create_state_token, get_org_id
+from app.couriers import get_org_couriers, update_org_courier
 from app.fiscal_settings import get_org_fiscal_settings, set_org_fiscal_settings
 from app.models import (
+    CourierStatus,
+    CourierUpdate,
     OrgFiscalSettingsPublic,
     OrgFiscalSettingsUpdate,
     OrgIntegrationSettingsPublic,
@@ -39,6 +43,21 @@ async def update_org_settings(body: OrgIntegrationSettingsUpdate, org_id: str = 
         couriers_next_auth_key=body.couriers_next_auth_key,
     )
     return await read_org_settings(org_id)
+
+
+@router.get("/couriers", response_model=List[CourierStatus])
+async def list_couriers(org_id: str = Depends(get_org_id)):
+    return get_org_couriers(org_id)
+
+
+@router.put("/couriers/{courier_id}", response_model=CourierStatus)
+async def update_courier(courier_id: str, body: CourierUpdate, org_id: str = Depends(get_org_id)):
+    try:
+        return update_org_courier(org_id, courier_id, body.enabled, body.credentials)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Unknown courier")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/fiscal", response_model=OrgFiscalSettingsPublic)

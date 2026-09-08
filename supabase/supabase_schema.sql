@@ -940,6 +940,46 @@ BEGIN
 END;
 $$;
 
+-- A courier enabled in Settings > Couriers gets a system ledger
+-- (system_key = 'courier_<id>', an Asset account for COD the courier holds on our
+-- behalf). Adopt-or-create: an org that already keeps a plain ledger named
+-- "PostEx"/"TCS"/etc. keeps that account rather than getting a second, empty one.
+-- Called from app/couriers.py. See
+-- supabase/migrations/20260909000000_courier_system_ledgers.sql.
+CREATE OR REPLACE FUNCTION enable_courier_system_ledger(
+    p_org_id     UUID,
+    p_system_key VARCHAR,
+    p_name       VARCHAR,
+    p_code       VARCHAR
+)
+RETURNS UUID
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    v_id UUID;
+BEGIN
+    SELECT id INTO v_id
+      FROM finances_ledgers
+     WHERE org_id = p_org_id AND system_key = p_system_key;
+    IF v_id IS NOT NULL THEN
+        RETURN v_id;
+    END IF;
+
+    SELECT id INTO v_id
+      FROM finances_ledgers
+     WHERE org_id = p_org_id
+       AND system_key IS NULL
+       AND lower(trim(name)) = lower(trim(p_name))
+     LIMIT 1;
+    IF v_id IS NOT NULL THEN
+        UPDATE finances_ledgers SET system_key = p_system_key WHERE id = v_id;
+        RETURN v_id;
+    END IF;
+
+    RETURN ensure_system_ledger(p_org_id, p_system_key, p_name, 'Asset', p_code);
+END;
+$$;
+
 -- ledgers.opening_balance used to be a free-floating number with no contra
 -- entry: the moment one was set, total debits stopped equalling total credits
 -- (FINANCE_ACCOUNTING_PLAN.md A4). It now posts against Opening Balance Equity.

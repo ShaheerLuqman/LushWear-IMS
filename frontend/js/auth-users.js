@@ -121,21 +121,11 @@ async function loadIntegrationsSection() {
         const apiVersionEl = document.getElementById('settingsShopifyApiVersion');
         const tokenEl = document.getElementById('settingsShopifyAccessToken');
         const tokenStatusEl = document.getElementById('settingsShopifyTokenStatus');
-        const postexEl = document.getElementById('settingsPostexToken');
-        const postexStatusEl = document.getElementById('settingsPostexTokenStatus');
-        const couriersNextEl = document.getElementById('settingsCouriersNextAuthKey');
-        const couriersNextStatusEl = document.getElementById('settingsCouriersNextAuthKeyStatus');
         if (storeUrlEl) storeUrlEl.value = settings.shopify_store_url || '';
         if (apiVersionEl) apiVersionEl.value = settings.shopify_api_version || '';
         if (tokenEl) tokenEl.placeholder = settings.shopify_access_token_configured
             ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
         if (tokenStatusEl) tokenStatusEl.textContent = settings.shopify_access_token_configured ? 'Configured' : 'Not configured';
-        if (postexEl) postexEl.placeholder = settings.postex_merchant_token_configured
-            ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
-        if (postexStatusEl) postexStatusEl.textContent = settings.postex_merchant_token_configured ? 'Configured' : 'Not configured';
-        if (couriersNextEl) couriersNextEl.placeholder = settings.couriers_next_auth_key_configured
-            ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
-        if (couriersNextStatusEl) couriersNextStatusEl.textContent = settings.couriers_next_auth_key_configured ? 'Configured' : 'Not configured';
         return settings;
     } catch (ex) {
         showToast(ex.message || 'Failed to load integrations', 'error');
@@ -201,24 +191,18 @@ function initIntegrationsForm() {
         const storeUrl = document.getElementById('settingsShopifyStoreUrl').value.trim();
         const apiVersion = document.getElementById('settingsShopifyApiVersion').value.trim();
         const token = document.getElementById('settingsShopifyAccessToken').value;
-        const postexToken = document.getElementById('settingsPostexToken').value;
-        const couriersNextAuthKey = document.getElementById('settingsCouriersNextAuthKey').value;
         const body = {
             shopify_store_url: storeUrl || null,
             shopify_api_version: apiVersion || null,
         };
         // Blank means "leave unchanged" - only send a token field the admin actually typed.
         if (token) body.shopify_access_token = token;
-        if (postexToken) body.postex_merchant_token = postexToken;
-        if (couriersNextAuthKey) body.couriers_next_auth_key = couriersNextAuthKey;
 
         const submitBtn = form.querySelector('button[type="submit"]');
         if (submitBtn) submitBtn.disabled = true;
         try {
             await apiJson('/org-settings/', { method: 'PUT', body });
             document.getElementById('settingsShopifyAccessToken').value = '';
-            document.getElementById('settingsPostexToken').value = '';
-            document.getElementById('settingsCouriersNextAuthKey').value = '';
             showToast('Integrations saved', 'success');
             await loadIntegrationsSection();
         } catch (ex) {
@@ -227,6 +211,126 @@ function initIntegrationsForm() {
             if (submitBtn) submitBtn.disabled = false;
         }
     });
+}
+
+/** One courier from GET /org-settings/couriers. Toggling `enabled` and saving
+ * credentials both PUT to the same endpoint; the server also creates/adopts the
+ * courier's system ledger on enable. */
+function renderCourierRow(courier) {
+    const row = document.createElement('div');
+    row.className = 'settings-couriers-row';
+
+    const head = document.createElement('div');
+    head.className = 'settings-couriers-row__head';
+
+    const toggle = document.createElement('label');
+    toggle.className = 'settings-couriers-row__toggle';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = courier.enabled;
+    const name = document.createElement('span');
+    name.textContent = courier.label;
+    toggle.append(checkbox, name);
+    head.appendChild(toggle);
+
+    const ledgerNote = document.createElement('span');
+    ledgerNote.className = 'settings-couriers-row__ledger';
+    if (courier.enabled && courier.ledger_id) {
+        const financeOn = !!currentAccount && (currentAccount.enabled_features || []).includes('finance');
+        if (financeOn && typeof openLedgerDetail === 'function') {
+            const link = document.createElement('a');
+            link.href = '#';
+            link.textContent = 'View ledger';
+            link.addEventListener('click', (e) => { e.preventDefault(); openLedgerDetail(courier.ledger_id); });
+            ledgerNote.appendChild(link);
+        } else {
+            ledgerNote.textContent = 'Ledger ready';
+        }
+    }
+    head.appendChild(ledgerNote);
+    row.appendChild(head);
+
+    const body = document.createElement('div');
+    body.className = 'settings-couriers-row__body';
+    body.hidden = !courier.enabled || !courier.credentials.length;
+
+    const inputs = new Map();
+    courier.credentials.forEach((field) => {
+        const group = document.createElement('div');
+        group.className = 'form-group';
+        const label = document.createElement('label');
+        label.textContent = field.label;
+        const input = document.createElement('input');
+        input.type = 'password';
+        input.className = 'form-input';
+        input.autocomplete = 'new-password';
+        input.dataset.lpignore = 'true';
+        input.placeholder = field.configured ? INTEGRATIONS_TOKEN_PLACEHOLDER_CONFIGURED : INTEGRATIONS_TOKEN_PLACEHOLDER_UNSET;
+        const hint = document.createElement('span');
+        hint.className = 'form-hint';
+        hint.textContent = field.configured ? 'Configured' : 'Not configured';
+        group.append(label, input, hint);
+        body.appendChild(group);
+        inputs.set(field.key, input);
+    });
+
+    if (courier.credentials.length) {
+        const actions = document.createElement('div');
+        actions.className = 'settings-couriers-row__actions';
+        const saveBtn = document.createElement('button');
+        saveBtn.type = 'button';
+        saveBtn.className = 'btn btn-primary';
+        saveBtn.textContent = 'Save keys';
+        saveBtn.addEventListener('click', async () => {
+            const credentials = {};
+            inputs.forEach((input, key) => { if (input.value) credentials[key] = input.value; });
+            saveBtn.disabled = true;
+            try {
+                await apiJson(`/org-settings/couriers/${courier.id}`, {
+                    method: 'PUT', body: { enabled: true, credentials },
+                });
+                showToast(`${courier.label} keys saved`, 'success');
+                await loadCouriersSection();
+            } catch (ex) {
+                showToast(ex.message || 'Could not save keys', 'error');
+                saveBtn.disabled = false;
+            }
+        });
+        actions.appendChild(saveBtn);
+        body.appendChild(actions);
+    }
+    row.appendChild(body);
+
+    checkbox.addEventListener('change', async () => {
+        checkbox.disabled = true;
+        try {
+            await apiJson(`/org-settings/couriers/${courier.id}`, {
+                method: 'PUT', body: { enabled: checkbox.checked },
+            });
+            showToast(checkbox.checked ? `${courier.label} enabled` : `${courier.label} disabled`, 'success');
+            await loadCouriersSection();
+        } catch (ex) {
+            checkbox.checked = !checkbox.checked;
+            checkbox.disabled = false;
+            showToast(ex.message || 'Could not update courier', 'error');
+        }
+    });
+
+    return row;
+}
+
+async function loadCouriersSection() {
+    const list = document.getElementById('settingsCouriersList');
+    const errEl = document.getElementById('settingsCouriersError');
+    if (!list) return;
+    if (errEl) errEl.textContent = '';
+    try {
+        const couriers = await apiJson('/org-settings/couriers', { fallback: 'Failed to load couriers' });
+        list.innerHTML = '';
+        couriers.forEach((courier) => list.appendChild(renderCourierRow(courier)));
+    } catch (ex) {
+        if (errEl) errEl.textContent = ex.message || 'Failed to load couriers';
+    }
 }
 
 const FISCAL_MONTH_NAMES = [
@@ -331,6 +435,7 @@ async function loadAccountSettings() {
     const roleEl = document.getElementById('settingsAccountRole');
     const usersSection = document.getElementById('settingsUsersSection');
     const integrationsSection = document.getElementById('settingsIntegrationsSection');
+    const couriersSection = document.getElementById('settingsCouriersSection');
     const fiscalSection = document.getElementById('settingsFiscalSection');
 
     try {
@@ -346,9 +451,10 @@ async function loadAccountSettings() {
     const isAdmin = !!currentAccount && currentAccount.role === 'admin';
     if (usersSection) usersSection.style.display = isAdmin ? '' : 'none';
     if (integrationsSection) integrationsSection.style.display = isAdmin ? '' : 'none';
+    if (couriersSection) couriersSection.style.display = isAdmin ? '' : 'none';
     if (fiscalSection) fiscalSection.style.display = isAdmin ? '' : 'none';
 
     if (isAdmin) {
-        await Promise.all([loadUsersSection(), loadIntegrationsSection(), loadFiscalSection()]);
+        await Promise.all([loadUsersSection(), loadIntegrationsSection(), loadCouriersSection(), loadFiscalSection()]);
     }
 }
