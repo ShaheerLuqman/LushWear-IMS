@@ -2298,9 +2298,53 @@ input[type="number"] {
     transition: var(--transition);
 }
 
-.status-report-view-btn:hover {
+.status-report-view-btn:hover:not(:disabled) {
     border-color: var(--accent-primary);
     background: var(--accent-glow);
+}
+
+.status-report-view-btn:disabled {
+    color: var(--text-muted);
+    cursor: default;
+}
+
+.status-report-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+#shipperAdviceModal .modal-content {
+    max-width: 520px;
+}
+
+#shipperAdviceModal textarea {
+    width: 100%;
+    resize: vertical;
+}
+
+/* .form-group carries no outer margin, so sibling groups in this modal would sit flush. */
+#shipperAdviceModal .form-group + .form-group {
+    margin-top: 16px;
+}
+
+.shipper-advice-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.shipper-advice-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.shipper-advice-option input {
+    margin-top: 2px;
 }
 
 /* Opened from within the report modal while that stays open. Both get the same
@@ -2373,6 +2417,7 @@ input[type="number"] {
 .status-report-card--returned .status-report-card__count,
 .status-report-card--failed .status-report-card__count { color: var(--danger); }
 .status-report-card--issues .status-report-card__count { color: var(--warning); }
+.status-report-card--review .status-report-card__count { color: var(--accent-primary); }
 .status-report-card--unfulfilled .status-report-card__count { color: var(--text-muted); }
 
 .status-report-detail__title {

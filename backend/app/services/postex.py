@@ -436,6 +436,56 @@ async def create_order(
     return str(tracking_number)
 
 
+class PostexShipperAdviceError(Exception):
+    """PostEx refused to record shipper advice for one parcel. Carries PostEx's own
+    statusMessage so the caller can report per-order why it failed."""
+
+
+# save-shipper-advice's statusId, keyed by the decision the app offers. These are the two
+# answers PostEx waits for on a parcel it has parked for review.
+SHIPPER_ADVICE_STATUS_IDS = {"retry": 2, "return": 1}
+
+
+async def save_shipper_advice(
+    client: httpx.AsyncClient, merchant_token: str, tracking_number: str, advice: str, remarks: str
+) -> None:
+    """Tell PostEx what to do with a parcel awaiting shipper advice: "retry" it, or send it
+    back as a "return".
+
+    Only meaningful while the parcel sits at "Delivery Under Review" (history code 0008),
+    the state PostEx parks a parcel in after failed attempts while it waits for the
+    merchant to decide; the caller checks that before calling.
+
+    `remarks` is what the rider is shown, so it carries the merchant's reason (a corrected
+    address, a new time to try, why it is going back). PostEx marks it mandatory.
+
+    Note the path: the integration guide prints this endpoint under /service/integration
+    (singular), which 404s at their nginx - the live route is /services/ like every other
+    call in this file.
+    """
+    try:
+        response = await client.put(
+            f"{_BASE_URL}/v2/save-shipper-advice",
+            headers={"token": merchant_token, "Content-Type": "application/json"},
+            json={
+                "trackingNumber": tracking_number,
+                "statusId": SHIPPER_ADVICE_STATUS_IDS[advice],
+                "remarks": remarks,
+            },
+        )
+    except httpx.HTTPError as exc:
+        raise PostexShipperAdviceError(f"Could not reach PostEx: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise PostexShipperAdviceError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
+
+    if str(body.get("statusCode")) != _SUCCESS_STATUS:
+        raise PostexShipperAdviceError(
+            body.get("statusMessage") or f"PostEx rejected the advice (HTTP {response.status_code})")
+
+
 async def _fetch_invoice_pdf(
     client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]
 ) -> bytes:

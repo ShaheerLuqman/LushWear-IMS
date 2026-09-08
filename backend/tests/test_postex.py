@@ -547,3 +547,68 @@ class TestSettlementFromTracking:
     def test_matches_csv_rows(self, invoice, expected_tax):
         result = postex.settlement_from_tracking(self._dist(invoicePayment=invoice))
         assert result["tax_amount"] == expected_tax
+
+
+class TestSaveShipperAdvice:
+    """save-shipper-advice, the write behind the report's Advise button."""
+
+    @staticmethod
+    def _client(response_json, captured=None, status_code=200):
+        class _Response:
+            def __init__(self):
+                self.status_code = status_code
+
+            def json(self):
+                return response_json
+
+        class _Client:
+            async def put(self, url, headers=None, json=None):
+                if captured is not None:
+                    captured.update({"url": url, "headers": headers, "json": json})
+                return _Response()
+
+        return _Client()
+
+    def test_sends_the_retry_advice_for_the_parcel(self):
+        captured = {}
+        client = self._client({"statusCode": "200", "statusMessage": "SUCCESSFULLY OPERATED"}, captured)
+
+        asyncio.run(postex.save_shipper_advice(client, "tok", "29306960008896", "retry", "Deliver after 5pm"))
+
+        assert captured["headers"]["token"] == "tok"
+        # The guide prints this under /service/ (singular), which 404s; /services/ is live.
+        assert captured["url"] == (
+            "https://api.postex.pk/services/integration/api/order/v2/save-shipper-advice")
+        assert captured["json"] == {
+            "trackingNumber": "29306960008896",
+            "statusId": 2,
+            "remarks": "Deliver after 5pm",
+        }
+
+    def test_return_is_sent_as_its_own_status_id(self):
+        captured = {}
+        client = self._client({"statusCode": "200"}, captured)
+
+        asyncio.run(postex.save_shipper_advice(client, "tok", "CX1", "return", "Customer refused"))
+
+        assert captured["json"]["statusId"] == 1
+        assert captured["json"]["remarks"] == "Customer refused"
+
+    def test_a_rejection_raises_with_postex_own_message(self):
+        client = self._client({"statusCode": "400", "statusMessage": "ORDER IS NOT ATTEMPTED"})
+
+        with pytest.raises(postex.PostexShipperAdviceError, match="ORDER IS NOT ATTEMPTED"):
+            asyncio.run(postex.save_shipper_advice(client, "tok", "CX1", "retry", "Retry"))
+
+    def test_a_non_json_body_raises_rather_than_reporting_success(self):
+        class _Client:
+            async def put(self, url, headers=None, json=None):
+                class _Response:
+                    status_code = 502
+
+                    def json(self):
+                        raise ValueError("not json")
+                return _Response()
+
+        with pytest.raises(postex.PostexShipperAdviceError, match="502"):
+            asyncio.run(postex.save_shipper_advice(_Client(), "tok", "CX1", "retry", "Retry"))

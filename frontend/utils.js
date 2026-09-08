@@ -273,6 +273,26 @@ function deliveryStatusIndicatesCNA(data) {
     return deliveryStatusIncludes(data, 'Attempt Made: CNA');
 }
 
+/* PostEx parks a parcel here after failed attempts and waits for the merchant to say
+   retry-or-return. Matched on the history code, not the message, which PostEx words
+   differently across endpoints. Mirrors backend POSTEX_UNDER_REVIEW_CODE. */
+const POSTEX_UNDER_REVIEW_CODE = '0008';
+
+/**
+ * True if the parcel is awaiting shipper advice right now - i.e. under review is the
+ * NEWEST event, not one a later attempt or return has already superseded. Only these can
+ * be advised - reattempted or returned. Mirrors backend _delivery_status_is_under_review.
+ */
+function deliveryStatusIsUnderReview(data) {
+    if (!data) return false;
+    const history = data.status_history || [];
+    if (history.length > 0) {
+        const newest = history.reduce((a, b) => ((b.datetime || '') >= (a.datetime || '') ? b : a));
+        return String(newest.status_code || '').trim() === POSTEX_UNDER_REVIEW_CODE;
+    }
+    return (data.latest_status || '').trim().toLowerCase() === 'delivery under review';
+}
+
 /** Normalize courier names for resilient matching. Mirrors backend _normalize_courier_name. */
 function normalizeCourierName(courier) {
     return (courier || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '');

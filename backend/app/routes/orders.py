@@ -2071,6 +2071,30 @@ def _delivery_status_indicates_cna(delivery_status_data: dict) -> bool:
     return False
 
 
+# PostEx parks a parcel here after failed attempts and waits for the merchant to say
+# retry-or-return. Matched on the history code rather than the message, which PostEx
+# words differently across endpoints ("Delivery Under Review" in tracking history,
+# "Under Verification" in get-all-order).
+POSTEX_UNDER_REVIEW_CODE = "0008"
+
+
+def _delivery_status_is_under_review(delivery_status_data: Optional[dict]) -> bool:
+    """True if the parcel is awaiting shipper advice right now - i.e. under review is the
+    NEWEST event, not one a later attempt or return has already superseded.
+
+    Deliberately not the same thing as "has been under review": PostEx's own get-all-order
+    still files an already-returning parcel under status 9, and a reattempt on one of those
+    is refused. Mirrors frontend deliveryStatusIsUnderReview.
+    """
+    if not delivery_status_data:
+        return False
+    history = delivery_status_data.get("status_history") or []
+    if history:
+        newest = max(history, key=lambda h: h.get("datetime") or "")
+        return str(newest.get("status_code") or "").strip() == POSTEX_UNDER_REVIEW_CODE
+    return (delivery_status_data.get("latest_status") or "").strip().lower() == "delivery under review"
+
+
 def _classify_status(status_text: str, courier_normalized: str) -> Optional[str]:
     """Classify a status text into one of the relevant order statuses.
 
@@ -2992,6 +3016,81 @@ async def get_delivery_status_bulk(
     except Exception:
         logger.exception("Error fetching bulk delivery status")
         raise HTTPException(status_code=500, detail="Error fetching delivery status")
+
+class ShipperAdviceBody(BaseModel):
+    order_ids: List[str]
+    advice: str
+    remarks: str
+
+
+class ShipperAdviceResult(BaseModel):
+    order_id: str
+    order_number: Optional[int] = None
+    ok: bool
+    error: Optional[str] = None
+
+
+@router.post("/postex-shipper-advice", response_model=List[ShipperAdviceResult])
+async def save_postex_shipper_advice(body: ShipperAdviceBody, org_id: str = Depends(get_org_id)):
+    """Answer PostEx on orders sitting at "Delivery Under Review": retry the delivery, or
+    take the parcel back as a return.
+
+    The under-review check is redone here off stored delivery_status rather than trusted
+    from the caller: this writes to the courier, and a parcel that has moved on since the
+    report was drawn (returned, or delivered on a later attempt) must not be re-advised.
+    Orders are sent one at a time - a handful at most in practice, and a write endpoint is
+    not somewhere to fan out.
+    """
+    if not body.order_ids:
+        raise HTTPException(status_code=400, detail="No orders selected.")
+    if body.advice not in postex.SHIPPER_ADVICE_STATUS_IDS:
+        raise HTTPException(status_code=400, detail="advice must be 'retry' or 'return'")
+    remarks = body.remarks.strip()
+    if not remarks:
+        raise HTTPException(status_code=400, detail="Remarks are required - PostEx shows them to the rider.")
+
+    supabase = get_supabase()
+    rows = org_table(supabase, org_id, "shopify_orders").select(
+        "id, order_number, courier, tracking_number, delivery_status"
+    ).in_("id", body.order_ids).execute().data or []
+    postex_name = _FULFILL_COURIER_NAMES["postex"]
+
+    eligible, results = [], []
+    for row in rows:
+        if (row.get("courier") or "").strip() != postex_name or not row.get("tracking_number"):
+            results.append(ShipperAdviceResult(
+                order_id=row["id"], order_number=row.get("order_number"), ok=False,
+                error="Not a booked PostEx order"))
+        elif not _delivery_status_is_under_review(row.get("delivery_status")):
+            results.append(ShipperAdviceResult(
+                order_id=row["id"], order_number=row.get("order_number"), ok=False,
+                error="No longer under review - refresh the delivery status"))
+        else:
+            eligible.append(row)
+
+    if not eligible:
+        raise HTTPException(
+            status_code=400,
+            detail=results[0].error if len(results) == 1 else "None of the selected orders are awaiting shipper advice.")
+
+    org_creds = get_org_integration_settings(org_id)
+    if not org_creds.postex_merchant_token:
+        raise HTTPException(status_code=400, detail="PostEx credentials are not configured for this organization. Set them in Settings > Integrations.")
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        for row in eligible:
+            try:
+                await postex.save_shipper_advice(
+                    client, org_creds.postex_merchant_token, row["tracking_number"], body.advice, remarks)
+                results.append(ShipperAdviceResult(
+                    order_id=row["id"], order_number=row.get("order_number"), ok=True))
+            except postex.PostexShipperAdviceError as exc:
+                logger.warning("[postex-shipper-advice] %s on order %s (%s): %s",
+                               body.advice, row.get("order_number"), row["tracking_number"], exc)
+                results.append(ShipperAdviceResult(
+                    order_id=row["id"], order_number=row.get("order_number"), ok=False, error=str(exc)))
+    return results
+
 
 @router.post("/fetch-postex-settlements")
 async def fetch_postex_settlements(

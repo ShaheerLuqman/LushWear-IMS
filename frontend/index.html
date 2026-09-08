@@ -1740,6 +1740,41 @@
         </div>
     </div>
 
+    <!-- PostEx shipper advice (retry / return) Modal -->
+    <div id="shipperAdviceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Advise PostEx</h2>
+                <button type="button" class="modal-close" id="closeShipperAdviceModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description" id="shipperAdviceSummary"></p>
+                <div class="form-group">
+                    <label>Decision</label>
+                    <div class="shipper-advice-options">
+                        <label class="shipper-advice-option">
+                            <input type="radio" name="shipperAdviceType" value="retry" checked>
+                            <span><strong>Reattempt delivery</strong> — ask PostEx to try the customer again.</span>
+                        </label>
+                        <label class="shipper-advice-option">
+                            <input type="radio" name="shipperAdviceType" value="return">
+                            <span><strong>Return the parcel</strong> — send it back to the warehouse.</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="shipperAdviceRemarks">Remarks for the rider</label>
+                    <textarea id="shipperAdviceRemarks" class="form-input" rows="4"
+                        placeholder="e.g. Customer asked to deliver after 5pm; correct address is House 21, Street 37"></textarea>
+                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" class="btn btn-secondary" id="shipperAdviceCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="shipperAdviceConfirmBtn">Send to PostEx</button>
+            </div>
+        </div>
+    </div>
+
     <!-- Generate Load Sheet Modal -->
     <div id="generateLoadSheetModal" class="modal">
         <div class="modal-content">

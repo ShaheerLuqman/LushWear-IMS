@@ -398,6 +398,94 @@ class TestPostexAirwayBillsRoute:
         assert r.status_code == 400
 
 
+class TestUnderReviewPredicate:
+    """The gate the shipper-advice route and the report's button both hinge on."""
+
+    @staticmethod
+    def _history(*pairs):
+        return {"status_history": [{"status_code": c, "datetime": d} for c, d in pairs]}
+
+    def test_under_review_as_the_newest_event_is_awaiting_advice(self):
+        from app.routes.orders import _delivery_status_is_under_review
+        assert _delivery_status_is_under_review(self._history(
+            ("0013", "2026-09-08T11:41:09.000+0500"),
+            ("0008", "2026-09-08T17:26:55.000+0500"),
+        ))
+
+    def test_a_superseded_review_is_not(self):
+        # PostEx's own get-all-order still files this parcel under status 9, but it is
+        # already on its way back - a reattempt on one of these is refused.
+        from app.routes.orders import _delivery_status_is_under_review
+        assert not _delivery_status_is_under_review(self._history(
+            ("0008", "2026-09-04T18:04:19.000+0500"),
+            ("0040", "2026-09-06T22:13:10.000+0500"),
+        ))
+
+    def test_history_order_in_the_payload_does_not_matter(self):
+        from app.routes.orders import _delivery_status_is_under_review
+        assert _delivery_status_is_under_review(self._history(
+            ("0008", "2026-09-08T17:26:55.000+0500"),
+            ("0013", "2026-09-08T11:41:09.000+0500"),
+        ))
+
+    def test_falls_back_to_latest_status_when_history_is_empty(self):
+        from app.routes.orders import _delivery_status_is_under_review
+        assert _delivery_status_is_under_review({"latest_status": "Delivery Under Review"})
+        assert not _delivery_status_is_under_review({"latest_status": "Delivered to Customer"})
+        assert not _delivery_status_is_under_review(None)
+
+
+class TestPostexShipperAdviceRoute:
+    """Request-validation and eligibility branches; the save-shipper-advice round trip is
+    covered at the service layer (test_postex.py::TestSaveShipperAdvice), same precedent as
+    TestPostexAirwayBillsRoute."""
+
+    URL = "/api/orders/postex-shipper-advice"
+    UNDER_REVIEW = {"status_history": [{"status_code": "0008", "datetime": "2026-09-08T17:26:55.000+0500"}]}
+
+    def _body(self, **over):
+        return {"order_ids": ["o1"], "advice": "retry", "remarks": "Retry", **over}
+
+    def test_no_orders_selected_is_rejected(self, make_client):
+        r = make_client({}).post(self.URL, json=self._body(order_ids=[]))
+        assert r.status_code == 400
+
+    def test_blank_remarks_are_rejected(self, make_client):
+        # PostEx marks remarks mandatory and shows them to the rider.
+        r = make_client({}).post(self.URL, json=self._body(remarks="   "))
+        assert r.status_code == 400
+
+    def test_an_unknown_advice_is_rejected(self, make_client):
+        r = make_client({}).post(self.URL, json=self._body(advice="cancel"))
+        assert r.status_code == 400
+
+    def test_an_order_that_moved_on_is_refused_rather_than_re_advised(self, make_client):
+        client = make_client({"shopify_orders": [{
+            "id": "o1", "order_number": 100, "courier": "PostEx", "tracking_number": "PX1",
+            "delivery_status": {"status_history": [{"status_code": "0005", "datetime": "2026-09-09T10:00:00.000+0500"}]},
+        }]})
+        r = client.post(self.URL, json=self._body())
+        assert r.status_code == 400
+        assert "no longer under review" in r.json()["detail"].lower()
+
+    def test_a_non_postex_order_is_refused(self, make_client):
+        client = make_client({"shopify_orders": [{
+            "id": "o1", "order_number": 100, "courier": "Couriers Next", "tracking_number": "CN1",
+            "delivery_status": self.UNDER_REVIEW,
+        }]})
+        r = client.post(self.URL, json=self._body())
+        assert r.status_code == 400
+
+    def test_missing_credentials_are_reported_before_any_courier_call(self, make_client):
+        client = make_client({"shopify_orders": [{
+            "id": "o1", "order_number": 100, "courier": "PostEx", "tracking_number": "PX1",
+            "delivery_status": self.UNDER_REVIEW,
+        }]})
+        r = client.post(self.URL, json=self._body(advice="return"))
+        assert r.status_code == 400
+        assert "credentials" in r.json()["detail"].lower()
+
+
 class TestCouriersNextAirwayBillsRoute:
     """Same precedent as TestPostexAirwayBillsRoute - request-validation branches only;
     the org_creds -> GetOrderList.php round trip is covered at the service layer
