@@ -4793,6 +4793,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row {
     display: flex;
     align-items: center;
+    justify-content: space-between;
     height: 100%;
     padding: 0 16px;
     font-size: 11px;
@@ -4801,6 +4802,10 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     text-transform: uppercase;
     color: var(--text-secondary);
     background: var(--grid-header-bg);
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-balance {
+    color: var(--text-primary);
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell,
