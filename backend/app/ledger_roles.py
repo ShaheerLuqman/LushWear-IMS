@@ -21,11 +21,20 @@ SYSTEM_LEDGER_LABELS = {
     "opening_balance_equity": "Opening Balance Equity",
     "orders": "Orders",
     "inventory": "Inventory",
+    "cost_of_goods_sold": "COGS",
+    "sales_revenue": "Sales Revenue",
+    "sales_return": "Sales Return",
+    "delivery_charges": "Delivery Charges",
+    "withholding_tax": "Withholding Tax",
     # Not seeded with the org - receive_bill creates it the first time a bill
     # carries tax. Still a role, so it still needs a label when one exists.
     "tax_on_purchases": "Tax on Purchases",
     # Same lazy creation, for a bill's other (non-tax, non-stock) expense.
     "other_expenses": "Other Expenses",
+    # Created on demand by resolve_courier_ledger for a courier with no system
+    # ledger of its own (SCS, "Other", one switched off in Settings); the
+    # per-courier accounts themselves are labelled in couriers.py.
+    "courier_other": "Courier Receivables - Other",
 }
 
 
