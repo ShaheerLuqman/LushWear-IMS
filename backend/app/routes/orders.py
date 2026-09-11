@@ -73,6 +73,10 @@ MAX_PDF_BATCH_ORDERS = 500
 # keeps us from opening hundreds of simultaneous connections to any one service.
 _BULK_CONCURRENCY = 20
 
+# Gives the courier a moment to finish generating the last-booked parcel's label before
+# the fulfillment progress screen's Print button unlocks - see the /fulfill stream.
+_POST_BOOKING_LABEL_DELAY = 2.0
+
 
 def _period_start_end(month: int, year: int, start_day: int = DEFAULT_FISCAL_MONTH_START_DAY):
     """Return (start_iso, end_iso) for period: month's `start_day` 00:00:00 PKT to next
@@ -685,6 +689,11 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                 yield json.dumps({"type": "order", "result": result.model_dump()}) + "\n"
 
         if booked:
+            # The fulfillment progress screen's Print button unlocks right after "done",
+            # but PostEx generates a label asynchronously - the parcel booked last has had
+            # no time to be ready yet. A short pause here is cheaper than the airway-bill
+            # endpoint's own retry (get_airway_bill) having to catch up after the fact.
+            await asyncio.sleep(_POST_BOOKING_LABEL_DELAY)
             event_bus.publish(org_id, {"type": "orders_changed"})
             yield json.dumps({"type": "shopify_sync"}) + "\n"
             await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)

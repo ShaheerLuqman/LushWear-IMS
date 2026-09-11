@@ -548,6 +548,7 @@ class TestFulfillOrdersRoute:
 
         monkeypatch.setattr(orders.postex, "create_order", _fake_create_order)
         monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+        monkeypatch.setattr(orders, "_POST_BOOKING_LABEL_DELAY", 0)
 
         r = client.post("/api/orders/fulfill", json={
             "courier": "postex", "pickup_address_code": "PA1",
@@ -586,6 +587,7 @@ class TestFulfillOrdersRoute:
 
         monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
         monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+        monkeypatch.setattr(orders, "_POST_BOOKING_LABEL_DELAY", 0)
 
         r = client.post("/api/orders/fulfill", json={
             "courier": "postex", "pickup_address_code": "PA1",
@@ -626,6 +628,7 @@ class TestFulfillOrdersRoute:
 
         monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
         monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+        monkeypatch.setattr(orders, "_POST_BOOKING_LABEL_DELAY", 0)
 
         r = client.post("/api/orders/fulfill", json={
             "courier": "postex", "pickup_address_code": "PA1",
@@ -661,6 +664,7 @@ class TestFulfillOrdersRoute:
 
         monkeypatch.setattr(orders.postex, "create_order", _spy_create_order)
         monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+        monkeypatch.setattr(orders, "_POST_BOOKING_LABEL_DELAY", 0)
 
         r = client.post("/api/orders/fulfill", json={
             "courier": "postex", "pickup_address_code": "PA1",

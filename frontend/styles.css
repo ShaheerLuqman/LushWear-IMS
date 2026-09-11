@@ -2315,6 +2315,31 @@ input[type="number"] {
     justify-content: flex-end;
 }
 
+.status-report-select {
+    width: 28px;
+}
+
+.status-report-bulk-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.status-report-bulk-select-all {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
 #shipperAdviceModal .modal-content {
     max-width: 520px;
 }

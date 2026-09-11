@@ -4,15 +4,29 @@ import io
 import httpx
 import pytest
 from pypdf import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
 
 from app.services import postex
 
 
-def _tiny_pdf() -> bytes:
+def _tiny_pdf(pages: int = 1) -> bytes:
     writer = PdfWriter()
-    writer.add_blank_page(width=72, height=72)
+    for _ in range(pages):
+        writer.add_blank_page(width=72, height=72)
     buf = io.BytesIO()
     writer.write(buf)
+    return buf.getvalue()
+
+
+def _tracking_pdf(tracking_numbers) -> bytes:
+    """A real PDF whose text layer lists one "Tracking No: <n>" line per tracking
+    number, matching what get_airway_bill's verification regex looks for."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=(200, 200))
+    for tn in tracking_numbers:
+        c.drawString(10, 100, f"Tracking No: {tn}")
+        c.showPage()
+    c.save()
     return buf.getvalue()
 
 
@@ -260,14 +274,16 @@ class TestCreateOrder:
 
 class TestGetAirwayBill:
     """get_airway_bill is async; driven with plain asyncio.run, same convention as
-    TestCreateOrder above."""
+    TestCreateOrder above. pdf_bytes defaults to a real PDF listing "Tracking No:" for
+    every requested number, since get_airway_bill now reads them back out of the text
+    to verify none are missing."""
 
     @staticmethod
-    def _client(pdf_bytes=b"%PDF-1.4 fake", status_code=200, json_body=None, captured=None):
+    def _client(tracking_numbers=None, pdf_bytes=None, status_code=200, json_body=None, captured=None):
         class _Response:
             def __init__(self):
                 self.status_code = status_code
-                self.content = pdf_bytes
+                self.content = pdf_bytes if pdf_bytes is not None else _tracking_pdf(tracking_numbers or [])
 
             def json(self):
                 if json_body is None:
@@ -284,20 +300,21 @@ class TestGetAirwayBill:
 
     def test_returns_the_pdf_bytes_and_sends_the_documented_shape(self):
         captured = {}
-        client = self._client(pdf_bytes=b"%PDF-1.4 the bytes", captured=captured)
+        client = self._client(tracking_numbers=["CX-1", "CX-2"], captured=captured)
 
         pdf = asyncio.run(postex.get_airway_bill(client, "tok", ["CX-1", "CX-2"]))
 
-        assert pdf == b"%PDF-1.4 the bytes"
+        assert pdf.startswith(b"%PDF")
         assert captured["url"].endswith("/v1/get-invoice")
         assert captured["headers"]["token"] == "tok"
         assert captured["params"]["trackingNumbers"] == "CX-1,CX-2"
 
     def test_a_selection_within_one_call_is_sent_as_a_single_request(self):
         captured = {}
-        client = self._client(captured=captured)
+        numbers = [f"CX-{i}" for i in range(50)]
+        client = self._client(tracking_numbers=numbers, captured=captured)
 
-        asyncio.run(postex.get_airway_bill(client, "tok", [f"CX-{i}" for i in range(50)]))
+        asyncio.run(postex.get_airway_bill(client, "tok", numbers))
 
         assert captured["params"]["trackingNumbers"].count(",") == 49
 
@@ -306,16 +323,18 @@ class TestGetAirwayBill:
 
         class _Client:
             async def get(self, url, headers=None, params=None):
-                calls.append(params["trackingNumbers"])
-                return type("R", (), {"status_code": 200, "content": _tiny_pdf(),
+                chunk = params["trackingNumbers"].split(",")
+                calls.append(chunk)
+                return type("R", (), {"status_code": 200, "content": _tracking_pdf(chunk),
                                       "json": lambda self: (_ for _ in ()).throw(ValueError())})()
 
-        pdf = asyncio.run(postex.get_airway_bill(
-            _Client(), "tok", [f"CX-{i}" for i in range(postex._INVOICE_TRACKING_PER_CALL + 5)]))
+        total = postex._INVOICE_TRACKING_PER_CALL + 5
+        numbers = [f"CX-{i}" for i in range(total)]
+        pdf = asyncio.run(postex.get_airway_bill(_Client(), "tok", numbers))
 
         assert len(calls) == 2
         assert pdf.startswith(b"%PDF")
-        assert len(PdfReader(io.BytesIO(pdf)).pages) == 2
+        assert postex._extract_tracking_numbers(pdf) == set(numbers)
 
     def test_no_tracking_numbers_is_rejected(self):
         client = self._client()
@@ -334,6 +353,55 @@ class TestGetAirwayBill:
 
         with pytest.raises(postex.PostexInvoiceError, match="500"):
             asyncio.run(postex.get_airway_bill(client, "tok", ["CX-1"]))
+
+    def test_a_pdf_missing_a_tracking_number_is_retried_until_complete(self, monkeypatch):
+        # Simulates a freshly booked tracking number sharing a page with others: the
+        # first call's label isn't in the text yet, the second call has caught up -
+        # same case a raw page-count check can't see (see get_airway_bill's docstring).
+        monkeypatch.setattr(postex, "_INVOICE_READY_RETRY_DELAY", 0)
+        responses = iter([_tracking_pdf(["CX-1"]), _tracking_pdf(["CX-1", "CX-2"])])
+        calls = []
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                calls.append(params["trackingNumbers"])
+                return type("R", (), {"status_code": 200, "content": next(responses)})()
+
+        pdf = asyncio.run(postex.get_airway_bill(_Client(), "tok", ["CX-1", "CX-2"]))
+
+        assert len(calls) == 2
+        assert postex._extract_tracking_numbers(pdf) == {"CX-1", "CX-2"}
+
+    def test_a_still_incomplete_pdf_is_returned_anyway_after_the_retry_budget(self, monkeypatch):
+        # Never catches up - must not hang or raise, just hand back the best it got.
+        monkeypatch.setattr(postex, "_INVOICE_READY_RETRY_DELAY", 0)
+        calls = []
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                calls.append(params["trackingNumbers"])
+                return type("R", (), {"status_code": 200, "content": _tracking_pdf(["CX-1"])})()
+
+        pdf = asyncio.run(postex.get_airway_bill(_Client(), "tok", ["CX-1", "CX-2"]))
+
+        assert len(calls) == 1 + postex._INVOICE_READY_RETRIES
+        assert postex._extract_tracking_numbers(pdf) == {"CX-1"}
+
+    def test_a_pdf_with_no_text_layer_is_returned_without_retrying(self, monkeypatch):
+        # Nothing to verify against (e.g. an image-only PDF) - retrying would only ever
+        # repeat the same non-finding, so it must not loop.
+        monkeypatch.setattr(postex, "_INVOICE_READY_RETRY_DELAY", 0)
+        calls = []
+
+        class _Client:
+            async def get(self, url, headers=None, params=None):
+                calls.append(params["trackingNumbers"])
+                return type("R", (), {"status_code": 200, "content": _tiny_pdf()})()
+
+        pdf = asyncio.run(postex.get_airway_bill(_Client(), "tok", ["CX-1", "CX-2"]))
+
+        assert len(calls) == 1
+        assert postex._extract_tracking_numbers(pdf) == set()
 
 
 class TestFetchPickupAddresses:
