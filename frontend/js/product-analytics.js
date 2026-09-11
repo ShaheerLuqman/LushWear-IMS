@@ -16,7 +16,6 @@ let paCustomEnd = '';
 let paCollection = '';                // '' = all collections
 let paSearch = '';                    // free-text product filter, table only
 let _paSearchTimer = null;
-let paSegment = 'all';                // 'all' | 'hero' | 'zero'
 let paTrendMetric = 'units';          // 'units' | 'revenue'
 let _paTimeMenuOpen = false;
 let _paCustomizeOpen = false;
@@ -38,8 +37,8 @@ const PA_TIME_PRESETS = [
 function paLoadCols() {
     try {
         const saved = JSON.parse(localStorage.getItem('lushwear_pa_cols') || '{}');
-        return { revenue: true, delta: true, ...saved };
-    } catch (e) { return { revenue: true, delta: true }; }
+        return { revenue: true, delta: true, sizes: true, ...saved };
+    } catch (e) { return { revenue: true, delta: true, sizes: true }; }
 }
 function paSaveCols() {
     try { localStorage.setItem('lushwear_pa_cols', JSON.stringify(paCols)); } catch (e) { /* ignore */ }
@@ -173,20 +172,13 @@ function paDeriveView() {
     };
     prevTotals.aov = prevTotals.orders ? prevTotals.revenue / prevTotals.orders : 0;
 
-    let segmentRows = paSegment === 'all' ? rows : rows.filter((r) => r.perf === paSegment);
+    let segmentRows = rows;
     if (paSearch) {
         const q = paSearch.toLowerCase();
         segmentRows = segmentRows.filter((r) => r.name.toLowerCase().includes(q) || r.collection.toLowerCase().includes(q));
     }
-    const heroRows = rows.filter((r) => r.perf === 'hero');
-    const zeroRows = rows.filter((r) => r.perf === 'zero');
 
-    return {
-        rows, segmentRows, sizes, totals, prevTotals,
-        hasPrev: d.hasPrev,
-        hero: { count: heroRows.length, share: paPct(heroRows.reduce((s, r) => s + r.revenue, 0), totals.revenue) },
-        zero: { count: zeroRows.length, share: paPct(zeroRows.reduce((s, r) => s + r.revenue, 0), totals.revenue) },
-    };
+    return { rows, segmentRows, sizes, totals, prevTotals, hasPrev: d.hasPrev };
 }
 
 // ---------------------------------------------------------------- formatting
@@ -279,12 +271,16 @@ function paRenderResults() {
     const el = document.getElementById('paResults');
     if (!el) return;
 
-    document.querySelectorAll('.pa-seg-btn[data-seg="hero"] .pa-seg-count').forEach((n) => { n.textContent = view.hero.count; });
-    document.querySelectorAll('.pa-seg-btn[data-seg="zero"] .pa-seg-count').forEach((n) => { n.textContent = view.zero.count; });
-
-    const colCount = 5 + (paCols.revenue ? 1 : 0) + (paCols.delta ? 1 : 0);
+    const showSizes = paCols.sizes && view.sizes.length;
+    const sizeHead = showSizes ? view.sizes.map((s) => `<th class="pa-col-size">${escapeHtml(s)}</th>`).join('') : '';
+    const colCount = 5 + (paCols.revenue ? 1 : 0) + (paCols.delta ? 1 : 0) + (showSizes ? view.sizes.length : 0);
 
     const rowsHtml = view.segmentRows.map((r) => {
+        const sizeCells = showSizes ? view.sizes.map((s) => {
+            const q = r.sizes[s] || 0;
+            if (!q) return '<td class="pa-col-size pa-size-empty">–</td>';
+            return `<td class="pa-col-size"><span class="pa-size-q">${paN(q)}</span><span class="pa-size-pct">${((q / r.units) * 100).toFixed(1)}%</span></td>`;
+        }).join('') : '';
         return `<tr data-key="${escapeHtml(r.key)}">
             <td class="pa-col-rank">${paRankCell(r.rank)}</td>
             <td class="pa-col-product">
@@ -298,6 +294,7 @@ function paRenderResults() {
             <td class="pa-col-total"><span class="pa-total-q">${paN(r.units)}</span><span class="pa-total-sub">${Math.round(paPct(r.units, view.totals.units))}% of shown</span></td>
             ${paCols.revenue ? `<td class="pa-col-rev">${paPKR(r.revenue)}</td>` : ''}
             ${paCols.delta ? `<td class="pa-col-delta"><span class="pa-delta-prev">${paN(r.prevUnits)}</span>${paDeltaHtml(r.units, r.prevUnits, view.hasPrev)}</td>` : ''}
+            ${sizeCells}
             <td class="pa-col-perf">${paPerfBadge(r.perf)}</td>
             <td class="pa-col-kebab"><button type="button" class="pa-kebab" data-key="${escapeHtml(r.key)}" aria-label="Product actions"><i class="fa-solid fa-ellipsis-vertical"></i></button></td>
         </tr>`;
@@ -305,17 +302,23 @@ function paRenderResults() {
 
     el.innerHTML = `
         ${paKpisHtml(view)}
-        ${paHeroBandHtml(view)}
         <div class="pa-card">
             <div class="pa-table-wrap">
                 <table class="pa-table">
                     <thead>
+                        ${showSizes ? `<tr class="pa-thead-group">
+                            <th></th><th></th><th></th>
+                            ${paCols.revenue ? '<th></th>' : ''}${paCols.delta ? '<th></th>' : ''}
+                            <th class="pa-group-variants" colspan="${view.sizes.length}">Variants Sold (Units)</th>
+                            <th></th><th></th>
+                        </tr>` : ''}
                         <tr class="pa-thead-cols">
                             <th class="pa-col-rank">#</th>
                             <th class="pa-col-product">Product</th>
                             <th class="pa-col-total">Total Sold<span>Units</span></th>
                             ${paCols.revenue ? '<th class="pa-col-rev">Revenue<span>PKR</span></th>' : ''}
                             ${paCols.delta ? '<th class="pa-col-delta">vs Previous<span>Units</span></th>' : ''}
+                            ${sizeHead}
                             <th class="pa-col-perf">Performance</th>
                             <th class="pa-col-kebab"></th>
                         </tr>
@@ -346,26 +349,6 @@ function paKpisHtml(view) {
         ${card('revenue', 'fa-sack-dollar', 'Total Revenue', paPKR(t.revenue), t.revenue, p.revenue)}
         ${card('orders', 'fa-receipt', 'Orders', paN(t.orders), t.orders, p.orders)}
         ${card('aov', 'fa-tags', 'Avg. Order Value', paPKR(t.aov), t.aov, p.aov)}
-    </div>`;
-}
-
-function paHeroBandHtml(view) {
-    return `<div class="pa-hero-band">
-        <div class="pa-hero-stat">
-            <span class="pa-hero-ic pa-hero-ic--hero"><i class="fa-solid fa-star"></i></span>
-            <div><strong>Hero: top 20% of products (${view.hero.count})</strong>
-                <span>Contribute ${view.hero.share.toFixed(1)}% of total revenue.</span></div>
-        </div>
-        <div class="pa-hero-stat">
-            <span class="pa-hero-ic pa-hero-ic--zero"><i class="fa-solid fa-arrow-trend-down"></i></span>
-            <div><strong>Zero: bottom 20% of products (${view.zero.count})</strong>
-                <span>Contribute only ${view.zero.share.toFixed(1)}% of total revenue.</span></div>
-        </div>
-        <button type="button" id="paHeroDefBtn" class="pa-hero-def-btn">View definition <i class="fa-solid fa-circle-info"></i></button>
-        <div class="pa-hero-def" ${_paHeroDefOpen ? '' : 'hidden'}>
-            Products are ranked by units sold within the current collection and range.
-            <strong>Hero</strong> = the top ~20% (ties included); <strong>Zero</strong> = the bottom ~20%, including products with no sales; everything between is <strong>Average</strong>.
-        </div>
     </div>`;
 }
 
@@ -482,74 +465,28 @@ function paSyncToolbar() {
     if (menu) menu.hidden = !_paTimeMenuOpen;
     document.getElementById('paTimeBtn')?.classList.toggle('is-open', _paTimeMenuOpen);
     document.getElementById('paCustomizeMenu')?.toggleAttribute('hidden', !_paCustomizeOpen);
-    document.querySelectorAll('.pa-seg-btn').forEach((b) => b.classList.toggle('is-active', b.dataset.seg === paSegment));
+    document.getElementById('paHeroDefPop')?.toggleAttribute('hidden', !_paHeroDefOpen);
+    const deltaLabel = document.getElementById('paColDeltaLabel');
+    if (deltaLabel) deltaLabel.textContent = paComparisonWord();
     if (_paTimeMenuOpen) paRenderTimeMenu();
 }
 
 function paRenderShell() {
     const root = document.getElementById('productAnalyticsRoot');
     if (!root) return;
-    const collOpts = ['<option value="">All collections</option>']
-        .concat(paCollectionOptions().map((c) => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`)).join('');
-
-    root.innerHTML = `
-        <div class="pa-head">
-            <div class="pa-head-titles">
-                <h2 class="pa-title">Product Analytics</h2>
-                <p class="pa-subtitle">Deep insight into how every product and size is performing.</p>
-            </div>
-            <div class="pa-head-actions">
-                <button type="button" id="paExportBtn" class="btn btn-secondary"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export</button>
-                <div class="pa-customize">
-                    <button type="button" id="paCustomizeBtn" class="btn btn-secondary"><i class="fa-solid fa-sliders"></i> Customize</button>
-                    <div id="paCustomizeMenu" class="pa-pop" hidden>
-                        <span class="pa-pop-title">Columns</span>
-                        <label><input type="checkbox" data-col="revenue"${paCols.revenue ? ' checked' : ''}> Revenue</label>
-                        <label><input type="checkbox" data-col="delta"${paCols.delta ? ' checked' : ''}> ${escapeHtml(paComparisonWord())}</label>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="pa-toolbar">
-            <div class="pa-field">
-                <label for="paSearchInput">Search</label>
-                <input type="text" id="paSearchInput" class="pa-search" placeholder="Search products…" autocomplete="off" value="${escapeHtml(paSearch)}">
-            </div>
-            <div class="pa-field pa-field--time">
-                <label>Time Range</label>
-                <div class="pa-time">
-                    <button type="button" id="paTimeBtn" class="pa-time-btn">
-                        <i class="fa-regular fa-calendar"></i>
-                        <span id="paTimeLabel">${escapeHtml(paRangeLabel())}</span>
-                        <i class="fa-solid fa-chevron-down"></i>
-                    </button>
-                    <div id="paTimeMenu" class="pa-time-menu" hidden></div>
-                </div>
-            </div>
-            <div class="pa-field">
-                <label for="paCollectionSelect">Collection</label>
-                <select id="paCollectionSelect" class="pa-select">${collOpts}</select>
-            </div>
-            <div class="pa-toolbar-spacer"></div>
-            <div class="pa-segments" role="tablist">
-                <button type="button" class="pa-seg-btn is-active" data-seg="all" role="tab">All Products</button>
-                <button type="button" class="pa-seg-btn" data-seg="hero" role="tab">Hero <span class="pa-seg-count">0</span></button>
-                <button type="button" class="pa-seg-btn" data-seg="zero" role="tab">Zero <span class="pa-seg-count">0</span></button>
-            </div>
-        </div>
-
-        <div id="paResults"></div>`;
-
-    document.getElementById('paCollectionSelect').value = paCollection;
+    root.innerHTML = '<div id="paResults"></div>';
     paBindShellEvents();
 }
 
-function paBindShellEvents() {
+/** Search / time range / collection / Export / Customize / the Hero-Zero info
+ *  popover all live in the persistent app header (not productAnalyticsRoot),
+ *  so they're bound once, not on every paRenderShell. */
+function paBindHeaderEvents() {
     document.getElementById('paTimeBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         _paTimeMenuOpen = !_paTimeMenuOpen;
         _paCustomizeOpen = false;
+        _paHeroDefOpen = false;
         paSyncToolbar();
     });
     document.getElementById('paTimeMenu').addEventListener('click', (e) => {
@@ -583,19 +520,14 @@ function paBindShellEvents() {
         clearTimeout(_paSearchTimer);
         _paSearchTimer = setTimeout(() => { paSearch = value.trim(); paRenderResults(); }, 200);
     });
-    document.querySelector('.pa-segments').addEventListener('click', (e) => {
-        const btn = e.target.closest('.pa-seg-btn');
-        if (!btn) return;
-        paSegment = btn.dataset.seg;
-        paSyncToolbar();
-        paRenderResults();
-    });
+
     document.getElementById('paExportBtn').addEventListener('click', paExport);
 
     document.getElementById('paCustomizeBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         _paCustomizeOpen = !_paCustomizeOpen;
         _paTimeMenuOpen = false;
+        _paHeroDefOpen = false;
         paSyncToolbar();
     });
     document.getElementById('paCustomizeMenu').addEventListener('click', (e) => e.stopPropagation());
@@ -606,10 +538,23 @@ function paBindShellEvents() {
         paSaveCols();
         paRenderResults();
     });
+    document.getElementById('paColRevenue').checked = paCols.revenue;
+    document.getElementById('paColDelta').checked = paCols.delta;
+    document.getElementById('paColSizes').checked = paCols.sizes;
 
+    document.getElementById('paHeroDefBtn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        _paHeroDefOpen = !_paHeroDefOpen;
+        _paTimeMenuOpen = false;
+        _paCustomizeOpen = false;
+        paSyncToolbar();
+    });
+    document.getElementById('paHeroDefPop').addEventListener('click', (e) => e.stopPropagation());
+}
+
+function paBindShellEvents() {
     const results = document.getElementById('paResults');
     results.addEventListener('click', (e) => {
-        if (e.target.closest('#paHeroDefBtn')) { _paHeroDefOpen = !_paHeroDefOpen; paRenderResults(); return; }
         const kebab = e.target.closest('.pa-kebab');
         if (kebab) { paKebabMenu(kebab); return; }
         const productCell = e.target.closest('.pa-col-product');
@@ -638,7 +583,12 @@ function paKebabMenu(btn) {
 }
 
 function paOnDocClick() {
-    if (_paTimeMenuOpen || _paCustomizeOpen) { _paTimeMenuOpen = false; _paCustomizeOpen = false; paSyncToolbar(); }
+    if (_paTimeMenuOpen || _paCustomizeOpen || _paHeroDefOpen) {
+        _paTimeMenuOpen = false;
+        _paCustomizeOpen = false;
+        _paHeroDefOpen = false;
+        paSyncToolbar();
+    }
 }
 
 // -------------------------------------------------------------- details modal
@@ -647,8 +597,7 @@ function paCloseDetailsModal() {
     document.getElementById('paDetailsModal')?.classList.remove('active');
 }
 
-/** Per-product sales + size breakdown, the detail the table no longer spreads
- *  into a column per size. Shaped from the same derived view the table renders. */
+/** Per-product sales + size breakdown, shaped from the same derived view the table renders. */
 function paOpenDetailsModal(key) {
     if (!key) return;
     const view = paDeriveView();
@@ -760,6 +709,7 @@ function initProductAnalyticsView() {
     if (!_paInited) {
         _paInited = true;
         document.addEventListener('click', paOnDocClick);
+        paBindHeaderEvents();
         const modal = document.getElementById('paDetailsModal');
         modal?.addEventListener('click', (e) => { if (e.target === modal) paCloseDetailsModal(); });
         document.getElementById('paDetailsCloseX')?.addEventListener('click', paCloseDetailsModal);
@@ -768,6 +718,8 @@ function initProductAnalyticsView() {
     }
     _paTimeMenuOpen = false;
     _paCustomizeOpen = false;
+    _paHeroDefOpen = false;
     paRenderShell();
+    paSyncToolbar();
     paRefreshData();
 }
