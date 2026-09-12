@@ -146,58 +146,74 @@
                         </button>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
-                        <button class="nav-item active" data-view="orders" title="Orders">
-                            <span class="nav-icon"><i data-lucide="package"></i></span>
-                            <span class="nav-tooltip">Orders</span>
-                        </button>
-                        <button class="nav-item" data-view="products" title="Inventory">
-                            <span class="nav-icon"><i data-lucide="boxes"></i></span>
-                            <span class="nav-tooltip">Inventory</span>
-                        </button>
-                        <button class="nav-item" data-view="productAnalytics" title="Product Analytics">
-                            <span class="nav-icon"><i data-lucide="bar-chart-2"></i></span>
-                            <span class="nav-tooltip">Product Analytics</span>
-                        </button>
-                        <button class="nav-item" data-view="monthSummary" title="Month Summary">
-                            <span class="nav-icon"><i data-lucide="calendar-days"></i></span>
-                            <span class="nav-tooltip">Month Summary</span>
-                        </button>
-                        <button class="nav-item" data-view="orderFulfillment" title="Order Fulfillment">
-                            <span class="nav-icon"><i data-lucide="package-check"></i></span>
-                            <span class="nav-tooltip">Order Fulfillment</span>
-                        </button>
-                        <button class="nav-item" data-view="printAirwayBill" title="Print Airway Bill">
-                            <span class="nav-icon"><i data-lucide="printer"></i></span>
-                            <span class="nav-tooltip">Print Airway Bill</span>
-                        </button>
+                        <div class="nav-group">
+                            <button class="nav-item nav-item-parent active" data-view="orders" title="Orders">
+                                <span class="nav-icon"><i data-lucide="package"></i></span>
+                                <span class="nav-tooltip">Orders</span>
+                            </button>
+                            <div class="nav-children">
+                                <button class="nav-item" data-view="orderFulfillment" title="Order Fulfillment">
+                                    <span class="nav-icon"><i data-lucide="package-check"></i></span>
+                                    <span class="nav-tooltip">Order Fulfillment</span>
+                                </button>
+                                <button class="nav-item" data-view="printAirwayBill" title="Print Airway Bill">
+                                    <span class="nav-icon"><i data-lucide="printer"></i></span>
+                                    <span class="nav-tooltip">Print Airway Bill</span>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="nav-group">
+                            <button class="nav-item nav-item-parent" data-view="products" title="Inventory">
+                                <span class="nav-icon"><i data-lucide="boxes"></i></span>
+                                <span class="nav-tooltip">Inventory</span>
+                            </button>
+                            <div class="nav-children">
+                                <button class="nav-item" data-view="productAnalytics" title="Product Analytics">
+                                    <span class="nav-icon"><i data-lucide="bar-chart-2"></i></span>
+                                    <span class="nav-tooltip">Product Analytics</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                     <div class="nav-section" data-feature-section="finance">
-                        <button class="nav-item" data-view="transactions" title="Transactions">
-                            <span class="nav-icon"><i data-lucide="wallet"></i></span>
-                            <span class="nav-tooltip">Transactions</span>
-                        </button>
-                        <button class="nav-item" data-view="ledgers" title="Ledgers">
-                            <span class="nav-icon"><i data-lucide="book-open"></i></span>
-                            <span class="nav-tooltip">Ledgers</span>
-                        </button>
-                        <button class="nav-item" data-view="bills" title="Purchase Bills">
-                            <span class="nav-icon"><i data-lucide="receipt"></i></span>
-                            <span class="nav-tooltip">Purchase Bills</span>
-                        </button>
-                        <button class="nav-item" data-view="trialBalance" title="Trial Balance">
-                            <span class="nav-icon"><i data-lucide="scale"></i></span>
-                            <span class="nav-tooltip">Trial Balance</span>
-                        </button>
+                        <div class="nav-group">
+                            <button class="nav-item nav-item-parent" data-view="monthSummary" title="Finance">
+                                <span class="nav-icon"><i data-lucide="calendar-days"></i></span>
+                                <span class="nav-tooltip">Finance</span>
+                            </button>
+                            <div class="nav-children">
+                                <button class="nav-item" data-view="transactions" title="Transactions">
+                                    <span class="nav-icon"><i data-lucide="wallet"></i></span>
+                                    <span class="nav-tooltip">Transactions</span>
+                                </button>
+                                <button class="nav-item" data-view="ledgers" title="Ledgers">
+                                    <span class="nav-icon"><i data-lucide="book-open"></i></span>
+                                    <span class="nav-tooltip">Ledgers</span>
+                                </button>
+                                <button class="nav-item" data-view="bills" title="Purchase Bills">
+                                    <span class="nav-icon"><i data-lucide="receipt"></i></span>
+                                    <span class="nav-tooltip">Purchase Bills</span>
+                                </button>
+                                <button class="nav-item" data-view="trialBalance" title="Trial Balance">
+                                    <span class="nav-icon"><i data-lucide="scale"></i></span>
+                                    <span class="nav-tooltip">Trial Balance</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                     <div class="nav-section" data-feature-section="orders">
-                        <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
-                            <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
-                            <span class="nav-tooltip">Load Sheet Logs</span>
-                        </button>
-                        <button class="nav-item" data-view="courierPaymentReport" title="Courier Payment Report">
-                            <span class="nav-icon"><i data-lucide="truck"></i></span>
-                            <span class="nav-tooltip">Courier Payment Report</span>
-                        </button>
+                        <div class="nav-group">
+                            <button class="nav-item nav-item-parent" data-view="courierPaymentReport" title="Courier Payment Report">
+                                <span class="nav-icon"><i data-lucide="truck"></i></span>
+                                <span class="nav-tooltip">Courier Payment Report</span>
+                            </button>
+                            <div class="nav-children">
+                                <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
+                                    <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
+                                    <span class="nav-tooltip">Load Sheet Logs</span>
+                                </button>
+                            </div>
+                        </div>
                     </div>
                 </nav>
                 <div class="sidebar-lock-wrap">

@@ -63,6 +63,16 @@ function formatOrdersPeriodLabel(month, year) {
     return `${monthNames[month - 1]} ${ordersFiscalMonthStartDay} – ${monthNames[end.getMonth()]} ${end.getDate()}, ${end.getFullYear()}`;
 }
 
+/** "Sep 1 – Oct 3, 2026" (same year) or "Sep 1, 2025 – Oct 3, 2026" (spans years), from
+ * YYYY-MM-DD dates - same style as formatOrdersPeriodLabel, for the custom date range. */
+function formatOrdersDateRangeLabel(fromYyyyMmDd, toYyyyMmDd) {
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const [fy, fm, fd] = fromYyyyMmDd.split('-').map(Number);
+    const [ty, tm, td] = toYyyyMmDd.split('-').map(Number);
+    const from = fy === ty ? `${monthNames[fm - 1]} ${fd}` : `${monthNames[fm - 1]} ${fd}, ${fy}`;
+    return `${from} – ${monthNames[tm - 1]} ${td}, ${ty}`;
+}
+
 /** Current period that contains today in PKT */
 function getCurrentOrdersPeriod() {
     return getPeriodForDate(getPKTDate());
@@ -159,7 +169,10 @@ function populateOrdersPeriodFilterDropdown() {
     if (!selectEl) return;
     const currentVal = selectEl.value;
     const options = [{ value: ALL_ORDERS_VALUE, label: 'Recent Orders' }, ...buildStaticPeriodOptions()];
-    if (currentVal === CUSTOM_ORDERS_VALUE) options.unshift({ value: CUSTOM_ORDERS_VALUE, label: 'Custom' });
+    if (currentVal === CUSTOM_ORDERS_VALUE && window._ordersDateRange) {
+        const { from, to } = window._ordersDateRange;
+        options.unshift({ value: CUSTOM_ORDERS_VALUE, label: formatOrdersDateRangeLabel(from, to) });
+    }
     selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
     const { month, year } = getCurrentOrdersPeriod();
     selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : `${month}-${year}`;

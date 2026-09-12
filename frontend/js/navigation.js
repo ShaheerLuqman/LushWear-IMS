@@ -149,9 +149,13 @@ function initOrdersDateRangeButton() {
         window._ordersDateRange = { from, to };
         const selectEl = document.getElementById('ordersPeriodFilter');
         if (selectEl) {
-            if (![...selectEl.options].some((o) => o.value === CUSTOM_ORDERS_VALUE)) {
-                selectEl.insertAdjacentHTML('afterbegin', `<option value="${CUSTOM_ORDERS_VALUE}">Custom</option>`);
+            const label = formatOrdersDateRangeLabel(from, to);
+            let customOption = [...selectEl.options].find((o) => o.value === CUSTOM_ORDERS_VALUE);
+            if (!customOption) {
+                selectEl.insertAdjacentHTML('afterbegin', `<option value="${CUSTOM_ORDERS_VALUE}"></option>`);
+                customOption = selectEl.options[0];
             }
+            customOption.textContent = label;
             selectEl.value = CUSTOM_ORDERS_VALUE;
         }
         if (ordersGridApi) ordersGridApi.showLoadingOverlay();
@@ -252,6 +256,12 @@ function switchView(viewName, { skipReload = false } = {}) {
         item.classList.toggle('active', item.dataset.view === navView);
     });
 
+    // A child view keeps its parent row highlighted too (e.g. orderFulfillment under Orders).
+    document.querySelectorAll('.nav-group').forEach((group) => {
+        const isActiveChild = !!group.querySelector('.nav-children .nav-item.active');
+        group.querySelector('.nav-item-parent')?.classList.toggle('nav-item-parent-highlight', isActiveChild);
+    });
+
     // Update views
     views.forEach(view => {
         view.classList.toggle('active', view.id === `${viewName}View`);
@@ -266,7 +276,7 @@ function switchView(viewName, { skipReload = false } = {}) {
         'ledgerDetail': 'Ledger',
         'trialBalance': 'Trial Balance',
         'bills': 'Purchase Bills',
-        'monthSummary': 'Month Summary',
+        'monthSummary': 'Finance',
         'monthDetail': 'Month Details',
         'products': 'Inventory',
         'productAnalytics': 'Product Analytics',

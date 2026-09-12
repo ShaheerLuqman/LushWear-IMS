@@ -556,7 +556,7 @@ async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracki
         raise PostexInvoiceError("No tracking number given")
     requested = set(tracking_numbers)
 
-    async def _fetch_merged() -> bytes:
+    async def _fetch_once() -> bytes:
         chunks = [
             tracking_numbers[i:i + _INVOICE_TRACKING_PER_CALL]
             for i in range(0, len(tracking_numbers), _INVOICE_TRACKING_PER_CALL)
@@ -565,6 +565,12 @@ async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracki
         if len(pdfs) == 1:
             return pdfs[0]
         return await asyncio.to_thread(_merge_pdfs, list(pdfs))
+
+    async def _fetch_merged() -> bytes:
+        # get-invoice occasionally truncates a merged PDF non-deterministically - fetching
+        # twice and keeping the larger result catches that without needing to inspect content.
+        first, second = await asyncio.gather(_fetch_once(), _fetch_once())
+        return first if len(first) >= len(second) else second
 
     pdf_bytes = await _fetch_merged()
     for attempt in range(1, _INVOICE_READY_RETRIES + 1):

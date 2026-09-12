@@ -722,7 +722,10 @@ document.addEventListener('DOMContentLoaded', async () => {
         const lastView = localStorage.getItem(CURRENT_VIEW_KEY);
         if (lastView && !NON_RESTORABLE_VIEWS.has(lastView)) {
             const navItem = document.querySelector(`.nav-item[data-view="${lastView}"]`);
-            if (navItem && navItem.offsetParent !== null) defaultView = lastView;
+            // Nested child items sit in a collapsed .nav-children (display:none until its
+            // group opens), so offsetParent alone can't tell "feature-hidden" from "just
+            // collapsed" - check the feature section itself instead.
+            if (navItem && navItem.closest('.nav-section')?.style.display !== 'none') defaultView = lastView;
         }
     } catch (e) { /* ignore */ }
 

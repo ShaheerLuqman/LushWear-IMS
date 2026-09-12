@@ -3139,11 +3139,13 @@ async def fetch_postex_settlements(
     recheck_derived: bool = Query(False, description="Also re-derive orders this endpoint already settled, correcting stale figures"),
     org_id: str = Depends(get_org_id),
 ):
-    """Settle unsettled PostEx orders from the tracking API.
+    """Derive PostEx settlement figures from the tracking API, without settling the order.
 
     Scans every unsettled, uncancelled PostEx order with a tracking number, asks PostEx for
     its current state, and for the ones it reports delivered or returned writes back
-    delivery_charge, tax_amount and folio, marking them settled.
+    delivery_charge, tax_amount and folio. is_order_settled is left untouched: the API never
+    reports a CPR payout, so it must not count as received in the Courier Payment Report or
+    post a ledger receipt. Only a real CPR (CSV upload) settles an order.
 
     delivery_charge is PostEx's own fee + GST. tax_amount is DERIVED (see
     postex.settlement_from_tracking) because the API never reports withholding - rows written
@@ -3153,7 +3155,7 @@ async def fetch_postex_settlements(
     response, while a return's shows only on the per-order Payment Status API, fetched here
     for the returns in scope.
 
-    recheck_derived additionally revisits orders this endpoint already settled, so a fix to
+    recheck_derived additionally revisits orders this endpoint already wrote, so a fix to
     the derivation can be applied to rows written under the old one. It deliberately never
     touches CSV-settled rows: those carry PostEx's authoritative figures, which a derivation
     must not overwrite.
@@ -3163,7 +3165,7 @@ async def fetch_postex_settlements(
         def _candidate_query():
             q = (
                 org_table(supabase, org_id, "shopify_orders")
-                .select("id, order_number, tracking_number, order_status, total_amount, advance_amount, order_receiving_date, folio, courier, delivery_charge, tax_amount, is_order_settled")
+                .select("id, order_number, tracking_number, order_status, total_amount, advance_amount, order_receiving_date, folio, courier, delivery_charge, tax_amount, is_order_settled, tax_amount_derived")
                 .eq("courier", "PostEx")
                 .not_.is_("tracking_number", "null")
                 .neq("tracking_number", "")
@@ -3195,13 +3197,13 @@ async def fetch_postex_settlements(
         # A delivery's folio is its reservePaymentDate, already in the bulk response. A
         # return carries none - its payout, and the CPR date the folio records, show only
         # on the per-order Payment Status API. Fetch it for the returns that still need it:
-        # unsettled, or settled here earlier before this lookup existed.
+        # no folio yet, or derived here earlier before this lookup existed.
         returned_tracking = []
         for candidate in candidates:
             tn = str(candidate["tracking_number"]).strip()
             raw = (by_tracking.get(tn) or {}).get("_raw") or {}
             if str(raw.get("transactionStatus") or "").strip().lower() == "returned" and not (
-                candidate.get("is_order_settled") and (candidate.get("folio") or "").strip()
+                candidate.get("tax_amount_derived") and (candidate.get("folio") or "").strip()
             ):
                 returned_tracking.append(tn)
         payment_status_by_tracking = await _fetch_postex_payment_statuses(
@@ -3239,7 +3241,10 @@ async def fetch_postex_settlements(
             is_return = derived["order_status"] == "returned"
             receivable = money(-dc) if is_return else money(total_amount - advance_amount - dc - tax)
 
-            was_settled = bool(order.get("is_order_settled"))
+            # is_order_settled never gets set by this endpoint (see docstring), so it can't
+            # signal "already derived here" any more - a row already carrying tax_amount_derived
+            # is what marks that instead.
+            was_derived = bool(order.get("tax_amount_derived"))
             changed = (
                 abs(dc - round(float(order.get("delivery_charge") or 0), 2)) > 0.011
                 or abs(tax - round(float(order.get("tax_amount") or 0), 2)) > 0.011
@@ -3247,7 +3252,7 @@ async def fetch_postex_settlements(
             )
             # A recheck pass re-reads rows that are already correct; skip them so it writes
             # only genuine corrections and the summary is not padded with no-ops.
-            if was_settled and not changed:
+            if was_derived and not changed:
                 unchanged += 1
                 continue
 
@@ -3255,7 +3260,7 @@ async def fetch_postex_settlements(
             # keep the existing one; the next run fills it once the CPR date is available.
             folio = derived["folio"] or (order.get("folio") or "")
             settlements.append({
-                "corrected": was_settled,
+                "corrected": was_derived,
                 "order_number": order.get("order_number"),
                 "tracking_number": tn,
                 "order_status": derived["order_status"],
@@ -3283,7 +3288,9 @@ async def fetch_postex_settlements(
                 "delivery_charge": dc,
                 "tax_amount": tax,
                 "tax_amount_derived": True,
-                "is_order_settled": True,
+                # Not is_order_settled: API-derived figures aren't a CPR payout, so this
+                # must not count as received in the Courier Payment Report or post a
+                # ledger receipt. Only a real CPR (CSV upload) settles an order.
                 "updated_at": current_time,
             })
             if derived["folio"]:
