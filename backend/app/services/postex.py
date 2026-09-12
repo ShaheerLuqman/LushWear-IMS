@@ -566,13 +566,7 @@ async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracki
             return pdfs[0]
         return await asyncio.to_thread(_merge_pdfs, list(pdfs))
 
-    async def _fetch_merged() -> bytes:
-        # get-invoice occasionally truncates a merged PDF non-deterministically - fetching
-        # twice and keeping the larger result catches that without needing to inspect content.
-        first, second = await asyncio.gather(_fetch_once(), _fetch_once())
-        return first if len(first) >= len(second) else second
-
-    pdf_bytes = await _fetch_merged()
+    pdf_bytes = await _fetch_once()
     for attempt in range(1, _INVOICE_READY_RETRIES + 1):
         found = await asyncio.to_thread(_extract_tracking_numbers, pdf_bytes)
         if not found:
@@ -588,7 +582,7 @@ async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracki
             len(missing), len(requested), attempt, _INVOICE_READY_RETRIES, sorted(missing),
         )
         await asyncio.sleep(_INVOICE_READY_RETRY_DELAY)
-        pdf_bytes = await _fetch_merged()
+        pdf_bytes = await _fetch_once()
 
     missing = requested - await asyncio.to_thread(_extract_tracking_numbers, pdf_bytes)
     if missing:
