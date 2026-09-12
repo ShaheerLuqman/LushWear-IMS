@@ -1096,6 +1096,8 @@ BEGIN
     PERFORM ensure_system_ledger(NEW.id, 'orders', 'Orders', 'Liability', '2200');
     PERFORM ensure_system_ledger(NEW.id, 'inventory', 'Inventory', 'Asset', '1400');
     PERFORM ensure_system_ledger(NEW.id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
+    PERFORM ensure_system_ledger(NEW.id, 'sales_revenue', 'Sales Revenue', 'Revenue', '4000');
+    PERFORM ensure_system_ledger(NEW.id, 'sales_return', 'Sales Return', 'Revenue', '4100');
     -- No tax_on_purchases: receive_bill creates it on the first taxed bill.
     RETURN NEW;
 END;
@@ -1118,6 +1120,8 @@ BEGIN
         PERFORM ensure_system_ledger(org.id, 'orders', 'Orders', 'Liability', '2200');
         PERFORM ensure_system_ledger(org.id, 'inventory', 'Inventory', 'Asset', '1400');
         PERFORM ensure_system_ledger(org.id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
+        PERFORM ensure_system_ledger(org.id, 'sales_revenue', 'Sales Revenue', 'Revenue', '4000');
+        PERFORM ensure_system_ledger(org.id, 'sales_return', 'Sales Return', 'Revenue', '4100');
     END LOOP;
 END $$;
 
@@ -1606,8 +1610,10 @@ $$;
 -- lines (get_month_summary_expense_lines), computed in the orders route.
 -- cost_of_goods_sold comes from the posted order_cogs_month journal entries
 -- (sync_month_cogs_journal - one entry per org per fiscal month, Debit
--- COGS/Credit Inventory), not a live sum of shopify_orders.cost_price;
--- Net Sales and Tax stay on the wider non-cancelled basis.
+-- COGS/Credit Inventory), not a live sum of shopify_orders.cost_price; it is
+-- returned as its own field but no longer deducted in gross_profit (Gross
+-- Profit = Net Sales - DC Charges - Tax). Net Sales and Tax stay on the wider
+-- non-cancelled basis.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
@@ -1681,7 +1687,6 @@ AS $$
         ot.tax_total,
         (
             (ot.total_gross_sale - ot.total_return_amount)
-            - c.cost_of_goods_sold
             - (ot.dc_charges_delivered + ot.dc_charges_returned)
             - ot.tax_total
         ) AS gross_profit,
@@ -1692,7 +1697,12 @@ AS $$
 $$;
 
 -- One row per Expense-type ledger, LEFT JOINed so a ledger with no activity
--- that period still shows up at 0 instead of disappearing.
+-- that period still shows up at 0 instead of disappearing. Sums both sides
+-- (debit to_account_id minus credit from_account_id), matching the ledger's
+-- actual net balance. Excludes the COGS system ledger - it posts via the
+-- journal (sync_month_cogs_journal), not transaction_entries, and is already
+-- surfaced through get_month_summary_totals.cost_of_goods_sold; including it
+-- here would double it as "Less: COGS" in Month Summary.
 CREATE OR REPLACE FUNCTION get_month_summary_expense_lines(
     p_entry_start DATE,
     p_entry_end DATE,
@@ -1709,15 +1719,21 @@ AS $$
     SELECT
         l.id,
         l.name,
-        COALESCE(SUM(ce.amount) FILTER (
+        COALESCE(SUM(
+            CASE
+                WHEN ce.to_account_id = l.id THEN ce.amount
+                WHEN ce.from_account_id = l.id THEN -ce.amount
+            END
+        ) FILTER (
             WHERE ce.entry_date >= p_entry_start AND ce.entry_date <= p_entry_end
         ), 0) AS amount
     FROM finances_ledgers l
     LEFT JOIN finances_transaction_entries ce
-           ON ce.to_account_id = l.id AND ce.org_id = p_org_id
+           ON (ce.to_account_id = l.id OR ce.from_account_id = l.id) AND ce.org_id = p_org_id
     WHERE l.org_id = p_org_id
       AND l.type = 'Expense'
       AND l.show_in_month_summary
+      AND l.system_key IS DISTINCT FROM 'cost_of_goods_sold'
     GROUP BY l.id, l.name
     ORDER BY l.name;
 $$;

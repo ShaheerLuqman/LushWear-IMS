@@ -271,10 +271,10 @@ function displayMonthDetail(data) {
                         ${line('Total Gross Sale', rs(data.total_gross_sale))}
                         ${line('Total Return Amount', rs(data.total_return_amount), 'deduction')}
                         ${line('Net Sales', rs(netSales), 'subtotal')}
-                        ${line('Less: Cost of Goods Sold', rs(data.cost_of_goods_sold ?? 0), 'deduction')}
                         ${line('Less: DC Charges / Delivery Expense', rs(data.dc_charges_total ?? 0), 'deduction')}
                         ${line('Less: Tax', rs(data.tax_total ?? 0), 'deduction')}
                         ${line('Gross Profit', rs(grossProfit), 'subtotal')}
+                        ${line('Less: Cost of Goods Sold', rs(data.cost_of_goods_sold ?? 0), 'deduction')}
                         ${(data.expense_lines || []).map(l => line(`Less: ${l.name}`, rs(l.amount ?? 0), 'deduction')).join('')}
                         ${line('Net Profit', rs(netProfit), netProfit < 0 ? 'final negative' : 'final')}
                     </div>
@@ -352,6 +352,7 @@ function displayMonthDetail(data) {
         </div>
         <div class="month-detail-stats">
             ${statCard('fa-sack-dollar', 'accent', rs(netSales), 'Net Sales')}
+            ${statCard('fa-boxes-stacked', 'danger', rs(data.cost_of_goods_sold ?? 0), 'Cost of Goods Sold')}
             ${statCard('fa-arrow-trend-up', 'success', rs(grossProfit), 'Gross Profit')}
             ${statCard('fa-money-bill-trend-up', netProfit < 0 ? 'danger' : 'success', rs(netProfit), 'Net Profit')}
             ${statCard('fa-percent', 'warning', `${grossMargin.toFixed(2)}%`, 'Gross Profit Margin')}

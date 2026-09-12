@@ -2,6 +2,8 @@
 -- (sync_month_cogs_journal, source_type = 'order_cogs_month'). Month Summary
 -- reads it from there instead of live-summing shopify_orders.cost_price,
 -- filtered by entry_date like get_month_summary_expense_lines already does.
+-- COGS is still returned as its own field but no longer deducted in the
+-- Gross Profit formula (Gross Profit = Net Sales - DC Charges - Tax).
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 
 CREATE FUNCTION get_month_summary_totals(
@@ -76,7 +78,6 @@ AS $$
         ot.tax_total,
         (
             (ot.total_gross_sale - ot.total_return_amount)
-            - c.cost_of_goods_sold
             - (ot.dc_charges_delivered + ot.dc_charges_returned)
             - ot.tax_total
         ) AS gross_profit,

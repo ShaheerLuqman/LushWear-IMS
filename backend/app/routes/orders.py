@@ -3495,7 +3495,8 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
         ]
         total_expenses = round(sum(line["amount"] for line in expense_lines), 2)
         gross_profit = round(float(totals.get("gross_profit") or 0), 2)
-        net_profit = round(gross_profit - total_expenses, 2)
+        cost_of_goods_sold = round(float(totals.get("cost_of_goods_sold") or 0), 2)
+        net_profit = round(gross_profit - cost_of_goods_sold - total_expenses, 2)
 
         carrier_health_resp = supabase.rpc("get_month_summary_carrier_health", {
             "p_period_start": start_iso,
@@ -3601,7 +3602,7 @@ async def get_month_summary_detail(month: int, year: int, org_id: str = Depends(
             "unfulfilled_orders_count": int(totals.get("unfulfilled_orders_count") or 0),
             "cancelled_orders_count": int(totals.get("cancelled_orders_count") or 0),
             "net_sales": round(float(totals.get("net_sales") or 0), 2),
-            "cost_of_goods_sold": round(float(totals.get("cost_of_goods_sold") or 0), 2),
+            "cost_of_goods_sold": cost_of_goods_sold,
             "tax_total": round(float(totals.get("tax_total") or 0), 2),
             "gross_profit": gross_profit,
             "total_expenses": total_expenses,

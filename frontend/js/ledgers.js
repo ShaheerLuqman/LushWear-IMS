@@ -600,12 +600,18 @@ function renderLedgerDetailGrid() {
     ledgerDetailGridApi.refreshCells({ force: true });
 }
 
-// Inserts a full-width divider row carrying the month name and closing balance
-// ahead of each month's first entry, so a long statement reads as month-by-month
-// blocks. Runs on the display order (most-recent-first), so a month's first row
-// here carries the running balance as of that month's end. Undated rows (legacy
-// data) get no header.
+// Inserts a full-width divider row carrying the month name and that month's own
+// net movement (debit - credit for entries in that month, not the running
+// balance) ahead of each month's first entry, so a long statement reads as
+// month-by-month blocks. Undated rows (legacy data) get no header.
 function withLedgerMonthRows(rows) {
+    const monthNet = {};
+    rows.forEach(row => {
+        const month = (row.entry_date || '').slice(0, 7);
+        if (!month) return;
+        monthNet[month] = (monthNet[month] || 0) + row.debit - row.credit;
+    });
+
     const out = [];
     let prevMonth = null;
     rows.forEach(row => {
@@ -615,7 +621,7 @@ function withLedgerMonthRows(rows) {
                 id: `__month__${month}`,
                 month_row: true,
                 label: ledgerMonthLabel(month),
-                balance: row.balance
+                balance: monthNet[month]
             });
             prevMonth = month;
         }
