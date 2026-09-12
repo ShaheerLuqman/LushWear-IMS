@@ -344,6 +344,40 @@
                         <button type="button" id="printAirwayBillClearFiltersBtn" class="btn btn-secondary header-toolbar-btn">Clear Filters</button>
                         <button type="button" id="printAirwayBillBulkBtn" class="btn btn-primary header-toolbar-btn"><i data-lucide="printer"></i> Print Airway Bill</button>
                     </div>
+                    <div id="productAnalyticsHeaderWrap" class="header-inline" style="display: none;">
+                        <div class="transaction-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
+                            <input id="paSearchInput" type="text" class="transaction-search-filter" placeholder="Search products…" autocomplete="off">
+                        </div>
+                        <div class="pa-time">
+                            <button type="button" id="paTimeBtn" class="pa-time-btn">
+                                <i class="fa-regular fa-calendar"></i>
+                                <span id="paTimeLabel"></span>
+                                <i class="fa-solid fa-chevron-down"></i>
+                            </button>
+                            <div id="paTimeMenu" class="pa-time-menu" hidden></div>
+                        </div>
+                        <select id="paCollectionSelect" class="orders-period-filter" title="Filter by collection">
+                            <option value="">All collections</option>
+                        </select>
+                        <button type="button" id="paExportBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export</button>
+                        <div class="pa-customize">
+                            <button type="button" id="paCustomizeBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-sliders"></i> Customize</button>
+                            <div id="paCustomizeMenu" class="pa-pop" hidden>
+                                <span class="pa-pop-title">Columns</span>
+                                <label><input type="checkbox" id="paColRevenue" data-col="revenue"> Revenue</label>
+                                <label><input type="checkbox" id="paColDelta" data-col="delta"> <span id="paColDeltaLabel">vs Previous</span></label>
+                                <label><input type="checkbox" id="paColSizes" data-col="sizes"> Variant sizes</label>
+                            </div>
+                        </div>
+                        <div class="pa-info">
+                            <button type="button" id="paHeroDefBtn" class="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only" title="Performance definition" aria-label="Performance definition"><i class="fa-solid fa-circle-info"></i></button>
+                            <div id="paHeroDefPop" class="pa-pop pa-hero-def-pop" hidden>
+                                Products are ranked by units sold within the current collection and range.
+                                <strong>Hero</strong> = the top ~20% (ties included); <strong>Zero</strong> = the bottom ~20%, including products with no sales; everything between is <strong>Average</strong>.
+                            </div>
+                        </div>
+                    </div>
                 </div>
                 <div class="header-notif-wrap" id="notifWrap">
                     <button type="button" id="notifBtn" class="btn btn-secondary header-notif-btn" aria-haspopup="true" aria-expanded="false" title="Notifications">
@@ -1272,21 +1306,18 @@
                                     <label for="settingsShopifyApiVersion">Shopify API version</label>
                                     <input type="text" id="settingsShopifyApiVersion" class="form-input" placeholder="e.g. 2024-07">
                                 </div>
-                                <div class="form-group">
-                                    <label for="settingsPostexToken">PostEx merchant token</label>
-                                    <input type="password" id="settingsPostexToken" class="form-input" placeholder="Leave blank to keep current token" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                                    <span class="form-hint" id="settingsPostexTokenStatus"></span>
-                                </div>
-                                <div class="form-group">
-                                    <label for="settingsCouriersNextAuthKey">Couriers Next auth key</label>
-                                    <input type="password" id="settingsCouriersNextAuthKey" class="form-input" placeholder="Leave blank to keep current key" autocomplete="new-password" data-lpignore="true" data-1p-ignore="true">
-                                    <span class="form-hint" id="settingsCouriersNextAuthKeyStatus"></span>
-                                </div>
                                 <p id="settingsIntegrationsError" class="auth-gate-error" role="alert"></p>
                                 <div class="form-actions">
                                     <button type="submit" class="btn btn-primary">Save integrations</button>
                                 </div>
                             </form>
+                        </section>
+
+                        <section class="settings-section" id="settingsCouriersSection" style="display: none;">
+                            <h2 class="settings-section__title">Couriers</h2>
+                            <p class="settings-section__desc">Turn on the couriers you ship with. Enabling a courier opens its integration keys and creates a ledger for it.</p>
+                            <div id="settingsCouriersList" class="settings-couriers-list"></div>
+                            <p id="settingsCouriersError" class="auth-gate-error" role="alert"></p>
                         </section>
                     </div>
                 </div>
@@ -1739,6 +1770,41 @@
             </div>
             <div class="modal-pinned-footer">
                 <button type="button" id="closeDeliveryStatusReportBtn" class="btn btn-primary">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- PostEx shipper advice (retry / return) Modal -->
+    <div id="shipperAdviceModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Advise PostEx</h2>
+                <button type="button" class="modal-close" id="closeShipperAdviceModal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p class="modal-description" id="shipperAdviceSummary"></p>
+                <div class="form-group">
+                    <label>Decision</label>
+                    <div class="shipper-advice-options">
+                        <label class="shipper-advice-option">
+                            <input type="radio" name="shipperAdviceType" value="retry" checked>
+                            <span><strong>Reattempt delivery</strong> — ask PostEx to try the customer again.</span>
+                        </label>
+                        <label class="shipper-advice-option">
+                            <input type="radio" name="shipperAdviceType" value="return">
+                            <span><strong>Return the parcel</strong> — send it back to the warehouse.</span>
+                        </label>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="shipperAdviceRemarks">Remarks for the rider</label>
+                    <textarea id="shipperAdviceRemarks" class="form-input" rows="4"
+                        placeholder="e.g. Customer asked to deliver after 5pm; correct address is House 21, Street 37"></textarea>
+                </div>
+            </div>
+            <div class="modal-pinned-footer">
+                <button type="button" class="btn btn-secondary" id="shipperAdviceCancelBtn">Cancel</button>
+                <button type="button" class="btn btn-primary" id="shipperAdviceConfirmBtn">Send to PostEx</button>
             </div>
         </div>
     </div>

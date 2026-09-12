@@ -662,6 +662,28 @@ class OrgIntegrationSettingsPublic(BaseModel):
     postex_merchant_token_configured: bool
     couriers_next_auth_key_configured: bool
 
+class CourierCredentialField(BaseModel):
+    """One integration-config input for a courier (e.g. PostEx's merchant token).
+    `configured` reports whether a value is stored, never the value itself."""
+    key: str
+    label: str
+    configured: bool
+
+class CourierStatus(BaseModel):
+    id: str
+    label: str
+    enabled: bool
+    credentials: List[CourierCredentialField]
+    # The courier's system ledger (finances_ledgers.system_key = 'courier_<id>'),
+    # or None until the courier has been enabled at least once.
+    ledger_id: Optional[str] = None
+
+class CourierUpdate(BaseModel):
+    """PUT /org-settings/couriers/{id} body. `credentials` only carries keys the
+    admin actually typed - a blank/omitted field keeps whatever is stored."""
+    enabled: bool
+    credentials: Dict[str, NonBlankStr] = {}
+
 class OrgFiscalSettingsUpdate(BaseModel):
     """PUT /org-settings/fiscal body - both fields required, the whole fiscal
     calendar is replaced together rather than merged (see app/fiscal_settings.py)."""

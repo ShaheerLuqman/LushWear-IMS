@@ -31,7 +31,6 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 #### Data & reporting
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
-- [ ] **Shopify webhooks** — trigger order reconciliation on webhook events, not just polling.
 - [ ] **Shopify orders still on REST** — kept on REST deliberately (GraphQL bills ~105 cost points per nested order); revisit before REST is retired.
 
 #### Couriers
@@ -53,6 +52,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Shopify webhooks trigger order reconciliation** — `orders/create`, `orders/updated`, `orders/cancelled`, `orders/fulfilled` webhooks reconcile the order immediately (`reconcile_and_persist_single_order`) instead of waiting on the periodic poll.
+- [x] **Shipper advice from the delivery status report** — new "Under review" bucket groups parcels PostEx has parked awaiting a decision (history code 0008, checked as the newest event so already-returning parcels are excluded); a per-row Advise button opens a modal to reattempt delivery or return the parcel, with remarks for the rider, sending PostEx's save-shipper-advice via `POST /orders/postex-shipper-advice`, which re-checks eligibility server-side before writing.
 - [x] **Orders page restyled Shopify-style** — added a period summary strip (orders, items, COD to collect, delivered, returned, net profit) and status view-tabs wired to the grid's `order_status` filter, wrapped the grid in a framed table card with Polaris-style pills and quieter headers; AG Grid and all its behaviour kept, light theme only.
 - [x] **Print Airway Bill screen** — dedicated page listing fulfilled PostEx/Couriers Next orders for a fulfillment-date range (today by default) with a single-select courier (PostEx default); per-row Print and a header button print the whole selection via the existing airway-bill endpoints. Backed by a new `shopify_orders.fulfilled_at` column stamped at booking time and a `GET /orders/airway-bill-list` endpoint.
 - [x] **Products page redesigned as Inventory** — stat cards (products, stock, low/out of stock, value with month-over-month deltas from a new daily snapshot), toolbar search + collection/status filters + collapsible column filters, per-size stock columns, status/cost-per-unit/value columns and paginated grid; product details, Adjust Stock (pushes the delta to Shopify) and cost-history modals, with every manual cost change now recorded with reason, effective date and who made it.

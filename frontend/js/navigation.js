@@ -310,6 +310,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('courierPaymentReportHeaderWrap', viewName === 'courierPaymentReport', 'flex');
     show('orderFulfillmentHeaderWrap', viewName === 'orderFulfillment', 'flex');
     show('printAirwayBillHeaderWrap', viewName === 'printAirwayBill', 'flex');
+    show('productAnalyticsHeaderWrap', viewName === 'productAnalytics', 'flex');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();

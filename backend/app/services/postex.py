@@ -300,6 +300,22 @@ class PostexInvoiceError(Exception):
 # this are fetched in concurrent chunks and merged into one PDF here.
 _INVOICE_TRACKING_PER_CALL = 100
 
+# A tracking number requested moments after its create-order call can still be missing
+# from get-invoice's merged PDF - PostEx generates the label asynchronously and hasn't
+# caught up yet. Confirmed live: the same 30 already-settled tracking numbers returned an
+# identical, complete PDF on 10/10 repeated calls, so this only bites freshly booked
+# parcels, and printing the same selection again a few seconds later has always come back
+# complete.
+#
+# Page count can't detect this: PostEx prints 3 airway bills per page, so dropping one
+# order out of 30 still fills the same 10 pages (ceil(29/3) == ceil(30/3)) - confirmed by
+# extracting the live PDF's text, which lists exactly 3 "Tracking No:" lines per page.
+# The only reliable check is reading every tracking number back out of the PDF text and
+# diffing against what was requested.
+_INVOICE_READY_RETRIES = 2
+_INVOICE_READY_RETRY_DELAY = 3.0
+_TRACKING_NO_RE = re.compile(r"Tracking No:\s*([A-Za-z0-9-]+)")
+
 
 def normalize_phone(value: Optional[str]) -> Optional[str]:
     """Coerce a phone number to the 03xxxxxxxxx form create-order documents as mandatory.
@@ -436,6 +452,56 @@ async def create_order(
     return str(tracking_number)
 
 
+class PostexShipperAdviceError(Exception):
+    """PostEx refused to record shipper advice for one parcel. Carries PostEx's own
+    statusMessage so the caller can report per-order why it failed."""
+
+
+# save-shipper-advice's statusId, keyed by the decision the app offers. These are the two
+# answers PostEx waits for on a parcel it has parked for review.
+SHIPPER_ADVICE_STATUS_IDS = {"retry": 2, "return": 1}
+
+
+async def save_shipper_advice(
+    client: httpx.AsyncClient, merchant_token: str, tracking_number: str, advice: str, remarks: str
+) -> None:
+    """Tell PostEx what to do with a parcel awaiting shipper advice: "retry" it, or send it
+    back as a "return".
+
+    Only meaningful while the parcel sits at "Delivery Under Review" (history code 0008),
+    the state PostEx parks a parcel in after failed attempts while it waits for the
+    merchant to decide; the caller checks that before calling.
+
+    `remarks` is what the rider is shown, so it carries the merchant's reason (a corrected
+    address, a new time to try, why it is going back). PostEx marks it mandatory.
+
+    Note the path: the integration guide prints this endpoint under /service/integration
+    (singular), which 404s at their nginx - the live route is /services/ like every other
+    call in this file.
+    """
+    try:
+        response = await client.put(
+            f"{_BASE_URL}/v2/save-shipper-advice",
+            headers={"token": merchant_token, "Content-Type": "application/json"},
+            json={
+                "trackingNumber": tracking_number,
+                "statusId": SHIPPER_ADVICE_STATUS_IDS[advice],
+                "remarks": remarks,
+            },
+        )
+    except httpx.HTTPError as exc:
+        raise PostexShipperAdviceError(f"Could not reach PostEx: {exc}") from exc
+
+    try:
+        body = response.json()
+    except ValueError:
+        raise PostexShipperAdviceError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
+
+    if str(body.get("statusCode")) != _SUCCESS_STATUS:
+        raise PostexShipperAdviceError(
+            body.get("statusMessage") or f"PostEx rejected the advice (HTTP {response.status_code})")
+
+
 async def _fetch_invoice_pdf(
     client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]
 ) -> bytes:
@@ -470,20 +536,58 @@ def _merge_pdfs(pdfs: List[bytes]) -> bytes:
     return out.getvalue()
 
 
+def _extract_tracking_numbers(pdf_bytes: bytes) -> set:
+    """Every tracking number the PDF's own "Tracking No:" lines list, read back out of
+    the text layer - the only way to tell how many of several bills sharing a page
+    actually made it in (see _INVOICE_READY_RETRIES)."""
+    text = "".join((page.extract_text() or "") for page in PdfReader(io.BytesIO(pdf_bytes)).pages)
+    return set(_TRACKING_NO_RE.findall(text))
+
+
 async def get_airway_bill(client: httpx.AsyncClient, merchant_token: str, tracking_numbers: List[str]) -> bytes:
     """Fetch the printable airway bill PDF for one or more booked orders, as a single PDF.
 
     Selections above _INVOICE_TRACKING_PER_CALL are fetched in concurrent chunks and
-    merged so the caller always gets one file.
+    merged so the caller always gets one file. Retries (see _INVOICE_READY_RETRIES) when
+    a requested tracking number's own line is missing from the merged PDF's text - a
+    just-booked parcel's label PostEx hasn't finished generating yet.
     """
     if not tracking_numbers:
         raise PostexInvoiceError("No tracking number given")
+    requested = set(tracking_numbers)
 
-    chunks = [
-        tracking_numbers[i:i + _INVOICE_TRACKING_PER_CALL]
-        for i in range(0, len(tracking_numbers), _INVOICE_TRACKING_PER_CALL)
-    ]
-    pdfs = await asyncio.gather(*(_fetch_invoice_pdf(client, merchant_token, c) for c in chunks))
-    if len(pdfs) == 1:
-        return pdfs[0]
-    return await asyncio.to_thread(_merge_pdfs, list(pdfs))
+    async def _fetch_merged() -> bytes:
+        chunks = [
+            tracking_numbers[i:i + _INVOICE_TRACKING_PER_CALL]
+            for i in range(0, len(tracking_numbers), _INVOICE_TRACKING_PER_CALL)
+        ]
+        pdfs = await asyncio.gather(*(_fetch_invoice_pdf(client, merchant_token, c) for c in chunks))
+        if len(pdfs) == 1:
+            return pdfs[0]
+        return await asyncio.to_thread(_merge_pdfs, list(pdfs))
+
+    pdf_bytes = await _fetch_merged()
+    for attempt in range(1, _INVOICE_READY_RETRIES + 1):
+        found = await asyncio.to_thread(_extract_tracking_numbers, pdf_bytes)
+        if not found:
+            # No text layer to check against (e.g. an image-only PDF) - nothing more a
+            # retry could tell us.
+            return pdf_bytes
+        missing = requested - found
+        if not missing:
+            return pdf_bytes
+        logger.warning(
+            "get-invoice is missing %d of %d requested tracking number(s) - retrying %d/%d, "
+            "a just-booked label may still be generating: %s",
+            len(missing), len(requested), attempt, _INVOICE_READY_RETRIES, sorted(missing),
+        )
+        await asyncio.sleep(_INVOICE_READY_RETRY_DELAY)
+        pdf_bytes = await _fetch_merged()
+
+    missing = requested - await asyncio.to_thread(_extract_tracking_numbers, pdf_bytes)
+    if missing:
+        logger.warning(
+            "get-invoice is still missing %d tracking number(s) after %d retries - returning it anyway: %s",
+            len(missing), _INVOICE_READY_RETRIES, sorted(missing),
+        )
+    return pdf_bytes

@@ -3,6 +3,7 @@ from typing import List, Literal
 from pydantic import BaseModel
 from app.auth import get_org_id
 from app.database import get_supabase
+from app.couriers import COURIER_LEDGER_LABELS
 from app.ledger_roles import SYSTEM_LEDGER_LABELS
 from app.models import (
     Ledger,
@@ -171,9 +172,10 @@ async def delete_ledger(ledger_id: str, org_id: str = Depends(get_org_id)):
 
     role = _system_key(supabase, org_id, ledger_id)
     if role:
+        label = SYSTEM_LEDGER_LABELS.get(role) or COURIER_LEDGER_LABELS.get(role) or role
         raise HTTPException(
             status_code=400,
-            detail=f"{SYSTEM_LEDGER_LABELS.get(role, role)} is a system account and cannot be deleted.",
+            detail=f"{label} is a system account and cannot be deleted.",
         )
 
     # Journal lines, not transaction entries: since Phase 1 an account can also be

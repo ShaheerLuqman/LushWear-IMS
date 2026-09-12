@@ -577,6 +577,7 @@ body:has(#orderFulfillmentView.active) .header-actions {
 .header-actions .transaction-search-filter,
 .header-actions .trial-balance-date,
 .header-actions .cash-in-hand-display,
+.header-actions .pa-time-btn,
 .header-actions .btn-sm,
 .header-actions .btn-icon-sm {
     height: 36px;
@@ -2298,9 +2299,78 @@ input[type="number"] {
     transition: var(--transition);
 }
 
-.status-report-view-btn:hover {
+.status-report-view-btn:hover:not(:disabled) {
     border-color: var(--accent-primary);
     background: var(--accent-glow);
+}
+
+.status-report-view-btn:disabled {
+    color: var(--text-muted);
+    cursor: default;
+}
+
+.status-report-actions {
+    display: flex;
+    gap: 6px;
+    justify-content: flex-end;
+}
+
+.status-report-select {
+    width: 28px;
+}
+
+.status-report-bulk-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+}
+
+.status-report-bulk-select-all {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+#shipperAdviceModal .modal-content {
+    max-width: 520px;
+}
+
+#shipperAdviceModal textarea {
+    width: 100%;
+    resize: vertical;
+}
+
+/* .form-group carries no outer margin, so sibling groups in this modal would sit flush. */
+#shipperAdviceModal .form-group + .form-group {
+    margin-top: 16px;
+}
+
+.shipper-advice-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.shipper-advice-option {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+.shipper-advice-option input {
+    margin-top: 2px;
 }
 
 /* Opened from within the report modal while that stays open. Both get the same
@@ -2373,6 +2443,7 @@ input[type="number"] {
 .status-report-card--returned .status-report-card__count,
 .status-report-card--failed .status-report-card__count { color: var(--danger); }
 .status-report-card--issues .status-report-card__count { color: var(--warning); }
+.status-report-card--review .status-report-card__count { color: var(--accent-primary); }
 .status-report-card--unfulfilled .status-report-card__count { color: var(--text-muted); }
 
 .status-report-detail__title {
@@ -5508,7 +5579,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .pa-scroll {
     height: 100%;
     overflow-y: auto;
-    padding: 4px 4px 48px;
     --pa-hero: #12855a;
     --pa-hero-bg: rgba(18, 133, 90, 0.12);
     --pa-zero: #cf5a4f;
@@ -5537,39 +5607,9 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     --pa-amber-bg: rgba(251, 191, 36, 0.14);
 }
 
-/* --- header --- */
-.pa-head {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 16px;
-    flex-wrap: wrap;
-}
-
-.pa-title {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.pa-subtitle {
-    margin: 6px 0 0;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.pa-head-actions {
-    display: flex;
-    gap: 10px;
-    flex-shrink: 0;
-}
-
-.pa-head-actions .btn {
-    height: 38px;
-}
-
-.pa-customize {
+/* --- header controls (Customize, Hero/Zero info) --- */
+.pa-customize,
+.pa-info {
     position: relative;
 }
 
@@ -5590,6 +5630,14 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .pa-pop[hidden] { display: none; }
+
+.pa-hero-def-pop {
+    width: 260px;
+    padding: 12px;
+    font-size: 12px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+}
 
 .pa-pop-title {
     font-size: 11px;
@@ -5631,51 +5679,24 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
 }
 
-/* --- toolbar --- */
-.pa-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: flex-end;
-    gap: 16px;
-    margin: 22px 0 20px;
-}
-
-.pa-field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    min-width: 0;
-}
-
-.pa-field > label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.pa-toolbar-spacer { flex: 1; }
-
+/* Time range control now lives in the app header row (see .header-actions
+   pinned-height rules) — sized to match the other header controls there. */
 .pa-time { position: relative; }
 
-.pa-time-btn,
-.pa-select {
+.pa-time-btn {
     display: inline-flex;
     align-items: center;
     gap: 10px;
-    height: 40px;
+    justify-content: space-between;
     padding: 0 14px;
     font-family: inherit;
-    font-size: 14px;
+    font-size: 13px;
     color: var(--text-primary);
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
     cursor: pointer;
-}
-
-.pa-time-btn {
-    min-width: 280px;
-    justify-content: space-between;
+    min-width: 200px;
 }
 
 .pa-time-btn > span {
@@ -5692,8 +5713,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
 }
-
-.pa-select { min-width: 220px; appearance: auto; }
 
 .pa-time-menu {
     position: absolute;
@@ -5783,53 +5802,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     border-radius: var(--radius-md);
 }
 
-/* --- segmented control --- */
-.pa-segments {
-    display: inline-flex;
-    gap: 2px;
-    padding: 3px;
-    background: color-mix(in srgb, var(--text-muted) 12%, transparent);
-    border-radius: var(--radius-md);
-}
-
-.pa-seg-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 7px;
-    padding: 7px 14px;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    background: none;
-    border: none;
-    border-radius: 7px;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.pa-seg-btn.is-active {
-    color: var(--accent-primary);
-    background: var(--bg-card);
-    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
-}
-
-.pa-seg-count {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 18px;
-    height: 18px;
-    padding: 0 5px;
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--text-muted);
-    background: color-mix(in srgb, var(--text-muted) 16%, transparent);
-    border-radius: 999px;
-}
-
-.pa-seg-btn.is-active .pa-seg-count { color: #fff; background: var(--accent-primary); }
-
 /* --- KPI cards --- */
 .pa-kpis {
     display: grid;
@@ -5906,75 +5878,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .pa-delta--up { color: var(--pa-hero); }
 .pa-delta--down { color: var(--pa-zero); }
 .pa-delta--flat { color: var(--text-muted); }
-
-/* --- hero / zero band --- */
-.pa-hero-band {
-    position: relative;
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 28px;
-    padding: 16px 22px;
-    margin-bottom: 18px;
-    background: linear-gradient(120deg,
-        color-mix(in srgb, var(--pa-hero) 7%, var(--bg-card)),
-        color-mix(in srgb, var(--pa-zero) 7%, var(--bg-card)));
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-}
-
-.pa-hero-stat {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.pa-hero-stat strong { display: block; color: var(--text-primary); font-size: 13px; }
-.pa-hero-stat span { font-size: 12px; color: var(--text-muted); }
-
-.pa-hero-ic {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    font-size: 13px;
-    flex-shrink: 0;
-}
-
-.pa-hero-ic--hero { color: var(--pa-hero); background: var(--pa-hero-bg); }
-.pa-hero-ic--zero { color: var(--pa-zero); background: var(--pa-zero-bg); }
-
-.pa-hero-def-btn {
-    margin-left: auto;
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 12px;
-    font: inherit;
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--accent-primary);
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-}
-
-.pa-hero-def {
-    flex-basis: 100%;
-    margin-top: 4px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border-color);
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text-secondary);
-}
-
-.pa-hero-def[hidden] { display: none; }
 
 /* --- table --- */
 .pa-card {
@@ -6270,15 +6173,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     .pa-kpis { grid-template-columns: 1fr 1fr; }
 }
 
-@media (max-width: 900px) {
-    .pa-toolbar-spacer { display: none; }
-    .pa-toolbar { gap: 12px; }
-    .pa-field--time, .pa-time, .pa-time-btn, .pa-field .pa-select { width: 100%; }
-    .pa-segments { width: 100%; }
-    .pa-seg-btn { flex: 1; justify-content: center; }
-    .pa-hero-band { gap: 16px; }
-    .pa-hero-def-btn { margin-left: 0; }
-}
 
 @media (max-width: 680px) {
     .pa-widgets { grid-template-columns: 1fr; }
@@ -7578,6 +7472,68 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
+}
+
+.settings-section__desc {
+    margin: 0 0 10px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.settings-couriers-list {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.settings-couriers-row {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    padding: 14px 16px;
+}
+
+.settings-couriers-row__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.settings-couriers-row__toggle {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--text-primary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.settings-couriers-row__toggle input {
+    cursor: pointer;
+}
+
+.settings-couriers-row__ledger {
+    font-size: 12px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.settings-couriers-row__body {
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+}
+
+.settings-couriers-row__body .form-group {
+    margin-bottom: 12px;
+}
+
+.settings-couriers-row__actions {
+    display: flex;
+    justify-content: flex-end;
 }
 
 .settings-row + .settings-row {

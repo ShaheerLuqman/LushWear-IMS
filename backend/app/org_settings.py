@@ -105,10 +105,11 @@ def _decrypt(value: Optional[str]) -> Optional[str]:
         return None
 
 
-# Courier id -> the credential key inside that courier's blob entry, and the
-# pre-blob column the value used to live in. Adding a courier means adding a row
+# Courier id -> the credential key inside that courier's blob entry. Only couriers
+# that have an integration appear here; the courier catalog (app/couriers.py) is
+# the wider list an org can enable. Adding a courier credential means adding a row
 # here; the database itself needs no change.
-_COURIER_CREDENTIALS = {
+COURIER_CREDENTIAL_KEYS = {
     "postex": "merchant_token",
     "couriers_next": "auth_key",
 }
@@ -140,7 +141,7 @@ class OrgIntegrationSettings:
     couriers: dict
 
     def courier_credential(self, courier: str) -> Optional[str]:
-        return (self.couriers.get(courier) or {}).get(_COURIER_CREDENTIALS[courier])
+        return (self.couriers.get(courier) or {}).get(COURIER_CREDENTIAL_KEYS[courier])
 
     @property
     def postex_merchant_token(self) -> Optional[str]:
@@ -238,7 +239,7 @@ def any_org_courier_credential(courier: str) -> Optional[str]:
         .data
         or []
     )
-    key = _COURIER_CREDENTIALS[courier]
+    key = COURIER_CREDENTIAL_KEYS[courier]
     for row in rows:
         value = (_decode_couriers(row).get(courier) or {}).get(key)
         if value:
@@ -312,6 +313,7 @@ def upsert_org_integration_settings(
     shopify_token_expires_at: Optional[datetime] = None,
     postex_merchant_token: Optional[str] = None,
     couriers_next_auth_key: Optional[str] = None,
+    couriers_blob: Optional[dict] = None,
 ) -> None:
     """Admin-facing write path (Settings > Integrations UI, or a one-time
     backfill) - also called by ensure_valid_shopify_token() after a refresh.
@@ -319,10 +321,13 @@ def upsert_org_integration_settings(
     is already stored, so an admin can update just the PostEx token without
     re-entering the Shopify credentials.
 
-    Courier credentials are still named per courier here (the API and both
-    Settings UIs speak that shape); this is where they are folded into the
-    single `couriers` blob. Setting one courier's credential re-encrypts the
-    whole blob, so the others are read back first to avoid dropping them."""
+    Courier credentials are still named per courier here (the superadmin portal
+    speaks that shape); this is where they are folded into the single `couriers`
+    blob. Setting one courier's credential re-encrypts the whole blob, so the
+    others are read back first to avoid dropping them. `couriers_blob` is the
+    other way in - app/couriers.py has already merged the whole dict (enabled
+    flags plus credentials) and passes it verbatim; the two are mutually
+    exclusive."""
     payload = {"org_id": org_id, "updated_at": datetime.now(timezone.utc).isoformat()}
     if shopify_store_url is not None:
         payload["shopify_store_url"] = shopify_store_url
@@ -344,10 +349,12 @@ def upsert_org_integration_settings(
     if shopify_token_expires_at is not None:
         payload["shopify_token_expires_at"] = shopify_token_expires_at.isoformat()
     courier_updates = {"postex": postex_merchant_token, "couriers_next": couriers_next_auth_key}
-    if any(v is not None for v in courier_updates.values()):
+    if couriers_blob is not None:
+        payload["couriers"] = _encrypt(json.dumps(couriers_blob))
+    elif any(v is not None for v in courier_updates.values()):
         couriers = get_org_integration_settings(org_id).couriers
         for courier, value in courier_updates.items():
             if value is not None:
-                couriers.setdefault(courier, {})[_COURIER_CREDENTIALS[courier]] = value
+                couriers.setdefault(courier, {})[COURIER_CREDENTIAL_KEYS[courier]] = value
         payload["couriers"] = _encrypt(json.dumps(couriers))
     get_supabase().table("system_integration_settings").upsert(payload, on_conflict="org_id").execute()

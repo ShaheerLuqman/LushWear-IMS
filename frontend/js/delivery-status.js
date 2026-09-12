@@ -247,7 +247,7 @@ function refreshDeliveryStatusSelected() {
         showToast('Select orders to include in the report', 'warning', { silent: true });
         return;
     }
-    const report = { delivered: [], returned: [], unfulfilled: [], transit: [], issues: [], failed: [] };
+    const report = { delivered: [], returned: [], unfulfilled: [], transit: [], review: [], issues: [], failed: [] };
     for (const row of selected) {
         const status = (row.order_status || '').toLowerCase();
         if (status === 'delivered' || status === 'returned' || status === 'unfulfilled') {
@@ -259,7 +259,11 @@ function refreshDeliveryStatusSelected() {
         // no relevant status yet means still in transit, or never fetched at all).
         const derivedStatus = deriveOrderStatusFromLatest(row.delivery_status);
         const isIssue = ['CNA', 'ICA', 'RFD'].includes(derivedStatus);
-        const bucket = isIssue ? 'issues' : (derivedStatus || 'transit');
+        // Checked ahead of the attempt codes: order_status still reads RFD/ICA on a parcel
+        // PostEx has since parked for review, and awaiting-our-decision is the actionable
+        // state - it's the one the Advise button acts on.
+        const underReview = deliveryStatusIsUnderReview(row.delivery_status);
+        const bucket = underReview ? 'review' : (isIssue ? 'issues' : (derivedStatus || 'transit'));
         (report[bucket] || report.transit).push({
             order: row,
             note: (row.delivery_status && row.delivery_status.latest_status) || '',
@@ -511,17 +515,20 @@ const DELIVERY_REPORT_CATEGORIES = [
     { key: 'delivered', label: 'Delivered' },
     { key: 'returned', label: 'Returned' },
     { key: 'transit', label: 'In transit' },
+    { key: 'review', label: 'Under review' },
     { key: 'issues', label: 'Issues' },
     { key: 'unfulfilled', label: 'Unfulfilled' },
     { key: 'failed', label: 'Fetch failed' },
 ];
 
 let deliveryStatusReport = null;
+let deliveryStatusReportActiveKey = 'all';
 
 function renderDeliveryStatusReportDetail(key) {
     const detail = document.getElementById('deliveryStatusReportDetail');
     const cards = document.getElementById('deliveryStatusReportCards');
     if (!detail || !deliveryStatusReport) return;
+    deliveryStatusReportActiveKey = key;
     cards?.querySelectorAll('.status-report-card').forEach(card => {
         card.classList.toggle('active', card.dataset.category === key);
     });
@@ -534,7 +541,7 @@ function renderDeliveryStatusReportDetail(key) {
         return;
     }
     const showIssueColumn = key === 'issues' || key === 'all';
-    const rows = entries.map(({ order, note, issueType }, i) => {
+    const meta = entries.map(({ order, note, issueType, advised }) => {
         const courierNormalized = (order.courier || '').trim().toUpperCase();
         const track = (order.tracking_number || '').trim();
         // Full details come from the courier API, so only offer it where that call can work.
@@ -542,30 +549,165 @@ function renderDeliveryStatusReportDetail(key) {
             (courierNormalized === 'POSTEX' || courierNormalized === 'COURIERS NEXT') &&
             track && track !== '-'
         );
-        return `
+        // Shipper advice is a PostEx endpoint, and PostEx only accepts it while the parcel
+        // is parked for review - so the button appears exactly where the call can succeed.
+        const canAdvise = courierNormalized === 'POSTEX' && track && track !== '-' &&
+            deliveryStatusIsUnderReview(order.delivery_status);
+        return { order, note, issueType, advised, canViewDetails, canAdvise };
+    });
+    // A bulk bar only earns its place when there's more than one parcel to advise at once -
+    // otherwise it's a second way to do exactly what the per-row Advise button already does.
+    const adviseIndexes = meta.reduce((acc, m, i) => { if (m.canAdvise && !m.advised) acc.push(i); return acc; }, []);
+    const bulkEligible = adviseIndexes.length > 1;
+    const rows = meta.map(({ order, note, issueType, advised, canViewDetails, canAdvise }, i) => `
         <tr>
+            ${bulkEligible ? `<td class="status-report-select">${(canAdvise && !advised) ? `<input type="checkbox" class="status-report-advise-check" data-index="${i}">` : ''}</td>` : ''}
             <td>${escapeHtml(order.order_number || '')}</td>
             <td>${escapeHtml(formatCourierForDisplay(order.courier) || '')}</td>
             <td>${escapeHtml(order.tracking_number || '')}</td>
             ${showIssueColumn ? `<td>${issueType ? `<span class="grid-status-badge grid-status-rfd">${escapeHtml(issueType)}</span>` : ''}</td>` : ''}
             <td>${escapeHtml(note || '')}</td>
-            <td>${canViewDetails ? `<button type="button" class="status-report-view-btn" data-index="${i}">View</button>` : ''}</td>
-        </tr>`;
-    }).join('');
+            <td class="status-report-actions">
+                ${canViewDetails ? `<button type="button" class="status-report-view-btn" data-index="${i}">View</button>` : ''}
+                ${canAdvise ? (advised
+                    ? `<button type="button" class="status-report-view-btn" disabled>${escapeHtml(advised)} sent</button>`
+                    : `<button type="button" class="status-report-view-btn status-report-advise-btn" data-index="${i}">Advise</button>`) : ''}
+            </td>
+        </tr>`).join('');
+    const bulkBar = bulkEligible ? `
+        <div class="status-report-bulk-bar">
+            <label class="status-report-bulk-select-all">
+                <input type="checkbox" id="statusReportSelectAllAdvise">Select all under review
+            </label>
+            <button type="button" class="btn btn-secondary btn-sm" id="statusReportBulkAdviseBtn" disabled>Advise selected (0)</button>
+        </div>` : '';
     detail.innerHTML = `
         <h3 class="status-report-detail__title">${escapeHtml(label)} (${entries.length})</h3>
+        ${bulkBar}
         <div class="postex-mismatches-table-wrap">
             <table class="postex-mismatches-table">
-                <thead><tr><th>Order #</th><th>Courier</th><th>Tracking</th>${showIssueColumn ? '<th>Issue</th>' : ''}<th>Latest status</th><th></th></tr></thead>
+                <thead><tr>${bulkEligible ? '<th></th>' : ''}<th>Order #</th><th>Courier</th><th>Tracking</th>${showIssueColumn ? '<th>Issue</th>' : ''}<th>Latest status</th><th></th></tr></thead>
                 <tbody>${rows}</tbody>
             </table>
         </div>`;
-    detail.querySelectorAll('.status-report-view-btn').forEach(btn => {
+    detail.querySelectorAll('.status-report-view-btn:not(.status-report-advise-btn)').forEach(btn => {
+        if (btn.disabled) return;
         btn.addEventListener('click', () => {
             const { order } = entries[Number(btn.dataset.index)];
             fetchDeliveryStatus(order.id, order.courier, order.tracking_number);
         });
     });
+    detail.querySelectorAll('.status-report-advise-btn').forEach(btn => {
+        btn.addEventListener('click', () => openShipperAdviceModal([entries[Number(btn.dataset.index)]]));
+    });
+
+    if (!bulkEligible) return;
+    const selected = new Set();
+    const selectAll = document.getElementById('statusReportSelectAllAdvise');
+    const bulkBtn = document.getElementById('statusReportBulkAdviseBtn');
+    const updateBulkBtn = () => {
+        bulkBtn.disabled = selected.size === 0;
+        bulkBtn.textContent = `Advise selected (${selected.size})`;
+    };
+    detail.querySelectorAll('.status-report-advise-check').forEach(cb => {
+        cb.addEventListener('change', () => {
+            const idx = Number(cb.dataset.index);
+            if (cb.checked) selected.add(idx); else selected.delete(idx);
+            selectAll.checked = selected.size === adviseIndexes.length;
+            updateBulkBtn();
+        });
+    });
+    selectAll.addEventListener('change', () => {
+        selected.clear();
+        if (selectAll.checked) adviseIndexes.forEach(i => selected.add(i));
+        detail.querySelectorAll('.status-report-advise-check').forEach(cb => { cb.checked = selectAll.checked; });
+        updateBulkBtn();
+    });
+    bulkBtn.addEventListener('click', () => openShipperAdviceModal([...selected].map(i => entries[i])));
+}
+
+// The two answers PostEx waits for on a parcel it has parked for review. Keys match the
+// backend's postex.SHIPPER_ADVICE_STATUS_IDS.
+const SHIPPER_ADVICE_LABELS = { retry: 'Reattempt', return: 'Return' };
+
+// The report entries the advice modal is open for (one for a per-row Advise, several for a
+// bulk Advise) - held so a successful send can mark each advised in place, keeping the
+// button from being fired twice at the same parcel.
+let shipperAdviceEntries = [];
+
+function openShipperAdviceModal(entries) {
+    const modal = document.getElementById('shipperAdviceModal');
+    const summary = document.getElementById('shipperAdviceSummary');
+    const remarks = document.getElementById('shipperAdviceRemarks');
+    if (!modal || !remarks || !entries || entries.length === 0) return;
+    shipperAdviceEntries = entries;
+    if (summary) {
+        summary.textContent = entries.length === 1
+            ? `Order ${entries[0].order.order_number} (${entries[0].order.tracking_number}) is with PostEx awaiting your ` +
+              'decision on what to do with the parcel. Your remarks are shown to the rider.'
+            : `${entries.length} orders are with PostEx awaiting your decision on what to do with the parcel. ` +
+              'The same decision and remarks are sent for all of them, and shown to the rider.';
+    }
+    const retryOption = modal.querySelector('input[name="shipperAdviceType"][value="retry"]');
+    if (retryOption) retryOption.checked = true;
+    remarks.value = '';
+    modal.classList.add('active');
+    remarks.focus();
+}
+
+function closeShipperAdviceModal() {
+    const modal = document.getElementById('shipperAdviceModal');
+    if (modal) modal.classList.remove('active');
+    shipperAdviceEntries = [];
+}
+
+async function submitShipperAdvice() {
+    if (shipperAdviceEntries.length === 0) return;
+    const remarksEl = document.getElementById('shipperAdviceRemarks');
+    const btn = document.getElementById('shipperAdviceConfirmBtn');
+    const advice = document.querySelector('input[name="shipperAdviceType"]:checked')?.value || 'retry';
+    const remarks = (remarksEl?.value || '').trim();
+    if (!remarks) {
+        showToast('Enter remarks for the rider', 'warning', { silent: true });
+        remarksEl?.focus();
+        return;
+    }
+    const entries = shipperAdviceEntries;
+    const label = SHIPPER_ADVICE_LABELS[advice];
+    if (btn) btn.disabled = true;
+    try {
+        const results = await apiJson('/orders/postex-shipper-advice', {
+            method: 'POST',
+            body: { order_ids: entries.map(e => e.order.id), advice, remarks },
+            fallback: `Failed to send ${label.toLowerCase()} to PostEx`
+        });
+        const resultsById = new Map((results || []).map(r => [r.order_id, r]));
+        const failed = [];
+        let succeeded = 0;
+        for (const entry of entries) {
+            const result = resultsById.get(entry.order.id);
+            if (result && result.ok) {
+                entry.advised = label;
+                succeeded++;
+            } else {
+                failed.push({ order_number: entry.order.order_number, error: result?.error });
+            }
+        }
+        if (succeeded === 0) throw new Error(failed[0]?.error || 'PostEx did not accept the advice');
+
+        const summary = entries.length === 1
+            ? `${label} requested for order ${entries[0].order.order_number}`
+            : `${label} requested for ${succeeded} order${succeeded === 1 ? '' : 's'}`;
+        showToast(
+            failed.length ? `${summary}; failed for ${failed.map(f => f.order_number).join(', ')}` : summary,
+            failed.length ? 'warning' : 'success');
+        closeShipperAdviceModal();
+        renderDeliveryStatusReportDetail(deliveryStatusReportActiveKey);
+    } catch (err) {
+        showToast(err.message || 'Failed to send advice to PostEx', 'error');
+    } finally {
+        if (btn) btn.disabled = false;
+    }
 }
 
 function showDeliveryStatusReportModal(report, total) {
@@ -761,5 +903,16 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     document.getElementById('closeDeliveryStatusReportModal')?.addEventListener('click', closeDeliveryStatusReportModal);
     document.getElementById('closeDeliveryStatusReportBtn')?.addEventListener('click', closeDeliveryStatusReportModal);
+
+    // PostEx shipper advice (retry / return) modal
+    const shipperAdviceModal = document.getElementById('shipperAdviceModal');
+    if (shipperAdviceModal) {
+        shipperAdviceModal.addEventListener('click', (e) => {
+            if (e.target === shipperAdviceModal) closeShipperAdviceModal();
+        });
+    }
+    document.getElementById('closeShipperAdviceModal')?.addEventListener('click', closeShipperAdviceModal);
+    document.getElementById('shipperAdviceCancelBtn')?.addEventListener('click', closeShipperAdviceModal);
+    document.getElementById('shipperAdviceConfirmBtn')?.addEventListener('click', submitShipperAdvice);
 });
 
