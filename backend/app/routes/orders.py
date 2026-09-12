@@ -972,6 +972,9 @@ async def upload_postex_csv(
                 "tax_amount": r["tax_amount"],
                 "courier": "PostEx",
                 "is_order_settled": True,
+                # A real CPR overrides whatever the tracking API had derived - clear the
+                # flag so this row reads as settled, not as still-pending API derivation.
+                "tax_amount_derived": False,
                 "updated_at": current_time,
             }
             if r.get("tracking_number"):
