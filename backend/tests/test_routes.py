@@ -95,6 +95,25 @@ class TestOrders:
         assert client.get("/api/orders/?month=13&year=2026").status_code == 422
         assert client.get("/api/orders/?month=6&year=2026").status_code == 200
 
+    def test_date_range_returns_rows_regardless_of_loaded_period(self, make_client, order_row):
+        r = make_client({"shopify_orders": [order_row]}).get(
+            "/api/orders/?date_from=2026-07-01&date_to=2026-07-31"
+        )
+        assert r.status_code == 200
+        assert [o["order_number"] for o in r.json()] == [11308]
+
+    def test_date_range_takes_priority_over_month_and_year(self, make_client, order_row):
+        r = make_client({"shopify_orders": [order_row]}).get(
+            "/api/orders/?month=6&year=2026&date_from=2026-07-01&date_to=2026-07-31"
+        )
+        assert r.status_code == 200
+        assert [o["order_number"] for o in r.json()] == [11308]
+
+    def test_date_range_rejects_malformed_dates(self, make_client, order_row):
+        client = make_client({"shopify_orders": [order_row]})
+        assert client.get("/api/orders/?date_from=18-07-2026").status_code == 400
+        assert client.get("/api/orders/?date_to=not-a-date").status_code == 400
+
     def test_create_order_returns_the_typed_order(self, make_client, order_row):
         # FakeQuery.insert().execute() just echoes the seeded row for the table,
         # not the request payload - order_row (conftest.py) is a full Order shape.

@@ -159,6 +159,7 @@ function populateOrdersPeriodFilterDropdown() {
     if (!selectEl) return;
     const currentVal = selectEl.value;
     const options = [{ value: ALL_ORDERS_VALUE, label: 'Recent Orders' }, ...buildStaticPeriodOptions()];
+    if (currentVal === CUSTOM_ORDERS_VALUE) options.unshift({ value: CUSTOM_ORDERS_VALUE, label: 'Custom' });
     selectEl.innerHTML = options.map((o) => `<option value="${o.value}">${o.label}</option>`).join('');
     const { month, year } = getCurrentOrdersPeriod();
     selectEl.value = (currentVal && options.some((o) => o.value === currentVal)) ? currentVal : `${month}-${year}`;
@@ -167,12 +168,17 @@ function populateOrdersPeriodFilterDropdown() {
 /** Loads orders for whichever period is currently selected in the period dropdown, defaulting
  * to the current month period when none is selected yet (e.g. initial load). Single entry point
  * for reloading orders - safe to call after any mutation without silently dropping the user out
- * of a selected period back to the default. */
+ * of a selected period (or an active custom date range) back to the default. */
 async function loadOrders() {
     const selectEl = document.getElementById('ordersPeriodFilter');
     if (selectEl && !selectEl.value) populateOrdersPeriodFilterDropdown();
     const periodVal = selectEl?.value;
-    if (periodVal && periodVal !== ALL_ORDERS_VALUE) {
+    if (periodVal === CUSTOM_ORDERS_VALUE && window._ordersDateRange) {
+        const { from, to } = window._ordersDateRange;
+        await loadOrdersForDateRange(from, to);
+        return;
+    }
+    if (periodVal && periodVal !== ALL_ORDERS_VALUE && periodVal !== CUSTOM_ORDERS_VALUE) {
         const [month, year] = periodVal.split('-');
         await loadOrdersForPeriod(Number(month), Number(year));
         return;
@@ -217,6 +223,23 @@ async function loadOrdersForPeriod(month, year) {
     } catch (error) {
         console.error('Error loading orders for period:', error);
         showToast('Failed to load orders for period', 'error');
+    }
+}
+
+/** Dropdown value for a custom date range picked via the header's Date range button. */
+const CUSTOM_ORDERS_VALUE = '__custom__';
+
+/** Load every order whose order_receiving_date falls in [from, to] (YYYY-MM-DD, inclusive)
+ * from the API - the whole range, not just whatever period happens to already be loaded. */
+async function loadOrdersForDateRange(from, to) {
+    try {
+        const params = new URLSearchParams();
+        if (from) params.append('date_from', from);
+        if (to) params.append('date_to', to);
+        await fetchOrdersForPeriodKey(`${CUSTOM_ORDERS_VALUE}-${from}-${to}`, `/orders/?${params}`, 'Failed to fetch orders for date range');
+    } catch (error) {
+        console.error('Error loading orders for date range:', error);
+        showToast('Failed to load orders for date range', 'error');
     }
 }
 

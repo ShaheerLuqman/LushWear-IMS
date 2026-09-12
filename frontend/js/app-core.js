@@ -141,8 +141,6 @@ let nextLoadSheetAssignmentNumber = 1;
 const ORDERS_AUTO_SYNC_INTERVAL_MS = 30 * 60 * 1000;
 let ordersAutoSyncTimerId = null;
 let lastOrdersSyncAt = null; // ms epoch
-/** Orders grid date column id (for header date range filter). */
-const ORDERS_DATE_COLUMN_ID = 'order_receiving_date';
 /** Guard: when Order# filter is a full order number (4+ digits) and 0 results, we fetch from DB; avoid duplicate requests */
 let ordersFetchByNumberInFlight = null;
 /** IDs of orders added temporarily from "fetch by number" search; removed when filter is cleared or changed */

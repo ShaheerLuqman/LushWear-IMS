@@ -59,11 +59,17 @@ function initOrdersPeriodFilter() {
             // isn't cached - a cache hit paints instantly instead (see hydrateOrdersFromCache).
             // Other reloads (sync, mutations elsewhere) keep the existing rows visible until
             // the new data lands instead of flashing to a blank/spinner state.
+            if (selectEl.value !== CUSTOM_ORDERS_VALUE) {
+                window._ordersDateRange = null;
+                if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
+                const customOption = [...selectEl.options].find((o) => o.value === CUSTOM_ORDERS_VALUE);
+                if (customOption) customOption.remove();
+            }
             if (ordersGridApi && !ordersHasCachedOrders(selectEl.value)) ordersGridApi.showLoadingOverlay();
             try {
                 if (selectEl.value === ALL_ORDERS_VALUE) {
                     await loadAllOrders();
-                } else {
+                } else if (selectEl.value !== CUSTOM_ORDERS_VALUE) {
                     const [month, year] = selectEl.value.split('-').map(Number);
                     await loadOrdersForPeriod(month, year);
                 }
@@ -74,20 +80,14 @@ function initOrdersPeriodFilter() {
     }
 }
 
-/** Date range filter popup for orders header button. Uses ordersGridApi and ORDERS_DATE_COLUMN_ID. */
+/** Date range filter popup for orders header button. Fetches the range server-side
+ * (loadOrdersForDateRange) into window._ordersDateRange, and marks the period dropdown
+ * "Custom" while a range is active. */
 function initOrdersDateRangeButton() {
     const triggerBtn = document.getElementById('ordersDateRangeBtn');
     if (!triggerBtn) return;
 
     const toDateInputValue = (val) => (val == null || val === '') ? '' : formatDateDDMMYYYY(val);
-
-    const shiftDays = (yyyymmdd, days) => {
-        if (!yyyymmdd) return '';
-        const d = new Date(`${String(yyyymmdd).slice(0, 10)}T00:00:00`);
-        d.setDate(d.getDate() + days);
-        const pad = (n) => String(n).padStart(2, '0');
-        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-    };
 
     const menu = document.createElement('div');
     menu.className = 'date-range-menu';
@@ -139,76 +139,81 @@ function initOrdersDateRangeButton() {
     const toPicker = window.flatpickr ? window.flatpickr(toInput, flatpickrOpts) : null;
 
     function updateButtonLabel() {
-        if (!ordersGridApi) return;
-        const filterModel = ordersGridApi.getFilterModel() || {};
-        const colFilter = filterModel[ORDERS_DATE_COLUMN_ID];
-        const hasRange = colFilter && colFilter.type === 'inRange';
-        triggerBtn.textContent = hasRange ? 'Range set' : 'Date range';
+        triggerBtn.textContent = window._ordersDateRange ? 'Range set' : 'Date range';
     }
 
-    const updateFilter = () => {
-        if (!ordersGridApi) return;
+    // The range is fetched server-side (loadOrdersForDateRange) so it covers every matching
+    // order, not just whatever period happened to already be loaded into the grid - a plain
+    // AG Grid column filter here would only ever narrow the currently-loaded period's rows.
+    const applyDateRange = async (from, to) => {
+        window._ordersDateRange = { from, to };
+        const selectEl = document.getElementById('ordersPeriodFilter');
+        if (selectEl) {
+            if (![...selectEl.options].some((o) => o.value === CUSTOM_ORDERS_VALUE)) {
+                selectEl.insertAdjacentHTML('afterbegin', `<option value="${CUSTOM_ORDERS_VALUE}">Custom</option>`);
+            }
+            selectEl.value = CUSTOM_ORDERS_VALUE;
+        }
+        if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+        try {
+            await loadOrdersForDateRange(from, to);
+        } finally {
+            if (ordersGridApi) ordersGridApi.hideOverlay();
+        }
+        triggerBtn.textContent = 'Range set';
+    };
+
+    applyBtn.addEventListener('click', async (e) => {
+        e.stopPropagation();
         const rawFrom = (fromInput.value || '').trim();
         const rawTo = (toInput.value || '').trim();
         const fromVal = rawFrom ? parseDDMMYYYYToYYYYMMDD(rawFrom) : null;
         const toVal = rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null;
-        const currentModel = ordersGridApi.getFilterModel() || {};
-        const newModel = { ...currentModel };
-        if (fromVal && toVal) {
-            // agDateColumnFilter's inRange upper bound is compared against row dates that
-            // carry a time component, so push it to the next day to include the whole end
-            // day - equal from/to then still matches that single day.
-            newModel[ORDERS_DATE_COLUMN_ID] = { filterType: 'date', type: 'inRange', dateFrom: fromVal, dateTo: shiftDays(toVal, 1) };
-            triggerBtn.textContent = 'Range set';
-        } else if (!fromVal && !toVal) {
-            delete newModel[ORDERS_DATE_COLUMN_ID];
-            triggerBtn.textContent = 'Date range';
-        } else return;
-        ordersGridApi.setFilterModel(newModel);
-    };
-
-    applyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        updateFilter();
+        if (!fromVal || !toVal) return;
         menu.style.display = 'none';
+        await applyDateRange(fromVal, toVal);
     });
 
-    clearBtn.addEventListener('click', (e) => {
+    clearBtn.addEventListener('click', async (e) => {
         e.stopPropagation();
         fromInput.value = '';
         toInput.value = '';
         if (fromPicker) fromPicker.clear();
         if (toPicker) toPicker.clear();
-        if (ordersGridApi) {
-            const newModel = { ...(ordersGridApi.getFilterModel() || {}) };
-            delete newModel[ORDERS_DATE_COLUMN_ID];
-            ordersGridApi.setFilterModel(newModel);
-        }
+        window._ordersDateRange = null;
         triggerBtn.textContent = 'Date range';
         menu.style.display = 'none';
+        const selectEl = document.getElementById('ordersPeriodFilter');
+        if (selectEl) {
+            const customOption = [...selectEl.options].find((o) => o.value === CUSTOM_ORDERS_VALUE);
+            if (customOption) customOption.remove();
+            const { month, year } = getCurrentOrdersPeriod();
+            selectEl.value = `${month}-${year}`;
+        }
+        if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+        try {
+            await loadOrders();
+        } finally {
+            if (ordersGridApi) ordersGridApi.hideOverlay();
+        }
     });
 
     triggerBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         if (menu.style.display === 'none') {
-            if (ordersGridApi) {
-                const filterModel = ordersGridApi.getFilterModel() || {};
-                const colFilter = filterModel[ORDERS_DATE_COLUMN_ID];
-                if (colFilter && colFilter.type === 'inRange') {
-                    const fromStr = toDateInputValue(colFilter.dateFrom);
-                    // dateTo is stored as the day after the picked end date (see updateFilter),
-                    // so shift it back to show the user the date they actually chose.
-                    const toStr = toDateInputValue(shiftDays(colFilter.dateTo, -1));
-                    fromInput.value = fromStr;
-                    toInput.value = toStr;
-                    if (fromPicker) fromPicker.setDate(fromStr || null, false);
-                    if (toPicker) toPicker.setDate(toStr || null, false);
-                } else {
-                    fromInput.value = '';
-                    toInput.value = '';
-                    if (fromPicker) fromPicker.clear();
-                    if (toPicker) toPicker.clear();
-                }
+            const range = window._ordersDateRange;
+            if (range) {
+                const fromStr = toDateInputValue(range.from);
+                const toStr = toDateInputValue(range.to);
+                fromInput.value = fromStr;
+                toInput.value = toStr;
+                if (fromPicker) fromPicker.setDate(fromStr || null, false);
+                if (toPicker) toPicker.setDate(toStr || null, false);
+            } else {
+                fromInput.value = '';
+                toInput.value = '';
+                if (fromPicker) fromPicker.clear();
+                if (toPicker) toPicker.clear();
             }
             const rect = triggerBtn.getBoundingClientRect();
             menu.style.display = 'block';

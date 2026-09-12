@@ -173,12 +173,44 @@ def _reshape_delivery_status_latest(rows: List[dict]) -> List[dict]:
 async def get_all_orders(
     month: int = Query(None, ge=1, le=12, description="Filter by period month (1-12). Period boundaries follow the org's fiscal_month_start_day."),
     year: int = Query(None, ge=2000, le=2100, description="Filter by period year."),
+    date_from: str = Query(None, description="Earliest order_receiving_date (inclusive), YYYY-MM-DD, PKT."),
+    date_to: str = Query(None, description="Latest order_receiving_date (inclusive), YYYY-MM-DD, PKT."),
     org_id: str = Depends(get_org_id),
 ):
-    """Orders for a month period, or the last RECENT_ORDERS_MONTHS months (newest first) when no period is given ('Recent Orders')."""
+    """Orders for a custom date range, a month period, or the last RECENT_ORDERS_MONTHS
+    months (newest first) when neither is given ('Recent Orders'). date_from/date_to take
+    priority over month/year when both are supplied."""
     try:
         t_start = time.perf_counter()
         supabase = get_supabase()
+
+        if date_from or date_to:
+            def _pkt_day_start(value: str) -> datetime:
+                day = datetime.strptime(value, "%Y-%m-%d").date()
+                return datetime(day.year, day.month, day.day, tzinfo=PKT_TIMEZONE)
+
+            try:
+                from_iso = _pkt_day_start(date_from).isoformat() if date_from else None
+                to_iso = (_pkt_day_start(date_to) + timedelta(days=1)).isoformat() if date_to else None
+            except ValueError:
+                raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+
+            def _build_range_query():
+                q = org_table(supabase, org_id, "shopify_orders").select(ORDERS_LIST_SELECT)
+                if from_iso:
+                    q = q.gte("order_receiving_date", from_iso)
+                if to_iso:
+                    q = q.lt("order_receiving_date", to_iso)
+                return q.order("order_receiving_date", desc=True).order("order_number", desc=True)
+
+            range_orders = _reshape_delivery_status_latest(fetch_all(_build_range_query))
+            t_query = time.perf_counter()
+            logger.info(
+                "[get_all_orders] range=%s..%s query=%.2fs (rows=%d)",
+                date_from, date_to, t_query - t_start, len(range_orders),
+            )
+            return range_orders
+
         start_day = get_org_fiscal_settings(org_id)["fiscal_month_start_day"]
 
         if month is not None and year is not None:
