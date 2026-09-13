@@ -108,6 +108,7 @@ function mapCourierBillRow(row) {
         grossCod: row.gross_cod,
         charges: row.charges,
         taxes: row.taxes,
+        costTotal: row.cost_total,
         returnedTotal: row.returned_total,
         netReceivable: row.net_receivable,
         receivedAmount: row.received_amount,
@@ -350,6 +351,12 @@ function renderCourierPaymentReportDetailStats(bill) {
                 <span class="stat-label">Net Receivable</span>
                 <span class="stat-value" style="color: ${netColor};">Rs ${formatMoney(bill.netReceivable)}</span>
             </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-info">
+                <span class="stat-label">Total Cost Price</span>
+                <span class="stat-value">Rs ${formatMoney(bill.costTotal)}</span>
+            </div>
         </div>`;
 }
 
@@ -456,6 +463,7 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
             <td>${formatMoney(order.delivery_charge)}</td>
             <td>${formatMoney(order.tax_amount)}</td>
             <td>${receivable != null ? formatMoney(receivable) : '-'}</td>
+            <td>${formatMoney(order.cost_price)}</td>
             <td>${settledBadge}</td>
         </tr>`;
     }).join('');

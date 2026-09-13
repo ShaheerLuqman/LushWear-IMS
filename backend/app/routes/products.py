@@ -728,6 +728,98 @@ async def get_product_analytics(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+@router.get("/analytics-by-city")
+async def get_city_analytics(
+    start: date = Query(..., description="Range start, inclusive (YYYY-MM-DD)"),
+    end: date = Query(..., description="Range end, inclusive (YYYY-MM-DD)"),
+    org_id: str = Depends(get_org_id),
+):
+    """Per-city units/revenue for [start, end] and the equal-length window right
+    before it, plus a per-city product breakdown. Same basis and product
+    resolution as get_product_analytics; this route only merges the RPC result
+    with the product catalog (names, collections) for the city_products rows."""
+    try:
+        if end < start:
+            raise HTTPException(status_code=400, detail="end must be on or after start")
+
+        span_days = (end - start).days + 1
+        prev_end = start - timedelta(days=1)
+        prev_start = start - timedelta(days=span_days)
+        has_prev = prev_end >= _ANALYTICS_OLDEST
+        if has_prev and prev_start < _ANALYTICS_OLDEST:
+            prev_start = _ANALYTICS_OLDEST
+
+        supabase = get_supabase()
+        rpc_resp = supabase.rpc("get_city_analytics", {
+            "p_org_id": org_id,
+            "p_start": start.isoformat(),
+            "p_end": end.isoformat(),
+            "p_prev_start": prev_start.isoformat() if has_prev else None,
+            "p_prev_end": prev_end.isoformat() if has_prev else None,
+        }).execute()
+        rpc = rpc_resp.data or {}
+        rpc_cities = rpc.get("cities") or []
+        rpc_city_products = rpc.get("city_products") or []
+
+        catalog = fetch_all(lambda: org_table(supabase, org_id, "shopify_products")
+                            .select("id, name, collection"))
+        by_id = {p["id"]: p for p in catalog}
+        by_name: Dict[str, str] = {}
+        for p in catalog:
+            nm = (p.get("name") or "").strip().lower()
+            if nm:
+                by_name.setdefault(nm, p["id"])
+                if " - " in nm:
+                    by_name.setdefault(nm.rsplit(" - ", 1)[0].strip(), p["id"])
+
+        cities: Dict[str, dict] = {}
+        for row in rpc_cities:
+            phase = row.get("phase")
+            city = row.get("city") or "Unknown"
+            b = cities.setdefault(city, {
+                "city": city, "units": 0, "revenue": 0.0, "orders": 0, "products": 0,
+                "prev_units": 0, "prev_revenue": 0.0,
+            })
+            if phase == "current":
+                b["units"] = int(row.get("units") or 0)
+                b["revenue"] = money(row.get("revenue") or 0.0)
+                b["orders"] = int(row.get("orders") or 0)
+                b["products"] = int(row.get("products") or 0)
+            elif phase == "previous":
+                b["prev_units"] = int(row.get("units") or 0)
+                b["prev_revenue"] = money(row.get("revenue") or 0.0)
+
+        city_products = []
+        for row in rpc_city_products:
+            if row.get("phase") != "current":
+                continue
+            key = _pa_resolve_key(row, by_id, by_name)
+            product = by_id.get(key)
+            city_products.append({
+                "city": row.get("city") or "Unknown",
+                "product_id": key if product else None,
+                "name": (product or {}).get("name") or row.get("item_name") or "(unknown product)",
+                "collection": ((product or {}).get("collection") or "").strip() or "Uncategorized",
+                "units": int(row.get("units") or 0),
+                "revenue": money(row.get("revenue") or 0.0),
+            })
+
+        return {
+            "start": start.isoformat(),
+            "end": end.isoformat(),
+            "prev_start": prev_start.isoformat() if has_prev else None,
+            "prev_end": prev_end.isoformat() if has_prev else None,
+            "has_prev": has_prev,
+            "cities": sorted(cities.values(), key=lambda c: c["revenue"], reverse=True),
+            "city_products": city_products,
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("products endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
 @router.get("/{product_id}", response_model=ProductWithVariants)
 async def get_product(product_id: str, org_id: str = Depends(get_org_id)):
     """Get a single product with its variants"""

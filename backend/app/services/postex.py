@@ -103,7 +103,21 @@ def build_column_map(fieldnames: List[str]) -> Dict[str, str]:
             col_map["tracking_number"] = name
         if "NET_AMOUNT" in key_upper and "net_amount" not in col_map:
             col_map["net_amount"] = name
+        if key_upper == "STATUS" and "status" not in col_map:
+            col_map["status"] = name
     return col_map
+
+
+# The CPR export's STATUS column only ever carries these two terminal values (verified
+# against every CPR_Transaction_*.csv on hand) - anything else is left unmapped rather
+# than guessed at, since forcing an unrecognised value to one of these would silently
+# misreport what PostEx actually said.
+_CSV_STATUS_MAP = {"delivered": "delivered", "return": "returned", "returned": "returned"}
+
+
+def normalize_csv_status(raw: str) -> Optional[str]:
+    """Map a CPR STATUS cell ('Delivered'/'Return') to the app's order_status values."""
+    return _CSV_STATUS_MAP.get(str(raw or "").strip().lower())
 
 
 def decode(content: bytes) -> str:
@@ -123,8 +137,9 @@ def parse_rows(content: bytes) -> Tuple[List[dict], List[str]]:
 
     Returns (rows, order_numbers). Each row carries the canonical fields the
     upload endpoint writes back: delivery_charge (shipping + GST), tax_amount
-    (income + sales withholding), tracking_number and the CSV's own net amount
-    for reconciliation.
+    (income + sales withholding), tracking_number, the CSV's own net amount for
+    reconciliation, and csv_order_status (STATUS normalised to delivered/returned,
+    or None if the column is absent or unrecognised).
 
     Raises CsvFormatError when the file has no header or lacks a required column.
     """
@@ -156,12 +171,14 @@ def parse_rows(content: bytes) -> Tuple[List[dict], List[str]]:
             if net_amount_raw is not None and str(net_amount_raw).strip() != ""
             else None
         )
+        status_raw = row.get(col_map.get("status", ""), "") if col_map.get("status") else ""
         rows.append({
             "order_number": order_number,
             "delivery_charge": shipping + gst,
             "tax_amount": income_tax + sales_tax,
             "tracking_number": parse_tracking_number_14(tracking_raw),
             "csv_net_amount": net_amount_val,
+            "csv_order_status": normalize_csv_status(status_raw),
         })
         order_numbers.append(order_number)
     return rows, order_numbers
@@ -179,7 +196,7 @@ def parse_rows(content: bytes) -> Tuple[List[dict], List[str]]:
 FOLIO_API_SUFFIX = "-API"
 WH_INCOME_TAX_RATE = 0.02
 WH_SALES_TAX_RATE = 0.02
-_SETTLEABLE_STATUSES = {"delivered", "returned"}
+SETTLEABLE_STATUSES = {"delivered", "returned"}
 
 
 def _folio_from_date(raw: str) -> str:
@@ -227,7 +244,7 @@ def settlement_from_tracking(dist: dict, payment_status: Optional[dict] = None) 
     without it a return still derives its charges but stays unsettled with no folio.
     """
     status = str(dist.get("transactionStatus") or "").strip().lower()
-    if status not in _SETTLEABLE_STATUSES:
+    if status not in SETTLEABLE_STATUSES:
         return None
 
     invoice = parse_float(dist.get("invoicePayment"), 0.0)

@@ -280,12 +280,14 @@ function switchView(viewName, { skipReload = false } = {}) {
         'monthDetail': 'Month Details',
         'products': 'Inventory',
         'productAnalytics': 'Product Analytics',
+        'cityAnalytics': 'Analytics by City',
         'orderFulfillment': 'Order Fulfillment',
         'orderFulfillmentProgress': 'Order Fulfillment',
         'printAirwayBill': 'Print Airway Bill',
         'loadSheetLogs': 'Load Sheet Logs',
         'courierPaymentReport': 'Courier Payment Report',
         'courierPaymentReportDetail': 'Courier Payment Report',
+        'courierPerformance': 'Courier Performance',
         'settings': 'Settings'
     };
 
@@ -323,9 +325,11 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('ledgersHeaderWrap', viewName === 'ledgers');
     show('trialBalanceHeaderWrap', viewName === 'trialBalance');
     show('courierPaymentReportHeaderWrap', viewName === 'courierPaymentReport', 'flex');
+    show('courierPerformanceHeaderWrap', viewName === 'courierPerformance', 'flex');
     show('orderFulfillmentHeaderWrap', viewName === 'orderFulfillment', 'flex');
     show('printAirwayBillHeaderWrap', viewName === 'printAirwayBill', 'flex');
     show('productAnalyticsHeaderWrap', viewName === 'productAnalytics', 'flex');
+    show('cityAnalyticsHeaderWrap', viewName === 'cityAnalytics', 'flex');
 
     if (isOrders) {
         if (typeof window._ordersDateRangeUpdateButtonLabel === 'function') window._ordersDateRangeUpdateButtonLabel();
@@ -342,6 +346,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         }, 100);
     } else if (viewName === 'productAnalytics') {
         initProductAnalyticsView();
+    } else if (viewName === 'cityAnalytics') {
+        initCityAnalyticsView();
     } else if (viewName === 'orders') {
         if (!skipReload) loadOrders();
         setTimeout(() => {
@@ -375,6 +381,8 @@ function switchView(viewName, { skipReload = false } = {}) {
         setTimeout(() => {
             sizeGridColumns(courierPaymentReportGridApi);
         }, 100);
+    } else if (viewName === 'courierPerformance') {
+        loadCourierPerformance();
     } else if (viewName === 'orderFulfillment') {
         renderOrderFulfillmentView();
     } else if (viewName === 'printAirwayBill') {

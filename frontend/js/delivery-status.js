@@ -788,8 +788,9 @@ function closePostExSettlementsModal() {
 
 /** Full report shown right after a PostEx CSV upload: net receivable and the other
  * totals the upload derived, plus the per-order breakdown behind them, including any
- * receivable-vs-CSV-NET_AMOUNT mismatch inline (mismatch rows highlighted, no separate
- * popup). Built entirely from the upload response (order_breakdown/totals) - no refetch. */
+ * receivable-vs-CSV-NET_AMOUNT mismatch and any delivery-status mismatch inline (rows
+ * highlighted, no separate popup). Built entirely from the upload response
+ * (order_breakdown/totals) - no refetch. */
 function showPostExUploadReportModal(data) {
     const modal = document.getElementById('postExUploadReportModal');
     const statsEl = document.getElementById('postExUploadReportStats');
@@ -798,8 +799,9 @@ function showPostExUploadReportModal(data) {
     if (!modal || !statsEl || !tbody) return;
 
     const orderNum = (o) => parseInt(String(o.order_number).replace(/\D/g, ''), 10) || 0;
+    const flagged = (o) => o.mismatch || o.status_mismatch;
     const orders = [...(data.order_breakdown || [])].sort((a, b) =>
-        (b.mismatch - a.mismatch) || (orderNum(b) - orderNum(a)));
+        (flagged(b) - flagged(a)) || (orderNum(b) - orderNum(a)));
     const t = data.totals || {};
     const num = (v) => Number(v || 0).toFixed(2);
     const stat = (label, value, opts = {}) => `
@@ -811,6 +813,7 @@ function showPostExUploadReportModal(data) {
         </div>`;
     const netColor = Number(t.net_receivable || 0) < 0 ? 'var(--danger)' : 'var(--success)';
     const mismatchCount = orders.filter((o) => o.mismatch).length;
+    const statusMismatchCount = orders.filter((o) => o.status_mismatch).length;
     statsEl.innerHTML = [
         stat('Total Order Value', t.total_amount),
         stat('Advance Received', t.advance_total),
@@ -820,16 +823,20 @@ function showPostExUploadReportModal(data) {
         stat('Taxes (SST)', t.taxes),
         stat('Net Receivable', t.net_receivable, { color: netColor }),
         stat('Mismatched Orders', mismatchCount, { raw: true, color: mismatchCount > 0 ? 'var(--danger)' : 'var(--success)' }),
+        stat('Status Mismatches', statusMismatchCount, { raw: true, color: statusMismatchCount > 0 ? 'var(--danger)' : 'var(--success)' }),
     ].join('');
 
     tbody.innerHTML = orders.length
         ? orders.map((o) => {
             const diff = o.mismatch ? num(o.receivable - o.csv_net_amount) : null;
+            const statusCell = o.status_mismatch
+                ? `${escapeHtml(o.order_status || '-')} (CSV: ${escapeHtml(o.csv_status || '-')})`
+                : escapeHtml(o.order_status || '-');
             return `
-            <tr class="${o.mismatch ? 'postex-report-row--mismatch' : ''}">
+            <tr class="${flagged(o) ? 'postex-report-row--mismatch' : ''}">
                 <td>${escapeHtml(String(o.order_number ?? ''))}</td>
                 <td>${escapeHtml(o.folio || '-')}</td>
-                <td>${escapeHtml(o.order_status || '-')}</td>
+                <td>${statusCell}</td>
                 <td>${num(o.total_amount)}</td>
                 <td>${num(o.advance_amount)}</td>
                 <td>${num(o.cod)}</td>
@@ -844,7 +851,8 @@ function showPostExUploadReportModal(data) {
 
     if (summaryEl) {
         summaryEl.textContent = `${orders.length} order(s) from this upload, net receivable Rs ${num(t.net_receivable)}.`
-            + (mismatchCount > 0 ? ` ${mismatchCount} order(s) differ from the CSV's NET_AMOUNT (highlighted).` : '');
+            + (mismatchCount > 0 ? ` ${mismatchCount} order(s) differ from the CSV's NET_AMOUNT (highlighted).` : '')
+            + (statusMismatchCount > 0 ? ` ${statusMismatchCount} order(s) have a delivery status contradicting this CSV (highlighted).` : '');
     }
     modal.classList.add('active');
 }

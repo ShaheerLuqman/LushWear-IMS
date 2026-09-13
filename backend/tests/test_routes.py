@@ -918,6 +918,74 @@ class TestPostexCsvUpload:
         assert r.status_code == 200
         assert r.json()["updated"] == 0
 
+    def _csv_with_status(self, *rows):
+        header = b"ORDER_REF_NUMBER,SHIPPING_CHARGES,STATUS\n"
+        body = b"".join(f"{num},{charge},{status}\n".encode() for num, charge, status in rows)
+        return header + body
+
+    def test_csv_status_updates_a_still_fulfilled_order(self, make_client):
+        """A CSV's STATUS is authoritative over a non-terminal DB status (fulfilled,
+        unfulfilled, or a courier in-transit code) - this is the payout report telling
+        the app an order it still thinks is in transit has actually resolved."""
+        import app.routes.orders as orders_module
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "fulfilled", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", self._csv_with_status((100, 200, "Delivered")), "text/csv")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status_mismatch_count"] == 0
+        assert body["order_breakdown"][0]["order_status"] == "delivered"
+        written = orders_module.get_supabase().upserted["shopify_orders"]
+        assert written[0]["order_status"] == "delivered"
+
+    def test_csv_status_contradicting_a_terminal_db_status_is_flagged_not_overwritten(self, make_client):
+        """DB already says delivered but the CSV says Return (or vice versa) - a real
+        reconciliation problem, not something to silently overwrite. order_status must
+        stay as the DB had it, and the order surfaces in status_mismatch_order_numbers."""
+        import app.routes.orders as orders_module
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "delivered", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", self._csv_with_status((100, 200, "Return")), "text/csv")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status_mismatch_count"] == 1
+        assert body["status_mismatch_order_numbers"] == ["100"]
+        breakdown = body["order_breakdown"][0]
+        assert breakdown["status_mismatch"] is True
+        assert breakdown["order_status"] == "delivered"
+        assert breakdown["csv_status"] == "returned"
+        written = orders_module.get_supabase().upserted["shopify_orders"]
+        assert written[0]["order_status"] == "delivered"
+
+    def test_csv_status_agreeing_with_terminal_db_status_is_not_flagged(self, make_client):
+        import app.routes.orders as orders_module
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 100, "total_amount": 1000.0, "advance_amount": 0.0,
+             "order_status": "delivered", "order_receiving_date": "2026-07-18T13:23:08+00:00"},
+        ]})
+        r = client.post(
+            "/api/orders/upload-postex-csv",
+            files={"file": ("postex.csv", self._csv_with_status((100, 200, "Delivered")), "text/csv")},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status_mismatch_count"] == 0
+        written = orders_module.get_supabase().upserted["shopify_orders"]
+        assert written[0]["order_status"] == "delivered"
+
 
 class TestBulkUpdateOrderSettled:
     def test_only_delivered_orders_are_marked_paid_on_shopify(self, make_client):

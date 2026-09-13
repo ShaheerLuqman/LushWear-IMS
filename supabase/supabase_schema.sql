@@ -710,6 +710,11 @@ CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON shopify_orders(o
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id            ON shopify_orders(customer_id);
 -- Print Airway Bill screen: fulfilled orders within a date range, newest first.
 CREATE INDEX IF NOT EXISTS idx_orders_fulfilled_at           ON shopify_orders(org_id, fulfilled_at DESC);
+-- assign_courier_payouts's WHERE clause (settled orders with a folio) - without this
+-- it sequentially scans the org's entire order history on every CSV upload.
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_settled_folio
+    ON shopify_orders (org_id)
+    WHERE is_order_settled AND folio IS NOT NULL AND folio <> '';
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
 --   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON shopify_orders USING GIN (delivery_status);
@@ -770,7 +775,13 @@ CREATE INDEX IF NOT EXISTS idx_transaction_entry_audit_log_org_id     ON finance
 --   'transaction_entry'  -> transaction_entries.id (written by the projection below)
 --   'bill'               -> bills.id
 --   'courier_bill_sale'  -> courier_bills.id (one pickup date: revenue + COGS + COD)
---   'courier_payout'     -> courier_payouts.id (one CPR: cash, charges, returns)
+--   'courier_payout_return'/'_delivery_charge'/'_tax'/'_cash'
+--                        -> courier_payouts.id (one CPR, split into 4 self-balanced
+--                           entries so the courier ledger's own statement shows each
+--                           separately rather than one netted line; see
+--                           20260913080000_split_payout_journal_entries.sql). Legacy
+--                           'courier_payout' rows from before the split may still exist
+--                           on data no upload has touched since.
 --   'opening_balance' -> NULL (one per org)
 --   'manual'          -> NULL
 CREATE TABLE IF NOT EXISTS finances_journal_entries (
@@ -1008,13 +1019,18 @@ $$;
 -- still one payout. The suffix stays on the order, where it records provenance.
 -- See supabase/migrations/20260910000000_sales_journal_accounts.sql.
 CREATE TABLE IF NOT EXISTS finances_courier_payouts (
-    id          UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
-    org_id      UUID NOT NULL REFERENCES system_organizations(id),
-    courier     VARCHAR(100) NOT NULL,
-    folio       VARCHAR(255) NOT NULL,
-    payout_date DATE NOT NULL,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    id             UUID DEFAULT uuid_generate_v4() PRIMARY KEY,
+    org_id         UUID NOT NULL REFERENCES system_organizations(id),
+    courier        VARCHAR(100) NOT NULL,
+    folio          VARCHAR(255) NOT NULL,
+    payout_date    DATE NOT NULL,
+    -- Which Asset ledger the "amount received" leg of this payout's voucher posts
+    -- to - NULL means the default seeded `cash` ledger. Set once, from the upload
+    -- that first creates this row (see assign_courier_payouts); a later upload
+    -- matching the same folio never overwrites it.
+    cash_ledger_id UUID REFERENCES finances_ledgers(id),
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CONSTRAINT finances_courier_payouts_org_courier_folio_key UNIQUE (org_id, courier, folio)
 );
 
@@ -1197,6 +1213,12 @@ BEGIN
     PERFORM ensure_system_ledger(NEW.id, 'delivery_charges', 'Delivery Charges', 'Expense', '5100');
     PERFORM ensure_system_ledger(NEW.id, 'withholding_tax', 'Withholding Tax', 'Expense', '5200');
     -- No tax_on_purchases: receive_bill creates it on the first taxed bill.
+    -- Kept in sync by hand with backend/app/couriers.py's COURIER_CATALOG -
+    -- adding a courier there needs one more line here too.
+    PERFORM ensure_system_ledger(NEW.id, 'courier_postex', 'PostEx', 'Asset', '1150');
+    PERFORM ensure_system_ledger(NEW.id, 'courier_couriers_next', 'Couriers Next', 'Asset', '1151');
+    PERFORM ensure_system_ledger(NEW.id, 'courier_tcs', 'TCS', 'Asset', '1152');
+    PERFORM ensure_system_ledger(NEW.id, 'courier_bykea', 'Bykea', 'Asset', '1153');
     RETURN NEW;
 END;
 $$;
@@ -1222,6 +1244,10 @@ BEGIN
         PERFORM ensure_system_ledger(org.id, 'sales_return', 'Sales Return', 'Revenue', '4100');
         PERFORM ensure_system_ledger(org.id, 'delivery_charges', 'Delivery Charges', 'Expense', '5100');
         PERFORM ensure_system_ledger(org.id, 'withholding_tax', 'Withholding Tax', 'Expense', '5200');
+        PERFORM ensure_system_ledger(org.id, 'courier_postex', 'PostEx', 'Asset', '1150');
+        PERFORM ensure_system_ledger(org.id, 'courier_couriers_next', 'Couriers Next', 'Asset', '1151');
+        PERFORM ensure_system_ledger(org.id, 'courier_tcs', 'TCS', 'Asset', '1152');
+        PERFORM ensure_system_ledger(org.id, 'courier_bykea', 'Bykea', 'Asset', '1153');
     END LOOP;
 END $$;
 
@@ -1369,7 +1395,6 @@ DECLARE
     v_from      DATE;
     v_total     NUMERIC(14, 2);
     v_advance   NUMERIC(14, 2);
-    v_cost      NUMERIC(14, 2);
     v_lines     JSONB;
 BEGIN
     SELECT * INTO b FROM shopify_courier_bills WHERE id = p_bill_id;
@@ -1388,15 +1413,8 @@ BEGIN
     END IF;
 
     SELECT ROUND(COALESCE(SUM(o.total_amount), 0), 2),
-           ROUND(COALESCE(SUM(o.advance_amount), 0), 2),
-           ROUND(COALESCE(SUM(
-               CASE WHEN COALESCE(o.cost_price, 0) <> 0 THEN o.cost_price
-                    ELSE (SELECT COALESCE(SUM((li ->> 'cost_price')::NUMERIC
-                                              * GREATEST(COALESCE((li ->> 'qty')::NUMERIC, 0), 0)), 0)
-                            FROM jsonb_array_elements(COALESCE(o.line_items, '[]'::jsonb)) li
-                           WHERE (li ->> 'cost_price') IS NOT NULL)
-               END), 0), 2)
-      INTO v_total, v_advance, v_cost
+           ROUND(COALESCE(SUM(o.advance_amount), 0), 2)
+      INTO v_total, v_advance
       FROM shopify_orders o
      WHERE o.courier_bill_id = p_bill_id
        AND lower(trim(COALESCE(o.order_status, ''))) <> 'cancelled';
@@ -1407,10 +1425,6 @@ BEGIN
                             v_advance, 'Advances applied');
     v_lines := journal_line(v_lines, ensure_system_ledger(b.org_id, 'sales_revenue', 'Sales Revenue', 'Revenue', '4000'),
                             -v_total, NULL);
-    v_lines := journal_line(v_lines, ensure_system_ledger(b.org_id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000'),
-                            v_cost, NULL);
-    v_lines := journal_line(v_lines, ensure_system_ledger(b.org_id, 'inventory', 'Inventory', 'Asset', '1400'),
-                            -v_cost, NULL);
 
     IF jsonb_array_length(v_lines) >= 2 THEN
         PERFORM post_journal_entry(
@@ -1423,20 +1437,29 @@ END;
 $$;
 
 
--- One voucher per CPR, dated the payout date. What the CSV actually reports:
+-- Four separate self-balanced vouchers per CPR, dated the payout date, each
+-- Dr <account> / Cr Courier - split rather than one combined voucher so the
+-- courier ledger's own statement (get_ledger_statement) shows 4 distinct rows
+-- individually matchable against the CSV's own totals, instead of 1 line
+-- netting all 4 together. See 20260913080000_split_payout_journal_entries.sql.
 --
---   Cr Courier          every member's COD clears - collected on a delivery,
---                       uncollectible on a return
---   Dr Sales Return     a returned parcel's sale unwinds at full value
---       Cr Orders       its advance goes back to being refundable
---   Dr Inventory        returned goods back into stock
---       Cr COGS
---   Dr Delivery Charges every member's charge, deliveries and returns alike
---   Dr Withholding Tax  deducted from the payout (zero on returns)
---   Dr Cash             what actually arrived
+--   Returns           Dr Sales Return / Cr Courier   (Returns Adjustment)
+--   Delivery Charges  Dr Delivery Charges / Cr Courier
+--   Withholding Tax   Dr Withholding Tax / Cr Courier
+--   Cash              Dr <received-in> / Cr Courier  (the payout's own
+--                      cash_ledger_id if the upload picked one - "Amount
+--                      Received In" - else the default seeded `cash` ledger;
+--                      the actual net cash received, matching the CSV's own
+--                      NET_AMOUNT total)
 --
--- Cash falls out as delivered COD less charges less withholding - the same figure
--- shopify_courier_bills_with_totals derives as `receivable`.
+-- No advance/upfront concept exists for this org's orders, so v_ret_adv is
+-- always 0 in practice and the Returns voucher is a clean 2-liner; kept as
+-- v_ret_tot - v_ret_adv rather than hardcoded, so an org that does track
+-- advances isn't silently wrong.
+--
+-- No Inventory/COGS here any more - that reversal now happens once per fiscal
+-- period, gated on every order in it reaching a terminal status, in
+-- sync_period_cogs_journal.
 CREATE OR REPLACE FUNCTION post_courier_payout_journal(p_payout_id UUID)
 RETURNS void
 LANGUAGE plpgsql
@@ -1449,16 +1472,20 @@ DECLARE
     v_ret_cod  NUMERIC(14, 2);
     v_ret_tot  NUMERIC(14, 2);
     v_ret_adv  NUMERIC(14, 2);
-    v_ret_cost NUMERIC(14, 2);
     v_charge   NUMERIC(14, 2);
     v_tax      NUMERIC(14, 2);
+    v_cash     UUID;
+    v_courier  UUID;
     v_lines    JSONB;
 BEGIN
     SELECT * INTO p FROM finances_courier_payouts WHERE id = p_payout_id;
     v_found := FOUND;
 
     DELETE FROM finances_journal_entries
-     WHERE source_type = 'courier_payout' AND source_id = p_payout_id;
+     WHERE source_id = p_payout_id
+       AND source_type IN ('courier_payout', 'courier_payout_return',
+                            'courier_payout_delivery_charge', 'courier_payout_tax',
+                            'courier_payout_cash');
 
     IF NOT v_found THEN
         RETURN;
@@ -1473,43 +1500,58 @@ BEGIN
                        FILTER (WHERE lower(trim(o.order_status)) = 'returned'), 0), 2),
         ROUND(COALESCE(SUM(o.total_amount) FILTER (WHERE lower(trim(o.order_status)) = 'returned'), 0), 2),
         ROUND(COALESCE(SUM(o.advance_amount) FILTER (WHERE lower(trim(o.order_status)) = 'returned'), 0), 2),
-        ROUND(COALESCE(SUM(
-            CASE WHEN COALESCE(o.cost_price, 0) <> 0 THEN o.cost_price
-                 ELSE (SELECT COALESCE(SUM((li ->> 'cost_price')::NUMERIC
-                                           * GREATEST(COALESCE((li ->> 'qty')::NUMERIC, 0), 0)), 0)
-                         FROM jsonb_array_elements(COALESCE(o.line_items, '[]'::jsonb)) li
-                        WHERE (li ->> 'cost_price') IS NOT NULL)
-            END) FILTER (WHERE lower(trim(o.order_status)) = 'returned'), 0), 2),
         ROUND(COALESCE(SUM(o.delivery_charge), 0), 2),
         ROUND(COALESCE(SUM(o.tax_amount), 0), 2)
-      INTO v_cod, v_ret_cod, v_ret_tot, v_ret_adv, v_ret_cost, v_charge, v_tax
+      INTO v_cod, v_ret_cod, v_ret_tot, v_ret_adv, v_charge, v_tax
       FROM shopify_orders o
      WHERE o.courier_payout_id = p_payout_id
        -- A member whose bill was never posted (dispatched before the cutover) has no
        -- COD on the courier account to clear.
        AND COALESCE(o.courier_pickup_date, o.fulfilled_at)::DATE >= v_from;
 
-    v_lines := journal_line('[]'::jsonb, resolve_courier_ledger(p.org_id, p.courier),
-                            -(v_cod + v_ret_cod), 'COD cleared');
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'sales_return', 'Sales Return', 'Revenue', '4100'),
-                            v_ret_tot, 'Returned parcels');
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'orders', 'Orders', 'Liability', '2200'),
-                            -v_ret_adv, 'Advances refundable');
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'inventory', 'Inventory', 'Asset', '1400'),
-                            v_ret_cost, 'Returned to stock');
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000'),
-                            -v_ret_cost, NULL);
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'delivery_charges', 'Delivery Charges', 'Expense', '5100'),
-                            v_charge, NULL);
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'withholding_tax', 'Withholding Tax', 'Expense', '5200'),
-                            v_tax, NULL);
-    v_lines := journal_line(v_lines, ensure_system_ledger(p.org_id, 'cash', 'Cash', 'Asset', '1000', TRUE),
-                            v_cod - v_charge - v_tax, 'Payout received');
+    v_cash    := COALESCE(p.cash_ledger_id, ensure_system_ledger(p.org_id, 'cash', 'Cash', 'Asset', '1000', TRUE));
+    v_courier := resolve_courier_ledger(p.org_id, p.courier);
 
+    v_lines := journal_line('[]'::jsonb, ensure_system_ledger(p.org_id, 'sales_return', 'Sales Return', 'Revenue', '4100'),
+                            v_ret_tot - v_ret_adv, 'Returned parcels');
+    v_lines := journal_line(v_lines, v_courier, -(v_ret_tot - v_ret_adv), 'Returns Adjustment');
     IF jsonb_array_length(v_lines) >= 2 THEN
         PERFORM post_journal_entry(
             p.org_id, p.payout_date, v_lines,
-            p.courier || ' payout ' || p.folio, 'receipt', NULL::UUID, 'courier_payout', p.id
+            p.courier || ' payout ' || p.folio || ' - Returns',
+            'return', NULL::UUID, 'courier_payout_return', p.id
+        );
+    END IF;
+
+    v_lines := journal_line('[]'::jsonb, ensure_system_ledger(p.org_id, 'delivery_charges', 'Delivery Charges', 'Expense', '5100'),
+                            v_charge, NULL);
+    v_lines := journal_line(v_lines, v_courier, -v_charge, 'Delivery charges deducted');
+    IF jsonb_array_length(v_lines) >= 2 THEN
+        PERFORM post_journal_entry(
+            p.org_id, p.payout_date, v_lines,
+            p.courier || ' payout ' || p.folio || ' - Delivery Charges',
+            'journal', NULL::UUID, 'courier_payout_delivery_charge', p.id
+        );
+    END IF;
+
+    v_lines := journal_line('[]'::jsonb, ensure_system_ledger(p.org_id, 'withholding_tax', 'Withholding Tax', 'Expense', '5200'),
+                            v_tax, NULL);
+    v_lines := journal_line(v_lines, v_courier, -v_tax, 'Withholding tax deducted');
+    IF jsonb_array_length(v_lines) >= 2 THEN
+        PERFORM post_journal_entry(
+            p.org_id, p.payout_date, v_lines,
+            p.courier || ' payout ' || p.folio || ' - Withholding Tax',
+            'journal', NULL::UUID, 'courier_payout_tax', p.id
+        );
+    END IF;
+
+    v_lines := journal_line('[]'::jsonb, v_cash, v_cod - v_charge - v_tax, 'Payout received');
+    v_lines := journal_line(v_lines, v_courier, -(v_cod - v_charge - v_tax), 'COD cleared');
+    IF jsonb_array_length(v_lines) >= 2 THEN
+        PERFORM post_journal_entry(
+            p.org_id, p.payout_date, v_lines,
+            p.courier || ' payout ' || p.folio || ' - Cash Received',
+            'receipt', NULL::UUID, 'courier_payout_cash', p.id
         );
     END IF;
 END;
@@ -1572,7 +1614,9 @@ BEGIN
         DELETE FROM finances_journal_entries
          WHERE org_id = p_org_id
            AND source_type IN ('order_sale', 'order_return', 'order_return_stock',
-                               'courier_bill_sale', 'courier_payout')
+                               'courier_bill_sale', 'courier_payout',
+                               'courier_payout_return', 'courier_payout_delivery_charge',
+                               'courier_payout_tax', 'courier_payout_cash')
         RETURNING 1
     )
     SELECT COUNT(*)::INT INTO v_n FROM gone;
@@ -1627,28 +1671,45 @@ $$;
 -- An order settled with no folio at all (bulk_update_order_settled records none) joins
 -- no payout and posts no cash - it is settled operationally but not financially, and
 -- shows up as COD still sitting on the courier's account.
-CREATE OR REPLACE FUNCTION assign_courier_payouts(p_org_id UUID)
+--
+-- p_cash_ledger_id is stamped only onto payout rows THIS call creates (v_new_ids,
+-- from the INSERT's own RETURNING) - a payout the INSERT skips via ON CONFLICT
+-- (already existing from an earlier upload of the same folio) keeps whatever
+-- cash_ledger_id that earlier upload set, so re-uploading the same CPR never
+-- silently redirects where its receipt posts.
+CREATE OR REPLACE FUNCTION assign_courier_payouts(p_org_id UUID, p_cash_ledger_id UUID DEFAULT NULL)
 RETURNS INT
 LANGUAGE plpgsql
 AS $$
 DECLARE
-    v_n INT;
+    v_n        INT;
+    v_new_ids  UUID[];
 BEGIN
-    INSERT INTO finances_courier_payouts (org_id, courier, folio, payout_date)
-    SELECT p_org_id,
-           o.courier,
-           normalize_folio(o.folio),
-           -- A folio that does not parse still has to sit somewhere on the calendar;
-           -- the last dispatch it covers is the earliest date it can honestly be.
-           COALESCE(folio_payout_date(o.folio),
-                    MAX(COALESCE(o.courier_pickup_date, o.fulfilled_at))::DATE)
-      FROM shopify_orders o
-     WHERE o.org_id = p_org_id
-       AND o.is_order_settled
-       AND COALESCE(trim(o.folio), '') <> ''
-       AND COALESCE(o.courier_pickup_date, o.fulfilled_at) IS NOT NULL
-     GROUP BY o.courier, normalize_folio(o.folio), folio_payout_date(o.folio)
-        ON CONFLICT (org_id, courier, folio) DO NOTHING;
+    WITH inserted AS (
+        INSERT INTO finances_courier_payouts (org_id, courier, folio, payout_date)
+        SELECT p_org_id,
+               o.courier,
+               normalize_folio(o.folio),
+               -- A folio that does not parse still has to sit somewhere on the calendar;
+               -- the last dispatch it covers is the earliest date it can honestly be.
+               COALESCE(folio_payout_date(o.folio),
+                        MAX(COALESCE(o.courier_pickup_date, o.fulfilled_at))::DATE)
+          FROM shopify_orders o
+         WHERE o.org_id = p_org_id
+           AND o.is_order_settled
+           AND COALESCE(trim(o.folio), '') <> ''
+           AND COALESCE(o.courier_pickup_date, o.fulfilled_at) IS NOT NULL
+         GROUP BY o.courier, normalize_folio(o.folio), folio_payout_date(o.folio)
+            ON CONFLICT (org_id, courier, folio) DO NOTHING
+        RETURNING id
+    )
+    SELECT array_agg(id) INTO v_new_ids FROM inserted;
+
+    IF p_cash_ledger_id IS NOT NULL AND v_new_ids IS NOT NULL THEN
+        UPDATE finances_courier_payouts
+           SET cash_ledger_id = p_cash_ledger_id
+         WHERE id = ANY(v_new_ids);
+    END IF;
 
     UPDATE shopify_orders o
        SET courier_payout_id = y.id
@@ -2013,8 +2074,9 @@ DROP FUNCTION IF EXISTS get_month_summary_carrier_health(TIMESTAMPTZ, TIMESTAMPT
 -- Same-signature return-type change (cancelled_orders_count column added) -
 -- CREATE OR REPLACE can't alter OUT-parameter row types, so drop first.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
--- Same-signature return-type change (warning_orders_count column added) -
--- CREATE OR REPLACE can't alter OUT-parameter row types, so drop first.
+-- Same-signature return-type change (total_orders/completed_orders_count
+-- columns added) - CREATE OR REPLACE can't alter OUT-parameter row types, so
+-- drop first.
 DROP FUNCTION IF EXISTS get_month_summary_periods(UUID);
 
 -- warning_orders_count mirrors the Orders grid's final_status column
@@ -2022,11 +2084,13 @@ DROP FUNCTION IF EXISTS get_month_summary_periods(UUID);
 -- "OK" only if delivered with delivery_charge > 0, or returned with
 -- delivery_charge > 0 and piece_received = 'Received'; everything else
 -- (non-cancelled) counts as Warning.
+-- completed_orders_count (delivered + returned) over total_orders (all
+-- non-cancelled) is the month summary card's completion ratio.
 -- The day threshold used to bucket orders into periods comes from the org's own
 -- fiscal_month_start_day (Financial Settings) rather than a hardcoded 22 - see
 -- supabase/migrations/20260905000000_org_fiscal_settings.sql.
 CREATE OR REPLACE FUNCTION get_month_summary_periods(p_org_id UUID)
-RETURNS TABLE(month INT, year INT, warning_orders_count INT)
+RETURNS TABLE(month INT, year INT, warning_orders_count INT, total_orders INT, completed_orders_count INT)
 LANGUAGE sql
 STABLE
 AS $$
@@ -2065,7 +2129,9 @@ AS $$
                     (lower(trim(order_status)) = 'delivered' AND delivery_charge > 0)
                  OR (lower(trim(order_status)) = 'returned' AND delivery_charge > 0 AND piece_received = 'Received')
               )
-        )::INT AS warning_orders_count
+        )::INT AS warning_orders_count,
+        COUNT(*) FILTER (WHERE lower(trim(order_status)) <> 'cancelled')::INT AS total_orders,
+        COUNT(*) FILTER (WHERE lower(trim(order_status)) IN ('delivered', 'returned'))::INT AS completed_orders_count
     FROM bucketed
     GROUP BY month, year
     ORDER BY year DESC, month DESC;
@@ -2076,12 +2142,14 @@ $$;
 -- net_profit was replaced by cost_of_goods_sold/tax_total/gross_profit - the
 -- true bottom-line Net Profit is Gross Profit minus the per-ledger expense
 -- lines (get_month_summary_expense_lines), computed in the orders route.
--- cost_of_goods_sold comes from the posted order_cogs_month journal entries
--- (sync_month_cogs_journal - one entry per org per fiscal month, Debit
--- COGS/Credit Inventory), not a live sum of shopify_orders.cost_price; it is
--- returned as its own field but no longer deducted in gross_profit (Gross
--- Profit = Net Sales - DC Charges - Tax). Net Sales and Tax stay on the wider
--- non-cancelled basis.
+-- cost_of_goods_sold comes from the posted order_cogs_period journal entries
+-- (sync_period_cogs_journal - one entry per org per fiscal period once every
+-- order in it is delivered/returned, Debit COGS/Credit Inventory), not a live
+-- sum of shopify_orders.cost_price; it is returned as its own field but no
+-- longer deducted in gross_profit (Gross Profit = Net Sales - DC Charges -
+-- Tax). Net Sales and Tax stay on the wider non-cancelled basis. A period
+-- still in progress simply has no order_cogs_period entry yet, so this reads
+-- 0 until the period completes rather than a partial figure.
 DROP FUNCTION IF EXISTS get_month_summary_totals(TIMESTAMPTZ, TIMESTAMPTZ, DATE, DATE, UUID);
 CREATE FUNCTION get_month_summary_totals(
     p_period_start TIMESTAMPTZ,
@@ -2137,7 +2205,7 @@ AS $$
         FROM finances_journal_entries je
         JOIN finances_journal_lines jl ON jl.journal_id = je.id
         WHERE je.org_id = p_org_id
-          AND je.source_type = 'order_cogs_month'
+          AND je.source_type = 'order_cogs_period'
           AND je.entry_date >= p_entry_start
           AND je.entry_date <= p_entry_end
     )
@@ -2168,7 +2236,7 @@ $$;
 -- that period still shows up at 0 instead of disappearing. Sums both sides
 -- (debit to_account_id minus credit from_account_id), matching the ledger's
 -- actual net balance. Excludes the COGS system ledger - it posts via the
--- journal (sync_month_cogs_journal), not transaction_entries, and is already
+-- journal (sync_period_cogs_journal), not transaction_entries, and is already
 -- surfaced through get_month_summary_totals.cost_of_goods_sold; including it
 -- here would double it as "Less: COGS" in Month Summary.
 CREATE OR REPLACE FUNCTION get_month_summary_expense_lines(
@@ -2845,13 +2913,22 @@ $$;
 -- summarize COGS. Always deletes the existing entry for (org, period) first
 -- and reposts only if the total is > 0 - same rebuild-from-scratch idiom as
 -- receive_bill/project_transaction_entry_to_journal.
-CREATE OR REPLACE FUNCTION sync_month_cogs_journal(p_org_id UUID, p_period_month INT, p_period_year INT)
+-- Posts Dr COGS / Cr Inventory for one fiscal period, exactly once, and only
+-- once every non-cancelled order in that period has reached delivered or
+-- returned (see supabase/migrations/20260913040000_cogs_inventory_period_completion.sql).
+-- A period with any order still in transit posts nothing and any existing
+-- voucher for it is removed - a partially-completed period carries no COGS
+-- voucher at all rather than a partial or stale one. cost_price is summed for
+-- both delivered and returned orders: a return still shipped goods out and
+-- back, so its cost is real even though its revenue unwound.
+CREATE OR REPLACE FUNCTION sync_period_cogs_journal(p_org_id UUID, p_period_month INT, p_period_year INT)
 RETURNS void
 LANGUAGE plpgsql
 AS $$
 DECLARE
     v_start_day    INT;
     v_period_start DATE;
+    v_open_count   INT;
     v_total        NUMERIC(14, 2);
     v_cogs         UUID;
     v_inventory    UUID;
@@ -2862,14 +2939,31 @@ BEGIN
     v_period_start := make_date(p_period_year, p_period_month, v_start_day);
 
     DELETE FROM finances_journal_entries
-     WHERE org_id = p_org_id AND source_type = 'order_cogs_month' AND entry_date = v_period_start;
+     WHERE org_id = p_org_id AND source_type = 'order_cogs_period' AND entry_date = v_period_start;
 
-    SELECT COALESCE(SUM(o.cost_price), 0) INTO v_total
+    SELECT COUNT(*) INTO v_open_count
       FROM shopify_orders o, fiscal_period_of(o.order_receiving_date, v_start_day) fp
      WHERE o.org_id = p_org_id
-       AND lower(trim(o.order_status)) = 'delivered'
        AND fp.period_month = p_period_month
-       AND fp.period_year  = p_period_year;
+       AND fp.period_year  = p_period_year
+       AND lower(trim(COALESCE(o.order_status, ''))) NOT IN ('delivered', 'returned', 'cancelled');
+
+    IF v_open_count > 0 THEN
+        RETURN;
+    END IF;
+
+    SELECT COALESCE(SUM(
+               CASE WHEN COALESCE(o.cost_price, 0) <> 0 THEN o.cost_price
+                    ELSE (SELECT COALESCE(SUM((li ->> 'cost_price')::NUMERIC
+                                              * GREATEST(COALESCE((li ->> 'qty')::NUMERIC, 0), 0)), 0)
+                            FROM jsonb_array_elements(COALESCE(o.line_items, '[]'::jsonb)) li
+                           WHERE (li ->> 'cost_price') IS NOT NULL)
+               END), 0) INTO v_total
+      FROM shopify_orders o, fiscal_period_of(o.order_receiving_date, v_start_day) fp
+     WHERE o.org_id = p_org_id
+       AND fp.period_month = p_period_month
+       AND fp.period_year  = p_period_year
+       AND lower(trim(o.order_status)) IN ('delivered', 'returned');
 
     IF v_total <= 0 THEN
         RETURN;
@@ -2878,49 +2972,112 @@ BEGIN
     v_cogs      := ensure_system_ledger(p_org_id, 'cost_of_goods_sold', 'COGS', 'Expense', '5000');
     v_inventory := ensure_system_ledger(p_org_id, 'inventory', 'Inventory', 'Asset', '1400');
 
-    v_lines := jsonb_build_array(
-        jsonb_build_object('account_id', v_cogs,      'debit', v_total, 'credit', 0,
-                            'description', 'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY')),
-        jsonb_build_object('account_id', v_inventory, 'debit', 0, 'credit', v_total,
-                            'description', 'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'))
-    );
+    v_lines := journal_line('[]'::jsonb, v_cogs, v_total,
+                            'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'));
+    v_lines := journal_line(v_lines, v_inventory, -v_total,
+                            'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'));
 
-    PERFORM post_journal_entry(
-        p_org_id,
-        v_period_start,
-        v_lines,
-        'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'),
-        'order_cogs_month',
-        NULL,
-        'order_cogs_month',
-        NULL);
+    IF jsonb_array_length(v_lines) >= 2 THEN
+        PERFORM post_journal_entry(
+            p_org_id, v_period_start, v_lines,
+            'Cost of goods sold - ' || to_char(v_period_start, 'FMMonth YYYY'),
+            'journal', NULL::UUID, 'order_cogs_period', NULL
+        );
+    END IF;
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION trg_shopify_orders_sync_cogs()
+-- Statement-level, not row-level: sync_period_cogs_journal re-scans the org's
+-- shopify_orders table for the touched period, so firing it once per row in a
+-- batch upsert is quadratic in the batch size. Transition tables let one
+-- statement resolve every distinct (org, period) it touched and sync each once.
+-- Postgres ties a transition table's REFERENCING clause to the firing event
+-- (NEW TABLE only for INSERT, OLD TABLE only for DELETE, both for UPDATE), so
+-- INSERT/UPDATE/DELETE each need their own trigger, sharing logic via near-
+-- identical functions.
+-- No column list on the UPDATE trigger below - transition tables and
+-- "UPDATE OF col_list" cannot be combined (0A000). Filter to rows where
+-- order_status or cost_price actually changed here instead.
+CREATE OR REPLACE FUNCTION trg_shopify_orders_sync_cogs_stmt()
 RETURNS trigger
 LANGUAGE plpgsql
 AS $$
-DECLARE
-    v_start_day INT;
-    v_row       RECORD;
-    fp          RECORD;
 BEGIN
-    v_row := COALESCE(NEW, OLD);
-    SELECT fiscal_month_start_day INTO v_start_day
-      FROM system_organizations WHERE id = v_row.org_id;
+    PERFORM sync_period_cogs_journal(p.org_id, p.period_month, p.period_year)
+      FROM (
+          SELECT DISTINCT r.org_id, fp.period_month, fp.period_year
+            FROM (
+                SELECT o.org_id, o.order_receiving_date
+                  FROM old_rows o
+                  JOIN new_rows n ON n.id = o.id
+                 WHERE o.order_status IS DISTINCT FROM n.order_status
+                    OR o.cost_price IS DISTINCT FROM n.cost_price
+                 UNION
+                SELECT n.org_id, n.order_receiving_date
+                  FROM new_rows n
+                  JOIN old_rows o ON o.id = n.id
+                 WHERE o.order_status IS DISTINCT FROM n.order_status
+                    OR o.cost_price IS DISTINCT FROM n.cost_price
+            ) r
+            JOIN system_organizations so ON so.id = r.org_id
+            CROSS JOIN LATERAL fiscal_period_of(r.order_receiving_date, so.fiscal_month_start_day) fp
+      ) p;
+    RETURN NULL;
+END;
+$$;
 
-    SELECT * INTO fp FROM fiscal_period_of(v_row.order_receiving_date, v_start_day);
-    PERFORM sync_month_cogs_journal(v_row.org_id, fp.period_month, fp.period_year);
-    RETURN v_row;
+CREATE OR REPLACE FUNCTION trg_shopify_orders_sync_cogs_stmt_ins()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM sync_period_cogs_journal(p.org_id, p.period_month, p.period_year)
+      FROM (
+          SELECT DISTINCT r.org_id, fp.period_month, fp.period_year
+            FROM new_rows r
+            JOIN system_organizations so ON so.id = r.org_id
+            CROSS JOIN LATERAL fiscal_period_of(r.order_receiving_date, so.fiscal_month_start_day) fp
+      ) p;
+    RETURN NULL;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION trg_shopify_orders_sync_cogs_stmt_del()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    PERFORM sync_period_cogs_journal(p.org_id, p.period_month, p.period_year)
+      FROM (
+          SELECT DISTINCT r.org_id, fp.period_month, fp.period_year
+            FROM old_rows r
+            JOIN system_organizations so ON so.id = r.org_id
+            CROSS JOIN LATERAL fiscal_period_of(r.order_receiving_date, so.fiscal_month_start_day) fp
+      ) p;
+    RETURN NULL;
 END;
 $$;
 
 DROP TRIGGER IF EXISTS shopify_orders_cogs_journal_trigger ON shopify_orders;
-CREATE TRIGGER shopify_orders_cogs_journal_trigger
-AFTER INSERT OR UPDATE OF order_status, cost_price OR DELETE ON shopify_orders
-FOR EACH ROW
-EXECUTE FUNCTION trg_shopify_orders_sync_cogs();
+DROP FUNCTION IF EXISTS trg_shopify_orders_sync_cogs();
+
+CREATE TRIGGER shopify_orders_cogs_journal_trigger_ins
+AFTER INSERT ON shopify_orders
+REFERENCING NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION trg_shopify_orders_sync_cogs_stmt_ins();
+
+CREATE TRIGGER shopify_orders_cogs_journal_trigger_upd
+AFTER UPDATE ON shopify_orders
+REFERENCING OLD TABLE AS old_rows NEW TABLE AS new_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION trg_shopify_orders_sync_cogs_stmt();
+
+CREATE TRIGGER shopify_orders_cogs_journal_trigger_del
+AFTER DELETE ON shopify_orders
+REFERENCING OLD TABLE AS old_rows
+FOR EACH STATEMENT
+EXECUTE FUNCTION trg_shopify_orders_sync_cogs_stmt_del();
 
 -- Bills with settlement derived FIFO from the supplier's ledger balance.
 --

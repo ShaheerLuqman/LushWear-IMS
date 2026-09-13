@@ -58,7 +58,7 @@ def _receivable(order: dict) -> Optional[float]:
 
 
 def aggregate_courier_bill(orders: List[dict]) -> dict:
-    bill_value = advance_total = charges = taxes = returned_total = received = 0.0
+    bill_value = advance_total = charges = taxes = returned_total = received = cost_total = 0.0
     resolved_count = settled_count = in_transit_count = 0
 
     for order in orders:
@@ -68,6 +68,7 @@ def aggregate_courier_bill(orders: List[dict]) -> dict:
         advance_total += _num(order.get("advance_amount"))
         charges += _num(order.get("delivery_charge"))
         taxes += _num(order.get("tax_amount"))
+        cost_total += _num(order.get("cost_price"))
         # Only settled returns are written off; an unsettled one is still owed, so it
         # stays inside Remaining. Deducted at COD because bill_value is already net of
         # the advance - using the gross total would back the advance out twice.
@@ -114,6 +115,7 @@ def aggregate_courier_bill(orders: List[dict]) -> dict:
         "netReceivable": money(net_receivable),
         "receivedAmount": money(received),
         "remainingAmount": money(net_receivable - received),
+        "costTotal": money(cost_total),
         "status": status_label,
     }
 
@@ -201,6 +203,7 @@ def generate_courier_bill_summary_pdf(
         ["Net Receivable", _fmt(totals["netReceivable"])],
         ["Received", _fmt(totals["receivedAmount"])],
         ["Remaining", _fmt(totals["remainingAmount"])],
+        ["Total Cost Price", _fmt(totals["costTotal"])],
     ]
     financial_table = Table(financial, colWidths=[110 * mm, 50 * mm])
     financial_table.setStyle(TableStyle([
@@ -220,7 +223,7 @@ def generate_courier_bill_summary_pdf(
     elements.append(financial_table)
 
     elements.append(Paragraph(f'Orders in this Bill ({totals["totalOrders"]})', heading_style))
-    rows = [["Order #", "Tracking ID", "Status", "Total", "Advance", "Delivery", "Tax", "Receivable", "Settled"]]
+    rows = [["Order #", "Tracking ID", "Status", "Total", "Advance", "Delivery", "Tax", "Receivable", "Cost Price", "Settled"]]
     for order in sorted(orders, key=lambda o: _order_number_sort_key(o.get("order_number"))):
         receivable = _receivable(order)
         rows.append([
@@ -232,12 +235,13 @@ def generate_courier_bill_summary_pdf(
             _fmt(money(_num(order.get("delivery_charge")))),
             _fmt(money(_num(order.get("tax_amount")))),
             _fmt(money(receivable)) if receivable is not None else "-",
+            _fmt(money(_num(order.get("cost_price")))),
             "Settled" if order.get("is_order_settled") else "Unsettled",
         ])
 
     orders_table = Table(
         rows,
-        colWidths=[19 * mm, 28 * mm, 20 * mm, 19 * mm, 19 * mm, 19 * mm, 16 * mm, 21 * mm, 19 * mm],
+        colWidths=[17 * mm, 25 * mm, 18 * mm, 17 * mm, 17 * mm, 17 * mm, 14 * mm, 19 * mm, 19 * mm, 17 * mm],
         repeatRows=1,
     )
     orders_table.setStyle(TableStyle([
@@ -247,8 +251,8 @@ def generate_courier_bill_summary_pdf(
         ("FONTSIZE", (0, 0), (-1, 0), 8),
         ("FONTSIZE", (0, 1), (-1, -1), 8),
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#BBBBBB")),
-        ("ALIGN", (3, 1), (7, -1), "RIGHT"),
-        ("ALIGN", (8, 0), (8, -1), "CENTER"),
+        ("ALIGN", (3, 1), (8, -1), "RIGHT"),
+        ("ALIGN", (9, 0), (9, -1), "CENTER"),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F7F7F7")]),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),

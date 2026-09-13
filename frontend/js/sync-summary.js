@@ -136,10 +136,10 @@ function displayMonthSummaryCards(months) {
             const monthName = getMonthName(month.month);
             const periodLabel = formatOrdersPeriodLabel(month.month, month.year);
             const warningCount = month.warning_orders_count || 0;
+            const totalOrders = month.total_orders || 0;
+            const completedCount = month.completed_orders_count || 0;
             const warningHtml = warningCount > 0
-                ? `<div class="month-summary-card-body">
-                        <span class="month-summary-card-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${warningCount} on warning</span>
-                    </div>`
+                ? `<span class="month-summary-card-warning"><i class="fa-solid fa-triangle-exclamation"></i> ${warningCount} on warning</span>`
                 : '';
             return `
                 <div class="month-summary-card" data-month="${month.month}" data-year="${month.year}">
@@ -147,7 +147,10 @@ function displayMonthSummaryCards(months) {
                         <h3 class="month-summary-card-title">${monthName} ${month.year}</h3>
                         <span class="month-summary-card-period">${periodLabel}</span>
                     </div>
-                    ${warningHtml}
+                    <div class="month-summary-card-body">
+                        <span class="month-summary-card-completed"><i class="fa-solid fa-circle-check"></i> ${completedCount}/${totalOrders} completed</span>
+                        ${warningHtml}
+                    </div>
                 </div>
             `;
         }).join('');

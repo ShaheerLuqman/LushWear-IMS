@@ -707,6 +707,14 @@ function flashGridRowTwice(gridApi, rowId) {
 }
 
 function initLedgerModals() {
+    document.getElementById('cashInHandDisplay')?.addEventListener('click', (e) => {
+        e.stopPropagation();
+        document.getElementById('cashInHandDisplay').classList.toggle('cash-in-hand-tooltip-open');
+    });
+    document.addEventListener('click', () => {
+        document.getElementById('cashInHandDisplay')?.classList.remove('cash-in-hand-tooltip-open');
+    });
+
     document.getElementById('createLedgerBtn')?.addEventListener('click', () => openCreateLedgerModal());
     document.getElementById('ledgerSearchFilter')?.addEventListener('input', (e) => {
         ledgerSearchQuery = e.target.value;
@@ -998,7 +1006,17 @@ function scheduleOrdersAutoSync(delayMs = ORDERS_AUTO_SYNC_INTERVAL_MS) {
     }, delayMs);
 }
 
-async function uploadPostExCsv(file, assignmentNumber) {
+// Mirrors backend/app/services/postex.py's _folio_from_date: unpadded day/month, 2-digit
+// year (e.g. "2/9/26"), so a CSV upload's default folio parses the same way a PostEx
+// tracking-API-derived one does.
+function postExFolioFromDate(isoDate) {
+    if (!isoDate) return '';
+    const [year, month, day] = isoDate.split('-').map(Number);
+    if (!year || !month || !day) return '';
+    return `${day}/${month}/${String(year).slice(2)}`;
+}
+
+async function uploadPostExCsv(file, assignmentNumber, cashLedgerId) {
     const btn = document.getElementById('uploadPostExModalUpload');
     const originalText = btn?.textContent;
     if (btn) {
@@ -1011,6 +1029,7 @@ async function uploadPostExCsv(file, assignmentNumber) {
         if (assignmentNumber != null && String(assignmentNumber).trim() !== '') {
             formData.append('assignment_number', String(assignmentNumber).trim());
         }
+        formData.append('cash_ledger_id', cashLedgerId);
         const response = await fetch(`${API_BASE}/orders/upload-postex-csv`, {
             method: 'POST',
             body: formData
@@ -1020,7 +1039,8 @@ async function uploadPostExCsv(file, assignmentNumber) {
             const detail = Array.isArray(data.detail) ? data.detail.map(d => d.msg || d).join(' ') : data.detail;
             throw new Error(detail || response.statusText || 'Upload failed');
         }
-        showToast(data.message || `Updated ${data.updated || 0} order(s).`, 'success');
+        const postedSuffix = data.voucher_posted ? ' Posted to ledger.' : '';
+        showToast((data.message || `Updated ${data.updated || 0} order(s).`) + postedSuffix, 'success');
         closeUploadPostExModal();
 
         if ((data.order_breakdown || []).length > 0) {
@@ -1074,16 +1094,35 @@ async function fetchPostExSettlements() {
     }
 }
 
+// Asset ledgers a payout's "amount received" leg can post to - excludes courier
+// receivables (Asset-typed but not a deposit destination), same filter shape as
+// partyLedgers() in bills.js.
+function postExCashLedgerOptions() {
+    return ledgers.filter(l => l.type === 'Asset' && !(l.system_key || '').startsWith('courier_'));
+}
+
 function openUploadPostExModal() {
     const modal = document.getElementById('uploadPostExModal');
     const fileInput = document.getElementById('uploadPostExFileInput');
     const fileNameEl = document.getElementById('uploadPostExFileName');
+    const cprDateInput = document.getElementById('uploadPostExCprDate');
     const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
+    const cashLedgerSelect = document.getElementById('uploadPostExCashLedger');
     if (fileInput) {
         fileInput.value = '';
         if (fileNameEl) fileNameEl.textContent = 'No file chosen';
     }
-    if (assignmentInput) assignmentInput.value = '';
+    // Left empty rather than defaulted to today - a wrong CPR date silently misdates the
+    // voucher, so the user must pick it deliberately.
+    if (cprDateInput) cprDateInput.value = '';
+    if (assignmentInput) {
+        assignmentInput.value = '';
+        assignmentInput.dataset.autofilled = 'true';
+    }
+    if (cashLedgerSelect) {
+        cashLedgerSelect.innerHTML = '<option value="">Select ledger...</option>' +
+            postExCashLedgerOptions().map(l => `<option value="${l.id}">${escapeHtml(l.name)}</option>`).join('');
+    }
     if (modal) modal.classList.add('active');
 }
 

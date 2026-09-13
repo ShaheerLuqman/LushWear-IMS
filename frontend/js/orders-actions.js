@@ -19,7 +19,7 @@ function initOrdersActions() {
     document.getElementById('bulkUpdateSetOrderSettled')?.addEventListener('click', () => submitBulkUpdateOrderSettled(true));
     document.getElementById('bulkUpdateSetOrderUnsettled')?.addEventListener('click', () => submitBulkUpdateOrderSettled(false));
 
-    // Upload PostEx modal: file name display, upload button, close/cancel
+    // Upload PostEx modal: file name display, CPR date -> folio autofill, upload button, close/cancel
     document.getElementById('ordersMoreActionUploadPostEx')?.addEventListener('click', openUploadPostExModal);
     const uploadPostExFileInput = document.getElementById('uploadPostExFileInput');
     const uploadPostExFileNameEl = document.getElementById('uploadPostExFileName');
@@ -29,6 +29,18 @@ function initOrdersActions() {
             uploadPostExFileNameEl.textContent = file ? file.name : 'No file chosen';
         });
     }
+    const uploadPostExAssignmentInput = document.getElementById('uploadPostExAssignmentNumber');
+    document.getElementById('uploadPostExCprDate')?.addEventListener('change', (e) => {
+        // Only overwrite a folio the user hasn't typed over themselves - re-picking the
+        // date after a manual edit must not clobber it.
+        if (uploadPostExAssignmentInput && uploadPostExAssignmentInput.dataset.autofilled !== 'false') {
+            uploadPostExAssignmentInput.value = postExFolioFromDate(e.target.value);
+            uploadPostExAssignmentInput.dataset.autofilled = 'true';
+        }
+    });
+    uploadPostExAssignmentInput?.addEventListener('input', () => {
+        uploadPostExAssignmentInput.dataset.autofilled = 'false';
+    });
     document.getElementById('uploadPostExModalUpload')?.addEventListener('click', async () => {
         const fileInput = document.getElementById('uploadPostExFileInput');
         const file = fileInput?.files?.[0];
@@ -36,9 +48,19 @@ function initOrdersActions() {
             showToast('Please select a CSV file', 'error', { silent: true });
             return;
         }
-        const assignmentInput = document.getElementById('uploadPostExAssignmentNumber');
-        const assignmentNumber = assignmentInput?.value?.trim() || null;
-        await uploadPostExCsv(file, assignmentNumber);
+        const cprDateInput = document.getElementById('uploadPostExCprDate');
+        if (!cprDateInput?.value) {
+            showToast('Please select the CPR date', 'error', { silent: true });
+            return;
+        }
+        const cashLedgerSelect = document.getElementById('uploadPostExCashLedger');
+        const cashLedgerId = cashLedgerSelect?.value || null;
+        if (!cashLedgerId) {
+            showToast('Please select where the amount was received', 'error', { silent: true });
+            return;
+        }
+        const assignmentNumber = uploadPostExAssignmentInput?.value?.trim() || null;
+        await uploadPostExCsv(file, assignmentNumber, cashLedgerId);
     });
     document.getElementById('closeUploadPostExModal')?.addEventListener('click', closeUploadPostExModal);
     document.getElementById('uploadPostExModalCancel')?.addEventListener('click', closeUploadPostExModal);

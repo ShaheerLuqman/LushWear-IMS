@@ -149,6 +149,38 @@ class TestParseRows:
         with pytest.raises(postex.CsvFormatError, match="SHIPPING_CHARGES"):
             postex.parse_rows(b"ORDER_REF_NUMBER\n4807\n")
 
+    def test_csv_without_a_status_column_leaves_it_none(self):
+        rows, _ = postex.parse_rows(CSV)
+        assert rows[0]["csv_order_status"] is None
+
+    def test_status_column_is_normalised_to_delivered_and_returned(self):
+        csv_bytes = (
+            b"ORDER_REF_NUMBER,SHIPPING_CHARGES,STATUS\n"
+            b"100,180,Delivered\n"
+            b"101,180,Return\n"
+        )
+        rows, _ = postex.parse_rows(csv_bytes)
+        assert rows[0]["csv_order_status"] == "delivered"
+        assert rows[1]["csv_order_status"] == "returned"
+
+    def test_unrecognised_status_value_is_none(self):
+        csv_bytes = b"ORDER_REF_NUMBER,SHIPPING_CHARGES,STATUS\n100,180,In Transit\n"
+        rows, _ = postex.parse_rows(csv_bytes)
+        assert rows[0]["csv_order_status"] is None
+
+
+class TestNormalizeCsvStatus:
+    def test_maps_known_values_case_insensitively(self):
+        assert postex.normalize_csv_status("Delivered") == "delivered"
+        assert postex.normalize_csv_status("DELIVERED") == "delivered"
+        assert postex.normalize_csv_status("Return") == "returned"
+        assert postex.normalize_csv_status("returned") == "returned"
+
+    def test_unknown_or_blank_is_none(self):
+        assert postex.normalize_csv_status("In Transit") is None
+        assert postex.normalize_csv_status("") is None
+        assert postex.normalize_csv_status(None) is None
+
 
 class TestNormalizePhone:
     @pytest.mark.parametrize("raw,expected", [

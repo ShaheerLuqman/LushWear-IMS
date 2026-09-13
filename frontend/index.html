@@ -172,6 +172,10 @@
                                     <span class="nav-icon"><i data-lucide="bar-chart-2"></i></span>
                                     <span class="nav-tooltip">Product Analytics</span>
                                 </button>
+                                <button class="nav-item" data-view="cityAnalytics" title="Analytics by City">
+                                    <span class="nav-icon"><i data-lucide="map-pin"></i></span>
+                                    <span class="nav-tooltip">Analytics by City</span>
+                                </button>
                             </div>
                         </div>
                     </div>
@@ -211,6 +215,10 @@
                                 <button class="nav-item" data-view="loadSheetLogs" title="Load Sheet Logs">
                                     <span class="nav-icon"><i data-lucide="clipboard-list"></i></span>
                                     <span class="nav-tooltip">Load Sheet Logs</span>
+                                </button>
+                                <button class="nav-item" data-view="courierPerformance" title="Courier Performance">
+                                    <span class="nav-icon"><i data-lucide="bar-chart-3"></i></span>
+                                    <span class="nav-tooltip">Courier Performance</span>
                                 </button>
                             </div>
                         </div>
@@ -347,6 +355,15 @@
                         <button type="button" id="courierPaymentReportImportCsvBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-upload"></i> Import Payment (CSV)</button>
                         <button type="button" id="courierPaymentReportFetchSettlementsBtn" class="btn btn-secondary header-toolbar-btn" title="Check unsettled PostEx orders against the courier API and settle the ones now delivered or returned" style="display: none;"><i class="fa-solid fa-rotate"></i> Fetch PostEx Settlements</button>
                     </div>
+                    <div id="courierPerformanceHeaderWrap" class="header-inline" style="display: none;">
+                        <button type="button" id="courierPerformanceDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by fulfilled date range">Date range</button>
+                        <select id="courierPerformanceCityFilter" class="orders-period-filter" title="Filter by city">
+                            <option value="">All Cities</option>
+                        </select>
+                        <select id="courierPerformanceCourierFilter" class="orders-period-filter" title="Filter by courier">
+                            <option value="">All Couriers</option>
+                        </select>
+                    </div>
                     <div id="printAirwayBillHeaderWrap" class="header-inline" style="display: none;">
                         <button type="button" id="printAirwayBillDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by fulfillment date range">Date range</button>
                         <select id="printAirwayBillCourierFilter" class="orders-period-filter" title="Filter by courier">
@@ -393,6 +410,24 @@
                                 <strong>Hero</strong> = the top ~20% (ties included); <strong>Zero</strong> = the bottom ~20%, including products with no sales; everything between is <strong>Average</strong>.
                             </div>
                         </div>
+                    </div>
+                    <div id="cityAnalyticsHeaderWrap" class="header-inline" style="display: none;">
+                        <div class="transaction-search-wrap">
+                            <i class="fa-solid fa-magnifying-glass transaction-search-icon"></i>
+                            <input id="caSearchInput" type="text" class="transaction-search-filter" placeholder="Search products…" autocomplete="off">
+                        </div>
+                        <div class="pa-time">
+                            <button type="button" id="caTimeBtn" class="pa-time-btn">
+                                <i class="fa-regular fa-calendar"></i>
+                                <span id="caTimeLabel"></span>
+                                <i class="fa-solid fa-chevron-down"></i>
+                            </button>
+                            <div id="caTimeMenu" class="pa-time-menu" hidden></div>
+                        </div>
+                        <select id="caCollectionSelect" class="orders-period-filter" title="Filter by collection">
+                            <option value="">All collections</option>
+                        </select>
+                        <button type="button" id="caExportBtn" class="btn btn-secondary header-toolbar-btn"><i class="fa-solid fa-arrow-up-from-bracket"></i> Export</button>
                     </div>
                 </div>
                 <div class="header-notif-wrap" id="notifWrap">
@@ -516,6 +551,71 @@
                     <div id="courierPaymentReportGrid" class="ag-theme-alpine grid-container"></div>
                 </div>
 
+                <!-- Courier Performance View -->
+                <div id="courierPerformanceView" class="view">
+                    <div class="stats-grid courier-performance-stats-grid">
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Total Shipments</span>
+                                <span class="stat-value" id="courierPerfTotalShipments">0</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Delivered %</span>
+                                <span class="stat-value" id="courierPerfDeliveredPct">0%</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Return %</span>
+                                <span class="stat-value" id="courierPerfReturnPct">0%</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Failed %</span>
+                                <span class="stat-value" id="courierPerfFailedPct">0%</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">COD Collected</span>
+                                <span class="stat-value" id="courierPerfCodCollected">Rs 0.00</span>
+                            </div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-info">
+                                <span class="stat-label">Shipping Cost</span>
+                                <span class="stat-value" id="courierPerfShippingCost">Rs 0.00</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="bill-detail-card courier-performance-table-card">
+                        <h3>City Wise Courier Performance</h3>
+                        <div class="postex-mismatches-table-wrap">
+                            <table class="postex-mismatches-table">
+                                <thead>
+                                    <tr>
+                                        <th>City</th>
+                                        <th>Courier</th>
+                                        <th>Orders</th>
+                                        <th>Delivered</th>
+                                        <th>Delivery %</th>
+                                        <th>Returned</th>
+                                        <th>Return %</th>
+                                        <th>Failed %</th>
+                                        <th>COD Collected</th>
+                                        <th>Shipping Cost</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="courierPerformanceBody"></tbody>
+                            </table>
+                        </div>
+                        <p id="courierPerformanceEmpty" class="courier-performance-empty" style="display: none;">No fulfilled orders in this range.</p>
+                    </div>
+                </div>
+
                 <!-- Courier Payment Report: Bill Detail View -->
                 <div id="courierPaymentReportDetailView" class="view">
                     <div class="bill-detail-scroll">
@@ -565,6 +665,7 @@
                                             <th>Delivery Charge</th>
                                             <th>Tax</th>
                                             <th>Net Receivable</th>
+                                            <th>Cost Price</th>
                                             <th>Settled</th>
                                         </tr>
                                     </thead>
@@ -1179,6 +1280,11 @@
                     <div class="pa-scroll" id="productAnalyticsRoot"></div>
                 </div>
 
+                <!-- City Analytics View -->
+                <div id="cityAnalyticsView" class="view">
+                    <div class="pa-scroll" id="cityAnalyticsRoot"></div>
+                </div>
+
                 <!-- Load Sheet Logs View -->
                 <div id="loadSheetLogsView" class="view">
                     <div class="load-sheet-logs-container">
@@ -1681,7 +1787,7 @@
                 <button type="button" class="modal-close" id="closeUploadPostExModal" aria-label="Close">&times;</button>
             </div>
             <div class="modal-body">
-                <p class="modal-description">Select a PostEx CSV file and optionally set an assignment number (saved as folio on matched orders).</p>
+                <p class="modal-description">Select a PostEx CSV file and the CPR date it settles.</p>
                 <div class="form-group" style="margin-top: 16px;">
                     <label for="uploadPostExFileInput">CSV File *</label>
                     <div class="upload-postex-file-row">
@@ -1690,8 +1796,18 @@
                     </div>
                 </div>
                 <div class="form-group" style="margin-top: 12px;">
-                    <label for="uploadPostExAssignmentNumber">Assignment Number (Folio)</label>
-                    <input type="text" id="uploadPostExAssignmentNumber" class="form-input" placeholder="e.g. LW-1">
+                    <label for="uploadPostExCprDate">CPR Date *</label>
+                    <input type="date" id="uploadPostExCprDate" class="form-input">
+                </div>
+                <div class="form-group" style="margin-top: 12px;">
+                    <label for="uploadPostExAssignmentNumber">Folio</label>
+                    <input type="text" id="uploadPostExAssignmentNumber" class="form-input" placeholder="e.g. 2/9/26">
+                </div>
+                <div class="form-group" style="margin-top: 12px;">
+                    <label for="uploadPostExCashLedger">Amount Received In *</label>
+                    <select id="uploadPostExCashLedger" class="form-input">
+                        <option value="">Select ledger...</option>
+                    </select>
                 </div>
             </div>
             <div class="modal-pinned-footer">
@@ -1901,6 +2017,7 @@
     <script src="js/trial-balance.js"></script>
     <script src="js/bills.js"></script>
     <script src="js/courier-payment-report.js"></script>
+    <script src="js/courier-performance.js"></script>
     <script src="js/order-fulfillment.js"></script>
     <script src="js/print-airway-bill.js"></script>
     <script src="js/sync-summary.js"></script>
@@ -1908,6 +2025,7 @@
     <script src="js/inventory.js"></script>
     <script src="js/delivery-status.js"></script>
     <script src="js/product-analytics.js"></script>
+    <script src="js/city-analytics.js"></script>
 </body>
 
 </html>

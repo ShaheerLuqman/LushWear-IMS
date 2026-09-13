@@ -1,12 +1,14 @@
 """Per-org courier enablement (Settings > Couriers).
 
-An org turns on the couriers it ships with. Enabling a courier:
-  - flips its `enabled` flag in the encrypted `couriers` blob
-    (app/org_settings.py), alongside any integration credentials it needs;
-  - gives it a system ledger (`finances_ledgers.system_key = 'courier_<id>'`,
-    an Asset account for COD the courier is holding on our behalf), reusing an
-    existing same-named ledger the org may already keep - see the
-    `enable_courier_system_ledger` RPC.
+An org turns on the couriers it ships with. Its ledger
+(`finances_ledgers.system_key = 'courier_<id>'`, an Asset account for COD the
+courier is holding on our behalf) already exists from org creation
+(trg_organizations_seed_system_ledgers) for every id in COURIER_CATALOG, so
+enabling a courier only flips its `enabled` flag in the encrypted `couriers`
+blob (app/org_settings.py), alongside any integration credentials it needs.
+The `enable_courier_system_ledger` RPC call below is create-or-return and
+mostly a no-op now; it stays so an org whose ledger predates this seeding (or
+that already renamed/adopted a same-named ledger by hand) is left alone.
 
 The `enabled` flag drives this screen and the ledger only; nothing in the
 booking path checks it.

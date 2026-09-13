@@ -880,14 +880,34 @@ async def upload_postex_csv(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     assignment_number: Optional[str] = Form(None),
+    cash_ledger_id: str = Form(...),
     org_id: str = Depends(get_org_id),
 ):
     """
     Upload a PostEx CSV file. Matches rows by ORDER_REF_NUMBER to orders and updates
     delivery_charge (from SHIPPING_CHARGES), tax_amount (GST + WH_INCOME_TAX + WH_SALES_TAX),
     courier (set to PostEx), tracking_number (from TRACKING_NUMBER; parses 14-digit numbers
-    including exponential notation e.g. 2.63E+13), optionally folio (from assignment_number),
+    including exponential notation e.g. 2.63E+13), folio (from assignment_number - the upload
+    modal requires a CPR date and defaults this to its d/m/yy, but the user can override),
+    order_status (from STATUS, e.g. an order still "fulfilled" moves to delivered/returned),
     and marks the order as settled (the CSV is PostEx's payout report).
+
+    order_status only moves when the DB side is not already terminal. If it's already
+    delivered/returned and the CSV's STATUS disagrees, that's flagged as status_mismatch in
+    order_breakdown and left as-is rather than silently overwritten - same reasoning as the
+    receivable-vs-NET_AMOUNT mismatch check below.
+
+    The CPR date itself never reaches this endpoint - only the folio it defaulted to does.
+    Posting groups settled orders into a finances_courier_payouts
+    row by that folio (assign_courier_payouts) and posts the resulting voucher
+    (post_courier_payout_journal) before the response returns, so the reconciliation entries
+    (COD cleared, Sales Return, Delivery Charges, Withholding Tax, and the amount received -
+    cash_ledger_id, the "Amount Received In" ledger the upload modal requires) exist
+    immediately - see supabase/migrations/20260910040000_post_by_courier_bill.sql and
+    20260913060000_payout_cash_ledger_param.sql. A non-date-shaped folio still posts;
+    assign_courier_payouts falls back to the covered orders' last dispatch date.
+    cash_ledger_id is only applied to a payout this upload's folio newly creates - a folio
+    matching a payout an earlier upload already posted keeps that upload's ledger choice.
 
     Mirroring those settlements into Shopify runs after the response is sent - it is
     best-effort and far slower than the local write, which the upload should not wait on.
@@ -939,8 +959,11 @@ async def upload_postex_csv(
         # (e.g. re-checking a file) shouldn't re-push a no-op settlement to Shopify for each one.
         order_numbers_to_push = []
         delivered_order_numbers_to_push = []
+        # Orders where the CSV's STATUS contradicts an already-terminal DB status
+        # (delivered/returned) - order_status is left untouched for these, see status_mismatch below.
+        status_mismatch_order_numbers = []
         # { order_number, folio, order_status, total_amount, advance_amount, cod, delivery_charge,
-        #   tax_amount, receivable, csv_net_amount, mismatch }
+        #   tax_amount, receivable, csv_net_amount, mismatch, csv_status, status_mismatch }
         order_breakdown = []
         orders_to_upsert = []
         totals = {
@@ -959,13 +982,26 @@ async def upload_postex_csv(
                 cancelled_order_numbers.append(order_num)
                 continue
             matched_order_numbers.append(order_num)
+            db_status = (order.get("order_status") or "").strip().lower()
+            csv_status = r.get("csv_order_status")
+            # A terminal DB status (delivered/returned) contradicting the CSV's own STATUS
+            # is a reconciliation problem, not something to silently overwrite - flag it via
+            # status_mismatch below and leave order_status untouched. Otherwise (fulfilled,
+            # unfulfilled, CNA/ICA/RFD, or already agreeing) the CSV is authoritative: this
+            # is exactly the "still fulfilled after the payout report says delivered" gap.
+            status_mismatch = (
+                csv_status is not None
+                and db_status in postex.SETTLEABLE_STATUSES
+                and db_status != csv_status
+            )
+            new_status = order["order_status"] if status_mismatch or csv_status is None else csv_status
             update_data = {
                 "id": order["id"],
                 # An upsert is INSERT ... ON CONFLICT, and Postgres checks NOT NULL on the
                 # proposed row before it resolves the conflict - so every NOT NULL column
                 # without a default has to be carried even though this only ever updates.
                 "order_number": order["order_number"],
-                "order_status": order["order_status"],
+                "order_status": new_status,
                 "total_amount": order["total_amount"],
                 "order_receiving_date": order["order_receiving_date"],
                 "delivery_charge": r["delivery_charge"],
@@ -982,12 +1018,13 @@ async def upload_postex_csv(
             if assignment_number is not None and assignment_number.strip():
                 update_data["folio"] = assignment_number.strip()
 
-            order_status = (order.get("order_status") or "").strip().lower()
+            order_status = new_status.strip().lower()
             is_returned = order_status == "returned"
 
             unchanged = (
                 bool(order.get("is_order_settled"))
                 and (order.get("courier") or "") == "PostEx"
+                and new_status == order["order_status"]
                 and money(order.get("delivery_charge") or 0) == money(r["delivery_charge"])
                 and money(order.get("tax_amount") or 0) == money(r["tax_amount"])
                 and (not update_data.get("tracking_number") or order.get("tracking_number") == update_data["tracking_number"])
@@ -1027,7 +1064,11 @@ async def upload_postex_csv(
                 "receivable": receivable,
                 "csv_net_amount": csv_net_rounded,
                 "mismatch": csv_net_rounded is not None and receivable != csv_net_rounded,
+                "csv_status": csv_status,
+                "status_mismatch": status_mismatch,
             })
+            if status_mismatch:
+                status_mismatch_order_numbers.append(order_num)
             totals["total_amount"] += total_amount
             totals["advance_total"] += advance_amount
             totals["delivery_charges"] += delivery_charge
@@ -1038,6 +1079,7 @@ async def upload_postex_csv(
                 totals["cod_total"] += cod
                 totals["taxes"] += tax_amount
 
+        voucher_posted = False
         if orders_to_upsert:
             batch_size = 1000
             for i in range(0, len(orders_to_upsert), batch_size):
@@ -1047,6 +1089,7 @@ async def upload_postex_csv(
             # under another courier. Charges/taxes/settled changing needs no bill write at
             # all - the totals view derives those from the orders on every read.
             await _assign_courier_bills(org_id, updated_order_ids)
+            voucher_posted = await _post_postex_payout(org_id, updated_order_ids, cash_ledger_id)
             # Deferred: the local settlement is already committed above and the push is
             # best-effort, so hundreds of Shopify round trips must not hold the response.
             background_tasks.add_task(
@@ -1062,6 +1105,11 @@ async def upload_postex_csv(
                 message += f" Unmatched: {', '.join(map(str, unmatched_order_numbers[:10]))}"
         if cancelled_order_numbers:
             message += f" {len(cancelled_order_numbers)} order(s) skipped because they are cancelled."
+        if status_mismatch_order_numbers:
+            message += (
+                f" {len(status_mismatch_order_numbers)} order(s) have a delivery status that contradicts "
+                "this CSV (see highlighted rows) - order_status was left unchanged."
+            )
 
         return {
             "updated": updated_count,
@@ -1069,14 +1117,17 @@ async def upload_postex_csv(
             "updated_order_ids": updated_order_ids,
             "matched_order_numbers": matched_order_numbers,
             "cancelled_order_numbers": cancelled_order_numbers,
+            "status_mismatch_order_numbers": status_mismatch_order_numbers,
             "csv_rows_processed": len(rows),
             "csv_order_numbers_count": len(csv_order_numbers),
             "db_order_numbers_count": len(set(db_order_numbers)),
             "matched_count": len(matched_order_numbers),
             "unmatched_count": len(unmatched_order_numbers),
             "cancelled_count": len(cancelled_order_numbers),
+            "status_mismatch_count": len(status_mismatch_order_numbers),
             "order_breakdown": order_breakdown,
             "totals": {k: money(v) for k, v in totals.items()},
+            "voucher_posted": voucher_posted,
         }
     except HTTPException:
         raise
@@ -1750,6 +1801,84 @@ async def get_returned_delivery_charges_sum(org_id: str = Depends(get_org_id)):
         )
         total = sum(float(row.get("delivery_charge") or 0) for row in (response.data or []))
         return {"sum": total}
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/courier-performance-by-city")
+async def get_courier_performance_by_city(
+    date_from: str = Query(None, description="Earliest fulfilled_at (inclusive), YYYY-MM-DD, PKT."),
+    date_to: str = Query(None, description="Latest fulfilled_at (inclusive), YYYY-MM-DD, PKT."),
+    org_id: str = Depends(get_org_id),
+):
+    """Delivered/returned/failed rates per city per courier, for fulfilled orders in range.
+
+    Grouped in Python rather than SQL - matches every other report in this file, and the
+    row count per period is small enough that pushing the group-by into Postgres would
+    only add a migration for no real gain.
+    """
+    try:
+        supabase = get_supabase()
+
+        def _pkt_day_start(value: str) -> datetime:
+            day = datetime.strptime(value, "%Y-%m-%d").date()
+            return datetime(day.year, day.month, day.day, tzinfo=PKT_TIMEZONE)
+
+        try:
+            from_iso = _pkt_day_start(date_from).isoformat() if date_from else None
+            to_iso = (_pkt_day_start(date_to) + timedelta(days=1)).isoformat() if date_to else None
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Dates must be YYYY-MM-DD")
+
+        def _build_query():
+            q = (
+                org_table(supabase, org_id, "shopify_orders")
+                .select("customer_city, courier, order_status, total_amount, advance_amount, delivery_charge")
+                .not_.is_("courier", "null")
+                .neq("order_status", "unfulfilled")
+            )
+            if from_iso:
+                q = q.gte("fulfilled_at", from_iso)
+            if to_iso:
+                q = q.lt("fulfilled_at", to_iso)
+            return q
+
+        orders = fetch_all(_build_query)
+
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for row in orders:
+            city = (row.get("customer_city") or "-").strip() or "-"
+            courier = (row.get("courier") or "-").strip() or "-"
+            key = (city, courier)
+            g = groups.setdefault(key, {
+                "city": city, "courier": courier, "orders": 0, "delivered": 0,
+                "returned": 0, "failed": 0, "cod_collected": 0.0, "shipping_cost": 0.0,
+            })
+            status = (row.get("order_status") or "").strip().lower()
+            g["orders"] += 1
+            g["shipping_cost"] += float(row.get("delivery_charge") or 0)
+            if status == "delivered":
+                g["delivered"] += 1
+                g["cod_collected"] += max(0.0, float(row.get("total_amount") or 0) - float(row.get("advance_amount") or 0))
+            elif status == "returned":
+                g["returned"] += 1
+            elif status == "cancelled":
+                g["failed"] += 1
+
+        rows = []
+        for g in groups.values():
+            total = g["orders"]
+            rows.append({
+                **g,
+                "delivery_pct": round(g["delivered"] / total * 100, 1) if total else 0.0,
+                "return_pct": round(g["returned"] / total * 100, 1) if total else 0.0,
+                "failed_pct": round(g["failed"] / total * 100, 1) if total else 0.0,
+            })
+        rows.sort(key=lambda r: (r["city"], -r["orders"]))
+        return {"rows": rows}
     except HTTPException:
         raise
     except Exception:
@@ -2728,6 +2857,47 @@ async def _assign_courier_bills(org_id: str, order_ids: List[str]) -> None:
         logger.exception("[courier-bills] assignment failed for %d orders", len(order_ids))
 
 
+async def _post_postex_payout(org_id: str, order_ids: List[str], cash_ledger_id: str) -> bool:
+    """Group this upload's now-settled orders into their CPR payout and post the
+    resulting voucher (COD cleared, Sales Return, Delivery Charges, Withholding Tax,
+    and the amount received into cash_ledger_id - see post_courier_payout_journal).
+    Returns whether posting succeeded; a failure here is logged but never raised, since
+    the orders themselves are already committed and a CSV re-upload (or a manual retry)
+    can always re-derive and re-post the same voucher.
+
+    assign_courier_payouts scans the whole org's settled orders, not just this upload's
+    rows, so it also catches any order settled by an earlier upload that never made it
+    onto a payout (e.g. before this posting call existed). cash_ledger_id only lands on
+    a payout row this call newly creates - one matching an existing payout keeps
+    whatever ledger that earlier upload chose (see assign_courier_payouts).
+    """
+    if not order_ids:
+        return False
+    try:
+        supabase = get_supabase()
+        await asyncio.to_thread(
+            lambda: supabase.rpc(
+                "assign_courier_payouts", {"p_org_id": org_id, "p_cash_ledger_id": cash_ledger_id}
+            ).execute()
+        )
+        payout_ids_resp = await asyncio.to_thread(
+            lambda: org_table(supabase, org_id, "shopify_orders")
+            .select("courier_payout_id").in_("id", order_ids)
+            .not_.is_("courier_payout_id", "null").execute()
+        )
+        payout_ids = {row["courier_payout_id"] for row in (payout_ids_resp.data or [])}
+        for payout_id in payout_ids:
+            await asyncio.to_thread(
+                lambda pid=payout_id: supabase.rpc(
+                    "post_courier_payout_journal", {"p_payout_id": pid}
+                ).execute()
+            )
+        return bool(payout_ids)
+    except Exception:
+        logger.exception("[courier-payout] posting failed for %d orders", len(order_ids))
+        return False
+
+
 async def _save_delivery_status_updates(org_id: str, results: Dict[str, dict], orders_by_id: Dict[str, dict]) -> None:
     """Persist delivery_status (and derived order_status/piece_received) for many orders in
     one round-trip per batch, via the apply_delivery_status_updates RPC. Partial per-column
@@ -3599,7 +3769,13 @@ async def get_month_summary_list(org_id: str = Depends(get_org_id)):
         supabase = get_supabase()
         periods = supabase.rpc("get_month_summary_periods", {"p_org_id": org_id}).execute().data or []
         return [
-            {"month": p["month"], "year": p["year"], "warning_orders_count": p.get("warning_orders_count") or 0}
+            {
+                "month": p["month"],
+                "year": p["year"],
+                "warning_orders_count": p.get("warning_orders_count") or 0,
+                "total_orders": p.get("total_orders") or 0,
+                "completed_orders_count": p.get("completed_orders_count") or 0,
+            }
             for p in periods
         ]
     except HTTPException:

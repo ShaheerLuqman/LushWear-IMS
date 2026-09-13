@@ -13,6 +13,7 @@ function initGrids() {
     initTrialBalance();
     initBills();
     initCourierPaymentReport();
+    initCourierPerformance();
 }
 
 // Size order mapping for variant sorting
