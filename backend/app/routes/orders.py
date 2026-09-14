@@ -36,10 +36,7 @@ from app.services.pdf.packaging_list import (
     _generate_pdf_packaging_list,
     _order_line_rows,
 )
-from app.services.shopify_orders import (
-    _fetch_shopify_order_by_order_number,
-    _fetch_shopify_unfulfilled_orders,
-)
+from app.services.shopify_orders import _fetch_shopify_order_by_order_number
 from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     has_settled_tag,
@@ -76,6 +73,10 @@ _BULK_CONCURRENCY = 20
 # Gives the courier a moment to finish generating the last-booked parcel's label before
 # the fulfillment progress screen's Print button unlocks - see the /fulfill stream.
 _POST_BOOKING_LABEL_DELAY = 2.0
+
+# How long sweep_unsynced_shopify_fulfillments waits past fulfilled_at before treating an
+# order as abandoned rather than still being handled by its own fire-and-forget push.
+_SYNC_SWEEP_GRACE = timedelta(minutes=2)
 
 
 def _period_start_end(month: int, year: int, start_day: int = DEFAULT_FISCAL_MONTH_START_DAY):
@@ -301,11 +302,13 @@ def _customer_status_tier(received: int, total: int) -> Tuple[str, str]:
 @router.get("/unfulfilled", response_model=List[UnfulfilledOrder])
 async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
     """Unfulfilled orders for the Order Fulfillment view, across all periods (this is an
-    action queue, not a period report). Customer name/address/phone/city/id are captured
-    once per order at sync time (see shopify_sync._apply_customer_fields) and read
-    straight off shopify_orders here - no live Shopify lookup for customer data. Order
-    tags aren't persisted, though, so those still come from a live per-order lookup (same
-    fetch pattern generate-invoice uses).
+    action queue, not a period report). Customer name/address/phone/city/id/tags are all
+    captured at sync time (see shopify_sync._reconcile_one_order) and read straight off
+    shopify_orders here - no live Shopify call at all. (Tags used to be fetched live on
+    every page load - a 250-order sweep plus a per-row fallback for whatever it missed -
+    since they weren't persisted; now they are, so that's gone. A row synced before
+    migration 20260914120000 shows no tags until its next sync, which for this
+    still-unfulfilled set is typically soon.)
 
     customer_status is this customer's delivery track record across their *other* orders,
     found by grouping our own shopify_orders rows on customer_id - bounded to what we've
@@ -316,7 +319,7 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
         supabase = get_supabase()
         rows = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
-            .select("id, order_number, order_receiving_date, total_amount, advance_amount, line_items, customer_id, customer_name, customer_phone, customer_address, customer_city")
+            .select("id, order_number, order_receiving_date, total_amount, advance_amount, line_items, customer_id, customer_name, customer_phone, customer_address, customer_city, tags")
             .eq("order_status", "unfulfilled")
             .order("order_receiving_date", desc=True)
         )
@@ -324,44 +327,8 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
             return []
         t_db_rows = time.perf_counter()
 
-        org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
-        fetch_sem = asyncio.Semaphore(_BULK_CONCURRENCY)
-
-        # One sweep for the store's most-recently-created unfulfilled Shopify orders (see
-        # _fetch_shopify_unfulfilled_orders), instead of looking each row up individually.
-        # Any row it misses (older than its cutoff, or Shopify's sync lagged) still gets
-        # picked up by the per-order fallback below. Tags are all this is used for now.
-        sp_orders_list = await _fetch_shopify_unfulfilled_orders(org_creds)
-        sp_order_by_number: Dict[int, dict] = {}
-        for o in sp_orders_list:
-            try:
-                sp_order_by_number[int(o.get("order_number"))] = o
-            except (TypeError, ValueError):
-                continue
-        t_sweep = time.perf_counter()
-
-        async def _fetch_order_bounded(num: int):
-            async with fetch_sem:
-                try:
-                    return await _fetch_shopify_order_by_order_number(str(num), org_creds)
-                except Exception:
-                    return None
-
-        # Fallback for any DB row the sweep didn't cover (sync lag: DB still says unfulfilled,
-        # Shopify has moved on) - rare, so this costs ~nothing in the common case.
-        missing_rows = [row for row in rows if row["order_number"] not in sp_order_by_number]
-        if missing_rows:
-            fallback_sp_orders = await asyncio.gather(*(_fetch_order_bounded(row["order_number"]) for row in missing_rows))
-            for row, sp_order in zip(missing_rows, fallback_sp_orders):
-                if sp_order:
-                    sp_order_by_number[row["order_number"]] = sp_order
-        t_fallback = time.perf_counter()
-
-        def _tags_for(order_number: int) -> List[str]:
-            sp_order = sp_order_by_number.get(order_number)
-            if not sp_order:
-                return []
-            return [t.strip() for t in (sp_order.get("tags") or "").split(",") if t.strip()]
+        def _tags_for(row: dict) -> List[str]:
+            return [t.strip() for t in (row.get("tags") or "").split(",") if t.strip()]
 
         customer_ids = {row["customer_id"] for row in rows if row.get("customer_id") is not None}
         history_by_customer: Dict[int, List[dict]] = {}
@@ -388,7 +355,7 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
                 "name": row.get("customer_name") or "-",
                 "address": row.get("customer_address") or "-",
                 "mobile": row.get("customer_phone") or "-",
-                "tags": _tags_for(row["order_number"]),
+                "tags": _tags_for(row),
                 "city": row.get("customer_city") or "-",
                 "order_date": row["order_receiving_date"],
                 "total_amount": float(row.get("total_amount") or 0),
@@ -405,11 +372,9 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
             })
 
         logger.info(
-            "[get_unfulfilled_orders] rows=%d db_query=%.2fs shopify_sweep=%.2fs(found=%d/%d) "
-            "fallback_fetch=%.2fs(n=%d) history_db_query=%.2fs(customers=%d) total=%.2fs",
-            len(rows), t_db_rows - t_start, t_sweep - t_db_rows, len(sp_order_by_number), len(rows),
-            t_fallback - t_sweep, len(missing_rows),
-            t_history_query - t_fallback, len(customer_ids),
+            "[get_unfulfilled_orders] rows=%d db_query=%.2fs history_db_query=%.2fs(customers=%d) total=%.2fs",
+            len(rows), t_db_rows - t_start,
+            t_history_query - t_db_rows, len(customer_ids),
             time.perf_counter() - t_start,
         )
         return results
@@ -491,6 +456,18 @@ _FULFILL_TRACKING_URLS = {
     "postex": "https://postex.pk/tracking?cn={tracking_number}",
     "couriers_next": "https://portal.couriersnext.com/track-details.php?track_code={tracking_number}",
 }
+
+# Reverse of _FULFILL_COURIER_NAMES - _push_fulfillments_to_shopify gets the display name
+# from the row (it may be reused by the sweep across a mix of couriers) and needs the key
+# back to look up the row's tracking URL template.
+_FULFILL_COURIER_KEYS = {name: key for key, name in _FULFILL_COURIER_NAMES.items()}
+
+# How many create_order calls /fulfill runs at once, per courier. PostEx stays at 1
+# (sequential, unchanged) - its docstring already documents a tight create-order rate
+# limit. Couriers Next has no such documented limit and no 429 handling in
+# services/couriers_next.py, so a burst surfaces as ordinary per-order booking failures
+# rather than anything silent; 4 is a conservative starting point, not a measured ceiling.
+_FULFILL_CONCURRENCY = {"postex": 1, "couriers_next": 4}
 
 # Couriers Next books a parcel from a named origin city rather than from a stored pickup
 # address, so unlike PostEx the shipper profile does not carry one. Their account is
@@ -643,6 +620,10 @@ async def _book_one_order(
             error=f"Booked as {tracking_number}, but saving it locally failed - record it manually.",
         ), None
 
+    # _push_fulfillments_to_shopify reads the courier off the row rather than taking it as
+    # a separate argument (see there) - row was fetched before booking, so it still carries
+    # whatever courier (if any) the order had before this call.
+    row["courier"] = courier_name
     return (
         FulfillOrderResult(
             order_id=order_id, order_number=order_number, ok=True, tracking_number=tracking_number,
@@ -709,12 +690,25 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     async def stream():
         results: List[FulfillOrderResult] = []
         booked: List[Tuple[dict, str]] = []
+        sem = asyncio.Semaphore(_FULFILL_CONCURRENCY.get(body.courier, 1))
+
         async with httpx.AsyncClient(timeout=60.0) as client:
-            for order_id, request in requested.items():
-                result, booked_row = await _book_one_order(
-                    client, body, order_id, request, rows_by_id.get(order_id),
-                    courier_name, credential, client_code, supabase, org_id,
-                )
+            async def _book_bounded(order_id: str, request: FulfillOrderRequest):
+                async with sem:
+                    return await _book_one_order(
+                        client, body, order_id, request, rows_by_id.get(order_id),
+                        courier_name, credential, client_code, supabase, org_id,
+                    )
+
+            # Bounded by courier (see _FULFILL_CONCURRENCY) rather than strictly
+            # sequential: a slow courier API used to mean a slow parcel booked every
+            # ~60-90s, one at a time (a 7-order batch once took ~10 minutes). Results are
+            # yielded as each booking resolves, not in submission order - the frontend
+            # already keys progress rows by order_id (applyFulfillmentProgressResult), not
+            # arrival position, so this doesn't change what the user sees land per row.
+            tasks = [asyncio.create_task(_book_bounded(oid, req)) for oid, req in requested.items()]
+            for task in asyncio.as_completed(tasks):
+                result, booked_row = await task
                 results.append(result)
                 if booked_row:
                     booked.append(booked_row)
@@ -728,7 +722,15 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
             await asyncio.sleep(_POST_BOOKING_LABEL_DELAY)
             event_bus.publish(org_id, {"type": "orders_changed"})
             yield json.dumps({"type": "shopify_sync"}) + "\n"
-            await _push_fulfillments_to_shopify(booked, body.courier, courier_name, org_id, org_creds)
+            # Not awaited: this generator is tied to the client's HTTP connection, and a
+            # bulk fulfill can run for minutes - if that connection drops, uvicorn tears
+            # the generator down at its next suspension point with no exception logged,
+            # silently killing the push along with it (see the 2026-09-14 Couriers Next
+            # incident: 7 orders booked with the courier, never pushed to Shopify, no
+            # trace anywhere). Detaching it as its own task lets it survive a dropped
+            # client connection; sweep_unsynced_shopify_fulfillments (main.py's periodic
+            # sweep) is the backstop for the rarer case where the server itself goes away.
+            _spawn_shopify_push(booked, org_id, org_creds)
 
         yield json.dumps({
             "type": "done",
@@ -739,17 +741,46 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     return StreamingResponse(stream(), media_type="application/x-ndjson")
 
 
+# Strong refs for the fire-and-forget tasks _spawn_shopify_push creates - asyncio only
+# holds a task via what references it, so without this a task can be garbage-collected
+# mid-run once the request that spawned it returns. Each task discards itself on completion.
+_shopify_push_tasks: Set[asyncio.Task] = set()
+
+
+def _spawn_shopify_push(booked: List[Tuple[dict, str]], org_id: str, org_creds: OrgIntegrationSettings) -> None:
+    """Kick off _push_fulfillments_to_shopify detached from the caller's request/connection
+    - see the comment at its call site in fulfill_orders_stream for why."""
+    task = asyncio.create_task(_push_fulfillments_to_shopify(booked, org_id, org_creds))
+    _shopify_push_tasks.add(task)
+    task.add_done_callback(_shopify_push_tasks.discard)
+
+
+def _mark_shopify_fulfillment_synced(supabase, org_id: str, row_id: str) -> None:
+    org_table(supabase, org_id, "shopify_orders").update({
+        "shopify_fulfillment_synced_at": datetime.now(timezone.utc).isoformat(),
+        "shopify_fulfillment_sync_error": None,
+    }).eq("id", row_id).execute()
+
+
+def _mark_shopify_fulfillment_sync_error(supabase, org_id: str, row_id: str, error: str) -> None:
+    org_table(supabase, org_id, "shopify_orders").update({
+        "shopify_fulfillment_sync_error": error[:500],
+    }).eq("id", row_id).execute()
+
+
 async def _push_fulfillments_to_shopify(
-    booked: List[Tuple[dict, str]], courier: str, courier_name: str, org_id: str,
-    org_creds: OrgIntegrationSettings
+    booked: List[Tuple[dict, str]], org_id: str, org_creds: OrgIntegrationSettings
 ) -> None:
     """Mirror successful bookings into Shopify so the store shows them fulfilled with
-    tracking, and the customer gets the shipping notification.
+    tracking, and the customer gets the shipping notification. Reused by both the
+    fulfillment endpoint (via _spawn_shopify_push) and sweep_unsynced_shopify_fulfillments,
+    so courier is read off each row instead of assumed uniform across the whole batch.
 
-    Best-effort by design: every failure is logged and swallowed, because the courier
-    booking it reflects has already happened and must not be reported back as failed.
-    A miss here is recoverable - the next Shopify sync reconciles it - whereas a parcel
-    booked twice is not.
+    Best-effort by design: every failure is logged, swallowed, and recorded on the row
+    (shopify_fulfillment_sync_error) rather than raised, because the courier booking it
+    reflects has already happened and must not be reported back as failed. A miss here is
+    recoverable - shopify_fulfillment_synced_at stays null and the sweep retries it later -
+    whereas a parcel booked twice is not.
     """
     try:
         org_creds = await ensure_valid_shopify_token(org_id, org_creds)
@@ -757,21 +788,79 @@ async def _push_fulfillments_to_shopify(
         logger.exception("Could not refresh the Shopify token - skipping fulfillment push for %d order(s)", len(booked))
         return
 
-    for row, tracking_number in booked:
-        try:
-            sp_order = await _fetch_shopify_order_by_order_number(str(row["order_number"]), org_creds)
-            if not sp_order:
-                logger.warning("Order %s not found in Shopify - skipping fulfillment push", row["order_number"])
-                continue
-            tracking_url = _FULFILL_TRACKING_URLS.get(courier)
-            await shopify.create_fulfillment(
-                sp_order["id"], tracking_number, courier_name,
-                tracking_url.format(tracking_number=tracking_number) if tracking_url else None,
-                org_creds,
-            )
-        except Exception:
-            logger.exception("Shopify fulfillment push failed for order %s (booked as %s)",
-                             row["order_number"], tracking_number)
+    supabase = get_supabase()
+    logger.info("Pushing %d Shopify fulfillment(s) for org %s", len(booked), org_id)
+    sem = asyncio.Semaphore(_BULK_CONCURRENCY)
+
+    async def _push_one(row: dict, tracking_number: str, client: httpx.AsyncClient) -> bool:
+        async with sem:
+            try:
+                sp_order = await _fetch_shopify_order_by_order_number(str(row["order_number"]), org_creds)
+                if not sp_order:
+                    logger.warning("Order %s not found in Shopify - skipping fulfillment push", row["order_number"])
+                    _mark_shopify_fulfillment_sync_error(supabase, org_id, row["id"], "Order not found in Shopify")
+                    return False
+                courier_name = row["courier"]
+                tracking_url = _FULFILL_TRACKING_URLS.get(_FULFILL_COURIER_KEYS.get(courier_name))
+                await shopify.create_fulfillment(
+                    sp_order["id"], tracking_number, courier_name,
+                    tracking_url.format(tracking_number=tracking_number) if tracking_url else None,
+                    org_creds, client,
+                )
+                _mark_shopify_fulfillment_synced(supabase, org_id, row["id"])
+                return True
+            except Exception as exc:
+                logger.exception("Shopify fulfillment push failed for order %s (booked as %s)",
+                                 row["order_number"], tracking_number)
+                _mark_shopify_fulfillment_sync_error(supabase, org_id, row["id"], str(exc))
+                return False
+
+    # Concurrent, like _push_settlements_to_shopify (shares _BULK_CONCURRENCY) - this used
+    # to run one order at a time, each opening its own connection, which mattered once this
+    # moved off the request's critical path (background task / sweep) but still means a
+    # large sweep batch takes proportionally longer to clear, and _request_with_retry (now
+    # also used by create_fulfillment) absorbs the 429s the concurrency provokes.
+    async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+        outcomes = await asyncio.gather(*(_push_one(row, tn, client) for row, tn in booked))
+    synced = sum(outcomes)
+    logger.info("Shopify fulfillment push done for org %s: %d/%d synced", org_id, synced, len(booked))
+
+
+async def sweep_unsynced_shopify_fulfillments() -> None:
+    """Backstop for _spawn_shopify_push: finds any order booked with a courier but never
+    pushed to Shopify - a dropped client connection killed the fire-and-forget task, or the
+    server itself restarted before it ran - and retries it. Called on a timer from main.py's
+    lifespan, independent of any one request, so it recovers regardless of what interrupted
+    the original push. See the 2026-09-14 Couriers Next incident this replaces: 7 orders
+    booked and billed with the courier, silently never pushed to Shopify, with no trace of
+    the failure anywhere - found only by noticing it missing on Shopify's side.
+
+    The 2-minute grace period on fulfilled_at avoids racing an in-flight fire-and-forget
+    push for the same order.
+    """
+    supabase = get_supabase()
+    cutoff = (datetime.now(timezone.utc) - _SYNC_SWEEP_GRACE).isoformat()
+    orgs = supabase.table("system_organizations").select("id").execute().data or []
+    for org in orgs:
+        org_id = org["id"]
+        rows = (
+            org_table(supabase, org_id, "shopify_orders")
+            .select("id, order_number, courier, tracking_number")
+            .eq("order_status", "fulfilled")
+            .is_("shopify_fulfillment_synced_at", "null")
+            .lt("fulfilled_at", cutoff)
+            .execute()
+            .data
+            or []
+        )
+        booked = [(row, row["tracking_number"]) for row in rows if row.get("tracking_number")]
+        if not booked:
+            continue
+        org_creds = get_org_integration_settings(org_id)
+        if not (org_creds.shopify_store_url and org_creds.shopify_access_token):
+            continue
+        logger.info("Shopify fulfillment sweep: %d unsynced order(s) for org %s", len(booked), org_id)
+        await _push_fulfillments_to_shopify(booked, org_id, org_creds)
 
 
 async def _push_settlements_to_shopify(

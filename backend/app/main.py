@@ -1,3 +1,5 @@
+import asyncio
+import contextlib
 import logging
 import os
 import time
@@ -47,6 +49,21 @@ if IS_PROD:
     # via app.org_settings) are validated at sync time instead. See
     # ORGANIZATIONS_USERS_PLAN.md Phase 2.
 
+# How often sweep_unsynced_shopify_fulfillments runs - frequent enough that a missed push
+# is caught within a couple of minutes, cheap enough (a no-op query per org when there's
+# nothing to do) to just leave running for the life of the process.
+_SHOPIFY_FULFILLMENT_SWEEP_INTERVAL_SECONDS = 120
+
+
+async def _run_shopify_fulfillment_sweep_loop():
+    while True:
+        try:
+            await orders.sweep_unsynced_shopify_fulfillments()
+        except Exception:
+            logger.exception("Shopify fulfillment sweep failed")
+        await asyncio.sleep(_SHOPIFY_FULFILLMENT_SWEEP_INTERVAL_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     try:
@@ -55,7 +72,13 @@ async def lifespan(app: FastAPI):
         # Non-fatal: get_courier_cities falls back to a live per-request fetch for
         # whichever courier this didn't manage to populate.
         logger.exception("Failed to refresh courier cities cache on startup")
-    yield
+    sweep_task = asyncio.create_task(_run_shopify_fulfillment_sweep_loop())
+    try:
+        yield
+    finally:
+        sweep_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sweep_task
 
 
 app = FastAPI(

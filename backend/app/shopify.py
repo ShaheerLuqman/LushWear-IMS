@@ -341,7 +341,8 @@ async def adjust_inventory_levels(
 
 async def create_fulfillment(
     shopify_order_id: int, tracking_number: str, tracking_company: str,
-    tracking_url: Optional[str], org_creds: OrgIntegrationSettings
+    tracking_url: Optional[str], org_creds: OrgIntegrationSettings,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> None:
     """Mark a Shopify order fulfilled with the courier's tracking number and tag it with
     the courier's name, so the store (and the customer's shipping notification) reflect a
@@ -358,35 +359,42 @@ async def create_fulfillment(
     rather than treated as an error, since the booking it belongs to did succeed - but
     it is still tagged, since the courier tag describes who carries the parcel, not
     whether this particular call created the fulfillment.
+
+    `client` lets a caller pushing many fulfillments (orders.py's
+    _push_fulfillments_to_shopify) share one connection pool and one shop-wide rate-limit
+    budget instead of paying a TLS handshake per order.
     """
+    if client is None:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as owned_client:
+            return await create_fulfillment(
+                shopify_order_id, tracking_number, tracking_company, tracking_url, org_creds, owned_client)
+
     store_url, access_token = _credentials(org_creds)
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        await add_order_tag(shopify_order_id, tracking_company, org_creds, client)
+    await add_order_tag(shopify_order_id, tracking_company, org_creds, client)
 
-        response = await client.get(f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
-        response.raise_for_status()
-        fulfillment_orders = [
-            fo for fo in response.json().get("fulfillment_orders", [])
-            if fo.get("status") in ("open", "in_progress", "scheduled")
-        ]
-        if not fulfillment_orders:
-            return
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
+    fulfillment_orders = [
+        fo for fo in response.json().get("fulfillment_orders", [])
+        if fo.get("status") in ("open", "in_progress", "scheduled")
+    ]
+    if not fulfillment_orders:
+        return
 
-        response = await client.post(f"{base}/fulfillments.json", headers=headers, json={
-            "fulfillment": {
-                "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
-                "tracking_info": {
-                    "number": tracking_number,
-                    "company": tracking_company,
-                    **({"url": tracking_url} if tracking_url else {}),
-                },
-                "notify_customer": True,
-            }
-        })
-        response.raise_for_status()
+    await _request_with_retry(client, "POST", f"{base}/fulfillments.json", headers=headers, json={
+        "fulfillment": {
+            "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
+            "tracking_info": {
+                "number": tracking_number,
+                "company": tracking_company,
+                **({"url": tracking_url} if tracking_url else {}),
+            },
+            "notify_customer": True,
+        }
+    })
 
 
 # Deeper than _MAX_RATE_LIMIT_RETRIES: the bucket is shop-wide, so concurrent settle

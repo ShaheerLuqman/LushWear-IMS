@@ -892,6 +892,7 @@ def _reconcile_one_order(
         "order_receiving_date": order_received_date,
         "line_items": structured_line_items,
         "replacement_of_order_no": replacement_of,
+        "tags": tags_str,
         "updated_at": current_time,
     }
 

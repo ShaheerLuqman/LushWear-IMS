@@ -1,0 +1,12 @@
+-- Shopify order tags, comma-separated exactly as Shopify itself stores them - written by
+-- _reconcile_one_order (shopify_sync.py) on every sync (periodic and webhook-triggered),
+-- which already fetches and parses this string but previously discarded it once
+-- replacement_of_order_no/is_replacement_order were derived from it. get_unfulfilled_orders
+-- (orders.py) used to fetch this live from Shopify on every page load (a 250-order sweep
+-- plus a per-row fallback) purely to display/filter by tag; reading it off this column
+-- instead removes that call from the request entirely.
+--
+-- Existing rows are null until their next sync (periodic, or the next orders/updated
+-- webhook) - self-healing for the unfulfilled set this is read for, since those are by
+-- definition still being actively worked.
+ALTER TABLE shopify_orders ADD COLUMN IF NOT EXISTS tags TEXT;

@@ -304,6 +304,10 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     folio                    VARCHAR(255),
     order_status             VARCHAR(50) NOT NULL,
     delivery_status          JSONB,
+    -- Comma-separated, exactly as Shopify stores them. Written by _reconcile_one_order on
+    -- every sync; null until an order's first sync under this column (see migration
+    -- 20260914120000). get_unfulfilled_orders reads this instead of a live Shopify call.
+    tags                     TEXT,
     total_amount             DECIMAL(10, 2) NOT NULL,
     advance_amount           DECIMAL(10, 2) NOT NULL DEFAULT 0.00,
     -- Advance reconciliation (Shopify advance_amount vs transaction order-advance entries):
@@ -325,6 +329,11 @@ CREATE TABLE IF NOT EXISTS shopify_orders (
     -- the parcel) and updated_at (drifts with later edits). Null for orders fulfilled
     -- outside the app; the Print Airway Bill screen's date range filters on it.
     fulfilled_at             TIMESTAMPTZ,
+    -- Null means the courier booking above hasn't been mirrored to Shopify yet (tagged +
+    -- fulfillment created); sweep_unsynced_shopify_fulfillments (orders.py) retries until
+    -- it's set. sync_error holds the last failure, if any, for visibility.
+    shopify_fulfillment_synced_at TIMESTAMPTZ,
+    shopify_fulfillment_sync_error TEXT,
     -- Date the parcel came back, for the return voucher to post on. Which history
     -- entry means "returned" is _classify_status's text matching (routes/orders.py),
     -- so this is written from Python alongside order_status, never derived in SQL.
@@ -715,6 +724,16 @@ CREATE INDEX IF NOT EXISTS idx_orders_fulfilled_at           ON shopify_orders(o
 CREATE INDEX IF NOT EXISTS idx_shopify_orders_settled_folio
     ON shopify_orders (org_id)
     WHERE is_order_settled AND folio IS NOT NULL AND folio <> '';
+-- sweep_unsynced_shopify_fulfillments's own query (order_status/synced_at/fulfilled_at).
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_unsynced_fulfillment
+    ON shopify_orders (org_id, fulfilled_at)
+    WHERE order_status = 'fulfilled' AND shopify_fulfillment_synced_at IS NULL;
+-- get_unfulfilled_orders' own query (org_id + order_status, sorted by order_receiving_date) -
+-- unfulfilled is a small, hot subset of the table, so a partial index beats bitmap-and'ing
+-- idx_orders_org_id/idx_orders_order_status and then sorting.
+CREATE INDEX IF NOT EXISTS idx_shopify_orders_unfulfilled
+    ON shopify_orders (org_id, order_receiving_date DESC)
+    WHERE order_status = 'unfulfilled';
 -- NOTE: delivery_status is JSONB; a plain btree index on it cannot search inside the
 -- JSON and provides no benefit, so it is intentionally omitted. To query into it, use GIN:
 --   CREATE INDEX IF NOT EXISTS idx_orders_delivery_status_gin ON shopify_orders USING GIN (delivery_status);
