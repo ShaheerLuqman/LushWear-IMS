@@ -129,6 +129,8 @@ let currentOrgId = null;
 let ledgerEntries = [];
 let currentLedger = null;
 let ledgerDetailGridApi = null;
+/** Months (YYYY-MM) collapsed in the ledger statement; reset per ledger load so only the current month starts open. */
+let ledgerCollapsedMonths = new Set();
 let updateFooterRow = null; // Will be set in initOrdersGrid
 let loadSheetRiderNames = [];
 /** Next assignment number for load sheet (format LW-N). Updated when load sheet logs are fetched. */

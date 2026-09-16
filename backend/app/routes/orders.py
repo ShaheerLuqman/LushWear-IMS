@@ -2753,18 +2753,13 @@ _TZ_OFFSET_NO_COLON_RE = re.compile(r"([+-]\d{2})(\d{2})$")
 
 
 def _courier_pickup_date_iso(delivery_status_data: dict) -> Optional[str]:
-    """Courier pickup date for the courier_pickup_date column. Prefers PostEx's own
-    order_pickup_date (their authoritative field, from dist.orderPickupDate) when present;
-    otherwise falls back to status_history's second entry (oldest-first) - the first entry
-    is the order being booked with the courier, the second is the courier actually
-    collecting it. Couriers Next never reports order_pickup_date, so it always uses the
-    history fallback. Returns None on missing/unparseable input rather than raising, so a
-    save never fails over this."""
+    """Courier pickup date for the courier_pickup_date column, from status_history's
+    second entry (oldest-first) - the first entry is the order being booked with the
+    courier, the second is the courier actually collecting it. Returns None on
+    missing/unparseable input rather than raising, so a save never fails over this."""
     data = delivery_status_data or {}
-    raw = data.get("order_pickup_date")
-    if not raw:
-        history = data.get("status_history") or []
-        raw = history[1].get("datetime") if len(history) >= 2 else None
+    history = data.get("status_history") or []
+    raw = history[1].get("datetime") if len(history) >= 2 else None
     if not raw:
         return None
     # PostEx timestamps look like "2026-06-15T21:08:08.000+0500" - a UTC offset with no

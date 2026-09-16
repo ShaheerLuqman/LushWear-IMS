@@ -562,6 +562,14 @@ async function loadLedgerEntries(ledgerId) {
         if (ledgerDetailGridApi) ledgerDetailGridApi.hideOverlay();
     }
 
+    // Only the current month starts expanded; every other month collapses by default.
+    const currentMonth = new Date().toISOString().slice(0, 7);
+    ledgerCollapsedMonths = new Set(
+        ledgerEntries
+            .map(e => (e.entry_date || '').slice(0, 7))
+            .filter(month => month && month !== currentMonth)
+    );
+
     renderLedgerDetailGrid();
 }
 
@@ -592,7 +600,7 @@ function renderLedgerDetailGrid() {
     // Read-only: every row is a posted journal line, corrected by posting again
     // rather than by editing history in place. Display is most-recent-first,
     // but the running balance above must stay computed in chronological order.
-    ledgerDetailGridApi.setGridOption('rowData', withLedgerMonthRows(rowsWithBalance.slice().reverse()));
+    ledgerDetailGridApi.setGridOption('rowData', withLedgerMonthRows(rowsWithBalance.slice().reverse(), ledgerCollapsedMonths));
     // The Balance column's cellStyle also depends on currentLedger.type, which AG
     // Grid can't see as a dependency. With getRowId in play, setting rowData updates
     // matching rows in place rather than rebuilding them, so cellStyle isn't guaranteed to
@@ -603,8 +611,10 @@ function renderLedgerDetailGrid() {
 // Inserts a full-width divider row carrying the month name and that month's own
 // net movement (debit - credit for entries in that month, not the running
 // balance) ahead of each month's first entry, so a long statement reads as
-// month-by-month blocks. Undated rows (legacy data) get no header.
-function withLedgerMonthRows(rows) {
+// month-by-month blocks. Undated rows (legacy data) get no header. Entries whose
+// month is in collapsedMonths are left out of the grid entirely, leaving just
+// the clickable header behind.
+function withLedgerMonthRows(rows, collapsedMonths) {
     const monthNet = {};
     rows.forEach(row => {
         const month = (row.entry_date || '').slice(0, 7);
@@ -620,12 +630,14 @@ function withLedgerMonthRows(rows) {
             out.push({
                 id: `__month__${month}`,
                 month_row: true,
+                month,
+                collapsed: collapsedMonths.has(month),
                 label: ledgerMonthLabel(month),
                 balance: monthNet[month]
             });
             prevMonth = month;
         }
-        out.push(row);
+        if (!month || !collapsedMonths.has(month)) out.push(row);
     });
     return out;
 }
@@ -638,13 +650,31 @@ function ledgerMonthLabel(month) {
 function ledgerMonthRowRenderer(params) {
     const el = document.createElement('div');
     el.className = 'ledger-month-row';
+    el.classList.toggle('ledger-month-row-collapsed', !!params.data?.collapsed);
+
     const label = document.createElement('span');
-    label.textContent = params.data?.label || '';
+    label.className = 'ledger-month-row-label';
+    const caret = document.createElement('i');
+    caret.className = `fa-solid ${params.data?.collapsed ? 'fa-chevron-right' : 'fa-chevron-down'}`;
+    label.append(caret, document.createTextNode(params.data?.label || ''));
+
     const balance = document.createElement('span');
     balance.className = 'ledger-month-row-balance';
     balance.textContent = formatBalanceWithSide(params.data?.balance);
+
     el.append(label, balance);
+    el.addEventListener('click', () => toggleLedgerMonth(params.data?.month));
     return el;
+}
+
+function toggleLedgerMonth(month) {
+    if (!month) return;
+    if (ledgerCollapsedMonths.has(month)) {
+        ledgerCollapsedMonths.delete(month);
+    } else {
+        ledgerCollapsedMonths.add(month);
+    }
+    renderLedgerDetailGrid();
 }
 
 // Statement lines for a transaction entry or a bill link back to the row that

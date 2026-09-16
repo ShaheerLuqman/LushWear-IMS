@@ -4872,6 +4872,18 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     text-transform: uppercase;
     color: var(--text-secondary);
     background: var(--grid-header-bg);
+    cursor: pointer;
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-label i {
+    font-size: 10px;
+    width: 10px;
 }
 
 :is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-balance {
