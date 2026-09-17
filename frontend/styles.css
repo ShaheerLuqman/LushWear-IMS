@@ -2780,7 +2780,9 @@ input[type="number"] {
 .orders-date-range-wrap {
     flex-shrink: 0;
 }
-.orders-date-range-clear {
+/* Small "x" createDateRangePicker (utils.js) inserts right after every date-range trigger
+   button in the app, to clear that filter. */
+.date-range-picker-clear {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2796,7 +2798,7 @@ input[type="number"] {
     cursor: pointer;
     transition: var(--transition);
 }
-.orders-date-range-clear:hover {
+.date-range-picker-clear:hover {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border-color: var(--text-muted);

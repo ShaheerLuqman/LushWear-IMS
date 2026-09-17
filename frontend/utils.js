@@ -248,6 +248,146 @@ function debounce(func, wait) {
 }
 
 // ============================================
+// Date Range Picker (easepick)
+// ============================================
+
+/** Preset ranges shared by every date-range popup in the app: Today/Yesterday/Last 7 &
+ * 30 Days/This & Last Month, anchored to PKT "today" since order/bill dates are PKT-based
+ * (not the browser's local clock), plus "All Time" back to the oldest orders period (see
+ * ORDERS_PERIOD_OLDEST_MONTH/YEAR in data-api.js). PresetPlugin only auto-fills its own 6
+ * built-in ranges when left fully unconfigured, so adding "All Time" means building the
+ * whole list ourselves - the same way PresetPlugin builds its own defaults. */
+function buildDateRangePresets() {
+    const DateTime = window.easepick.DateTime;
+    const pkt = getPKTDate();
+    const y = pkt.getFullYear(), m = pkt.getMonth();
+    const today = new Date(y, m, pkt.getDate());
+    const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+    const oldestStart = ordersPeriodStartEnd(ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR).start;
+    return {
+        'All Time': [new DateTime(oldestStart), new DateTime(today)],
+        'Today': [new DateTime(today), new DateTime(today)],
+        'Yesterday': [new DateTime(addDays(-1)), new DateTime(addDays(-1))],
+        'Last 7 Days': [new DateTime(addDays(-6)), new DateTime(today)],
+        'Last 30 Days': [new DateTime(addDays(-29)), new DateTime(today)],
+        'This Month': [new DateTime(new Date(y, m, 1)), new DateTime(new Date(y, m + 1, 0))],
+        'Last Month': [new DateTime(new Date(y, m - 1, 1)), new DateTime(new Date(y, m, 0))],
+    };
+}
+
+/**
+ * Wire an easepick date-range popup (RangePlugin + PresetPlugin) onto `triggerBtn` -
+ * single-month calendar, viewport-clamped, themed to the app's own colors/radius/shadow,
+ * plus a small "x" button inserted right after `triggerBtn` to clear it. This is the one
+ * mechanism behind every date-range filter in the app (Orders, Courier Performance, Courier
+ * Payment Report, Print Airway Bill) - each caller keeps owning its own {from,to} state,
+ * button label, and reload; this only drives the popup and the "x" itself:
+ *   - onSelect(from, to) fires with YYYY-MM-DD strings for a picked range (a preset or a
+ *     plain two-click custom range - both auto-apply and close immediately).
+ *   - onClear() fires when the "x" is clicked.
+ * Returns { picker, setLabel(text, title), setClearable(bool) } so the caller can keep the
+ * trigger's own text/tooltip and the "x" button's visibility in sync after any change to
+ * its range state - not just a select/clear here, but e.g. a page-wide "Clear filters"
+ * button resetting this range too.
+ */
+function createDateRangePicker(triggerBtn, { onSelect, onClear } = {}) {
+    if (!triggerBtn || !window.easepick) return null;
+
+    const clearBtn = document.createElement('button');
+    clearBtn.type = 'button';
+    clearBtn.className = 'date-range-picker-clear';
+    clearBtn.style.display = 'none';
+    clearBtn.title = 'Clear date range';
+    clearBtn.innerHTML = '&times;';
+    triggerBtn.insertAdjacentElement('afterend', clearBtn);
+    clearBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (typeof onClear === 'function') onClear();
+    });
+
+    const picker = new window.easepick.create({
+        element: triggerBtn,
+        css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.css'],
+        zIndex: 9999,
+        format: 'DD/MM/YYYY',
+        grid: 1,
+        calendars: 1,
+        // Preset buttons only call setDateRange()+select on click when autoApply is true -
+        // with it false they silently stash the pick and wait for a separate Apply click
+        // (the footer autoApply:false would otherwise render), so a preset click looks like
+        // a no-op. true also means a plain two-click custom range applies immediately.
+        autoApply: true,
+        plugins: ['RangePlugin', 'PresetPlugin'],
+        PresetPlugin: { position: 'left', customPreset: buildDateRangePresets() },
+    });
+
+    // easepick renders into a shadow root, so the app's own stylesheet can't reach it -
+    // these just map its color variables onto the app's own (already theme-aware) ones,
+    // which keeps it in sync with light/dark mode without duplicating either palette.
+    const themeStyle = document.createElement('style');
+    themeStyle.textContent = `
+        :host {
+            --color-bg-default: var(--bg-card);
+            --color-bg-secondary: var(--bg-secondary);
+            --color-fg-default: var(--text-primary);
+            --color-fg-secondary: var(--text-secondary);
+            --color-fg-muted: var(--text-muted);
+            --color-fg-primary: var(--accent-primary);
+            --color-border-default: var(--border-color);
+            --color-bg-inrange: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+            --color-btn-primary-bg: var(--accent-primary);
+            --color-btn-primary-fg: #fff;
+            --color-btn-primary-border: var(--accent-primary);
+            --color-btn-secondary-bg: var(--bg-secondary);
+            --color-btn-secondary-fg: var(--text-secondary);
+            --color-btn-secondary-border: var(--border-color);
+            --border-radius: 8px;
+            font-family: var(--font-primary);
+        }
+        .container {
+            max-width: calc(100vw - 16px);
+            overflow: hidden;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+        }
+    `;
+    picker.ui.shadowRoot.appendChild(themeStyle);
+
+    picker.on('select', (e) => {
+        const { start, end } = e.detail;
+        if (start && end && typeof onSelect === 'function') onSelect(start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'));
+    });
+
+    // easepick's own adjustPosition() only flips left/up when there's room for the whole
+    // popup on the other side, which there often isn't near a header's right-aligned
+    // button - re-clamp its actual rendered box into the viewport after it shows.
+    picker.on('show', () => {
+        const container = picker.ui.container;
+        const rect = container.getBoundingClientRect();
+        const left = parseFloat(container.style.left) || 0;
+        const top = parseFloat(container.style.top) || 0;
+        const overflowRight = rect.right - (window.innerWidth - 8);
+        const overflowLeft = 8 - rect.left;
+        if (overflowRight > 0) container.style.left = `${left - overflowRight}px`;
+        else if (overflowLeft > 0) container.style.left = `${left + overflowLeft}px`;
+        const overflowBottom = rect.bottom - (window.innerHeight - 8);
+        if (overflowBottom > 0) container.style.top = `${top - overflowBottom}px`;
+    });
+
+    return {
+        picker,
+        setLabel(text, title) {
+            triggerBtn.textContent = text;
+            if (title !== undefined) triggerBtn.title = title;
+        },
+        setClearable(clearable) {
+            clearBtn.style.display = clearable ? '' : 'none';
+        },
+    };
+}
+
+// ============================================
 // Delivery Status Helpers
 // ============================================
 

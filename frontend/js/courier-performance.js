@@ -86,113 +86,33 @@ async function loadCourierPerformance() {
     renderCourierPerformanceView();
 }
 
-/** Fulfilled-date range popover, mirroring initCourierPaymentReportDateRangeButton. */
+/** Fulfilled-date range popover, via the shared createDateRangePicker (utils.js). */
 function initCourierPerformanceDateRangeButton() {
     const triggerBtn = document.getElementById('courierPerformanceDateRangeBtn');
     if (!triggerBtn) return;
 
-    const menu = document.createElement('div');
-    menu.className = 'date-range-menu';
-    menu.style.display = 'none';
-
-    const fromField = document.createElement('div');
-    fromField.className = 'date-range-menu__field';
-    const fromLabel = document.createElement('label');
-    fromLabel.className = 'date-range-menu__label';
-    fromLabel.textContent = 'From';
-    const fromInput = document.createElement('input');
-    fromInput.type = 'text';
-    fromInput.placeholder = 'dd/mm/yyyy';
-    fromInput.className = 'grid-floating-filter-date';
-    fromField.appendChild(fromLabel);
-    fromField.appendChild(fromInput);
-
-    const toField = document.createElement('div');
-    toField.className = 'date-range-menu__field';
-    const toLabel = document.createElement('label');
-    toLabel.className = 'date-range-menu__label';
-    toLabel.textContent = 'To';
-    const toInput = document.createElement('input');
-    toInput.type = 'text';
-    toInput.placeholder = 'dd/mm/yyyy';
-    toInput.className = 'grid-floating-filter-date';
-    toField.appendChild(toLabel);
-    toField.appendChild(toInput);
-
-    const actionsRow = document.createElement('div');
-    actionsRow.className = 'date-range-menu__actions';
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.className = 'date-range-menu__btn date-range-menu__btn--clear';
-    clearBtn.textContent = 'Clear';
-    const applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'date-range-menu__btn date-range-menu__btn--apply';
-    applyBtn.textContent = 'Apply';
-    actionsRow.appendChild(clearBtn);
-    actionsRow.appendChild(applyBtn);
-
-    menu.appendChild(fromField);
-    menu.appendChild(toField);
-    menu.appendChild(actionsRow);
-
-    const flatpickrOpts = { dateFormat: 'd/m/Y', allowInput: true, static: false };
-    const fromPicker = window.flatpickr ? window.flatpickr(fromInput, flatpickrOpts) : null;
-    const toPicker = window.flatpickr ? window.flatpickr(toInput, flatpickrOpts) : null;
-
     function updateButtonLabel() {
         const { from, to } = courierPerformanceDateRange;
-        triggerBtn.textContent = (from || to)
+        rangePicker.setLabel((from || to)
             ? `${from ? formatDateDDMMYYYY(from) : '…'} – ${to ? formatDateDDMMYYYY(to) : '…'}`
-            : 'Date range';
+            : 'Date range');
+        rangePicker.setClearable(!!(from || to));
     }
 
-    applyBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const rawFrom = (fromInput.value || '').trim();
-        const rawTo = (toInput.value || '').trim();
-        courierPerformanceDateRange = {
-            from: rawFrom ? parseDDMMYYYYToYYYYMMDD(rawFrom) : null,
-            to: rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null,
-        };
-        updateButtonLabel();
-        loadCourierPerformance();
-        menu.style.display = 'none';
+    const rangePicker = createDateRangePicker(triggerBtn, {
+        onSelect: (from, to) => {
+            courierPerformanceDateRange = { from, to };
+            updateButtonLabel();
+            loadCourierPerformance();
+        },
+        onClear: () => {
+            rangePicker.picker.clear();
+            courierPerformanceDateRange = { from: null, to: null };
+            updateButtonLabel();
+            loadCourierPerformance();
+        },
     });
-
-    clearBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        fromInput.value = '';
-        toInput.value = '';
-        if (fromPicker) fromPicker.clear();
-        if (toPicker) toPicker.clear();
-        courierPerformanceDateRange = { from: null, to: null };
-        updateButtonLabel();
-        loadCourierPerformance();
-        menu.style.display = 'none';
-    });
-
-    triggerBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (menu.style.display === 'none') {
-            const { from, to } = courierPerformanceDateRange;
-            fromInput.value = from ? formatDateDDMMYYYY(from) : '';
-            toInput.value = to ? formatDateDDMMYYYY(to) : '';
-            if (fromPicker) fromPicker.setDate(fromInput.value || null, false);
-            if (toPicker) toPicker.setDate(toInput.value || null, false);
-
-            const rect = triggerBtn.getBoundingClientRect();
-            menu.style.display = 'block';
-            const left = rect.left + window.scrollX + (rect.width - menu.offsetWidth) / 2;
-            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
-            menu.style.top = `${rect.bottom + window.scrollY}px`;
-            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
-        } else {
-            menu.style.display = 'none';
-        }
-    });
-
-    document.body.appendChild(menu);
+    if (!rangePicker) return;
     updateButtonLabel();
 }
 
