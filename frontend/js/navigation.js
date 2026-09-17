@@ -66,15 +66,17 @@ function initOrdersPeriodFilter() {
                 if (customOption) customOption.remove();
             }
             if (ordersGridApi && !ordersHasCachedOrders(selectEl.value)) ordersGridApi.showLoadingOverlay();
-            try {
-                if (selectEl.value === ALL_ORDERS_VALUE) {
-                    await loadAllOrders();
-                } else if (selectEl.value !== CUSTOM_ORDERS_VALUE) {
-                    const [month, year] = selectEl.value.split('-').map(Number);
-                    await loadOrdersForPeriod(month, year);
-                }
-            } finally {
-                if (ordersGridApi) ordersGridApi.hideOverlay();
+            if (selectEl.value === ALL_ORDERS_VALUE) {
+                await loadAllOrders();
+            } else if (selectEl.value !== CUSTOM_ORDERS_VALUE) {
+                const [month, year] = selectEl.value.split('-').map(Number);
+                await loadOrdersForPeriod(month, year);
+            }
+            // A failed fetch never repaints the grid, so this is also the fallback that clears
+            // a stuck loading overlay in that case (rather than only the happy path).
+            if (ordersGridApi) {
+                if (ordersGridApi.getDisplayedRowCount() === 0) ordersGridApi.showNoRowsOverlay();
+                else ordersGridApi.hideOverlay();
             }
         });
     }
@@ -120,10 +122,12 @@ function initOrdersDateRangeButton() {
         }
         updateButtonLabel();
         if (ordersGridApi) ordersGridApi.showLoadingOverlay();
-        try {
-            await loadOrdersForDateRange(from, to);
-        } finally {
-            if (ordersGridApi) ordersGridApi.hideOverlay();
+        await loadOrdersForDateRange(from, to);
+        // A failed fetch never repaints the grid, so this is also the fallback that clears
+        // a stuck loading overlay in that case (rather than only the happy path).
+        if (ordersGridApi) {
+            if (ordersGridApi.getDisplayedRowCount() === 0) ordersGridApi.showNoRowsOverlay();
+            else ordersGridApi.hideOverlay();
         }
     };
 
@@ -143,10 +147,12 @@ function initOrdersDateRangeButton() {
                 selectEl.value = `${month}-${year}`;
             }
             if (ordersGridApi) ordersGridApi.showLoadingOverlay();
-            try {
-                await loadOrders();
-            } finally {
-                if (ordersGridApi) ordersGridApi.hideOverlay();
+            await loadOrders();
+            // A failed fetch never repaints the grid, so this is also the fallback that clears
+            // a stuck loading overlay in that case (rather than only the happy path).
+            if (ordersGridApi) {
+                if (ordersGridApi.getDisplayedRowCount() === 0) ordersGridApi.showNoRowsOverlay();
+                else ordersGridApi.hideOverlay();
             }
         },
     });

@@ -1250,6 +1250,18 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    /* Flex items default to min-width: auto, which stops them from ever shrinking
+       below their content's natural width - without this, the ellipsis above never
+       engages and a long name just hard-clips at the cell's own edge instead. */
+    min-width: 0;
+}
+
+/* AG Grid wraps a plain-HTML cellRenderer's output in an unclassed <span> that also
+   defaults to min-width: auto, one level above .grid-product-cell - without overriding
+   it too, that wrapper never shrinks to the cell's width and .grid-product-name's own
+   ellipsis (above) never gets a narrow enough box to actually engage on a long name. */
+.ag-cell > span:has(> .grid-product-cell) {
+    min-width: 0;
 }
 
 .grid-stock-variants {

@@ -62,7 +62,7 @@ async function loadTrialBalance() {
     if (trialBalanceGridApi) {
         trialBalanceGridApi.setGridOption('rowData', rows);
         trialBalanceGridApi.setGridOption('pinnedBottomRowData', [totalRow]);
-        trialBalanceGridApi.hideOverlay();
+        if (rows.length === 0) trialBalanceGridApi.showNoRowsOverlay(); else trialBalanceGridApi.hideOverlay();
     }
 }
 

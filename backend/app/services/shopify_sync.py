@@ -1417,7 +1417,10 @@ async def _sync_shopify_orders(org_id: str) -> dict:
         except ValueError:
             pass
         raise HTTPException(
-            status_code=e.response.status_code,
+            # Not e.response.status_code: a 401/403 here is Shopify rejecting our stored
+            # token, not the caller's own session - passing it through verbatim trips the
+            # frontend's global "401 -> session expired, log out" handler (app-core.js).
+            status_code=502,
             detail=f"Shopify API error: {error_text}\nURL: {api_url if 'api_url' in locals() else 'N/A'}"
         )
     except httpx.RequestError:

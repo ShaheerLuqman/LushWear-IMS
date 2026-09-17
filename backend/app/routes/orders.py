@@ -3206,7 +3206,10 @@ async def get_delivery_status(order_id: str, save: bool = Query(False, descripti
         return delivery_status_data
         
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=f"Failed to fetch delivery status: {e.response.text}")
+        # Not e.response.status_code: a 401/403 here is the courier rejecting our stored API
+        # key, not the caller's own session - passing it through verbatim trips the frontend's
+        # global "401 -> session expired, log out" handler (app-core.js).
+        raise HTTPException(status_code=502, detail=f"Failed to fetch delivery status: {e.response.text}")
     except httpx.RequestError as e:
         err_msg = str(e) or getattr(e, "message", "") or type(e).__name__
         raise HTTPException(
