@@ -2105,7 +2105,7 @@ async def get_airway_bill_list(
                 q = q.gte("fulfilled_at", from_iso)
             if to_iso:
                 q = q.lt("fulfilled_at", to_iso)
-            return q.order("fulfilled_at", desc=True).order("order_number", desc=True)
+            return q.order("order_number", desc=True)
 
         rows = fetch_all(_build_query)
         return [

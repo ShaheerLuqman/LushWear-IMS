@@ -4596,20 +4596,28 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     margin-bottom: 12px;
 }
 
+/* display stays table-cell (not flex) so colspan still spans the full row width
+   instead of shrink-wrapping to content; centering is done via text-align/vertical-align
+   plus an inline-flex inner wrapper. */
 .table-loading-cell {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 12px;
+    text-align: center;
+    vertical-align: middle;
     min-height: 160px;
     padding: 40px 20px !important;
     color: var(--text-muted);
+}
+
+.table-loading-cell-inner {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
 }
 
 .table-loading-cell .content-loading-spinner {
     width: 24px;
     height: 24px;
     border-width: 3px;
+    flex-shrink: 0;
 }
 
 #ledgerDetailGrid {

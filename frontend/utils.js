@@ -193,7 +193,7 @@ function escapeHtml(text) {
 /** A `<tr>` spanning the whole table with a spinner, for a tbody's loading state. */
 function tableLoadingRow(colspan, text) {
     return `<tr><td colspan="${colspan}" class="table-loading-cell">
-        <div class="content-loading-spinner"></div>${escapeHtml(text)}</td></tr>`;
+        <div class="table-loading-cell-inner"><div class="content-loading-spinner"></div>${escapeHtml(text)}</div></td></tr>`;
 }
 
 /** AG Grid's `overlayLoadingTemplate` - fills the overlay area itself (rather than
