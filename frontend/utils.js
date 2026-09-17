@@ -190,6 +190,19 @@ function escapeHtml(text) {
     return div.innerHTML.replace(/"/g, '&quot;');
 }
 
+/** A `<tr>` spanning the whole table with a spinner, for a tbody's loading state. */
+function tableLoadingRow(colspan, text) {
+    return `<tr><td colspan="${colspan}" class="table-loading-cell">
+        <div class="content-loading-spinner"></div>${escapeHtml(text)}</td></tr>`;
+}
+
+/** AG Grid's `overlayLoadingTemplate` - fills the overlay area itself (rather than
+ *  relying on ag-grid's own centering, which the alpine theme doesn't apply here) so the
+ *  spinner is centered over the grid instead of stuck at the left. */
+const AG_GRID_LOADING_OVERLAY_HTML = `<div class="content-loading" style="width: 100%; height: 100%; min-height: 0;">
+    <div class="content-loading-spinner"></div><p class="content-loading-text">Loading...</p>
+</div>`;
+
 /** Humanize a past timestamp (ms epoch) as "just now" / "5 min ago" / "3 hr ago" / "2 days ago". */
 function formatRelativeTime(timestampMs) {
     const seconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));

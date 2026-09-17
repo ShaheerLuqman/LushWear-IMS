@@ -2582,12 +2582,6 @@ input[type="number"] {
     border: 1px solid var(--danger);
 }
 
-.loading {
-    text-align: center;
-    padding: 40px;
-    color: var(--text-muted);
-}
-
 .no-status {
     text-align: center;
     padding: 20px;
@@ -2782,6 +2776,30 @@ input[type="number"] {
 }
 .orders-period-filter-wrap.header-inline {
     padding: 0;
+}
+.orders-date-range-wrap {
+    flex-shrink: 0;
+}
+.orders-date-range-clear {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    line-height: 1;
+    font-size: 16px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.orders-date-range-clear:hover {
+    background: var(--bg-tertiary);
+    color: var(--text-primary);
+    border-color: var(--text-muted);
 }
 .orders-period-filter-label {
     font-size: 14px;
@@ -4640,6 +4658,22 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-weight: 600;
     color: var(--text-primary);
     margin-bottom: 12px;
+}
+
+.table-loading-cell {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    min-height: 160px;
+    padding: 40px 20px !important;
+    color: var(--text-muted);
+}
+
+.table-loading-cell .content-loading-spinner {
+    width: 24px;
+    height: 24px;
+    border-width: 3px;
 }
 
 #ledgerDetailGrid {

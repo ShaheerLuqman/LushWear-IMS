@@ -1038,7 +1038,7 @@ function renderFulfillmentTable() {
     const tbody = document.getElementById('fulfillmentTableBody');
     if (tbody) {
         if (fulfillmentLoading) {
-            tbody.innerHTML = '<tr><td colspan="12" class="empty-state">Loading unfulfilled orders…</td></tr>';
+            tbody.innerHTML = tableLoadingRow(12, 'Loading unfulfilled orders…');
         } else {
             tbody.innerHTML = filtered.length
                 ? filtered.map(renderFulfillmentRow).join('')

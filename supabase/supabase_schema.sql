@@ -593,6 +593,17 @@ ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS idempotency_ke
 ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS from_account_id UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
 ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS to_account_id   UUID REFERENCES finances_ledgers(id) ON DELETE RESTRICT;
 
+-- Set only for entries a backend function posts on its own behalf (e.g. a
+-- courier payout's Cash Received leg - source_type = 'courier_payout_cash');
+-- lets that function find and rebuild "its" entry, mirroring
+-- finances_journal_entries' own source_type/source_id pairing. NULL for every
+-- entry a person creates directly (manual, order advance, bulk-text).
+ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS source_type VARCHAR(40);
+ALTER TABLE finances_transaction_entries ADD COLUMN IF NOT EXISTS source_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_transaction_entries_source
+    ON finances_transaction_entries(source_type, source_id)
+    WHERE source_type IS NOT NULL AND source_id IS NOT NULL;
+
 DO $$
 BEGIN
     IF EXISTS (
@@ -1495,6 +1506,7 @@ DECLARE
     v_tax      NUMERIC(14, 2);
     v_cash     UUID;
     v_courier  UUID;
+    v_cash_net NUMERIC(14, 2);
     v_lines    JSONB;
 BEGIN
     SELECT * INTO p FROM finances_courier_payouts WHERE id = p_payout_id;
@@ -1505,6 +1517,9 @@ BEGIN
        AND source_type IN ('courier_payout', 'courier_payout_return',
                             'courier_payout_delivery_charge', 'courier_payout_tax',
                             'courier_payout_cash');
+    -- Cascades to the journal entry it projected, via transaction_entries_journal_trigger.
+    DELETE FROM finances_transaction_entries
+     WHERE source_id = p_payout_id AND source_type = 'courier_payout_cash';
 
     IF NOT v_found THEN
         RETURN;
@@ -1564,13 +1579,19 @@ BEGIN
         );
     END IF;
 
-    v_lines := journal_line('[]'::jsonb, v_cash, v_cod - v_charge - v_tax, 'Payout received');
-    v_lines := journal_line(v_lines, v_courier, -(v_cod - v_charge - v_tax), 'COD cleared');
-    IF jsonb_array_length(v_lines) >= 2 THEN
-        PERFORM post_journal_entry(
-            p.org_id, p.payout_date, v_lines,
+    -- Posted as a transaction entry (not a direct post_journal_entry call) so it
+    -- also lands on the Transactions page, like any other cash movement - see
+    -- project_transaction_entry_to_journal, which projects it into the journal.
+    v_cash_net := v_cod - v_charge - v_tax;
+    IF v_cash_net <> 0 THEN
+        INSERT INTO finances_transaction_entries
+            (org_id, entry_date, amount, description, from_account_id, to_account_id, source_type, source_id)
+        VALUES (
+            p.org_id, p.payout_date, ABS(v_cash_net),
             p.courier || ' payout ' || p.folio || ' - Cash Received',
-            'receipt', NULL::UUID, 'courier_payout_cash', p.id
+            CASE WHEN v_cash_net > 0 THEN v_courier ELSE v_cash    END,
+            CASE WHEN v_cash_net > 0 THEN v_cash    ELSE v_courier END,
+            'courier_payout_cash', p.id
         );
     END IF;
 END;
@@ -1628,6 +1649,12 @@ DECLARE
     v_n INT;
 BEGIN
     ALTER TABLE finances_journal_lines DISABLE TRIGGER journal_lines_balance_trigger;
+
+    -- A full unpost has to clear the payout's transaction entry too, not just its
+    -- journal entries, or the Cash Received row (and, via the trigger, its
+    -- projected journal entry) would be left behind.
+    DELETE FROM finances_transaction_entries
+     WHERE org_id = p_org_id AND source_type = 'courier_payout_cash';
 
     WITH gone AS (
         DELETE FROM finances_journal_entries

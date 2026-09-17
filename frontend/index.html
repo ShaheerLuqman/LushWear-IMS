@@ -88,7 +88,9 @@
                 <button class="modal-close" id="closeDeliveryStatusModal">&times;</button>
             </div>
             <div class="modal-body" id="deliveryStatusContent">
-                <div class="loading">Loading...</div>
+                <div class="content-loading">
+                    <div class="content-loading-spinner"></div><p class="content-loading-text">Loading...</p>
+                </div>
             </div>
         </div>
     </div>
@@ -260,7 +262,10 @@
                         <label for="ordersPeriodFilter" class="orders-period-filter-label">Period:</label>
                         <select id="ordersPeriodFilter" class="orders-period-filter" title="Filter orders by financial-month period"></select>
                     </div>
-                    <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Filter by date range">Date range</button>
+                    <div id="ordersDateRangeWrap" class="orders-date-range-wrap header-inline" style="display: none;">
+                        <button id="ordersDateRangeBtn" class="btn btn-secondary header-toolbar-btn" title="Filter by date range">Date range</button>
+                        <button id="ordersDateRangeClearBtn" class="orders-date-range-clear" style="display: none;" title="Clear date range">&times;</button>
+                    </div>
                     <button id="inventoryExportBtn" class="btn btn-secondary header-toolbar-btn" style="display: none;" title="Export the rows currently shown to Excel">
                         <i class="fa-solid fa-arrow-up-from-bracket"></i> Export
                     </button>
@@ -1993,6 +1998,8 @@
     <!-- AG Grid JS -->
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.0.2/dist/ag-grid-community.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
+    <!-- easepick (preset + custom range picker, orders date-range filter) -->
+    <script src="https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@1.28.0/dist/umd/lucide.min.js"></script>
     <script src="config.js"></script>

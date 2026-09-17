@@ -375,16 +375,19 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber, force = fal
     }
     
     modal.classList.add('active');
-    // Keep whatever's already shown (e.g. a previous fetch's data) visible while
-    // this one is in flight, instead of blanking the modal - only show the loading
-    // state on a genuinely first fetch, when there's nothing to preserve.
-    const hasExistingData = !!content.querySelector('.delivery-status-info');
+    // Keep whatever's already shown visible while this one is in flight, instead of
+    // blanking the modal - but only when it's the SAME order being re-fetched (e.g. the
+    // in-modal "Refresh status" button). Switching to a different order must always show
+    // the loading state, otherwise the previous order's data lingers on screen looking
+    // like it belongs to the new one.
+    const hasExistingData = !!content.querySelector('.delivery-status-info') && content.dataset.orderId === String(orderId);
     const refreshBtn = content.querySelector('.delivery-status-btn');
     if (hasExistingData && refreshBtn) {
         refreshBtn.disabled = true;
         refreshBtn.textContent = 'Refreshing...';
     } else {
-        content.innerHTML = '<div class="loading">Fetching delivery status...</div>';
+        content.innerHTML = `<div class="content-loading">
+            <div class="content-loading-spinner"></div><p class="content-loading-text">Fetching delivery status...</p></div>`;
     }
 
     try {
@@ -441,6 +444,7 @@ async function fetchDeliveryStatus(orderId, courier, trackingNumber, force = fal
 
 function displayDeliveryStatus(data, orderId, customerInfo) {
     const content = document.getElementById('deliveryStatusContent');
+    content.dataset.orderId = String(orderId);
     const { name, phone } = customerInfo || {};
 
     let html = `

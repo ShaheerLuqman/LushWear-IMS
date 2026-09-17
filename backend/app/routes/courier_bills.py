@@ -85,10 +85,14 @@ async def get_courier_bill(bill_id: str, org_id: str = Depends(get_org_id)):
         if not bill.data:
             raise HTTPException(status_code=404, detail="Courier bill not found")
 
+        # Cancelled orders stay linked to courier_bill_id (membership = pickup-date batch,
+        # not a delivery outcome - see module docstring) but contribute nothing to the
+        # view's totals, so they are excluded here too rather than shown as a live member.
         orders = fetch_all(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select(BILL_ORDER_SELECT)
             .eq("courier_bill_id", bill_id)
+            .neq("order_status", "cancelled")
             .order("order_number")
         )
         return {**bill.data[0], "orders": orders}

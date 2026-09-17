@@ -99,6 +99,7 @@ function initTrialBalanceGrid() {
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
+        overlayLoadingTemplate: AG_GRID_LOADING_OVERLAY_HTML,
         getRowId: (params) => params.data.account_id,
         onGridReady: (params) => {
             trialBalanceGridApi = params.api;

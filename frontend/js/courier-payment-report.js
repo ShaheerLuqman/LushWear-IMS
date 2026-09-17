@@ -454,7 +454,7 @@ function renderCourierPaymentReportDetailOrdersTable(bill) {
         <tr data-order-number="${escapeHtml(String(order.order_number ?? ''))}">
             <td>${escapeHtml(String(order.order_number ?? ''))}</td>
             <td>${escapeHtml(order.folio || '-')}</td>
-            <td class="cpr-detail-customer-name">Loading…</td>
+            <td class="cpr-detail-customer-name"><span class="btn-loading-spinner"></span>Loading…</td>
             <td>${escapeHtml(order.tracking_number || '-')}</td>
             <td><span class="grid-status-badge ${orderStatusBadgeClass(status)}">${escapeHtml(status)}</span></td>
             <td>${formatMoney(order.total_amount)}</td>
@@ -520,6 +520,8 @@ async function openCourierPaymentReportBillDetail(bill) {
     switchView('courierPaymentReportDetail');
 
     if (!bill.orders) {
+        const body = document.getElementById('courierPaymentReportDetailOrdersBody');
+        if (body) body.innerHTML = tableLoadingRow(13, 'Loading orders…');
         try {
             const detail = await apiJson(`/courier-bills/${bill.id}`, { fallback: 'Failed to load bill orders' });
             bill.orders = detail.orders;
@@ -812,6 +814,7 @@ function initCourierPaymentReportGrid() {
         defaultColDef: { sortable: true, resizable: true, filter: true, minWidth: 90 },
         pagination: false,
         domLayout: 'normal',
+        overlayLoadingTemplate: AG_GRID_LOADING_OVERLAY_HTML,
         getRowId: (params) => params.data.id,
         onGridReady: (params) => {
             courierPaymentReportGridApi = params.api;

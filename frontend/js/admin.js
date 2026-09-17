@@ -203,7 +203,7 @@ function renderOrganizations() {
 async function loadOrganizations() {
     const loadingEl = document.getElementById('adminOrgsLoading');
     loadingEl.style.display = '';
-    loadingEl.textContent = 'Loading organizations…';
+    loadingEl.innerHTML = '<span class="btn-loading-spinner"></span>Loading organizations…';
     try {
         organizations = await adminApiJson('/admin/organizations');
         renderOrganizations();
@@ -277,7 +277,7 @@ async function loadOrgUsers(org) {
     list.innerHTML = '';
     emptyEl.style.display = 'none';
     loadingEl.style.display = '';
-    loadingEl.textContent = 'Loading users…';
+    loadingEl.innerHTML = '<span class="btn-loading-spinner"></span>Loading users…';
 
     try {
         const users = await adminApiJson(`/admin/organizations/${org.id}/users`);

@@ -80,67 +80,103 @@ function initOrdersPeriodFilter() {
     }
 }
 
-/** Date range filter popup for orders header button. Fetches the range server-side
- * (loadOrdersForDateRange) into window._ordersDateRange, and marks the period dropdown
- * "Custom" while a range is active. */
+/** Date range filter popup for orders header button, via easepick (RangePlugin +
+ * PresetPlugin) - preset ranges (Today/Last 7 days/This month/...) alongside a two-month
+ * calendar for a custom range. Fetches the range server-side (loadOrdersForDateRange) into
+ * window._ordersDateRange, and marks the period dropdown "Custom" while a range is active. */
 function initOrdersDateRangeButton() {
     const triggerBtn = document.getElementById('ordersDateRangeBtn');
-    if (!triggerBtn) return;
+    const clearBtn = document.getElementById('ordersDateRangeClearBtn');
+    if (!triggerBtn || !window.easepick) return;
 
-    const toDateInputValue = (val) => (val == null || val === '') ? '' : formatDateDDMMYYYY(val);
+    // PresetPlugin only auto-fills its 6 built-in ranges when left fully unconfigured, so
+    // adding "All Time" means supplying the whole preset list ourselves - built the same way
+    // PresetPlugin builds its own defaults, just anchored to PKT "today" (order dates are
+    // PKT-based) instead of the browser's local clock, and with the orders data's oldest
+    // period (see ORDERS_PERIOD_OLDEST_MONTH/YEAR) as the "All Time" start.
+    const DateTime = window.easepick.DateTime;
+    const pkt = getPKTDate();
+    const y = pkt.getFullYear(), m = pkt.getMonth();
+    const today = new Date(y, m, pkt.getDate());
+    const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
+    const oldestStart = ordersPeriodStartEnd(ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR).start;
+    const customPreset = {
+        'All Time': [new DateTime(oldestStart), new DateTime(today)],
+        'Today': [new DateTime(today), new DateTime(today)],
+        'Yesterday': [new DateTime(addDays(-1)), new DateTime(addDays(-1))],
+        'Last 7 Days': [new DateTime(addDays(-6)), new DateTime(today)],
+        'Last 30 Days': [new DateTime(addDays(-29)), new DateTime(today)],
+        'This Month': [new DateTime(new Date(y, m, 1)), new DateTime(new Date(y, m + 1, 0))],
+        'Last Month': [new DateTime(new Date(y, m - 1, 1)), new DateTime(new Date(y, m, 0))],
+    };
 
-    const menu = document.createElement('div');
-    menu.className = 'date-range-menu';
-    menu.style.display = 'none';
+    const picker = new window.easepick.create({
+        element: triggerBtn,
+        css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.css'],
+        zIndex: 9999,
+        format: 'DD/MM/YYYY',
+        grid: 2,
+        calendars: 2,
+        // Preset buttons only call setDateRange()+select on click when autoApply is true -
+        // with it false they silently stash the pick and wait for a separate Apply click
+        // (the footer that autoApply:false would otherwise render), so a preset click looked
+        // like a no-op. true also means a plain two-click custom range applies immediately.
+        autoApply: true,
+        plugins: ['RangePlugin', 'PresetPlugin'],
+        PresetPlugin: { position: 'left', customPreset },
+    });
 
-    const fromField = document.createElement('div');
-    fromField.className = 'date-range-menu__field';
-    const fromLabel = document.createElement('label');
-    fromLabel.className = 'date-range-menu__label';
-    fromLabel.textContent = 'From';
-    const fromInput = document.createElement('input');
-    fromInput.type = 'text';
-    fromInput.placeholder = 'dd/mm/yyyy';
-    fromInput.className = 'grid-floating-filter-date';
-    fromField.appendChild(fromLabel);
-    fromField.appendChild(fromInput);
+    // easepick renders into a shadow root, so the app's own stylesheet can't reach it -
+    // these just map its color variables onto the app's own (already theme-aware) ones,
+    // which keeps it in sync with light/dark mode without duplicating either palette.
+    const themeStyle = document.createElement('style');
+    themeStyle.textContent = `
+        :host {
+            --color-bg-default: var(--bg-card);
+            --color-bg-secondary: var(--bg-secondary);
+            --color-fg-default: var(--text-primary);
+            --color-fg-secondary: var(--text-secondary);
+            --color-fg-muted: var(--text-muted);
+            --color-fg-primary: var(--accent-primary);
+            --color-border-default: var(--border-color);
+            --color-bg-inrange: color-mix(in srgb, var(--accent-primary) 18%, transparent);
+            --color-btn-primary-bg: var(--accent-primary);
+            --color-btn-primary-fg: #fff;
+            --color-btn-primary-border: var(--accent-primary);
+            --color-btn-secondary-bg: var(--bg-secondary);
+            --color-btn-secondary-fg: var(--text-secondary);
+            --color-btn-secondary-border: var(--border-color);
+            --border-radius: 8px;
+            font-family: var(--font-primary);
+        }
+        .container {
+            max-width: calc(100vw - 16px);
+            overflow: hidden;
+            border-radius: var(--radius-lg);
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+        }
+    `;
+    picker.ui.shadowRoot.appendChild(themeStyle);
 
-    const toField = document.createElement('div');
-    toField.className = 'date-range-menu__field';
-    const toLabel = document.createElement('label');
-    toLabel.className = 'date-range-menu__label';
-    toLabel.textContent = 'To';
-    const toInput = document.createElement('input');
-    toInput.type = 'text';
-    toInput.placeholder = 'dd/mm/yyyy';
-    toInput.className = 'grid-floating-filter-date';
-    toField.appendChild(toLabel);
-    toField.appendChild(toInput);
-
-    const actionsRow = document.createElement('div');
-    actionsRow.className = 'date-range-menu__actions';
-    const clearBtn = document.createElement('button');
-    clearBtn.type = 'button';
-    clearBtn.className = 'date-range-menu__btn date-range-menu__btn--clear';
-    clearBtn.textContent = 'Clear';
-    const applyBtn = document.createElement('button');
-    applyBtn.type = 'button';
-    applyBtn.className = 'date-range-menu__btn date-range-menu__btn--apply';
-    applyBtn.textContent = 'Apply';
-    actionsRow.appendChild(clearBtn);
-    actionsRow.appendChild(applyBtn);
-
-    menu.appendChild(fromField);
-    menu.appendChild(toField);
-    menu.appendChild(actionsRow);
-
-    const flatpickrOpts = { dateFormat: 'd/m/Y', allowInput: true, static: false };
-    const fromPicker = window.flatpickr ? window.flatpickr(fromInput, flatpickrOpts) : null;
-    const toPicker = window.flatpickr ? window.flatpickr(toInput, flatpickrOpts) : null;
-
+    // The button's own fixed width (shared with "More actions", for an even toolbar) can't
+    // fit a full "dd/mm/yyyy - dd/mm/yyyy" range - overrides easepick's auto-set label
+    // (which would otherwise fill the button with that full range and get ellipsed) with a
+    // short one, keeping the full range as the title tooltip instead.
     function updateButtonLabel() {
-        triggerBtn.textContent = window._ordersDateRange ? 'Range set' : 'Date range';
+        const range = window._ordersDateRange;
+        if (range) {
+            triggerBtn.textContent = 'Range set';
+            triggerBtn.title = formatOrdersDateRangeLabel(range.from, range.to);
+            if (clearBtn) clearBtn.style.display = '';
+        } else {
+            picker.clear();
+            triggerBtn.textContent = 'Date range';
+            triggerBtn.title = 'Filter by date range';
+            if (clearBtn) clearBtn.style.display = 'none';
+        }
     }
+    updateButtonLabel();
 
     // The range is fetched server-side (loadOrdersForDateRange) so it covers every matching
     // order, not just whatever period happened to already be loaded into the grid - a plain
@@ -158,84 +194,58 @@ function initOrdersDateRangeButton() {
             customOption.textContent = label;
             selectEl.value = CUSTOM_ORDERS_VALUE;
         }
+        updateButtonLabel();
         if (ordersGridApi) ordersGridApi.showLoadingOverlay();
         try {
             await loadOrdersForDateRange(from, to);
         } finally {
             if (ordersGridApi) ordersGridApi.hideOverlay();
         }
-        triggerBtn.textContent = 'Range set';
     };
 
-    applyBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        const rawFrom = (fromInput.value || '').trim();
-        const rawTo = (toInput.value || '').trim();
-        const fromVal = rawFrom ? parseDDMMYYYYToYYYYMMDD(rawFrom) : null;
-        const toVal = rawTo ? parseDDMMYYYYToYYYYMMDD(rawTo) : null;
-        if (!fromVal || !toVal) return;
-        menu.style.display = 'none';
-        await applyDateRange(fromVal, toVal);
+    picker.on('select', (e) => {
+        const { start, end } = e.detail;
+        if (!start || !end) return;
+        applyDateRange(start.format('YYYY-MM-DD'), end.format('YYYY-MM-DD'));
     });
 
-    clearBtn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        fromInput.value = '';
-        toInput.value = '';
-        if (fromPicker) fromPicker.clear();
-        if (toPicker) toPicker.clear();
-        window._ordersDateRange = null;
-        triggerBtn.textContent = 'Date range';
-        menu.style.display = 'none';
-        const selectEl = document.getElementById('ordersPeriodFilter');
-        if (selectEl) {
-            const customOption = [...selectEl.options].find((o) => o.value === CUSTOM_ORDERS_VALUE);
-            if (customOption) customOption.remove();
-            const { month, year } = getCurrentOrdersPeriod();
-            selectEl.value = `${month}-${year}`;
-        }
-        if (ordersGridApi) ordersGridApi.showLoadingOverlay();
-        try {
-            await loadOrders();
-        } finally {
-            if (ordersGridApi) ordersGridApi.hideOverlay();
-        }
+    // easepick's own adjustPosition() only flips left/up when there's room for the whole
+    // popup on the other side - with the trigger sitting near the header's right edge and a
+    // two-month calendar, there often isn't, and it's left overflowing off-screen. Re-clamp
+    // its actual rendered box into the viewport after it shows.
+    picker.on('show', () => {
+        const container = picker.ui.container;
+        const rect = container.getBoundingClientRect();
+        const left = parseFloat(container.style.left) || 0;
+        const top = parseFloat(container.style.top) || 0;
+        const overflowRight = rect.right - (window.innerWidth - 8);
+        const overflowLeft = 8 - rect.left;
+        if (overflowRight > 0) container.style.left = `${left - overflowRight}px`;
+        else if (overflowLeft > 0) container.style.left = `${left + overflowLeft}px`;
+        const overflowBottom = rect.bottom - (window.innerHeight - 8);
+        if (overflowBottom > 0) container.style.top = `${top - overflowBottom}px`;
     });
 
-    triggerBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (menu.style.display === 'none') {
-            const range = window._ordersDateRange;
-            if (range) {
-                const fromStr = toDateInputValue(range.from);
-                const toStr = toDateInputValue(range.to);
-                fromInput.value = fromStr;
-                toInput.value = toStr;
-                if (fromPicker) fromPicker.setDate(fromStr || null, false);
-                if (toPicker) toPicker.setDate(toStr || null, false);
-            } else {
-                fromInput.value = '';
-                toInput.value = '';
-                if (fromPicker) fromPicker.clear();
-                if (toPicker) toPicker.clear();
+    if (clearBtn) {
+        clearBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            window._ordersDateRange = null;
+            updateButtonLabel();
+            const selectEl = document.getElementById('ordersPeriodFilter');
+            if (selectEl) {
+                const customOption = [...selectEl.options].find((o) => o.value === CUSTOM_ORDERS_VALUE);
+                if (customOption) customOption.remove();
+                const { month, year } = getCurrentOrdersPeriod();
+                selectEl.value = `${month}-${year}`;
             }
-            const rect = triggerBtn.getBoundingClientRect();
-            menu.style.display = 'block';
-            // Display first so offsetWidth is measurable, then centre on the button,
-            // clamped so the popup can't hang off either edge of the viewport.
-            const left = rect.left + window.scrollX + (rect.width - menu.offsetWidth) / 2;
-            const maxLeft = window.scrollX + document.documentElement.clientWidth - menu.offsetWidth - 8;
-            menu.style.top = `${rect.bottom + window.scrollY}px`;
-            menu.style.left = `${Math.max(window.scrollX + 8, Math.min(left, maxLeft))}px`;
-        } else {
-            menu.style.display = 'none';
-        }
-    });
-
-    document.body.appendChild(menu);
-
-    // Menu only closes via Apply, Clear, or toggling the trigger button —
-    // clicking elsewhere (including the flatpickr calendar) leaves it open.
+            if (ordersGridApi) ordersGridApi.showLoadingOverlay();
+            try {
+                await loadOrders();
+            } finally {
+                if (ordersGridApi) ordersGridApi.hideOverlay();
+            }
+        });
+    }
 
     // Expose so onFilterChanged can update button label
     window._ordersDateRangeUpdateButtonLabel = updateButtonLabel;
@@ -316,7 +326,7 @@ function switchView(viewName, { skipReload = false } = {}) {
     show('syncOrdersLastSync', isOrders, 'inline-block');
     if (isOrders) updateSyncOrdersLastSyncLabel();
     show('ordersPeriodFilterWrap', isOrders, 'flex');
-    show('ordersDateRangeBtn', isOrders);
+    show('ordersDateRangeWrap', isOrders);
     show('ordersMoreActionsWrap', isOrders);
     show('headerOrdersAppActions', isOrders);
     show('deliveryRefreshProgress', false);

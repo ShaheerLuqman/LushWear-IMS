@@ -1089,6 +1089,7 @@ function initBillsGrid() {
         animateRows: true,
         pagination: false,
         domLayout: 'normal',
+        overlayLoadingTemplate: AG_GRID_LOADING_OVERLAY_HTML,
         getRowId: (params) => params.data.id,
         onGridReady: (params) => { billsGridApi = params.api; },
     });

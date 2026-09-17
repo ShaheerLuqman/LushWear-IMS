@@ -257,7 +257,7 @@ async function openCostHistoryModal(product) {
     if (!product?.id) return;
     renderProductIdentity('costHistory', product, false);
     const body = document.getElementById('costHistoryBody');
-    body.innerHTML = '<tr><td colspan="5" class="cost-history-empty">Loading…</td></tr>';
+    body.innerHTML = tableLoadingRow(5, 'Loading…');
     document.getElementById('costHistoryModal')?.classList.add('active');
 
     try {

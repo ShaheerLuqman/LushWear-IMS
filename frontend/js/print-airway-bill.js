@@ -87,7 +87,7 @@ function renderPrintAirwayBillTable() {
     const tbody = document.getElementById('printAirwayBillTableBody');
     if (tbody) {
         if (printAirwayBillLoading) {
-            tbody.innerHTML = '<tr><td colspan="11" class="empty-state">Loading fulfilled orders…</td></tr>';
+            tbody.innerHTML = tableLoadingRow(11, 'Loading fulfilled orders…');
         } else {
             tbody.innerHTML = filtered.length
                 ? filtered.map(renderPrintAirwayBillRow).join('')
