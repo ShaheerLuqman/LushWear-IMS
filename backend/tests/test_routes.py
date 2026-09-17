@@ -245,8 +245,8 @@ class TestMonthSummaryList:
         r = client.get("/api/orders/month-summary/list")
         assert r.status_code == 200
         assert r.json() == [
-            {"month": 7, "year": 2026, "warning_orders_count": 3},
-            {"month": 6, "year": 2026, "warning_orders_count": 0},
+            {"month": 7, "year": 2026, "warning_orders_count": 3, "total_orders": 0, "completed_orders_count": 0},
+            {"month": 6, "year": 2026, "warning_orders_count": 0, "total_orders": 0, "completed_orders_count": 0},
         ]
 
     def test_no_orders_returns_empty_list(self, make_client):
@@ -756,6 +756,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", csv_bytes, "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 200
         body = r.json()
@@ -779,6 +780,7 @@ class TestPostexCsvUpload:
         client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", self._csv((100, 200)), "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
 
         written = orders_module.get_supabase().upserted["shopify_orders"]
@@ -795,6 +797,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.txt", b"not a csv", "text/plain")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 400
 
@@ -819,6 +822,7 @@ class TestPostexCsvUpload:
             r = client.post(
                 "/api/orders/upload-postex-csv",
                 files={"file": ("postex.csv", csv_bytes, "text/csv")},
+                data={"cash_ledger_id": "ledger-1"},
             )
         finally:
             del fake_query_cls.in_
@@ -860,6 +864,7 @@ class TestPostexCsvUpload:
             r = client.post(
                 "/api/orders/upload-postex-csv",
                 files={"file": ("postex.csv", self._csv((100, 200)), "text/csv")},
+                data={"cash_ledger_id": "ledger-1"},
             )
         finally:
             BackgroundTasks.add_task = real_add_task
@@ -900,6 +905,7 @@ class TestPostexCsvUpload:
             r = client.post(
                 "/api/orders/upload-postex-csv",
                 files={"file": ("postex.csv", self._csv((100, 200), (200, 150), (300, 180)), "text/csv")},
+                data={"cash_ledger_id": "ledger-1"},
             )
         finally:
             BackgroundTasks.add_task = real_add_task
@@ -914,6 +920,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", b"ORDER_REF_NUMBER,SHIPPING_CHARGES\n4446-R,150\n", "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 200
         assert r.json()["updated"] == 0
@@ -936,6 +943,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", self._csv_with_status((100, 200, "Delivered")), "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 200
         body = r.json()
@@ -957,6 +965,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", self._csv_with_status((100, 200, "Return")), "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 200
         body = r.json()
@@ -979,6 +988,7 @@ class TestPostexCsvUpload:
         r = client.post(
             "/api/orders/upload-postex-csv",
             files={"file": ("postex.csv", self._csv_with_status((100, 200, "Delivered")), "text/csv")},
+            data={"cash_ledger_id": "ledger-1"},
         )
         assert r.status_code == 200
         body = r.json()

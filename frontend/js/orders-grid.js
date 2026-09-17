@@ -380,7 +380,7 @@ function buildProductsColumnDefs() {
             cellRenderer: createProductViewButton
         },
         {
-            headerName: 'More actions',
+            headerName: 'Actions',
             colId: 'moreActions',
             width: 110,
             filter: false,

@@ -135,6 +135,7 @@ function hydrateOrdersFromCache(periodKey) {
         if (ordersGridApi) {
             ordersGridApi.setGridOption('rowData', orders);
             ordersGridApi.refreshCells({ columns: ['advance_amount'], force: true });
+            if (orders.length === 0) ordersGridApi.showNoRowsOverlay(); else ordersGridApi.hideOverlay();
             setTimeout(() => updateFooterRow(), 0);
         }
     } catch (e) { /* ignore */ }

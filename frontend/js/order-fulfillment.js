@@ -382,25 +382,29 @@ function initOrderFulfillment() {
     });
 
     const dateInput = document.getElementById('fulfillmentDateRangeInput');
-    if (dateInput && window.flatpickr) {
-        fulfillmentDatePicker = window.flatpickr(dateInput, {
-            mode: 'range',
-            dateFormat: 'd/m/Y',
-            onChange: (selectedDates) => {
-                fulfillmentFilters.dateFrom = selectedDates[0] || null;
-                fulfillmentFilters.dateTo = selectedDates[1] || null;
-                if (selectedDates.length === 2) {
-                    renderFulfillmentTable();
-                }
-            }
-        });
-    }
+    // YYYY-MM-DD string -> local-midnight Date, matching what selectedDates[] used to give
+    // getFulfillmentFilteredOrders (new Date('YYYY-MM-DD') parses as UTC, not local, and
+    // would shift the boundary by PKT's +5h offset).
+    const toLocalDate = (s) => { const [y, mo, d] = s.split('-').map(Number); return new Date(y, mo - 1, d); };
+    fulfillmentDatePicker = createDateRangePicker(dateInput, {
+        onSelect: (from, to) => {
+            fulfillmentFilters.dateFrom = toLocalDate(from);
+            fulfillmentFilters.dateTo = toLocalDate(to);
+            renderFulfillmentTable();
+        },
+        onClear: () => {
+            fulfillmentDatePicker.picker.clear();
+            fulfillmentFilters.dateFrom = null;
+            fulfillmentFilters.dateTo = null;
+            renderFulfillmentTable();
+        },
+    });
 
     document.getElementById('fulfillmentClearFiltersBtn')?.addEventListener('click', () => {
         fulfillmentFilters = { cities: null, tags: null, dateFrom: null, dateTo: null };
         fulfillmentCityFilterControl?.reset();
         fulfillmentTagsFilterControl?.reset();
-        if (fulfillmentDatePicker) fulfillmentDatePicker.clear();
+        if (fulfillmentDatePicker) fulfillmentDatePicker.picker.clear();
         renderFulfillmentTable();
     });
 

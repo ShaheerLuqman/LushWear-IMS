@@ -128,6 +128,9 @@ function initOrdersDateRangeButton() {
     };
 
     const rangePicker = createDateRangePicker(triggerBtn, {
+        // Fetching every order ever is too expensive a preset to offer here (unlike the
+        // analytics pages, which already aggregate server-side).
+        presets: buildDateRangePresets({ includeAllTime: false }),
         onSelect: applyDateRange,
         onClear: async () => {
             window._ordersDateRange = null;

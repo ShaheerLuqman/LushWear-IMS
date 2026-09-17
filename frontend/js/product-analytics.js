@@ -17,7 +17,6 @@ let paCollection = '';                // '' = all collections
 let paSearch = '';                    // free-text product filter, table only
 let _paSearchTimer = null;
 let paTrendMetric = 'units';          // 'units' | 'revenue'
-let _paTimeMenuOpen = false;
 let _paCustomizeOpen = false;
 let _paHeroDefOpen = false;
 let paCols = paLoadCols();
@@ -25,7 +24,7 @@ let paCols = paLoadCols();
 const PA_BASE_SIZES = ['S', 'M', 'L', 'XL'];
 const PA_OLDEST = { year: 2024, month: 10, day: 22 };
 const PA_TIME_PRESETS = [
-    { key: 'max', label: 'Maximum' },
+    { key: 'max', label: 'All Time' },
     { key: 'today', label: 'Today' },
     { key: 'yesterday', label: 'Yesterday' },
     { key: 'last7', label: 'Last 7 days' },
@@ -431,44 +430,24 @@ function paWidgetsHtml(view) {
 
 // ---------------------------------------------------------------- render: shell
 
-function paRenderTimeMenu() {
-    const menu = document.getElementById('paTimeMenu');
-    if (!menu) return;
-    const rows = PA_TIME_PRESETS.map((p) => {
-        const [start, end] = paRangeDates(p.key);
-        const withYear = p.key === 'max' || start.getFullYear() !== end.getFullYear();
-        const sub = paIsoDate(start) === paIsoDate(end) ? paShortDate(start, withYear)
-            : `${paShortDate(start, withYear)} – ${paShortDate(end, withYear)}`;
-        return `<button type="button" class="pa-time-opt${paTimeRange === p.key ? ' is-active' : ''}" data-range="${p.key}">
-            <span class="pa-time-radio"></span>
-            <span class="pa-time-opt-text"><span class="pa-time-opt-label">${p.label}</span><span class="pa-time-opt-sub">${escapeHtml(sub)}</span></span>
-        </button>`;
-    }).join('');
-    menu.innerHTML = `${rows}
-        <div class="pa-time-custom${paTimeRange === 'custom' ? ' is-open' : ''}">
-            <button type="button" class="pa-time-opt" data-range="custom">
-                <span class="pa-time-radio"></span>
-                <span class="pa-time-opt-text"><span class="pa-time-opt-label">Custom date range</span></span>
-                <i class="fa-solid fa-chevron-right pa-time-custom-caret"></i>
-            </button>
-            <div class="pa-time-custom-fields">
-                <label>From <input type="date" id="paCustomStart" value="${paCustomStart}" max="${paIsoDate(paToday())}"></label>
-                <label>To <input type="date" id="paCustomEnd" value="${paCustomEnd}" max="${paIsoDate(paToday())}"></label>
-            </div>
-        </div>`;
+/** #paTimeBtn's calendar/chevron icons flanking #paTimeLabel get wiped out by easepick's
+ * own auto-set innerText on every select/clear (see createDateRangePicker, utils.js) -
+ * rebuilt here (cheap, idempotent) before every label update rather than fighting that. */
+function paSyncTimeButtonDom() {
+    const btn = document.getElementById('paTimeBtn');
+    if (!btn) return;
+    if (!btn.querySelector('#paTimeLabel')) {
+        btn.innerHTML = '<i class="fa-regular fa-calendar"></i><span id="paTimeLabel"></span><i class="fa-solid fa-chevron-down"></i>';
+    }
+    document.getElementById('paTimeLabel').textContent = paRangeLabel();
 }
 
 function paSyncToolbar() {
-    const label = document.getElementById('paTimeLabel');
-    if (label) label.textContent = paRangeLabel();
-    const menu = document.getElementById('paTimeMenu');
-    if (menu) menu.hidden = !_paTimeMenuOpen;
-    document.getElementById('paTimeBtn')?.classList.toggle('is-open', _paTimeMenuOpen);
+    paSyncTimeButtonDom();
     document.getElementById('paCustomizeMenu')?.toggleAttribute('hidden', !_paCustomizeOpen);
     document.getElementById('paHeroDefPop')?.toggleAttribute('hidden', !_paHeroDefOpen);
     const deltaLabel = document.getElementById('paColDeltaLabel');
     if (deltaLabel) deltaLabel.textContent = paComparisonWord();
-    if (_paTimeMenuOpen) paRenderTimeMenu();
 }
 
 function paRenderShell() {
@@ -482,33 +461,43 @@ function paRenderShell() {
  *  popover all live in the persistent app header (not productAnalyticsRoot),
  *  so they're bound once, not on every paRenderShell. */
 function paBindHeaderEvents() {
-    document.getElementById('paTimeBtn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        _paTimeMenuOpen = !_paTimeMenuOpen;
+    // Own preset set, not the shared default (buildDateRangePresets in utils.js) - this one's
+    // last7/last30 end yesterday rather than today, since today's figures are still
+    // accumulating, and it keeps "Maximum"/"This week" rather than "Last Month"/"All Time".
+    const paTimePresets = () => {
+        const DateTime = window.easepick.DateTime;
+        const presets = {};
+        PA_TIME_PRESETS.forEach((p) => {
+            const [start, end] = paRangeDates(p.key);
+            presets[p.label] = [new DateTime(start), new DateTime(end)];
+        });
+        return presets;
+    };
+    const timeRangePicker = createDateRangePicker(document.getElementById('paTimeBtn'), {
+        presets: paTimePresets(),
+        // Map the picked dates back onto whichever preset (if any) produces that same
+        // range, so paRangeLabel/paComparisonWord keep their preset-specific wording
+        // ("This month (...)" / "vs last month") instead of always reading as a custom pick.
+        onSelect: (from, to) => {
+            const matched = PA_TIME_PRESETS.find((p) => {
+                const [s, e] = paRangeDates(p.key);
+                return paIsoDate(s) === from && paIsoDate(e) === to;
+            });
+            if (matched) {
+                paTimeRange = matched.key;
+            } else {
+                paTimeRange = 'custom';
+                paCustomStart = from;
+                paCustomEnd = to;
+            }
+            paSyncToolbar();
+            paRefreshData();
+        },
+    });
+    timeRangePicker?.picker.on('show', () => {
         _paCustomizeOpen = false;
         _paHeroDefOpen = false;
         paSyncToolbar();
-    });
-    document.getElementById('paTimeMenu').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const opt = e.target.closest('[data-range]');
-        if (!opt) return;
-        const key = opt.dataset.range;
-        if (key === 'custom') {
-            paTimeRange = 'custom';
-            paRenderTimeMenu();
-            if (paCustomStart && paCustomEnd) { paSyncToolbar(); paRefreshData(); }
-            return;
-        }
-        paTimeRange = key;
-        _paTimeMenuOpen = false;
-        paSyncToolbar();
-        paRefreshData();
-    });
-    document.getElementById('paTimeMenu').addEventListener('change', (e) => {
-        if (e.target.id === 'paCustomStart') paCustomStart = e.target.value;
-        if (e.target.id === 'paCustomEnd') paCustomEnd = e.target.value;
-        if (paCustomStart && paCustomEnd) { paTimeRange = 'custom'; paSyncToolbar(); paRefreshData(); }
     });
 
     document.getElementById('paCollectionSelect').addEventListener('change', (e) => {
@@ -526,7 +515,6 @@ function paBindHeaderEvents() {
     document.getElementById('paCustomizeBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         _paCustomizeOpen = !_paCustomizeOpen;
-        _paTimeMenuOpen = false;
         _paHeroDefOpen = false;
         paSyncToolbar();
     });
@@ -545,7 +533,6 @@ function paBindHeaderEvents() {
     document.getElementById('paHeroDefBtn').addEventListener('click', (e) => {
         e.stopPropagation();
         _paHeroDefOpen = !_paHeroDefOpen;
-        _paTimeMenuOpen = false;
         _paCustomizeOpen = false;
         paSyncToolbar();
     });
@@ -583,8 +570,7 @@ function paKebabMenu(btn) {
 }
 
 function paOnDocClick() {
-    if (_paTimeMenuOpen || _paCustomizeOpen || _paHeroDefOpen) {
-        _paTimeMenuOpen = false;
+    if (_paCustomizeOpen || _paHeroDefOpen) {
         _paCustomizeOpen = false;
         _paHeroDefOpen = false;
         paSyncToolbar();
@@ -716,7 +702,6 @@ function initProductAnalyticsView() {
         document.getElementById('paDetailsClose')?.addEventListener('click', paCloseDetailsModal);
         document.getElementById('paDetailsOpenProducts')?.addEventListener('click', () => { paCloseDetailsModal(); switchView('products'); });
     }
-    _paTimeMenuOpen = false;
     _paCustomizeOpen = false;
     _paHeroDefOpen = false;
     paRenderShell();

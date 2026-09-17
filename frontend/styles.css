@@ -3091,7 +3091,10 @@ input[type="number"] {
     box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
-/* Date range context menu (popup) */
+/* Date range context menu (popup) - base panel only; the from/to fields + Apply/Clear
+   footer this used to have for the old flatpickr-based date-range filters are gone now
+   that those all go through createDateRangePicker (utils.js) instead. Still reused as-is
+   by the order-status checkbox filter popup (grid-filters.js). */
 .date-range-menu {
     position: absolute;
     z-index: 9999;
@@ -3103,87 +3106,6 @@ input[type="number"] {
     border-radius: var(--radius-md);
     box-shadow: var(--shadow-lg);
     font-family: var(--font-primary);
-}
-.date-range-menu .date-range-menu__label {
-    display: block;
-    margin-bottom: 4px;
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-}
-.date-range-menu .date-range-menu__field {
-    margin-bottom: 10px;
-}
-.date-range-menu .date-range-menu__field:last-of-type {
-    margin-bottom: 12px;
-}
-.date-range-menu .grid-floating-filter-date {
-    width: 100%;
-    padding: 8px 10px;
-    font-size: 13px;
-    font-family: var(--font-primary);
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-}
-.date-range-menu .grid-floating-filter-date::placeholder {
-    color: var(--text-muted);
-}
-.date-range-menu .grid-floating-filter-date:hover {
-    border-color: var(--text-muted);
-}
-.date-range-menu .grid-floating-filter-date:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-.date-range-menu .date-range-menu__actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 4px;
-    padding-top: 10px;
-    border-top: 1px solid var(--border-color);
-}
-.date-range-menu .date-range-menu__btn {
-    padding: 6px 12px;
-    font-size: 12px;
-    font-weight: 500;
-    font-family: var(--font-primary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-    border: 1px solid transparent;
-}
-.date-range-menu .date-range-menu__btn--clear {
-    color: var(--text-secondary);
-    background: var(--bg-secondary);
-    border-color: var(--border-color);
-}
-.date-range-menu .date-range-menu__btn--clear:hover {
-    background: var(--bg-tertiary);
-    border-color: var(--text-muted);
-    color: var(--text-primary);
-}
-.date-range-menu .date-range-menu__btn--apply {
-    color: #fff;
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-}
-.date-range-menu .date-range-menu__btn--apply:hover {
-    background: var(--accent-secondary);
-    border-color: var(--accent-secondary);
-}
-.date-range-menu .date-range-menu__btn:focus {
-    outline: none;
-}
-.date-range-menu .date-range-menu__btn--apply:focus {
-    box-shadow: 0 0 0 2px var(--accent-glow);
 }
 
 /* Toolbar/filter-bar checkbox filter (grid-filters.js) standing in for a <select>. The button
@@ -5764,99 +5686,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 
 .pa-time-btn i { color: var(--text-muted); font-size: 12px; }
 
-.pa-time-btn.is-open {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 18%, transparent);
-}
-
-.pa-time-menu {
-    position: absolute;
-    top: calc(100% + 6px);
-    left: 0;
-    z-index: 40;
-    width: 340px;
-    max-width: 92vw;
-    padding: 6px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    box-shadow: var(--shadow);
-}
-
-.pa-time-menu[hidden] { display: none; }
-
-.pa-time-opt {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    width: 100%;
-    padding: 9px 10px;
-    background: none;
-    border: none;
-    border-radius: var(--radius-md);
-    font-family: inherit;
-    text-align: left;
-    color: var(--text-primary);
-    cursor: pointer;
-}
-
-.pa-time-opt:hover { background: color-mix(in srgb, var(--accent-primary) 8%, transparent); }
-.pa-time-opt.is-active { background: color-mix(in srgb, var(--accent-primary) 12%, transparent); }
-
-.pa-time-radio {
-    flex-shrink: 0;
-    width: 16px;
-    height: 16px;
-    border: 2px solid var(--border-color);
-    border-radius: 50%;
-}
-
-.pa-time-opt.is-active .pa-time-radio {
-    border-color: var(--accent-primary);
-    box-shadow: inset 0 0 0 3px var(--accent-primary);
-}
-
-.pa-time-opt-text { display: flex; flex-direction: column; gap: 1px; flex: 1; min-width: 0; }
-.pa-time-opt-label { font-size: 14px; font-weight: 500; }
-.pa-time-opt-sub { font-size: 12px; color: var(--text-muted); }
-
-.pa-time-custom {
-    border-top: 1px solid var(--border-color);
-    margin-top: 4px;
-    padding-top: 4px;
-}
-
-.pa-time-custom-caret { color: var(--text-muted); font-size: 11px; transition: transform 0.15s ease; }
-.pa-time-custom.is-open .pa-time-custom-caret { transform: rotate(90deg); }
-
-.pa-time-custom-fields {
-    display: none;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    padding: 8px 10px 6px;
-}
-
-.pa-time-custom.is-open .pa-time-custom-fields { display: grid; }
-
-.pa-time-custom-fields label {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.pa-time-custom-fields input {
-    height: 34px;
-    padding: 0 8px;
-    font-family: inherit;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
 /* --- KPI cards --- */
 .pa-kpis {
     display: grid;
@@ -7980,41 +7809,6 @@ body.admin-portal-page {
 
 .sidebar-user-menu-item--danger {
     color: var(--danger, #c94c4c);
-}
-
-/* Flatpickr ships a light-only stylesheet; recolour its surfaces for dark mode. */
-:root[data-theme="dark"] .flatpickr-calendar {
-    background: var(--bg-card);
-    color: var(--text-primary);
-    box-shadow: var(--shadow-lg);
-}
-
-:root[data-theme="dark"] .flatpickr-months .flatpickr-month,
-:root[data-theme="dark"] .flatpickr-weekdays,
-:root[data-theme="dark"] span.flatpickr-weekday {
-    background: var(--bg-card);
-    color: var(--text-secondary);
-    fill: var(--text-secondary);
-}
-
-:root[data-theme="dark"] .flatpickr-day {
-    color: var(--text-primary);
-}
-
-:root[data-theme="dark"] .flatpickr-day:hover {
-    background: var(--bg-tertiary);
-    border-color: var(--bg-tertiary);
-}
-
-:root[data-theme="dark"] .flatpickr-day.prevMonthDay,
-:root[data-theme="dark"] .flatpickr-day.nextMonthDay,
-:root[data-theme="dark"] .flatpickr-day.flatpickr-disabled {
-    color: var(--text-muted);
-}
-
-:root[data-theme="dark"] .flatpickr-months .flatpickr-prev-month svg,
-:root[data-theme="dark"] .flatpickr-months .flatpickr-next-month svg {
-    fill: var(--text-secondary);
 }
 
 /* ============================================

@@ -18,11 +18,10 @@ let caCollection = '';
 let caSearch = '';
 let _caSearchTimer = null;
 let caMetric = 'revenue';   // 'revenue' | 'orders' - toggles the city list + matrix table
-let _caTimeMenuOpen = false;
 
 const CA_OLDEST = { year: 2024, month: 10, day: 22 };
 const CA_TIME_PRESETS = [
-    { key: 'max', label: 'Maximum' },
+    { key: 'max', label: 'All Time' },
     { key: 'today', label: 'Today' },
     { key: 'yesterday', label: 'Yesterday' },
     { key: 'last7', label: 'Last 7 days' },
@@ -264,40 +263,16 @@ function caDonutHtml(view) {
 
 // ---------------------------------------------------------------- render: shell
 
-function caRenderTimeMenu() {
-    const menu = document.getElementById('caTimeMenu');
-    if (!menu) return;
-    const rows = CA_TIME_PRESETS.map((p) => {
-        const [start, end] = caRangeDates(p.key);
-        const withYear = p.key === 'max' || start.getFullYear() !== end.getFullYear();
-        const sub = caIsoDate(start) === caIsoDate(end) ? caShortDate(start, withYear)
-            : `${caShortDate(start, withYear)} – ${caShortDate(end, withYear)}`;
-        return `<button type="button" class="pa-time-opt${caTimeRange === p.key ? ' is-active' : ''}" data-range="${p.key}">
-            <span class="pa-time-radio"></span>
-            <span class="pa-time-opt-text"><span class="pa-time-opt-label">${p.label}</span><span class="pa-time-opt-sub">${escapeHtml(sub)}</span></span>
-        </button>`;
-    }).join('');
-    menu.innerHTML = `${rows}
-        <div class="pa-time-custom${caTimeRange === 'custom' ? ' is-open' : ''}">
-            <button type="button" class="pa-time-opt" data-range="custom">
-                <span class="pa-time-radio"></span>
-                <span class="pa-time-opt-text"><span class="pa-time-opt-label">Custom date range</span></span>
-                <i class="fa-solid fa-chevron-right pa-time-custom-caret"></i>
-            </button>
-            <div class="pa-time-custom-fields">
-                <label>From <input type="date" id="caCustomStart" value="${caCustomStart}" max="${caIsoDate(caToday())}"></label>
-                <label>To <input type="date" id="caCustomEnd" value="${caCustomEnd}" max="${caIsoDate(caToday())}"></label>
-            </div>
-        </div>`;
-}
-
+/** #caTimeBtn's calendar/chevron icons flanking #caTimeLabel get wiped out by easepick's
+ * own auto-set innerText on every select/clear (see createDateRangePicker, utils.js) -
+ * rebuilt here (cheap, idempotent) before every label update rather than fighting that. */
 function caSyncToolbar() {
-    const label = document.getElementById('caTimeLabel');
-    if (label) label.textContent = caRangeLabel();
-    const menu = document.getElementById('caTimeMenu');
-    if (menu) menu.hidden = !_caTimeMenuOpen;
-    document.getElementById('caTimeBtn')?.classList.toggle('is-open', _caTimeMenuOpen);
-    if (_caTimeMenuOpen) caRenderTimeMenu();
+    const btn = document.getElementById('caTimeBtn');
+    if (!btn) return;
+    if (!btn.querySelector('#caTimeLabel')) {
+        btn.innerHTML = '<i class="fa-regular fa-calendar"></i><span id="caTimeLabel"></span><i class="fa-solid fa-chevron-down"></i>';
+    }
+    document.getElementById('caTimeLabel').textContent = caRangeLabel();
 }
 
 function caRenderShell() {
@@ -308,31 +283,38 @@ function caRenderShell() {
 }
 
 function caBindHeaderEvents() {
-    document.getElementById('caTimeBtn').addEventListener('click', (e) => {
-        e.stopPropagation();
-        _caTimeMenuOpen = !_caTimeMenuOpen;
-        caSyncToolbar();
-    });
-    document.getElementById('caTimeMenu').addEventListener('click', (e) => {
-        e.stopPropagation();
-        const opt = e.target.closest('[data-range]');
-        if (!opt) return;
-        const key = opt.dataset.range;
-        if (key === 'custom') {
-            caTimeRange = 'custom';
-            caRenderTimeMenu();
-            if (caCustomStart && caCustomEnd) { caSyncToolbar(); caRefreshData(); }
-            return;
-        }
-        caTimeRange = key;
-        _caTimeMenuOpen = false;
-        caSyncToolbar();
-        caRefreshData();
-    });
-    document.getElementById('caTimeMenu').addEventListener('change', (e) => {
-        if (e.target.id === 'caCustomStart') caCustomStart = e.target.value;
-        if (e.target.id === 'caCustomEnd') caCustomEnd = e.target.value;
-        if (caCustomStart && caCustomEnd) { caTimeRange = 'custom'; caSyncToolbar(); caRefreshData(); }
+    // Own preset set, not the shared default (buildDateRangePresets in utils.js) - this one's
+    // last7/last30 end yesterday rather than today, since today's figures are still
+    // accumulating, and it keeps "Maximum"/"This week" rather than "Last Month"/"All Time".
+    const caTimePresets = () => {
+        const DateTime = window.easepick.DateTime;
+        const presets = {};
+        CA_TIME_PRESETS.forEach((p) => {
+            const [start, end] = caRangeDates(p.key);
+            presets[p.label] = [new DateTime(start), new DateTime(end)];
+        });
+        return presets;
+    };
+    createDateRangePicker(document.getElementById('caTimeBtn'), {
+        presets: caTimePresets(),
+        // Map the picked dates back onto whichever preset (if any) produces that same
+        // range, so caRangeLabel/caComparisonWord keep their preset-specific wording
+        // ("This month (...)" / "vs last month") instead of always reading as a custom pick.
+        onSelect: (from, to) => {
+            const matched = CA_TIME_PRESETS.find((p) => {
+                const [s, e] = caRangeDates(p.key);
+                return caIsoDate(s) === from && caIsoDate(e) === to;
+            });
+            if (matched) {
+                caTimeRange = matched.key;
+            } else {
+                caTimeRange = 'custom';
+                caCustomStart = from;
+                caCustomEnd = to;
+            }
+            caSyncToolbar();
+            caRefreshData();
+        },
     });
 
     document.getElementById('caCollectionSelect').addEventListener('change', (e) => {
@@ -354,9 +336,6 @@ function caBindShellEvents() {
     });
 }
 
-function caOnDocClick() {
-    if (_caTimeMenuOpen) { _caTimeMenuOpen = false; caSyncToolbar(); }
-}
 
 // ------------------------------------------------------------------- lifecycle
 
@@ -430,10 +409,8 @@ function caExport() {
 function initCityAnalyticsView() {
     if (!_caInited) {
         _caInited = true;
-        document.addEventListener('click', caOnDocClick);
         caBindHeaderEvents();
     }
-    _caTimeMenuOpen = false;
     caRenderShell();
     caSyncToolbar();
     caRefreshData();

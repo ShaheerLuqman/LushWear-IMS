@@ -600,12 +600,14 @@ function renderLedgerDetailGrid() {
     // Read-only: every row is a posted journal line, corrected by posting again
     // rather than by editing history in place. Display is most-recent-first,
     // but the running balance above must stay computed in chronological order.
-    ledgerDetailGridApi.setGridOption('rowData', withLedgerMonthRows(rowsWithBalance.slice().reverse(), ledgerCollapsedMonths));
+    const monthRows = withLedgerMonthRows(rowsWithBalance.slice().reverse(), ledgerCollapsedMonths);
+    ledgerDetailGridApi.setGridOption('rowData', monthRows);
     // The Balance column's cellStyle also depends on currentLedger.type, which AG
     // Grid can't see as a dependency. With getRowId in play, setting rowData updates
     // matching rows in place rather than rebuilding them, so cellStyle isn't guaranteed to
     // re-run just from the row data change — force it.
     ledgerDetailGridApi.refreshCells({ force: true });
+    if (monthRows.length === 0) ledgerDetailGridApi.showNoRowsOverlay(); else ledgerDetailGridApi.hideOverlay();
 }
 
 // Inserts a full-width divider row carrying the month name and that month's own

@@ -573,6 +573,7 @@ function renderCourierPaymentReportView() {
     renderCourierPaymentReportSummary(courierPaymentReportSummary(bills));
     if (courierPaymentReportGridApi) {
         courierPaymentReportGridApi.setGridOption('rowData', bills);
+        if (bills.length === 0) courierPaymentReportGridApi.showNoRowsOverlay(); else courierPaymentReportGridApi.hideOverlay();
     }
 }
 
@@ -610,7 +611,6 @@ async function loadCourierPaymentReport() {
         return loadCourierPaymentReport();
     }
     renderCourierPaymentReportView();
-    if (courierPaymentReportGridApi) courierPaymentReportGridApi.hideOverlay();
 }
 
 /** Pickup-date range popover, via the shared createDateRangePicker (utils.js), refetching

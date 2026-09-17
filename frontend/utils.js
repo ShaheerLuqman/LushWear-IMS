@@ -254,25 +254,30 @@ function debounce(func, wait) {
 /** Preset ranges shared by every date-range popup in the app: Today/Yesterday/Last 7 &
  * 30 Days/This & Last Month, anchored to PKT "today" since order/bill dates are PKT-based
  * (not the browser's local clock), plus "All Time" back to the oldest orders period (see
- * ORDERS_PERIOD_OLDEST_MONTH/YEAR in data-api.js). PresetPlugin only auto-fills its own 6
- * built-in ranges when left fully unconfigured, so adding "All Time" means building the
- * whole list ourselves - the same way PresetPlugin builds its own defaults. */
-function buildDateRangePresets() {
+ * ORDERS_PERIOD_OLDEST_MONTH/YEAR in data-api.js) - omit it with `includeAllTime: false`
+ * where fetching every order ever isn't a range worth offering (the Orders page itself).
+ * PresetPlugin only auto-fills its own 6 built-in ranges when left fully unconfigured, so
+ * adding "All Time" means building the whole list ourselves - the same way PresetPlugin
+ * builds its own defaults. */
+function buildDateRangePresets({ includeAllTime = true } = {}) {
     const DateTime = window.easepick.DateTime;
     const pkt = getPKTDate();
     const y = pkt.getFullYear(), m = pkt.getMonth();
     const today = new Date(y, m, pkt.getDate());
     const addDays = (n) => { const d = new Date(today); d.setDate(d.getDate() + n); return d; };
-    const oldestStart = ordersPeriodStartEnd(ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR).start;
-    return {
-        'All Time': [new DateTime(oldestStart), new DateTime(today)],
+    const presets = {};
+    if (includeAllTime) {
+        const oldestStart = ordersPeriodStartEnd(ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR).start;
+        presets['All Time'] = [new DateTime(oldestStart), new DateTime(today)];
+    }
+    return Object.assign(presets, {
         'Today': [new DateTime(today), new DateTime(today)],
         'Yesterday': [new DateTime(addDays(-1)), new DateTime(addDays(-1))],
         'Last 7 Days': [new DateTime(addDays(-6)), new DateTime(today)],
         'Last 30 Days': [new DateTime(addDays(-29)), new DateTime(today)],
         'This Month': [new DateTime(new Date(y, m, 1)), new DateTime(new Date(y, m + 1, 0))],
         'Last Month': [new DateTime(new Date(y, m - 1, 1)), new DateTime(new Date(y, m, 0))],
-    };
+    });
 }
 
 /**
@@ -280,17 +285,23 @@ function buildDateRangePresets() {
  * single-month calendar, viewport-clamped, themed to the app's own colors/radius/shadow,
  * plus a small "x" button inserted right after `triggerBtn` to clear it. This is the one
  * mechanism behind every date-range filter in the app (Orders, Courier Performance, Courier
- * Payment Report, Print Airway Bill) - each caller keeps owning its own {from,to} state,
- * button label, and reload; this only drives the popup and the "x" itself:
+ * Payment Report, Print Airway Bill, Product/City Analytics) - each caller keeps owning its
+ * own {from,to} state, button label, and reload; this only drives the popup and the "x"
+ * itself:
  *   - onSelect(from, to) fires with YYYY-MM-DD strings for a picked range (a preset or a
  *     plain two-click custom range - both auto-apply and close immediately).
- *   - onClear() fires when the "x" is clicked.
+ *   - onClear() fires when the "x" is clicked. Omit it (leave `setClearable(true)` uncalled)
+ *     on a screen that has no "no range" state to clear to, like the analytics views, which
+ *     always show *some* period - the "x" then just stays hidden.
+ *   - presets overrides the default preset list with a caller-built customPreset object (see
+ *     buildDateRangePresets for the shape) - product/city analytics need their own (e.g. a
+ *     "last 7 days" ending yesterday, not today, since today's data is still incomplete).
  * Returns { picker, setLabel(text, title), setClearable(bool) } so the caller can keep the
  * trigger's own text/tooltip and the "x" button's visibility in sync after any change to
  * its range state - not just a select/clear here, but e.g. a page-wide "Clear filters"
  * button resetting this range too.
  */
-function createDateRangePicker(triggerBtn, { onSelect, onClear } = {}) {
+function createDateRangePicker(triggerBtn, { onSelect, onClear, presets } = {}) {
     if (!triggerBtn || !window.easepick) return null;
 
     const clearBtn = document.createElement('button');
@@ -318,7 +329,7 @@ function createDateRangePicker(triggerBtn, { onSelect, onClear } = {}) {
         // a no-op. true also means a plain two-click custom range applies immediately.
         autoApply: true,
         plugins: ['RangePlugin', 'PresetPlugin'],
-        PresetPlugin: { position: 'left', customPreset: buildDateRangePresets() },
+        PresetPlugin: { position: 'left', customPreset: presets || buildDateRangePresets() },
     });
 
     // easepick renders into a shadow root, so the app's own stylesheet can't reach it -

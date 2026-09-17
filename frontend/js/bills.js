@@ -86,7 +86,7 @@ async function loadBills() {
     }
     if (billsGridApi) {
         billsGridApi.setGridOption('rowData', bills);
-        billsGridApi.hideOverlay();
+        if (bills.length === 0) billsGridApi.showNoRowsOverlay(); else billsGridApi.hideOverlay();
     }
 }
 

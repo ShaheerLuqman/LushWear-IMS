@@ -18,8 +18,6 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ag-grid-community@31.0.2/styles/ag-theme-alpine.css">
     <!-- Font Awesome Icons -->
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6/css/all.min.css">
-    <!-- Flatpickr (date picker for date range filter) -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.css">
     <link rel="stylesheet" href="styles.css">
     <script>
         // Set before first paint so a dark-theme user never sees a light flash.
@@ -392,7 +390,6 @@
                                 <span id="paTimeLabel"></span>
                                 <i class="fa-solid fa-chevron-down"></i>
                             </button>
-                            <div id="paTimeMenu" class="pa-time-menu" hidden></div>
                         </div>
                         <select id="paCollectionSelect" class="orders-period-filter" title="Filter by collection">
                             <option value="">All collections</option>
@@ -426,7 +423,6 @@
                                 <span id="caTimeLabel"></span>
                                 <i class="fa-solid fa-chevron-down"></i>
                             </button>
-                            <div id="caTimeMenu" class="pa-time-menu" hidden></div>
                         </div>
                         <select id="caCollectionSelect" class="orders-period-filter" title="Filter by collection">
                             <option value="">All collections</option>
@@ -1996,8 +1992,7 @@
 
     <!-- AG Grid JS -->
     <script src="https://cdn.jsdelivr.net/npm/ag-grid-community@31.0.2/dist/ag-grid-community.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/flatpickr@4.6.13/dist/flatpickr.min.js"></script>
-    <!-- easepick (preset + custom range picker, orders date-range filter) -->
+    <!-- easepick (preset + custom range picker, shared by every date-range filter - see createDateRangePicker in utils.js) -->
     <script src="https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.umd.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/lucide@1.28.0/dist/umd/lucide.min.js"></script>
