@@ -1,6 +1,6 @@
 {
-    "name": "LushWear Inventory Manager",
-    "short_name": "LushWear IMS",
+    "name": "SoftLush Inventory Manager",
+    "short_name": "SoftLush IMS",
     "start_url": "./index.html",
     "scope": "./",
     "display": "standalone",

@@ -1,7 +1,7 @@
 {
-  "name": "lushwear-ims-frontend",
+  "name": "softlush-ims-frontend",
   "version": "1.0.0",
-  "description": "LushWear Inventory Management System — static web frontend",
+  "description": "SoftLush Inventory Management System — static web frontend",
   "private": true,
   "license": "MIT",
   "scripts": {

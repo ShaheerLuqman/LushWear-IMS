@@ -1087,6 +1087,7 @@ def _reconcile_one_order(
 
     _apply_customer_fields(order_data, customer_info, existing_order)
     customer_info_changed = any(order_data[key] != existing_order.get(key) for key in CUSTOMER_INFO_FIELDS)
+    tags_changed = (order_data.get("tags") or "") != (existing_order.get("tags") or "")
 
     # Always update if courier or tracking_number changed, otherwise check other fields.
     # has_changed's skip_fields mode (once an order has left "unfulfilled") never compares
@@ -1094,11 +1095,13 @@ def _reconcile_one_order(
     # otherwise never get a stale total_amount corrected here - cancelled_total_needs_fix covers
     # that, same as delivery_charge_changed does for the "Other"-courier backfill case (also
     # invisible to has_changed's skip mode once courier is assigned); customer_info_changed
-    # covers the same blind spot for a customer's name/phone/address/city/id.
+    # covers the same blind spot for a customer's name/phone/address/city/id. has_changed never
+    # compares tags in either field list, so tags_changed catches a tag added/removed on Shopify
+    # with nothing else about the order changing (e.g. a courier tag set after the order synced).
     # booking_was_voided is listed explicitly: it clears courier/tracking to values
     # that differ from BOTH Shopify (which still carries the cancelled fulfillment)
     # and the existing row, so neither courier_changed nor has_changed sees it.
-    if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+    if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or tags_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
         order_data["id"] = existing_order["id"]
         return OrderReconciliation("update", order_number, order_data, replacement_of)
     return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
@@ -1135,7 +1138,7 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
         "delivery_status, piece_received, courier, tracking_number, "
         "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
         "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-        "customer_address, customer_city"
+        "customer_address, customer_city, tags"
     ).eq("order_number", order_number).execute().data or []
 
     products_cost_map: Dict[str, float] = {}
@@ -1235,7 +1238,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             "delivery_status, piece_received, courier, tracking_number, "
             "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-            "customer_address, customer_city"
+            "customer_address, customer_city, tags"
         )
         shopify_order_numbers_list = list(shopify_order_numbers)
         order_chunks = [

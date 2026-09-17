@@ -4,7 +4,7 @@ Reads the CSV through the same parser the upload endpoint uses, then compares ev
 field that upload writes - delivery_charge, tax_amount, tracking_number, courier,
 is_order_settled - plus the receivable the grid derives, against the live rows.
 
-    python scripts/reconcile_postex_csv.py <export.csv> [--org <uuid>|--org-name LushWear]
+    python scripts/reconcile_postex_csv.py <export.csv> [--org <uuid>|--org-name NAME]
 
 Read-only: it never writes. Exits 1 when any discrepancy is found so it can gate a run.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from _org import resolve_org_by_name
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.money import money
@@ -32,17 +33,10 @@ def expected_receivable(status: str, total: float, advance: float, dc: float, ta
 
 
 def resolve_org(supabase, org_arg: str | None, org_name: str | None) -> str:
-    orgs = supabase.table("system_organizations").select("id, name").execute().data or []
     if org_arg:
         return org_arg
-    if org_name:
-        match = [o for o in orgs if o["name"].lower() == org_name.lower()]
-        if not match:
-            sys.exit(f"No organization named {org_name!r}. Available: {[o['name'] for o in orgs]}")
-        return match[0]["id"]
-    if len(orgs) == 1:
-        return orgs[0]["id"]
-    sys.exit(f"Multiple organizations - pass --org-name or --org. Available: {[o['name'] for o in orgs]}")
+    org_id, _ = resolve_org_by_name(supabase, org_name)
+    return org_id
 
 
 def main() -> int:

@@ -8,7 +8,7 @@ the silent-drop case suspected in the Print Airway Bill flow.
 
 Read-only against our DB; hits PostEx's live get-invoice endpoint 10 times.
 
-    python scripts/test_airway_bill_page_counts.py [--org-name LushWear] [--count 30] [--rounds 10]
+    python scripts/test_airway_bill_page_counts.py [--org-name NAME] [--count 30] [--rounds 10]
 """
 
 import argparse
@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import httpx
 from pypdf import PdfReader
 
+from _org import resolve_org_by_name
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.org_scope import org_table
@@ -31,17 +32,13 @@ from app.services import postex
 
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--org-name", default="LushWear")
+    ap.add_argument("--org-name", help="defaults to the sole organization if only one exists")
     ap.add_argument("--count", type=int, default=30)
     ap.add_argument("--rounds", type=int, default=10)
     args = ap.parse_args()
 
     sb = get_supabase()
-    orgs = sb.table("system_organizations").select("id, name").execute().data or []
-    match = [o for o in orgs if o["name"].lower() == args.org_name.lower()]
-    if not match:
-        sys.exit(f"No organization named {args.org_name!r}")
-    org_id = match[0]["id"]
+    org_id, org_name = resolve_org_by_name(sb, args.org_name)
 
     token = get_org_integration_settings(org_id).postex_merchant_token
     if not token:
@@ -60,7 +57,7 @@ async def main() -> int:
     if len(numbers) < args.count:
         sys.exit(f"Only found {len(numbers)} fulfilled PostEx orders with a tracking number - need {args.count}.")
     numbers = numbers[:args.count]
-    print(f"org={args.org_name} tracking numbers={len(numbers)} rounds={args.rounds}")
+    print(f"org={org_name} tracking numbers={len(numbers)} rounds={args.rounds}")
     print("first 5:", numbers[:5])
     print()
 

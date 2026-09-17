@@ -86,13 +86,40 @@ rather than build a parallel one:
   trailing 2-month window.
 - Orders the CSV shows as **already settled** → don't post individual
   journal entries at their real (pre-onboarding) dates (barred by §2);
-  instead **net their financial effect into the relevant ledgers'
-  `opening_balance`** (Cash/Courier-receivable, Sales Returns, Delivery
-  Charges, Withholding Tax), dated as of onboarding via the opening-balance
-  journal.
+  instead **net their financial effect into the PostEx system ledger's
+  `opening_balance`**, dated as of onboarding via the existing
+  opening-balance journal mechanism.
 - Orders the CSV shows as **still unsettled** → become a normal open
   `shopify_courier_bill` and flow through the existing ongoing
   reconciliation machinery after onboarding, same as any new order.
+
+**Revised, per discussion: no new opening-balance posting UI/logic is
+needed.** Confirmed via code investigation:
+
+- Every org already gets a PostEx system ledger (`system_key =
+  'courier_postex'`) unconditionally at org creation, independent of
+  whether the PostEx courier is toggled on in Settings — so it's always
+  there to edit.
+- `opening_balance` is already a first-class field end-to-end: present on
+  `LedgerUpdate` (`backend/app/models.py`), updatable with no
+  system-ledger restriction via `PUT /ledgers/{id}`
+  (`backend/app/routes/ledger.py`), and already an editable (not disabled)
+  input in the existing ledger edit modal (`editLedgerOpeningBalance` in
+  `frontend/js/ledgers.js` / `editLedgerModal` in `frontend/index.html`).
+- So: the opening balance produced by reconciling the historical CSV
+  against the trailing-window orders is simply **entered into the PostEx
+  ledger's existing opening_balance field via its existing edit modal** —
+  the same place any ledger's opening balance is set. It then flows through
+  the existing `sync_opening_balance_journal` rebuild like any other
+  ledger's opening balance. No separate onboarding-specific posting
+  endpoint or review screen is needed for this part.
+- One small pre-existing gap worth fixing along the way: the frontend's
+  `SYSTEM_LEDGER_LABELS` map in `ledgers.js` doesn't include the courier
+  system ledgers (`courier_postex`, etc.), so the edit modal's system
+  notice currently shows the raw key ("System account (courier_postex)…")
+  instead of "PostEx". The backend already has the correct mapping
+  (`COURIER_LEDGER_LABELS` in `app/couriers.py`, used in the delete-route
+  error message) — just needs mirroring into the frontend map.
 
 ## 5. UX flow (draft)
 
@@ -101,12 +128,14 @@ rather than build a parallel one:
 2. Once confirmed, system runs the bounded Shopify sync (§3) to pull in the
    trailing 2-month + ongoing orders.
 3. Admin is prompted to upload historical PostEx CSV(s) for that trailing
-   window.
-4. System shows a review screen with the computed opening-balance
-   adjustments + the list of "remaining" unsettled orders, before posting
-   (money is involved — avoid auto-posting silently).
-5. Confirm → opening balances posted, remaining orders become live courier
-   bills, normal operation begins.
+   window (reusing the existing upload-postex-csv flow/UI).
+4. The settled portion nets into the PostEx ledger's `opening_balance`,
+   entered via that ledger's existing edit modal (§4) — either manually by
+   the admin reading the CSV summary, or pre-filled by the upload response
+   if we choose to compute it automatically (open question below).
+5. The unsettled portion becomes live courier bills automatically, flowing
+   through the existing ongoing reconciliation machinery — normal operation
+   begins.
 
 ## Open questions
 
@@ -125,6 +154,14 @@ rather than build a parallel one:
   "onboarding mode" flag, or build a separate onboarding-specific upload
   endpoint, since the accounting treatment (net-into-opening-balance vs.
   per-order posting) differs?
+- **Auto-compute vs. manual entry for the PostEx opening balance**: should
+  the historical CSV upload compute and pre-fill the suggested
+  `opening_balance` value (admin then confirms/adjusts it in the PostEx
+  ledger's edit modal), or should the admin read the CSV-derived totals and
+  type the number in themselves? Auto-fill is friendlier but means the
+  upload response needs to hand a number to the ledger edit UI somehow
+  (e.g. a banner/prompt linking straight into `editLedgerModal` for the
+  PostEx ledger, pre-populated).
 
 ## Next step
 

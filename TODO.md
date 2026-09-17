@@ -1,6 +1,6 @@
 # TODO
 
-Open, non-urgent work items for LushWear IMS. Backend/database design and
+Open, non-urgent work items for SoftLush IMS. Backend/database design and
 settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 (descriptive, not a task list). Transactions/ledger work items live in
 [`CASHBOOK_IMPROVEMENTS.md`](CASHBOOK_IMPROVEMENTS.md).

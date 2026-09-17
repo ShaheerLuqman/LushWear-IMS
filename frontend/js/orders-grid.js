@@ -36,7 +36,9 @@ const STOCK_STATUS_LABELS = { in: 'In Stock', low: 'Low Stock', out: 'Out of Sto
 
 function productStockStatus(product) {
     const qty = product?.total_quantity || 0;
-    if (qty === 0) return 'out';
+    // <= 0, not === 0: an oversold product (negative qty) is worse than merely low,
+    // not a shade of it - badging it "Low Stock" reads as if there's cushion left.
+    if (qty <= 0) return 'out';
     return qty < LOW_STOCK_THRESHOLD ? 'low' : 'in';
 }
 

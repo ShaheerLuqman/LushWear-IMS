@@ -335,7 +335,7 @@ class TestGenerateInvoice:
         def fake_build_context(order, sp_order):
             return {"db_id": order["id"], "shopify_number": sp_order["shopify_number"] if sp_order else None}
 
-        def fake_generate_pdf(merged):
+        def fake_generate_pdf(merged, org_name=None):
             captured["merged"] = merged
             return io.BytesIO(b"%PDF-fake")
 

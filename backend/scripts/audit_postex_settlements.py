@@ -6,7 +6,7 @@ trustworthy at full history scale rather than on one export. Orders the API alre
 (tax_amount_derived = true) have no independent truth, so they are only checked for
 internal consistency - that what we stored still matches what the API reports today.
 
-    python scripts/audit_postex_settlements.py [--org-name LushWear] [--limit N]
+    python scripts/audit_postex_settlements.py [--org-name NAME] [--limit N]
 
 Read-only. Exits 1 if any CSV-backed order disagrees with the derivation.
 """
@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
 
+from _org import resolve_org_by_name
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.org_scope import org_table
@@ -105,17 +106,13 @@ def _same_folio(ours: str, theirs: str) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--org-name", default="LushWear")
+    ap.add_argument("--org-name", help="defaults to the sole organization if only one exists")
     ap.add_argument("--limit", type=int, default=25, help="max example rows printed per bucket")
     ap.add_argument("--out", type=Path, help="write every discrepancy to this CSV for review")
     args = ap.parse_args()
 
     sb = get_supabase()
-    orgs = sb.table("system_organizations").select("id, name").execute().data or []
-    match = [o for o in orgs if o["name"].lower() == args.org_name.lower()]
-    if not match:
-        sys.exit(f"No organization named {args.org_name!r}")
-    org_id = match[0]["id"]
+    org_id, _ = resolve_org_by_name(sb, args.org_name)
 
     rows = fetch_all(
         lambda: org_table(sb, org_id, "shopify_orders")

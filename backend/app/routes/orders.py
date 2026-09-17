@@ -36,7 +36,7 @@ from app.services.pdf.packaging_list import (
     _generate_pdf_packaging_list,
     _order_line_rows,
 )
-from app.services.shopify_orders import _fetch_shopify_order_by_order_number
+from app.services.shopify_orders import _fetch_shopify_order_by_order_number, _fetch_shopify_unfulfilled_orders
 from app.services.shopify_sync import (
     PRICE_REDUCTION_DISCOUNT_CODES,
     has_settled_tag,
@@ -302,13 +302,13 @@ def _customer_status_tier(received: int, total: int) -> Tuple[str, str]:
 @router.get("/unfulfilled", response_model=List[UnfulfilledOrder])
 async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
     """Unfulfilled orders for the Order Fulfillment view, across all periods (this is an
-    action queue, not a period report). Customer name/address/phone/city/id/tags are all
-    captured at sync time (see shopify_sync._reconcile_one_order) and read straight off
-    shopify_orders here - no live Shopify call at all. (Tags used to be fetched live on
-    every page load - a 250-order sweep plus a per-row fallback for whatever it missed -
-    since they weren't persisted; now they are, so that's gone. A row synced before
-    migration 20260914120000 shows no tags until its next sync, which for this
-    still-unfulfilled set is typically soon.)
+    action queue, not a period report). Customer name/address/phone/city/id are captured
+    at sync time (see shopify_sync._reconcile_one_order) and read straight off
+    shopify_orders; tags are additionally re-swept live from Shopify on every load (see
+    _fetch_shopify_unfulfilled_orders) so a tag added on Shopify shows up immediately
+    instead of waiting on the next webhook/periodic sync to catch up - the stored `tags`
+    column is only the fallback for a DB row the live sweep doesn't cover (older than its
+    250-most-recent-created window, or Shopify unreachable).
 
     customer_status is this customer's delivery track record across their *other* orders,
     found by grouping our own shopify_orders rows on customer_id - bounded to what we've
@@ -327,8 +327,22 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
             return []
         t_db_rows = time.perf_counter()
 
+        live_tags_by_order_number: Dict[int, str] = {}
+        try:
+            org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+            live_orders = await _fetch_shopify_unfulfilled_orders(org_creds)
+            for o in live_orders:
+                if o.get("order_number"):
+                    live_tags_by_order_number[int(o["order_number"])] = o.get("tags") or ""
+        except Exception:
+            logger.exception("[get_unfulfilled_orders] live tag sweep failed, falling back to stored tags")
+        t_live_sweep = time.perf_counter()
+
         def _tags_for(row: dict) -> List[str]:
-            return [t.strip() for t in (row.get("tags") or "").split(",") if t.strip()]
+            tags_raw = live_tags_by_order_number.get(row["order_number"])
+            if tags_raw is None:
+                tags_raw = row.get("tags") or ""
+            return [t.strip() for t in tags_raw.split(",") if t.strip()]
 
         customer_ids = {row["customer_id"] for row in rows if row.get("customer_id") is not None}
         history_by_customer: Dict[int, List[dict]] = {}
@@ -372,9 +386,10 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
             })
 
         logger.info(
-            "[get_unfulfilled_orders] rows=%d db_query=%.2fs history_db_query=%.2fs(customers=%d) total=%.2fs",
+            "[get_unfulfilled_orders] rows=%d db_query=%.2fs live_tag_sweep=%.2fs(matched=%d) history_db_query=%.2fs(customers=%d) total=%.2fs",
             len(rows), t_db_rows - t_start,
-            t_history_query - t_db_rows, len(customer_ids),
+            t_live_sweep - t_db_rows, len(live_tags_by_order_number),
+            t_history_query - t_live_sweep, len(customer_ids),
             time.perf_counter() - t_start,
         )
         return results
@@ -3640,7 +3655,9 @@ async def generate_invoice(request: Request, order_ids: List[str] = Body(..., em
         order_numbers = [str(o.get("order_number") or "").strip() for o in orders]
         sp_orders = await asyncio.gather(*(_fetch_bounded(num) for num in order_numbers))
         merged = [_build_invoice_order_context(o, sp_order) for o, sp_order in zip(orders, sp_orders)]
-        pdf_buffer = await asyncio.to_thread(_generate_pdf_invoice, merged)
+        org_row = supabase.table("system_organizations").select("name").eq("id", org_id).limit(1).execute().data or []
+        org_name = org_row[0]["name"] if org_row else None
+        pdf_buffer = await asyncio.to_thread(_generate_pdf_invoice, merged, org_name)
         return Response(
             content=pdf_buffer.getvalue(),
             media_type="application/pdf",

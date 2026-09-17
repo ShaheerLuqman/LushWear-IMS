@@ -1,5 +1,5 @@
 -- ============================================================================
--- LushWear IMS — Supabase (Postgres) schema
+-- SoftLush IMS — Supabase (Postgres) schema
 -- ----------------------------------------------------------------------------
 -- Canonical, replicable definition of the database. Running this whole file
 -- against a fresh project recreates the schema; running it against an existing

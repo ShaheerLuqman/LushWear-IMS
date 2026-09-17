@@ -196,27 +196,26 @@ def _build_invoice_order_context(db_order: dict, sp_order: Optional[dict]) -> di
     return ctx
 
 
-def _load_invoice_shipper_defaults() -> Dict[str, str]:
-    """Load fixed shipper information from invoice.json if present."""
+def _load_invoice_shipper_defaults(org_name: Optional[str] = None) -> Dict[str, str]:
+    """Load fixed shipper information from invoice.json if present.
+
+    `org_name` (the invoice's organization) takes priority over invoice.json's
+    own `name`, so each org's invoices are labelled with that org rather than
+    whichever business originally configured invoice.json's shipper details.
+    """
+    shipper: Dict[str, str] = {}
     invoice_json_path = ASSETS_DIR / "invoice.json"
     try:
         if invoice_json_path.exists():
             with open(invoice_json_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                shipper = (data.get("shipper_information") or {})
-                return {
-                    "name": shipper.get("name") or "Lushwear",
-                    "contact": shipper.get("contact") or "03390153893",
-                    "pickup_address": shipper.get("pickup_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
-                    "return_address": shipper.get("return_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
-                }
+                shipper = (json.load(f).get("shipper_information") or {})
     except Exception:
-        pass
+        shipper = {}
     return {
-        "name": "Lushwear",
-        "contact": "03390153893",
-        "pickup_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
-        "return_address": "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+        "name": org_name or shipper.get("name") or "Lushwear",
+        "contact": shipper.get("contact") or "03390153893",
+        "pickup_address": shipper.get("pickup_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
+        "return_address": shipper.get("return_address") or "Office Number 1B, 1st Floor Zul Jallal Centre, 172-F/2, PECHS Karachi",
     }
 
 
@@ -246,8 +245,9 @@ class _ScaleTableToSlot(Flowable):
         self.canv.restoreState()
 
 
-def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
-    """Generate a PDF with one invoice table per order. Shipper info is fixed; consignee/shipment/order from each order."""
+def _generate_pdf_invoice(orders: List[dict], org_name: Optional[str] = None) -> BytesIO:
+    """Generate a PDF with one invoice table per order. Shipper info is fixed (besides
+    the name, which reflects org_name); consignee/shipment/order from each order."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(
         buffer, pagesize=A4,
@@ -265,7 +265,7 @@ def _generate_pdf_invoice(orders: List[dict]) -> BytesIO:
     bold_style = ParagraphStyle(
         "InvoiceBold", parent=styles["Normal"], fontSize=9, textColor=colors.black, fontName="Helvetica-Bold"
     )
-    shipper = _load_invoice_shipper_defaults()
+    shipper = _load_invoice_shipper_defaults(org_name)
     inter_table_gap = 12 * mm
     tables_per_page = 3
     slot_height = (doc.height - (tables_per_page - 1) * inter_table_gap) / tables_per_page
