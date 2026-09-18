@@ -755,6 +755,12 @@ class TestCancelledFulfillmentReturnsOrderToUnfulfilled:
         row["tracking_number"] = "TRK900001"
         row["order_status"] = order_status
         row["delivery_status"] = _tracking_payload(delivery_status) if delivery_status else None
+        # What a successful _push_fulfillments_to_shopify marks (see
+        # _mark_shopify_fulfillment_synced) - the void below only fires once Shopify is
+        # known to have been told, so this is what makes "cancelled on Shopify" real here
+        # rather than "never told Shopify yet" (see TestStaleWebhookPayloadIgnored's
+        # sibling gap, guarded separately).
+        row["shopify_fulfillment_synced_at"] = "2026-01-01T00:00:00+00:00"
 
         self._cancel_every_fulfillment(orders_fixture, order_number)
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
@@ -790,6 +796,73 @@ class TestCancelledFulfillmentReturnsOrderToUnfulfilled:
             monkeypatch, order_status=terminal_status, delivery_status="Delivered to Customer")
 
         assert row["order_status"] == terminal_status
+
+
+class TestNeverSyncedBookingIsNotVoided:
+    """A booking whose push to Shopify hasn't succeeded yet (still pending retry, or
+    permanently failed on a transient error) makes Shopify legitimately still report the
+    order "unfulfilled" - indistinguishable, to a naive check, from Shopify genuinely
+    undoing a booking it *was* told about. Only the latter must void the local booking
+    (2026-09-18: order 13915, picked up by PostEx and confirmed on PostEx's own tracking
+    API, was reverted to unfulfilled/Unassigned by this exact confusion while its
+    fulfillment push had failed with a transient connection error - and voiding it also
+    made it invisible to the sweep that exists to retry that push)."""
+
+    def test_booking_survives_when_shopify_was_never_told(self, monkeypatch):
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=False)
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["order_status"] == "unfulfilled"
+        # What /fulfill writes on a successful booking - shopify_fulfillment_synced_at
+        # stays null because the push to Shopify hasn't succeeded (the real gap here).
+        row["courier"] = "PostEx"
+        row["tracking_number"] = "TRK900002"
+        row["order_status"] = "fulfilled"
+        assert not row.get("shopify_fulfillment_synced_at")
+
+        # Shopify's own state is unchanged - still unfulfilled, same as before the
+        # booking, because it was never told about it.
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row_after = fake_db.orders.rows_by_number[order_number]
+        assert row_after["order_status"] == "fulfilled"
+        assert row_after["courier"] == "PostEx"
+        assert row_after["tracking_number"] == "TRK900002"
+
+
+class TestStaleWebhookPayloadIgnored:
+    """Shopify webhook delivery is at-least-once but not ordered: a delayed/retried
+    "orders/updated" can arrive after a newer webhook already applied fresher data,
+    carrying an older snapshot of the order (2026-09-17: orders 13839/13803 reverted from
+    fulfilled/PostEx to unfulfilled/Unassigned an hour after being correctly fulfilled,
+    by exactly this). A payload older than what's already stored must be discarded
+    outright, not reconciled as if it were newer, real information."""
+
+    def test_older_payload_after_fulfillment_does_not_revert_it(self, synced_once):
+        fake_db, _result, orders_fixture = synced_once
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        # What /fulfill writes on a successful booking (same as
+        # TestCancelledAfterBookingResetsToUnfulfilled._sync_then_cancel above) - the
+        # fixture's own fulfillment may not carry a tracking_company.
+        fake_db.orders.rows_by_number[order_number]["courier"] = "PostEx"
+        fake_db.orders.rows_by_number[order_number]["tracking_number"] = "TRK123456"
+        row_before = dict(fake_db.orders.rows_by_number[order_number])
+        assert row_before["order_status"] == "fulfilled"
+
+        stale_sp_order = dict(next(o for o in orders_fixture if int(o["order_number"]) == order_number))
+        stored_updated_at = datetime.fromisoformat(row_before["shopify_updated_at"].replace("Z", "+00:00"))
+        stale_sp_order["updated_at"] = (stored_updated_at - timedelta(days=1)).isoformat()
+        stale_sp_order["fulfillments"] = []
+        stale_sp_order["fulfillment_status"] = None
+
+        result = asyncio.run(shopify_sync.reconcile_and_persist_single_order(TEST_ORG_ID, stale_sp_order))
+
+        assert result.action == "skip"
+        assert fake_db.orders.rows_by_number[order_number] == row_before
 
 
 class TestStaleSyncLockReclaim:

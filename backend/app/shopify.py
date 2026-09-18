@@ -339,6 +339,14 @@ async def adjust_inventory_levels(
     _check_user_errors("inventoryAdjustQuantities", data.get("inventoryAdjustQuantities"))
 
 
+# A concurrent burst of fulfillment pushes (one order per courier booking, several at
+# once - see orders.py's _push_fulfillments_to_shopify) periodically gets a handful of
+# connection resets from Shopify's side with no HTTP response at all - _request_with_retry
+# doesn't cover that (it only backs off on a 429 response), so uncovered it fails the push
+# outright on the first hiccup.
+_CONNECTION_ERROR_RETRIES = 3
+
+
 async def create_fulfillment(
     shopify_order_id: int, tracking_number: str, tracking_company: str,
     tracking_url: Optional[str], org_creds: OrgIntegrationSettings,
@@ -373,28 +381,45 @@ async def create_fulfillment(
     headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
     base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
 
-    await add_order_tag(shopify_order_id, tracking_company, org_creds, client)
+    # Retries a connection-level failure (Shopify's server dropping the connection before
+    # sending any response at all - not a 429, which _request_with_retry already handles)
+    # by re-running the whole sequence from scratch, not just the one request that failed.
+    # That's what makes it safe to blindly retry rather than risk double-booking a
+    # fulfillment whose POST actually landed but whose response we never saw: add_order_tag
+    # re-reads the order's current tags before writing (a retry is a no-op if the tag is
+    # already there), and the fulfillment_orders re-check below finds nothing "open" left
+    # once a fulfillment already exists, so retrying then just returns instead of creating
+    # a second one. (2026-09-18: 4 of 18 concurrent pushes in one batch failed this way -
+    # orders 13915/13912/13899/13893 - and, absent this retry, needed manual recovery.)
+    for attempt in range(_CONNECTION_ERROR_RETRIES):
+        try:
+            await add_order_tag(shopify_order_id, tracking_company, org_creds, client)
 
-    response = await _request_with_retry(
-        client, "GET", f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
-    fulfillment_orders = [
-        fo for fo in response.json().get("fulfillment_orders", [])
-        if fo.get("status") in ("open", "in_progress", "scheduled")
-    ]
-    if not fulfillment_orders:
-        return
+            response = await _request_with_retry(
+                client, "GET", f"{base}/orders/{shopify_order_id}/fulfillment_orders.json", headers=headers)
+            fulfillment_orders = [
+                fo for fo in response.json().get("fulfillment_orders", [])
+                if fo.get("status") in ("open", "in_progress", "scheduled")
+            ]
+            if not fulfillment_orders:
+                return
 
-    await _request_with_retry(client, "POST", f"{base}/fulfillments.json", headers=headers, json={
-        "fulfillment": {
-            "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
-            "tracking_info": {
-                "number": tracking_number,
-                "company": tracking_company,
-                **({"url": tracking_url} if tracking_url else {}),
-            },
-            "notify_customer": True,
-        }
-    })
+            await _request_with_retry(client, "POST", f"{base}/fulfillments.json", headers=headers, json={
+                "fulfillment": {
+                    "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
+                    "tracking_info": {
+                        "number": tracking_number,
+                        "company": tracking_company,
+                        **({"url": tracking_url} if tracking_url else {}),
+                    },
+                    "notify_customer": True,
+                }
+            })
+            return
+        except httpx.TransportError:
+            if attempt == _CONNECTION_ERROR_RETRIES - 1:
+                raise
+            await asyncio.sleep(0.5 * (2 ** attempt))
 
 
 # Deeper than _MAX_RATE_LIMIT_RETRIES: the bucket is shop-wide, so concurrent settle

@@ -758,6 +758,7 @@ def _reconcile_one_order(
 
     order_number = int(order_number)
     customer_info = _customer_info_from_shopify_order(sp_order)
+    shopify_updated_at_raw = sp_order.get("updated_at")
 
     courier = extract_courier(sp_order)
     tracking_number = extract_tracking_number(sp_order)
@@ -894,6 +895,7 @@ def _reconcile_one_order(
         "replacement_of_order_no": replacement_of,
         "tags": tags_str,
         "updated_at": current_time,
+        "shopify_updated_at": shopify_updated_at_raw,
     }
 
     if order_number not in existing_orders_map:
@@ -903,6 +905,23 @@ def _reconcile_one_order(
         return OrderReconciliation("insert", order_number, order_data, replacement_of)
 
     existing_order = existing_orders_map[order_number]
+
+    # Webhook delivery is at-least-once but not ordered: a delayed/retried "orders/updated"
+    # can arrive after a newer webhook already applied fresher data, carrying a stale
+    # snapshot (e.g. pre-fulfillment) that would otherwise silently revert
+    # courier/tracking/order_status back to old data. Only strictly older is rejected -
+    # a periodic sync's live refetch legitimately carries the same Shopify updated_at as
+    # last time when nothing changed there, and must still be allowed through to correct
+    # any local drift (a manual edit, a stale DB value) against that unchanged truth.
+    incoming_shopify_updated_at = _parse_iso(shopify_updated_at_raw)
+    existing_shopify_updated_at = _parse_iso(existing_order.get("shopify_updated_at"))
+    if (
+        incoming_shopify_updated_at is not None
+        and existing_shopify_updated_at is not None
+        and incoming_shopify_updated_at < existing_shopify_updated_at
+    ):
+        return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
+
     existing_status = (existing_order.get("order_status") or "").strip().lower()
     booking_was_voided = False
     if existing_status in ("delivered", "returned"):
@@ -929,6 +948,7 @@ def _reconcile_one_order(
                     "tracking_number": tracking_number,
                     "delivery_charge": new_delivery_charge_frozen,
                     "updated_at": current_time,
+                    "shopify_updated_at": shopify_updated_at_raw,
                 }
                 if replacement_of is not None and existing_order.get("replacement_of_order_no") != replacement_of:
                     update_payload["replacement_of_order_no"] = replacement_of
@@ -942,6 +962,7 @@ def _reconcile_one_order(
                 **existing_order,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
+                "shopify_updated_at": shopify_updated_at_raw,
             }
             _apply_customer_fields(update_payload, customer_info, existing_order)
             return OrderReconciliation("update", order_number, update_payload, replacement_of)
@@ -966,6 +987,17 @@ def _reconcile_one_order(
         # Only when there is actually a booking to void. Without this an ordinary
         # never-booked order matches on every sync and is rewritten forever.
         and _has_booking(existing_order)
+        # And only once we know Shopify was actually told about it. Without this, a
+        # booking whose own push to Shopify simply hasn't succeeded yet (still pending,
+        # or permanently failed on a transient error - see shopify_fulfillment_sync_error)
+        # looks identical to one Shopify genuinely undid, and gets wrongly voided: cleared
+        # locally even though the courier already has the real parcel (2026-09-18: order
+        # 13915, picked up by PostEx, reverted to unfulfilled/Unassigned this way while its
+        # fulfillment push had failed with a transient connection error). Voiding a booking
+        # Shopify never heard about also makes it invisible to
+        # sweep_unsynced_shopify_fulfillments, which only retries orders still
+        # order_status="fulfilled" - so nothing would ever push it to Shopify again either.
+        and existing_order.get("shopify_fulfillment_synced_at")
     ):
         # Shopify reports "unfulfilled" for an order whose every fulfillment has
         # been cancelled. That is a deliberate undo of the fulfillment - the parcel
@@ -1012,7 +1044,25 @@ def _reconcile_one_order(
     courier_changed = existing_courier_normalized != shopify_courier_normalized
     tracking_changed = existing_tracking != shopify_tracking
 
-    if courier_changed or tracking_changed:
+    # Shopify reporting no active fulfillment is only trustworthy enough to clear a real
+    # local booking when Shopify was actually told about it before (shopify_fulfillment_
+    # synced_at set) and has since dropped it - otherwise "Unassigned" here just means the
+    # push hasn't landed yet (still pending, or permanently failed - see
+    # shopify_fulfillment_sync_error), and clobbering the booking with it loses the
+    # courier/tracking info for a parcel that may already be with the courier (same gap,
+    # and same 2026-09-18 order-13915 incident, as the order_status void guard above).
+    # Cancelled/returned is a stronger, unambiguous signal (Shopify said so outright via
+    # cancelled_at) than plain "unfulfilled", and already means the booking should clear
+    # regardless of push status - only "unfulfilled" is the case that's genuinely
+    # ambiguous between "never told Shopify" and "Shopify undid it".
+    trust_shopify_courier = (
+        shopify_courier_normalized != "unassigned"
+        or shopify_order_status != "unfulfilled"
+        or not _has_booking(existing_order)
+        or bool(existing_order.get("shopify_fulfillment_synced_at"))
+    )
+
+    if trust_shopify_courier and (courier_changed or tracking_changed):
         # Update courier and tracking_number from Shopify
         order_data["courier"] = courier
         order_data["tracking_number"] = tracking_number
@@ -1138,7 +1188,7 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
         "delivery_status, piece_received, courier, tracking_number, "
         "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
         "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-        "customer_address, customer_city, tags"
+        "customer_address, customer_city, tags, shopify_updated_at, shopify_fulfillment_synced_at"
     ).eq("order_number", order_number).execute().data or []
 
     products_cost_map: Dict[str, float] = {}
@@ -1238,7 +1288,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             "delivery_status, piece_received, courier, tracking_number, "
             "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-            "customer_address, customer_city, tags"
+            "customer_address, customer_city, tags, shopify_updated_at, shopify_fulfillment_synced_at"
         )
         shopify_order_numbers_list = list(shopify_order_numbers)
         order_chunks = [

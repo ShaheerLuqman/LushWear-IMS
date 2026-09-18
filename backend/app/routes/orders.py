@@ -1622,6 +1622,11 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 "line_items": final_line_items,
                 "replacement_of_order_no": replacement_of,
                 "updated_at": current_time,
+                # Keep in step with _reconcile_one_order's staleness guard - a force-sync
+                # fetches Shopify's current state directly, so it's always newer; without
+                # this a stale/null value left behind would make the next legitimate
+                # webhook for this order look stale by comparison and get skipped.
+                "shopify_updated_at": sp_order.get("updated_at"),
             }
             if existing_order:
                 payload["id"] = existing_order["id"]

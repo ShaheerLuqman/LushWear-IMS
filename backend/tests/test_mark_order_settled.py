@@ -210,3 +210,67 @@ class TestCreateFulfillment:
 
         assert stub.puts[0]["tags"] == "Confirmed, PostEx"
         assert stub.fulfillments == []
+
+
+class _StubFulfillmentFlaky:
+    """Simulates Shopify dropping the connection with no response at all (not a 429 -
+    _request_with_retry doesn't cover this) on the fulfillment POST, `drops_before_success`
+    times before it starts succeeding. `response_lost_after_apply` simulates the dangerous
+    case: the dropped POST actually landed server-side, so a blind retry of just the POST
+    would double-book it - the fulfillment_orders list flips to "closed" as it would for
+    real, and the retry's own re-check (not a raw resend) is what must catch that."""
+
+    def __init__(self, *, drops_before_success, response_lost_after_apply=False):
+        self.order = {"id": 1, "tags": "Confirmed"}
+        self.fulfillment_orders = [{"id": 55, "status": "open"}]
+        self.fulfillments = []
+        self.post_attempts = 0
+        self.drops_before_success = drops_before_success
+        self.response_lost_after_apply = response_lost_after_apply
+
+    def handler(self, request):
+        path = request.url.path
+        if request.method == "GET" and path.endswith("/orders/1.json"):
+            return httpx.Response(200, json={"order": self.order})
+        if request.method == "PUT" and path.endswith("/orders/1.json"):
+            body = json.loads(request.content)["order"]
+            self.order["tags"] = body["tags"]
+            return httpx.Response(200, json={"order": self.order})
+        if request.method == "GET" and path.endswith("/fulfillment_orders.json"):
+            return httpx.Response(200, json={"fulfillment_orders": self.fulfillment_orders})
+        if request.method == "POST" and path.endswith("/fulfillments.json"):
+            self.post_attempts += 1
+            if self.post_attempts <= self.drops_before_success:
+                if self.response_lost_after_apply:
+                    self.fulfillment_orders = [{"id": 55, "status": "closed"}]
+                raise httpx.RemoteProtocolError("Server disconnected without sending a response.")
+            body = json.loads(request.content)["fulfillment"]
+            self.fulfillments.append(body)
+            return httpx.Response(201, json={"fulfillment": body})
+        raise AssertionError(f"unexpected {request.method} {path}")
+
+    install = _StubShopify.install
+
+
+class TestCreateFulfillmentRetriesConnectionErrors:
+    def test_retries_after_a_dropped_connection_and_succeeds(self, monkeypatch):
+        stub = _StubFulfillmentFlaky(drops_before_success=1).install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
+
+        assert len(stub.fulfillments) == 1
+
+    def test_does_not_double_book_when_the_dropped_response_actually_landed(self, monkeypatch):
+        stub = _StubFulfillmentFlaky(drops_before_success=1, response_lost_after_apply=True).install(monkeypatch)
+
+        asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
+
+        # The retry re-checked fulfillment_orders from scratch, found none open (the
+        # dropped attempt had already closed it), and returned instead of posting again.
+        assert stub.fulfillments == []
+
+    def test_gives_up_after_exhausting_retries(self, monkeypatch):
+        stub = _StubFulfillmentFlaky(drops_before_success=99).install(monkeypatch)
+
+        with pytest.raises(httpx.RemoteProtocolError):
+            asyncio.run(shopify.create_fulfillment(1, "CX123", "PostEx", _POSTEX_URL, _creds()))
