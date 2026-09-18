@@ -9,9 +9,8 @@ import {
   bulkEntryValidationHtml, defaultTransactionParticulars, getOrdersLedgerId, orderAdvanceParticularPlaceholder,
   parseBulkEntryText,
 } from '../../logic/transactionsBulkEntry';
+import { Dropdown } from '../../components/Dropdown';
 import { CreateLedgerModal } from './LedgerModals';
-
-const CREATE_LEDGER_OPTION_VALUE = '__create_ledger__';
 
 function generateIdempotencyKey(): string {
   return crypto.randomUUID();
@@ -25,17 +24,11 @@ function LedgerSelect({
   return (
     <div className="form-group">
       <label htmlFor={id}>{label}</label>
-      <select
-        id={id} className="form-input" disabled={disabled} value={value}
-        onChange={(e) => {
-          if (e.target.value === CREATE_LEDGER_OPTION_VALUE) { onCreateLedger(); return; }
-          onChange(e.target.value);
-        }}
-      >
-        <option value="">{cashSideLabel(ledgers)}</option>
-        {selectableLedgers(ledgers).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        <option value={CREATE_LEDGER_OPTION_VALUE}>+ Create new ledger...</option>
-      </select>
+      <Dropdown
+        id={id} fullWidth searchable disabled={disabled} value={value} onChange={onChange}
+        options={[{ value: '', label: cashSideLabel(ledgers) }, ...selectableLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))]}
+        action={{ content: '+ Create new ledger...', onAction: onCreateLedger }}
+      />
     </div>
   );
 }

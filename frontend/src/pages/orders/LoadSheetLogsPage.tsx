@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { useConfirm } from '../../components/ConfirmContext';
+import { HeaderButton } from '../../components/HeaderButton';
 import { formatDateTimeDDMMYYYY } from '../../logic/shared';
 import { useLoadSheetLogs } from './useLoadSheetLogs';
 
@@ -14,7 +15,7 @@ export function LoadSheetLogsPage() {
 
   usePageHeader({
     title: 'Load Sheet Logs',
-    actions: <button type="button" className="btn btn-secondary" onClick={load}>Refresh</button>,
+    actions: <HeaderButton onClick={load}>Refresh</HeaderButton>,
   });
 
   async function onDelete(logId: string) {

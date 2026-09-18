@@ -7,11 +7,13 @@ import type { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
 import { apiJson, apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { SearchField } from '../../components/SearchField';
+import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
 import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { MultiSelectFilterDropdown } from '../../components/MultiSelectFilterDropdown';
+import { Dropdown } from '../../components/Dropdown';
 import { formatDateDDMMYYYY } from '../../logic/shared';
 import { formatMoney } from '../../logic/ledgers';
-import { COURIER_LOGOS, computeReceivable, orderStatusBadgeClass } from '../../logic/orders';
+import { computeReceivable, orderStatusBadgeClass } from '../../logic/orders';
 import {
   BILL_STATUS_META, COURIER_PAYMENT_STATUSES, COURIER_PAYMENT_STATUS_LABELS, COURIER_RESOLVED_STATUSES,
   billCourierLabel, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
@@ -385,11 +387,7 @@ export function CourierPaymentReportPage() {
     { headerName: 'Date', field: 'pickupDate', width: 110, minWidth: 110, valueFormatter: (p: any) => billPickupDateLabel(p.data) },
     {
       headerName: 'Courier', field: 'courier', width: 130, minWidth: 110, valueFormatter: (p: any) => billCourierLabel(p.data),
-      cellRenderer: (p: any) => {
-        const label = billCourierLabel(p.data);
-        const logo = COURIER_LOGOS[label.trim().toUpperCase()];
-        return logo ? <span className="grid-courier-logo-wrap"><img src={logo.src} alt={logo.alt} className={`grid-courier-logo ${logo.imgClass}`} /></span> : <span>{label}</span>;
-      },
+      cellRenderer: (p: any) => <span>{billCourierLabel(p.data)}</span>,
     },
     { headerName: 'Bill Value', field: 'billValue', width: 140, minWidth: 130, cellClass: 'ag-right-aligned-cell', valueFormatter: (p: any) => formatMoney(p.value) },
     { headerName: 'Remaining', field: 'remainingAmount', width: 140, minWidth: 130, cellClass: 'ag-right-aligned-cell', valueFormatter: (p: any) => formatMoney(p.value) },
@@ -410,17 +408,12 @@ export function CourierPaymentReportPage() {
     title: 'Courier Payment Report',
     actions: detailBill ? undefined : (
       <>
-        <button ref={setDateBtnNode} type="button" className="btn btn-secondary header-toolbar-btn" title="Filter by pickup date range">{dateLabel}</button>
-        <MultiSelectFilterDropdown allLabel="All couriers" options={couriers} selected={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
-        <MultiSelectFilterDropdown allLabel="All Status" options={COURIER_PAYMENT_STATUSES} selected={statusFilter} onChange={setStatusFilter} displayLabel={(v) => COURIER_PAYMENT_STATUS_LABELS[v]} />
-        <div className="transaction-search-wrap">
-          <i className="fa-solid fa-magnifying-glass transaction-search-icon" />
-          <input className="transaction-search-filter" placeholder="Search courier or order #..." autoComplete="off" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" onClick={clearFilters}>Clear Filters</button>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" disabled={fetchingSettlements} onClick={fetchPostExSettlements}>
-          {fetchingSettlements ? 'Checking PostEx...' : 'Fetch Settlements'}
-        </button>
+        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by pickup date range" />
+        <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
+        <Dropdown multiple allLabel="All Status" options={COURIER_PAYMENT_STATUSES.map((v) => ({ value: v, label: COURIER_PAYMENT_STATUS_LABELS[v] }))} value={statusFilter} onChange={setStatusFilter} />
+        <div className="toolbar-search"><SearchField placeholder="Search courier or order #..." value={search} onChange={setSearch} /></div>
+        <HeaderButton onClick={clearFilters}>Clear Filters</HeaderButton>
+        <HeaderButton loading={fetchingSettlements} onClick={fetchPostExSettlements}>Fetch Settlements</HeaderButton>
       </>
     ),
   });

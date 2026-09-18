@@ -1,13 +1,15 @@
-// Settings: Appearance, Account, Users, Financial calendar, Integrations, Couriers.
+// Settings: Account, Users, Financial calendar, Integrations, Couriers.
 // Ported from auth-users.js's loadAccountSettings + the settingsView markup.
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
-import { useTheme } from '../../theme/ThemeContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { ChangePasswordModal } from './ChangePasswordModal';
+import { Dropdown } from '../../components/Dropdown';
+
+const ROLE_OPTIONS = [{ value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }];
 
 interface UserRow { id: string; name?: string; email: string; role: 'admin' | 'staff'; is_active: boolean }
 
@@ -83,10 +85,7 @@ function UsersSection() {
           <div className={'settings-user-row' + (user.is_active ? '' : ' settings-user-row--inactive')} key={user.id}>
             <span className="settings-user-row__email">{user.name ? `${user.name} (${user.email})` : user.email}</span>
             <div className="settings-user-row__controls">
-              <select className="settings-user-row__role-select" value={user.role} onChange={(e) => changeRole(user, e.target.value)}>
-                <option value="staff">Staff</option>
-                <option value="admin">Admin</option>
-              </select>
+              <Dropdown options={ROLE_OPTIONS} value={user.role} onChange={(v) => changeRole(user, v)} />
               <button type="button" className="btn btn-secondary" disabled={busyId === user.id} onClick={() => toggleActive(user)}>
                 {user.is_active ? 'Deactivate' : 'Activate'}
               </button>
@@ -109,10 +108,7 @@ function UsersSection() {
         </div>
         <div className="form-group">
           <label htmlFor="settingsAddUserRole">Role</label>
-          <select id="settingsAddUserRole" className="form-input" value={role} onChange={(e) => setRole(e.target.value as 'staff' | 'admin')}>
-            <option value="staff">Staff</option>
-            <option value="admin">Admin</option>
-          </select>
+          <Dropdown id="settingsAddUserRole" fullWidth options={ROLE_OPTIONS} value={role} onChange={(v) => setRole(v as 'staff' | 'admin')} />
         </div>
         {error && <p className="auth-gate-error" role="alert">{error}</p>}
         <div className="form-actions">
@@ -402,9 +398,7 @@ function FiscalSection() {
         </div>
         <div className="form-group">
           <label htmlFor="settingsFiscalYearStartMonth">Financial year starts in</label>
-          <select id="settingsFiscalYearStartMonth" className="form-input" value={startMonth} onChange={(e) => setStartMonth(e.target.value)}>
-            {FISCAL_MONTH_NAMES.map((name, i) => <option key={name} value={i + 1}>{name}</option>)}
-          </select>
+          <Dropdown id="settingsFiscalYearStartMonth" fullWidth options={FISCAL_MONTH_NAMES.map((name, i) => ({ value: String(i + 1), label: name }))} value={startMonth} onChange={setStartMonth} />
         </div>
         <div className="settings-fiscal-preview">
           <span>Financial year: <strong>{yearPreview}</strong></span>
@@ -421,7 +415,6 @@ function FiscalSection() {
 
 export function SettingsPage() {
   const { account } = useAuth();
-  const { theme, setTheme } = useTheme();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
 
   usePageHeader({ title: 'Settings' });
@@ -431,20 +424,6 @@ export function SettingsPage() {
 
   return (
     <div className="settings-container">
-      <section className="settings-section">
-        <h2 className="settings-section__title">Appearance</h2>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <span className="settings-row__label">Theme</span>
-            <span className="settings-row__hint">Choose a light or dark appearance.</span>
-          </div>
-          <div className="settings-theme-toggle" role="radiogroup" aria-label="Theme">
-            <button type="button" className="settings-theme-btn" role="radio" aria-checked={theme === 'light'} onClick={() => setTheme('light')}>Light</button>
-            <button type="button" className="settings-theme-btn" role="radio" aria-checked={theme === 'dark'} onClick={() => setTheme('dark')}>Dark</button>
-          </div>
-        </div>
-      </section>
-
       <section className="settings-section">
         <h2 className="settings-section__title">Account</h2>
         <div className="settings-row">

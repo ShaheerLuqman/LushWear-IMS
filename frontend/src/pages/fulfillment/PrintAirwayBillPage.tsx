@@ -5,11 +5,13 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
 import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { formatDateDDMMYYYY, getCourierDisplayName } from '../../logic/shared';
+import { formatDateDDMMYYYY, getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
 import { formatMoney } from '../../logic/ledgers';
 import { printAirwayBillsForOrders } from '../../logic/airwayBills';
 import type { Order } from '../../logic/orders';
+import { Dropdown } from '../../components/Dropdown';
 
 function todayIso(): string {
   const now = new Date();
@@ -71,14 +73,7 @@ export function PrintAirwayBillPage() {
     return () => handle?.destroy();
   }, [dateBtnNode]);
 
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return orders;
-    return orders.filter((o: any) =>
-      String(o.order_number).includes(q) || (o.customer_name || '').toLowerCase().includes(q)
-      || (o.customer_phone || '').toLowerCase().includes(q) || (o.customer_city || '').toLowerCase().includes(q)
-      || (o.tracking_number || '').toLowerCase().includes(q));
-  }, [orders, search]);
+  const visible = useMemo(() => orders.filter((o) => rowMatchesQuery(o, search)), [orders, search]);
 
   function clearFilters() {
     setCourier('PostEx');
@@ -118,19 +113,13 @@ export function PrintAirwayBillPage() {
 
   usePageHeader({
     title: 'Print Airway Bill',
+    search: { value: search, onChange: setSearch, placeholder: 'Search order #, name, phone or tracking...' },
     actions: (
       <>
-        <button ref={setDateBtnNode} type="button" className="btn btn-secondary header-toolbar-btn" title="Filter by fulfillment date range">{dateLabel}</button>
-        <select className="orders-period-filter" title="Filter by courier" value={courier} onChange={(e) => setCourier(e.target.value)}>
-          <option value="PostEx">PostEx</option>
-          <option value="Couriers Next">Couriers Next</option>
-        </select>
-        <div className="transaction-search-wrap">
-          <i className="fa-solid fa-magnifying-glass transaction-search-icon" />
-          <input className="transaction-search-filter" placeholder="Search order #, name, phone or tracking..." autoComplete="off" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" onClick={clearFilters}>Clear Filters</button>
-        <button type="button" className="btn btn-primary header-toolbar-btn" onClick={printSelected}><i className="fa-solid fa-print" /> Print Airway Bill</button>
+        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by fulfillment date range" />
+        <Dropdown options={['PostEx', 'Couriers Next']} value={courier} onChange={setCourier} />
+        <HeaderButton onClick={clearFilters}>Clear Filters</HeaderButton>
+        <HeaderButton variant="primary" icon={<i className="fa-solid fa-print" />} onClick={printSelected}>Print Airway Bill</HeaderButton>
       </>
     ),
   });

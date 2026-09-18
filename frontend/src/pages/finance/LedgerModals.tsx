@@ -6,14 +6,15 @@ import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import { findLedgerByName, SYSTEM_LEDGER_LABELS, type Ledger } from '../../logic/ledgers';
+import { Dropdown } from '../../components/Dropdown';
 
-const LEDGER_TYPES = [
-  ['Asset', "Asset (Cash, Bank, Accounts Receivable, Inventory, Equipment)"],
-  ['Liability', 'Liability (Accounts Payable, Loans, Taxes Payable)'],
-  ['Equity', "Equity (Owner's Capital, Investor's Capital)"],
-  ['Revenue', 'Revenue (Sales, Service Revenue)'],
-  ['Expense', 'Expense (Rent, Salaries, Advertisement, Fuel, Office Supplies)'],
-] as const;
+const LEDGER_TYPE_OPTIONS = [
+  { value: 'Asset', label: 'Asset (Cash, Bank, Accounts Receivable, Inventory, Equipment)' },
+  { value: 'Liability', label: 'Liability (Accounts Payable, Loans, Taxes Payable)' },
+  { value: 'Equity', label: "Equity (Owner's Capital, Investor's Capital)" },
+  { value: 'Revenue', label: 'Revenue (Sales, Service Revenue)' },
+  { value: 'Expense', label: 'Expense (Rent, Salaries, Advertisement, Fuel, Office Supplies)' },
+];
 
 interface PartyFields { tax_number: string | null; phone: string | null; email: string | null; address: string | null }
 const EMPTY_PARTY: PartyFields = { tax_number: null, phone: null, email: null, address: null };
@@ -112,10 +113,7 @@ export function CreateLedgerModal({
             </div>
             <div className="form-group">
               <label htmlFor="createLedgerType">Type (Nature) *</label>
-              <select id="createLedgerType" className="form-input" required value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="">Select type...</option>
-                {LEDGER_TYPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-              </select>
+              <Dropdown id="createLedgerType" fullWidth placeholder="Select type..." options={LEDGER_TYPE_OPTIONS} value={type} onChange={setType} />
             </div>
             <div className="form-group">
               <label htmlFor="createLedgerOpeningBalance">Opening balance</label>
@@ -251,10 +249,7 @@ export function EditLedgerModal({
             </div>
             <div className="form-group">
               <label htmlFor="editLedgerType">Type (Nature) *</label>
-              <select id="editLedgerType" className="form-input" required value={type} onChange={(e) => setType(e.target.value)}>
-                <option value="">Select type...</option>
-                {LEDGER_TYPES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
-              </select>
+              <Dropdown id="editLedgerType" fullWidth placeholder="Select type..." options={LEDGER_TYPE_OPTIONS} value={type} onChange={setType} />
             </div>
             <div className="form-group">
               <label htmlFor="editLedgerOpeningBalance">Opening balance</label>

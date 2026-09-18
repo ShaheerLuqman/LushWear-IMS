@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router-dom';
 import type { ColDef } from 'ag-grid-community';
 import { cashSideLabel, ledgerNameById, selectableLedgers, type Ledger } from '../../logic/ledgers';
 import { formatAmount } from '../../logic/shared';
+import { Dropdown } from '../../components/Dropdown';
 
 export interface TransactionRow {
   id: string;
@@ -44,76 +45,25 @@ export interface TransactionsColumnsCtx {
   onCreateLedger: (rowId: string, field: 'from_account_id' | 'to_account_id') => void;
 }
 
-const FOLIO_MENU_WIDTH = 220;
-
 function FolioCell({ data, accountField, ctx }: { data: TransactionRow; accountField: 'from_account_id' | 'to_account_id'; ctx: TransactionsColumnsCtx }) {
   const navigate = useNavigate();
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 200 });
-  const displayRef = useRef<HTMLSpanElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    inputRef.current?.focus();
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.folio-dropdown-panel') && target !== displayRef.current) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
   const currentFolio = data[accountField] as string | null | undefined;
   const emptyLabel = cashSideLabel(ctx.ledgers);
   const cashLedger = ctx.ledgers.find((l) => l.system_key === 'cash');
   const shownLedger = currentFolio ? ctx.ledgers.find((l) => l.id === currentFolio) : cashLedger;
   const displayText = shownLedger ? shownLedger.name : emptyLabel;
-  const isCashSide = shownLedger?.system_key === 'cash';
   const canEdit = ctx.isEditingAllowed();
 
-  function openMenu() {
-    if (!displayRef.current) return;
-    const rect = displayRef.current.getBoundingClientRect();
-    setPos({ top: rect.bottom + 2, left: rect.left, minWidth: Math.max(rect.width, FOLIO_MENU_WIDTH) });
-    setQuery('');
-    setOpen(true);
-  }
-
-  function select(id: string | null) {
-    ctx.onFieldChange(data.id, accountField, id);
-    setOpen(false);
-  }
-
-  const filtered = selectableLedgers(ctx.ledgers).filter((l) => l.name.toLowerCase().includes(query.toLowerCase()));
-
   return (
-    <div className="folio-dropdown">
-      <span
-        ref={displayRef}
-        className={'folio-display-text' + (isCashSide ? ' folio-cash' : '')}
-        style={{ cursor: canEdit ? 'pointer' : 'default' }}
-        onClick={(e) => { e.stopPropagation(); if (canEdit) openMenu(); }}
-      >
-        {displayText}
-      </span>
-      {open && createPortal(
-        // Portaled to <body> - AG Grid rows are translate()'d for virtualization,
-        // which breaks a `position: fixed` descendant left as a normal cell child.
-        <div className="folio-dropdown-panel" style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth }}>
-          <input ref={inputRef} type="text" className="folio-dropdown-search" placeholder="Search ledgers..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }} />
-          <div className="folio-dropdown-options">
-            <div className={'folio-dropdown-option' + (!currentFolio ? ' selected' : '')} onClick={() => select(null)}>{emptyLabel}</div>
-            {filtered.map((l) => (
-              <div key={l.id} className={'folio-dropdown-option' + (l.id === currentFolio ? ' selected' : '')} onClick={() => select(l.id)}>{l.name}</div>
-            ))}
-            {filtered.length === 0 && <div className="folio-dropdown-empty">{query ? 'No ledgers found' : 'No ledgers available.'}</div>}
-            <div className="folio-dropdown-option folio-dropdown-create" onClick={() => { setOpen(false); ctx.onCreateLedger(data.id, accountField); }}>+ Create new ledger...</div>
-          </div>
-        </div>,
-        document.body,
-      )}
+    <div className="folio-dropdown" onClick={(e) => e.stopPropagation()}>
+      {canEdit ? (
+        <Dropdown
+          variant="tertiary" size="slim" searchable fullWidth value={currentFolio || ''}
+          options={[{ value: '', label: emptyLabel }, ...selectableLedgers(ctx.ledgers).map((l) => ({ value: l.id, label: l.name }))]}
+          onChange={(id) => ctx.onFieldChange(data.id, accountField, id || null)}
+          action={{ content: '+ Create new ledger...', onAction: () => ctx.onCreateLedger(data.id, accountField) }}
+        />
+      ) : <span className="folio-display-text">{displayText}</span>}
       <button
         type="button" className="folio-goto-btn" title={shownLedger ? `Go to ${displayText}` : 'Select a ledger first'}
         style={{ opacity: shownLedger ? 1 : 0.4, cursor: shownLedger ? 'pointer' : 'not-allowed' }}

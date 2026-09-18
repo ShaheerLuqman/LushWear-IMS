@@ -1,8 +1,7 @@
 // Create/edit/view a purchase bill - line editor with per-variant qty/cost grids
 // and a landed-cost preview. Ported from bills.js's openBillModal/renderBillLines/
 // collectBillPayload.
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useMemo, useState } from 'react';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
@@ -10,6 +9,7 @@ import { useToast } from '../../toast/ToastContext';
 import { formatMoney, type Ledger } from '../../logic/ledgers';
 import { sortVariantsBySize, type Product } from '../../logic/products';
 import { getPKTDateString } from '../../logic/shared';
+import { Dropdown } from '../../components/Dropdown';
 import {
   billItemsToDrafts, billLineAmount, billLineCostEffect, billLineProduct,
   billLineUsesVariantGrid, billLineVariantDescription, billProductLandedCosts,
@@ -22,66 +22,6 @@ function CostEffectLabel({ current, newCost, diff, label }: { current: number; n
     <>
       {label}: Rs {formatMoney(current)} → Rs {formatMoney(newCost)}
       {diff !== 0 && <span className={changeClass}> ({diff > 0 ? '+' : ''}{formatMoney(diff)})</span>}
-    </>
-  );
-}
-
-function ProductPicker({
-  products, line, disabled, onPick,
-}: {
-  products: Product[];
-  line: BillLineDraft;
-  disabled: boolean;
-  onPick: (product: Product) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [pos, setPos] = useState({ top: 0, left: 0, minWidth: 220 });
-  const btnRef = useRef<HTMLButtonElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const product = products.find((p) => p.id === line.product_id) || null;
-
-  useEffect(() => {
-    if (!open) return;
-    inputRef.current?.focus();
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.folio-dropdown-panel') && target !== btnRef.current) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  const matches = query.trim() ? products.filter((p) => (p.name || '').toLowerCase().includes(query.trim().toLowerCase())) : products;
-
-  return (
-    <>
-      <button
-        ref={btnRef} type="button" className={'folio-dropdown-btn bill-line-product-btn' + (open ? ' open' : '')} disabled={disabled}
-        onClick={(e) => {
-          e.stopPropagation();
-          if (!btnRef.current) return;
-          const rect = btnRef.current.getBoundingClientRect();
-          setPos({ top: rect.bottom + 2, left: rect.left, minWidth: Math.max(rect.width, 220) });
-          setQuery('');
-          setOpen(true);
-        }}
-      >
-        <span className="folio-dropdown-text">{product ? product.name : 'Search product...'}</span>
-        <span className="folio-dropdown-arrow">▼</span>
-      </button>
-      {open && createPortal(
-        <div className="folio-dropdown-panel" style={{ top: pos.top, left: pos.left, minWidth: pos.minWidth }}>
-          <input ref={inputRef} type="text" className="folio-dropdown-search" placeholder="Search products..." value={query} onChange={(e) => setQuery(e.target.value)} onKeyDown={(e) => { if (e.key === 'Escape') setOpen(false); }} />
-          <div className="folio-dropdown-options">
-            {matches.map((p) => (
-              <div key={p.id} className={'folio-dropdown-option' + (p.id === line.product_id ? ' selected' : '')} onClick={() => { onPick(p); setOpen(false); }}>{p.name}</div>
-            ))}
-            {matches.length === 0 && <div className="folio-dropdown-empty">No products found</div>}
-          </div>
-        </div>,
-        document.body,
-      )}
     </>
   );
 }
@@ -130,7 +70,11 @@ function BillLineRow({
           {productMissing ? (
             <input type="text" className="form-input" value={line.description || ''} disabled />
           ) : line.mode === 'product' ? (
-            <ProductPicker products={products} line={line} disabled={disabled} onPick={pickProduct} />
+            <Dropdown
+              searchable fullWidth disabled={disabled} placeholder="Search product..."
+              options={products.map((p) => ({ value: p.id, label: p.name || '' }))}
+              value={line.product_id || ''} onChange={(id) => pickProduct(products.find((p) => p.id === id)!)}
+            />
           ) : (
             <input type="text" className="form-input bill-line-description" placeholder="e.g. Cotton fabric" disabled={disabled} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
           )}
@@ -400,10 +344,7 @@ export function BillModal({
             <div className="bill-form-row bill-form-row-3col">
               <div className="form-group">
                 <label htmlFor="billSupplier">Supplier *</label>
-                <select id="billSupplier" className="form-input" required disabled={readOnly} value={supplierId} onChange={(e) => setSupplierId(e.target.value)}>
-                  <option value="">Select supplier...</option>
-                  {partyLedgers(ledgers).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
+                <Dropdown id="billSupplier" fullWidth searchable placeholder="Select supplier..." disabled={readOnly} options={partyLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={supplierId} onChange={setSupplierId} />
                 <span className="form-hint">Party ledgers. Mark a ledger as a party in Edit Ledger.</span>
               </div>
               <div className="form-group">

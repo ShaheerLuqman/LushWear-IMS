@@ -1,8 +1,8 @@
 // Bottom-of-sidebar "who's logged in" button - opens a popup with
-// organizations to switch to (when there's more than one available),
-// Settings, and Log out. React port of app-core.js's initUserMenu().
+// organizations to switch to (when there's more than one available) and Log
+// out. React port of app-core.js's initUserMenu() (Settings now lives in the
+// main sidebar nav instead of this popup - see navConfig.ts).
 import { useEffect, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { User } from 'lucide-react';
 import { apiJson, setAuthToken } from './api';
 import { decodeTokenPayload, rememberLastUsedOrg, useAuth } from './auth/AuthContext';
@@ -17,7 +17,6 @@ interface Org {
 export function SidebarUserMenu() {
   const { account, logout } = useAuth();
   const { showToast } = useToast();
-  const navigate = useNavigate();
   const [open, setOpen] = useState(false);
   const [orgs, setOrgs] = useState<Org[]>([]);
   const [impersonating, setImpersonating] = useState(false);
@@ -116,9 +115,6 @@ export function SidebarUserMenu() {
               <div className="sidebar-user-menu-divider"></div>
             </>
           )}
-          <button type="button" className="sidebar-user-menu-item" onClick={() => { setOpen(false); navigate('/settings'); }}>
-            Settings
-          </button>
           <button type="button" className="sidebar-user-menu-item sidebar-user-menu-item--danger" onClick={() => { setOpen(false); logout(); }}>
             Log out
           </button>

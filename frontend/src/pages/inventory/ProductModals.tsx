@@ -5,6 +5,7 @@ import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { formatAmount, formatDateTimeDDMMYYYY } from '../../logic/shared';
+import { Dropdown } from '../../components/Dropdown';
 import {
   productStockStatus, productStockValue, productUnitCost, sortVariantsBySize, STOCK_STATUS_LABELS, type Product,
 } from '../../logic/products';
@@ -443,10 +444,7 @@ export function EditVariantCostsModal({
             </div>
             <div className="form-group">
               <label htmlFor="editVariantCostsReason">Reason (optional)</label>
-              <select id="editVariantCostsReason" className="form-input" value={reason} onChange={(e) => setReason(e.target.value)}>
-                <option value="">Select reason</option>
-                {COST_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
+              <Dropdown id="editVariantCostsReason" fullWidth placeholder="Select reason" options={COST_REASONS} value={reason} onChange={setReason} />
             </div>
           </div>
           <div className="edit-variant-costs-recalc">
@@ -555,10 +553,7 @@ export function BulkUpdateCostPriceModal({
             </div>
             <div className="form-group">
               <label htmlFor="bulkUpdateCostPriceReason">Reason (optional)</label>
-              <select id="bulkUpdateCostPriceReason" className="form-input" value={reason} onChange={(e) => setReason(e.target.value)}>
-                <option value="">Select reason</option>
-                {COST_REASONS.map((r) => <option key={r} value={r}>{r}</option>)}
-              </select>
+              <Dropdown id="bulkUpdateCostPriceReason" fullWidth placeholder="Select reason" options={COST_REASONS} value={reason} onChange={setReason} />
             </div>
           </div>
           <div className="edit-variant-costs-recalc">

@@ -9,6 +9,7 @@ import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderButton } from '../../components/HeaderButton';
 import { formatAmount, formatRelativeTime } from '../../logic/shared';
 import { getLastShopifyProductSyncAt, syncShopifyProducts } from '../../shopifySync';
 import type { Product } from '../../logic/products';
@@ -18,6 +19,7 @@ import {
   AdjustStockModal, BulkUpdateCostPriceModal, CostHistoryModal, EditVariantCostsModal, ProductDetailsModal,
 } from './ProductModals';
 import { PRODUCTS_CHANGED_EVENT } from '../../eventsStream';
+import { Dropdown } from '../../components/Dropdown';
 
 const FILTERS_VISIBLE_KEY = 'lushwear_inventory_filters_visible';
 
@@ -213,19 +215,13 @@ export function InventoryPage() {
     title: 'Inventory',
     actions: (
       <>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" title="Export the rows currently shown to Excel" onClick={exportToExcel}>
-          <i className="fa-solid fa-arrow-up-from-bracket" /> Export
-        </button>
-        <button type="button" className="btn btn-primary header-toolbar-btn" disabled={syncing} onClick={onSyncShopify}>
-          <span>{syncing ? 'Syncing...' : 'Sync with Shopify'}</span>
-          {!syncing && lastProductSyncAt != null && (
-            <span className="sync-btn-last-sync">Synced {formatRelativeTime(lastProductSyncAt)}</span>
-          )}
-        </button>
+        <HeaderButton icon={<i className="fa-solid fa-arrow-up-from-bracket" />} onClick={exportToExcel}>Export</HeaderButton>
+        <HeaderButton variant="primary" loading={syncing} onClick={onSyncShopify}>Sync with Shopify</HeaderButton>
+        {!syncing && lastProductSyncAt != null && (
+          <span className="orders-sync-status">Synced {formatRelativeTime(lastProductSyncAt)}</span>
+        )}
         {selectedIds.length > 0 && (
-          <button type="button" className="btn btn-secondary header-toolbar-btn" title="Set one cost price on all selected products" onClick={() => setModal({ type: 'bulkCost', ids: selectedIds })}>
-            Bulk update cost price
-          </button>
+          <HeaderButton onClick={() => setModal({ type: 'bulkCost', ids: selectedIds })}>Bulk update cost price</HeaderButton>
         )}
       </>
     ),
@@ -257,16 +253,11 @@ export function InventoryPage() {
             <i className="fa-solid fa-magnifying-glass inventory-search-icon" />
             <input type="text" className="inventory-search-input" placeholder="Search products..." autoComplete="off" value={search} onChange={(e) => onSearchChange(e.target.value)} />
           </div>
-          <select className="inventory-toolbar-select" title="Filter by collection" value={collectionFilter} onChange={(e) => { setCollectionFilter(e.target.value); applyToolbarFilters(e.target.value, statusFilter); }}>
-            <option value="">All Collections</option>
-            {collectionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-          </select>
-          <select className="inventory-toolbar-select" title="Filter by stock status" value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); applyToolbarFilters(collectionFilter, e.target.value); }}>
-            <option value="">All Status</option>
-            <option value="in">In Stock</option>
-            <option value="low">Low Stock</option>
-            <option value="out">Out of Stock</option>
-          </select>
+          <Dropdown searchable options={[{ value: '', label: 'All Collections' }, ...collectionOptions]} value={collectionFilter} onChange={(v) => { setCollectionFilter(v); applyToolbarFilters(v, statusFilter); }} />
+          <Dropdown
+            options={[{ value: '', label: 'All Status' }, { value: 'in', label: 'In Stock' }, { value: 'low', label: 'Low Stock' }, { value: 'out', label: 'Out of Stock' }]}
+            value={statusFilter} onChange={(v) => { setStatusFilter(v); applyToolbarFilters(collectionFilter, v); }}
+          />
           <button type="button" className="btn btn-secondary inventory-filters-toggle" aria-pressed={filtersVisible} title="Show per-column filters" onClick={toggleFilters}>
             <i className="fa-solid fa-sliders" /><span>Filters</span>
           </button>

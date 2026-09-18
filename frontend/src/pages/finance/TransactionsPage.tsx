@@ -8,6 +8,8 @@ import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { SearchField } from '../../components/SearchField';
+import { HeaderButton } from '../../components/HeaderButton';
 import { formatDateDDMMYYYY, getPKTDateString, parseDDMMYYYYToYYYYMMDD } from '../../logic/shared';
 import { formatMoney, type LedgerBalancePatch } from '../../logic/ledgers';
 import { useLedgersData } from './useLedgersData';
@@ -185,10 +187,7 @@ export function TransactionsPage() {
     title: 'Transactions',
     actions: (
       <>
-        <div className="transaction-search-wrap">
-          <i className="fa-solid fa-magnifying-glass transaction-search-icon" />
-          <input className="transaction-search-filter" placeholder="Search this day's entries..." autoComplete="off" value={search} onChange={(e) => { setSearch(e.target.value); gridApiRef.current?.setGridOption('quickFilterText', e.target.value); }} />
-        </div>
+        <div className="toolbar-search"><SearchField placeholder="Search this day's entries..." value={search} onChange={(v) => { setSearch(v); gridApiRef.current?.setGridOption('quickFilterText', v); }} /></div>
         <div className={'cash-in-hand-display' + (cashTooltipOpen ? ' cash-in-hand-tooltip-open' : '')} onClick={(e) => { e.stopPropagation(); setCashTooltipOpen((v) => !v); }}>
           <span className="cash-in-hand-label">Available Cash:</span>
           <span className="cash-in-hand-amount">Rs {formatMoney(cashInHand.total)}</span>
@@ -211,16 +210,16 @@ export function TransactionsPage() {
             </div>
           </div>
         </div>
-        <button type="button" className="btn btn-secondary btn-icon-sm" title="Previous day" onClick={() => shiftDay(-1)}><i className="fa-solid fa-chevron-left" /></button>
+        <HeaderButton icon={<i className="fa-solid fa-chevron-left" />} accessibilityLabel="Previous day" onClick={() => shiftDay(-1)} />
         <input
           type="text" className="transaction-date-filter" placeholder="DD/MM/YYYY" maxLength={10} autoComplete="off"
           value={dateInput} onChange={(e) => setDateInput(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyDateFromInput(); } }}
           onBlur={applyDateFromInput}
         />
-        <button type="button" className="btn btn-secondary btn-icon-sm" title="Next day" onClick={() => shiftDay(1)}><i className="fa-solid fa-chevron-right" /></button>
-        <button type="button" className="btn btn-secondary btn-sm" onClick={() => changeDate(getPKTDateString())}>Today</button>
-        <button type="button" className="btn btn-primary btn-sm" title="Create a new transaction entry" onClick={() => setEntryModalOpen(true)}><i className="fa-solid fa-plus" /> New Transaction</button>
+        <HeaderButton icon={<i className="fa-solid fa-chevron-right" />} accessibilityLabel="Next day" onClick={() => shiftDay(1)} />
+        <HeaderButton onClick={() => changeDate(getPKTDateString())}>Today</HeaderButton>
+        <HeaderButton variant="primary" icon={<i className="fa-solid fa-plus" />} onClick={() => setEntryModalOpen(true)}>New Transaction</HeaderButton>
       </>
     ),
   });

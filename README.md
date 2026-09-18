@@ -56,13 +56,13 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 **Terminal 2 — Frontend:**
 ```bash
-cd frontend/engine
+cd frontend
 npm install
 npm run dev             # serves on http://127.0.0.1:5173
 ```
 
 Then open **http://127.0.0.1:5173**. The frontend picks its backend URL automatically
-based on hostname (see `API_BASE` in `frontend/engine/src/api.ts`) - localhost talks to
+based on hostname (see `API_BASE` in `frontend/src/api.ts`) - localhost talks to
 `http://127.0.0.1:8000/api`, any other host uses the deployed backend URL.
 
 ## Project Structure
@@ -79,18 +79,17 @@ inventory-system/
 │   ├── requirements.txt
 │   └── .env                 # Your credentials (create this)
 │
-├── frontend/
-│   └── engine/               # React + Vite + TypeScript SPA
-│       ├── src/
-│       │   ├── api.ts        # API_BASE + auth token + apiJson/apiRequest
-│       │   ├── App.tsx       # Router (main app + /admin superadmin portal)
-│       │   ├── auth/         # AuthContext (session, superadmin impersonation)
-│       │   ├── pages/        # One folder per feature area (orders, inventory,
-│       │   │                 # finance, fulfillment, analytics, dashboard,
-│       │   │                 # settings, admin)
-│       │   └── logic/        # Pure business-logic modules, unit-testable
-│       │                     # independent of any component
-│       └── public/           # assets/, manifest.json, service-worker.js
+├── frontend/                 # React + Vite + TypeScript SPA
+│   ├── src/
+│   │   ├── api.ts            # API_BASE + auth token + apiJson/apiRequest
+│   │   ├── App.tsx           # Router (main app + /admin superadmin portal)
+│   │   ├── auth/             # AuthContext (session, superadmin impersonation)
+│   │   ├── pages/            # One folder per feature area (orders, inventory,
+│   │   │                     # finance, fulfillment, analytics, dashboard,
+│   │   │                     # settings, admin)
+│   │   └── logic/            # Pure business-logic modules, unit-testable
+│   │                         # independent of any component
+│   └── public/               # assets/, manifest.json, service-worker.js
 │
 ├── supabase_schema.sql      # Database schema
 ├── start-backend.bat        # Backend launcher (Windows)
@@ -103,8 +102,8 @@ inventory-system/
   `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, and set the env vars from your
   `.env` (Supabase + Shopify). Note the resulting `https://...onrender.com` URL.
 - **Frontend → Vercel:** connect the repo with root `frontend/`. `frontend/vercel.json`
-  builds `frontend/engine` (`npm install && npm run build`) and serves `engine/dist`
-  with an SPA-fallback rewrite. `API_BASE` in `src/api.ts` auto-detects a non-local
+  runs `npm install && npm run build` and serves `dist/` with an SPA-fallback rewrite.
+  `API_BASE` in `src/api.ts` auto-detects a non-local
   hostname and points at the deployed backend - pin the backend's `ALLOWED_ORIGINS` /
   CSP `connect-src` to the Vercel domain.
 
@@ -131,7 +130,7 @@ See `plan.md` for the full migration/deployment plan.
 
 ### Frontend shows "Disconnected"
 - Make sure the backend is running (default port 8000)
-- Confirm `API_BASE` in `frontend/engine/src/api.ts` points at the backend
+- Confirm `API_BASE` in `frontend/src/api.ts` points at the backend
 - Check the browser console (F12) for CORS or CSP errors
 
 ### Database errors

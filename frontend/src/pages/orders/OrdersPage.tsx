@@ -1,22 +1,37 @@
-// Orders view: metrics strip, status tabs, the AG Grid itself, period/date-range
-// filtering, and the header toolbar. Ported from orders-grid.js, navigation.js's
-// period/date-range init, and orders-shopify-ui.js.
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import type { GridApi, GridReadyEvent } from 'ag-grid-community';
+// Orders view: metrics strip, a Polaris IndexTable (Shopify's own orders-list component)
+// with its IndexFilters (search + status tabs + filter chips), period/date-range filtering,
+// and the header toolbar.
+import {
+  memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState,
+} from 'react';
 import * as XLSX from 'xlsx';
+import {
+  IndexTable, IndexFilters, useSetIndexFiltersMode, useIndexResourceState,
+  IndexTableSelectionType, TextField, Text, Tooltip, Pagination,
+} from '@shopify/polaris';
+import { MaximizeIcon } from '@shopify/polaris-icons';
+import { FilterX } from 'lucide-react';
 import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { useConfirm } from '../../components/ConfirmContext';
+import { Dropdown } from '../../components/Dropdown';
+import { MetricsStrip } from '../../components/MetricsStrip';
+import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { useStickyIndexTableHeader } from '../../components/useStickyIndexTableHeader';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { computeNetProfit, type Order } from '../../logic/orders';
+import {
+  computeNetProfit, FINAL_STATUS_VALUES, ORDER_STATUS_VALUES, orderStatusDisplayLabel, type Order,
+} from '../../logic/orders';
+import { getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
 import {
   ALL_ORDERS_VALUE, buildStaticPeriodOptions, CUSTOM_ORDERS_VALUE, formatOrdersDateRangeLabel,
   getCurrentOrdersPeriod, useOrdersData,
 } from './useOrdersData';
-import { buildOrdersGridColumns, calculateSelectedSums } from './ordersColumns';
+import {
+  ORDERS_COLUMNS, PIECE_RECEIVED_VALUES, calculateSelectedSums, type OrdersColumnCtx, type OrdersColumnDef, type SelectionSums,
+} from './ordersPolarisColumns';
 import { BulkUpdateOrderModal } from './BulkUpdateOrderModal';
 import { DeliveryStatusModal } from './DeliveryStatusModal';
 import { DeliveryStatusReportModal } from './DeliveryStatusReportModal';
@@ -40,6 +55,8 @@ const ORDERS_VIEW_TABS = [
   { id: 'cancelled', label: 'Cancelled', statuses: ['cancelled'] },
 ];
 
+const PAGE_SIZE = 100;
+
 function ordersRealRows(orders: Order[]): Order[] {
   return orders.filter((o) => o && o.id !== '__footer__');
 }
@@ -58,6 +75,45 @@ function compactRs(value: number): string {
   return `Rs ${v.toLocaleString('en-US')}`;
 }
 
+const AGGREGATE_SUM_KEYS: Partial<Record<string, keyof SelectionSums>> = {
+  total_amount: 'total_amount', advance_amount: 'advance_amount', cod: 'cod',
+  delivery_charge: 'delivery_charge', tax_amount: 'tax_amount', receivable: 'receivable',
+  cost_price: 'cost_price', net_profit: 'net_profit',
+};
+
+/* Aggregate row cells: a sum under every numeric column, blank under the rest
+   (order #, courier, status, folio, ...) rather than the old horizontal summary bar. */
+function aggregateCell(col: OrdersColumnDef, sums: SelectionSums): React.ReactNode {
+  if (col.key === 'profit_percent') {
+    return sums.profit_percent == null ? null : (
+      <Text as="span" alignment="end" numeric fontWeight="semibold">{sums.profit_percent.toFixed(1)}%</Text>
+    );
+  }
+  const sumKey = AGGREGATE_SUM_KEYS[col.key];
+  if (!sumKey) return null;
+  return (
+    <Text as="span" alignment="end" numeric fontWeight="semibold">
+      {(sums[sumKey] as number).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+    </Text>
+  );
+}
+
+/* Selecting a row re-renders OrdersPage, which would otherwise re-run every column's render()
+   (several are live TextField/Select inputs) for all PAGE_SIZE rows just to flip one checkbox.
+   Memoized so only the row whose `selected` actually changed re-renders - columnCtx is itself
+   memoized above, so unrelated rows' props are reference-equal and this fully bails out. */
+const OrderRow = memo(function OrderRow({
+  order, index, selected, tone, columnCtx,
+}: { order: Order; index: number; selected: boolean; tone: 'subdued' | undefined; columnCtx: OrdersColumnCtx }) {
+  return (
+    <IndexTable.Row id={order.id} position={index} selected={selected} tone={tone} onClick={() => {}}>
+      {ORDERS_COLUMNS.map((col) => (
+        <IndexTable.Cell key={col.key}>{col.render(order, columnCtx)}</IndexTable.Cell>
+      ))}
+    </IndexTable.Row>
+  );
+});
+
 export function OrdersPage() {
   const { account, isEditingAllowed } = useAuth();
   const { showToast } = useToast();
@@ -70,7 +126,11 @@ export function OrdersPage() {
   const [period, setPeriod] = useState<string>('');
   const [dateRange, setDateRange] = useState<{ from: string; to: string } | null>(null);
   const [activeTab, setActiveTab] = useState('all');
-  const [selectedRows, setSelectedRows] = useState<Order[]>([]);
+  const [columnFilters, setColumnFilters] = useState<Record<string, string | string[]>>({});
+  const [search, setSearch] = useState('');
+  const [sort, setSort] = useState<{ index: number; direction: 'ascending' | 'descending' } | null>(null);
+  const [page, setPage] = useState(0);
+  const [tableLoading, setTableLoading] = useState(false);
   const [moreActionsOpen, setMoreActionsOpen] = useState(false);
   const [moreActionsPos, setMoreActionsPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const [bulkUpdateOpen, setBulkUpdateOpen] = useState(false);
@@ -85,39 +145,16 @@ export function OrdersPage() {
 
   const { ledgers, loadLedgersList } = useLedgersData();
   const { riderNames, nextAssignmentNumber, load: loadLoadSheetLogs } = useLoadSheetLogs();
-
-  const gridApiRef = useRef<GridApi | null>(null);
-  // "Fetch order by number" - a full order-number search with 0 grid results fetches that
-  // order straight from the DB and injects it via applyTransaction, outside the `orders`
-  // state (so it doesn't skew the metrics strip) - same as orders-grid.js's onFilterChanged.
-  const fetchedByNumberIdsRef = useRef<Set<string>>(new Set());
-  const fetchByNumberInFlightRef = useRef<string | null>(null);
-  // Row highlight that follows the focused cell (click/arrow keys), toggled directly on the
-  // row DOM rather than via rowClassRules+redrawRows, which would recreate the just-focused
-  // cell and steal browser focus back to <body> - see orders-grid.js's onCellFocused.
-  const focusedRowIdRef = useRef<string | null>(null);
-  const autoFetchedDeliveryStatusRef = useRef(false);
-  // State, not a plain ref: this page's own mount effects run before the setHeader
-  // effect from usePageHeader() below, which is what actually mounts this button into
-  // AppShell's header - a ref would still read null when the picker effect runs, so the
-  // button would silently never get wired up (createDateRangePicker no-ops on a null element).
-  const [dateRangeBtnNode, setDateRangeBtnNode] = useState<HTMLButtonElement | null>(null);
-  const dateRangePickerRef = useRef<DateRangePickerHandle | null>(null);
-  const moreActionsBtnRef = useRef<HTMLButtonElement | null>(null);
-
-  useEffect(() => {
-    if (!moreActionsOpen) return;
-    const close = (e: Event) => {
-      if (!(e.target as HTMLElement).closest('.orders-more-actions')) setMoreActionsOpen(false);
-    };
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreActionsOpen(false); };
-    document.addEventListener('click', close);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('click', close); document.removeEventListener('keydown', onKey); };
-  }, [moreActionsOpen]);
+  const { mode, setMode } = useSetIndexFiltersMode();
 
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
+
+  // "Fetch order by number" - a full order-number search with 0 results fetches that order
+  // straight from the DB and injects it into `orders` (outside loadOrders*, so it doesn't
+  // skew the metrics strip) - same behaviour as the old orders-grid.js/AG Grid version.
+  const fetchedByNumberIdsRef = useRef<Set<string>>(new Set());
+  const fetchByNumberInFlightRef = useRef<string | null>(null);
 
   // "Synced with Shopify X ago" - re-renders on a sync (ORDERS_SYNC_STATUS_CHANGED_EVENT)
   // and every 30s so the relative-time text keeps ticking forward.
@@ -160,8 +197,8 @@ export function OrdersPage() {
 
   const confirmActionOnTerminalOrders = useCallback(async (orderNumbers: Array<string | number>, actionLabel: string, statuses: string[] = ['delivered', 'returned']) => {
     const wanted = new Set(orderNumbers.map(String));
-    const already = ordersRef.current
-      .filter((o) => o && o.id !== '__footer__' && wanted.has(String(o.order_number)) && statuses.includes((o.order_status || '').toLowerCase()))
+    const already = ordersRealRows(ordersRef.current)
+      .filter((o) => wanted.has(String(o.order_number)) && statuses.includes((o.order_status || '').toLowerCase()))
       .map((o) => o.order_number!);
     if (already.length === 0) return true;
     const list = [...already].sort((a, b) => a - b).join(', ');
@@ -174,55 +211,28 @@ export function OrdersPage() {
     });
   }, [confirm]);
 
-  const columnDefs = useMemo(() => buildOrdersGridColumns({
+  const columnCtx: OrdersColumnCtx = useMemo(() => ({
     isEditingAllowed,
     saveOrderField,
     confirmActionOnTerminalOrders,
-    getOrders: () => ordersRef.current,
+    onRefreshDelivery: (orderId) => setDeliveryStatusForId(orderId),
   }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders]);
 
-  const defaultColDef = useMemo(() => ({
-    sortable: true, resizable: true, filter: true, floatingFilter: true, minWidth: 70,
-    suppressHeaderMenuButton: true, suppressHeaderFilterButton: true, suppressFloatingFilterButton: true,
-    floatingFilterComponentParams: { suppressFilterButton: true },
-  }), []);
-
-  const footerRow = useMemo(() => {
-    if (selectedRows.length === 0) return [];
-    const sums = calculateSelectedSums(selectedRows);
-    return [{
-      id: '__footer__', order_number: null, courier: null, tracking_number: null, order_status: null,
-      delivery_status: null, piece_received: null, order_receiving_date: null, final_status: null,
-      ...sums,
-    }];
-  }, [selectedRows]);
-
-  function onGridReady(e: GridReadyEvent) {
-    gridApiRef.current = e.api;
-  }
-
-  function onSelectionChanged() {
-    const api = gridApiRef.current;
-    if (!api) return;
-    // Deselect any row that no longer passes the active filter - e.g. after filtering to a
-    // status while other rows were already selected.
-    const filteredIds = new Set<string>();
-    api.forEachNodeAfterFilter((node) => { if (node.data && node.data.id !== '__footer__') filteredIds.add(node.id!); });
-    api.getSelectedNodes().forEach((node) => {
-      if (node.data && node.data.id !== '__footer__' && !filteredIds.has(node.id!)) node.setSelected(false);
-    });
-    setSelectedRows(api.getSelectedRows().filter((r) => r.id !== '__footer__'));
+  function removeFetchedByNumberRows() {
+    if (fetchedByNumberIdsRef.current.size === 0) return;
+    const ids = fetchedByNumberIdsRef.current;
+    setOrders((prev) => prev.filter((o) => !ids.has(o.id)));
+    fetchedByNumberIdsRef.current.clear();
   }
 
   async function fetchOrderByNumber(orderNumber: string) {
-    const api = gridApiRef.current;
-    if (!api || fetchByNumberInFlightRef.current === orderNumber) return;
+    if (fetchByNumberInFlightRef.current === orderNumber) return;
     fetchByNumberInFlightRef.current = orderNumber;
     try {
       const order = await apiJson<Order | null>(`/orders/by-number/${encodeURIComponent(orderNumber)}`, { fallback: 'Failed to fetch order from database' });
       if (order && order.id) {
         fetchedByNumberIdsRef.current.add(order.id);
-        api.applyTransaction({ add: [order], addIndex: 0 });
+        setOrders((prev) => [order, ...prev]);
         showToast(`Order #${orderNumber} loaded from database`, 'success');
       }
     } catch (e: any) {
@@ -233,52 +243,21 @@ export function OrdersPage() {
     }
   }
 
-  function onFilterChanged() {
-    const api = gridApiRef.current;
-    if (!api) return;
-    const model = (api.getFilterModel() || {}).order_status;
-    const values = model && Array.isArray(model.values) ? [...model.values].sort() : null;
-    if (!values) setActiveTab('all');
-    else {
-      const match = ORDERS_VIEW_TABS.find((t) => t.statuses && [...t.statuses].sort().join(',') === values.join(','));
-      setActiveTab(match ? match.id : '');
-    }
-
-    // Temporarily-added "fetch by number" rows: drop them once the Order # filter is
-    // cleared/changed. Order numbers start at 1000, so a full number is 4+ digits.
-    const orderNumFilter = (api.getFilterModel() || {}).order_number;
-    const filterValue = orderNumFilter && orderNumFilter.filter != null ? String(orderNumFilter.filter).trim() : '';
-    const isFullOrderNumber = /^\d{4,}$/.test(filterValue);
-
-    function removeFetchedByNumberRows() {
-      if (fetchedByNumberIdsRef.current.size === 0) return;
-      const toRemove: any[] = [];
-      api!.forEachNode((node) => {
-        if (node.data && node.data.id !== '__footer__' && fetchedByNumberIdsRef.current.has(node.data.id)) toRemove.push(node.data);
-      });
-      if (toRemove.length) api!.applyTransaction({ remove: toRemove });
-      fetchedByNumberIdsRef.current.clear();
-    }
-
+  // Order-number auto-fetch: when the order # column filter holds a full order number
+  // (4+ digits) that matches nothing currently loaded, pull it straight from the DB.
+  const orderNumberFilter = String(columnFilters.order_number || '').trim();
+  useEffect(() => {
+    const isFullOrderNumber = /^\d{4,}$/.test(orderNumberFilter);
     if (!isFullOrderNumber) { removeFetchedByNumberRows(); return; }
-    if (api.getDisplayedRowCount() > 0) return; // already showing a match (real or fetched) - no-op
-    removeFetchedByNumberRows();
-    fetchOrderByNumber(filterValue);
-  }
+    const hasMatch = ordersRealRows(ordersRef.current).some((o) => String(o.order_number) === orderNumberFilter);
+    if (hasMatch) return;
+    const t = setTimeout(() => { removeFetchedByNumberRows(); fetchOrderByNumber(orderNumberFilter); }, 400);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderNumberFilter]);
 
-  function applyViewTab(tabId: string) {
-    const api = gridApiRef.current;
-    if (!api) return;
-    const tab = ORDERS_VIEW_TABS.find((t) => t.id === tabId) || ORDERS_VIEW_TABS[0];
-    const model = { ...(api.getFilterModel() || {}) };
-    if (tab.statuses) model.order_status = { values: tab.statuses.slice() };
-    else delete model.order_status;
-    api.setFilterModel(model);
-    setActiveTab(tab.id);
-  }
-
-  // Metrics strip + tab counts, derived from the currently loaded `orders` (not the grid's
-  // own filtered view - the strip always summarizes the whole loaded period).
+  // Metrics strip + tab counts, derived from the currently loaded `orders` (not the current
+  // filter/search - the strip always summarizes the whole loaded period).
   const metrics = useMemo(() => {
     const rows = ordersRealRows(orders);
     let items = 0, cod = 0, delivered = 0, returned = 0, cancelled = 0, netProfit = 0;
@@ -308,14 +287,98 @@ export function OrdersPage() {
     return counts;
   }, [orders]);
 
+  const courierOptions = useMemo(() => {
+    const names = new Set<string>();
+    ordersRealRows(orders).forEach((o) => names.add(getCourierDisplayName(o)));
+    return Array.from(names).sort((a, b) => a.localeCompare(b));
+  }, [orders]);
+
+  const activeTabDef = ORDERS_VIEW_TABS.find((t) => t.id === activeTab) || ORDERS_VIEW_TABS[0];
+
+  const filteredOrders = useMemo(() => {
+    let rows = ordersRealRows(orders).filter((o) => rowMatchesQuery(o, search));
+    if (activeTabDef.statuses) rows = rows.filter((o) => activeTabDef.statuses!.includes(o.order_status || ''));
+    // The order # column filter doubles as the old global search box did: it matches
+    // order number, tracking number, or folio, not just the order_number field.
+    const orderNumberQuery = orderNumberFilter.toLowerCase();
+    if (orderNumberQuery) {
+      rows = rows.filter((o) => String(o.order_number || '').includes(orderNumberQuery)
+        || (o.tracking_number || '').toLowerCase().includes(orderNumberQuery)
+        || (o.folio || '').toLowerCase().includes(orderNumberQuery));
+    }
+    const SELECT_FILTER_KEYS = new Set(['courier', 'order_status', 'piece_received', 'final_status']);
+    const CONTAINS_FILTER_KEYS = new Set(['folio']);
+    for (const [key, raw] of Object.entries(columnFilters)) {
+      if (key === 'order_number') continue;
+      if (!Array.isArray(raw) && !raw) continue;
+      const col = ORDERS_COLUMNS.find((c) => c.key === key);
+      if (!col?.sortValue) continue;
+      if (SELECT_FILTER_KEYS.has(key)) {
+        const values = Array.isArray(raw) ? raw : [raw];
+        rows = rows.filter((o) => values.includes(String(col.sortValue!(o))));
+      } else if (CONTAINS_FILTER_KEYS.has(key)) {
+        rows = rows.filter((o) => String(col.sortValue!(o)).toLowerCase().includes(String(raw).toLowerCase()));
+      } else {
+        const target = parseFloat(String(raw));
+        if (!isNaN(target)) rows = rows.filter((o) => Math.abs((col.sortValue!(o) as number) - target) < 0.01);
+      }
+    }
+    if (sort) {
+      const col = ORDERS_COLUMNS[sort.index];
+      if (col?.sortValue) {
+        const dir = sort.direction === 'ascending' ? 1 : -1;
+        rows = [...rows].sort((a, b) => {
+          const av = col.sortValue!(a);
+          const bv = col.sortValue!(b);
+          const cmp = typeof av === 'number' && typeof bv === 'number' ? av - bv : String(av).localeCompare(String(bv));
+          return cmp * dir;
+        });
+      }
+    }
+    return rows;
+  }, [orders, search, activeTabDef, columnFilters, sort]);
+
+  const pageCount = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE));
+  const pageRows = filteredOrders.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+  const hasAnyOrders = ordersRealRows(orders).length > 0;
+
+  useEffect(() => { setPage(0); }, [activeTab, columnFilters]);
+  useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [page, pageCount]);
+
+  const {
+    selectedResources, allResourcesSelected, handleSelectionChange, clearSelection,
+  } = useIndexResourceState(pageRows as unknown as Array<Order & { [key: string]: unknown }>, {
+    resourceIDResolver: (o) => o.id,
+  });
+
+  const selectedRows = useMemo(() => orders.filter((o) => selectedResources.includes(o.id)), [orders, selectedResources]);
+
+  function selectOrderNumbers(orderNumbers: number[]): { matched: number; notFound: string[] } {
+    const wanted = new Set(orderNumbers.map(String));
+    const matchedIds: string[] = [];
+    const matchedNums = new Set<string>();
+    ordersRealRows(ordersRef.current).forEach((o) => {
+      const num = String(o.order_number);
+      if (wanted.has(num)) { matchedIds.push(o.id); matchedNums.add(num); }
+    });
+    clearSelection();
+    matchedIds.forEach((id) => handleSelectionChange(IndexTableSelectionType.Single, true, id));
+    const notFound = [...wanted].filter((n) => !matchedNums.has(n));
+    return { matched: matchedIds.length, notFound };
+  }
+
   const reload = useCallback(async () => {
-    const api = gridApiRef.current;
-    if (api) api.showLoadingOverlay();
-    if (period === ALL_ORDERS_VALUE) await loadAllOrders();
-    else if (period === CUSTOM_ORDERS_VALUE && dateRange) await loadOrdersForDateRange(dateRange.from, dateRange.to);
-    else if (period) {
-      const [month, year] = period.split('-').map(Number);
-      await loadOrdersForPeriod(month, year);
+    const cacheKey = period === CUSTOM_ORDERS_VALUE && dateRange ? `${CUSTOM_ORDERS_VALUE}-${dateRange.from}-${dateRange.to}` : period;
+    if (cacheKey && !hasCachedOrders(cacheKey)) setTableLoading(true);
+    try {
+      if (period === ALL_ORDERS_VALUE) await loadAllOrders();
+      else if (period === CUSTOM_ORDERS_VALUE && dateRange) await loadOrdersForDateRange(dateRange.from, dateRange.to);
+      else if (period) {
+        const [month, year] = period.split('-').map(Number);
+        await loadOrdersForPeriod(month, year);
+      }
+    } finally {
+      setTableLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [period, dateRange]);
@@ -335,20 +398,32 @@ export function OrdersPage() {
       setDateRange(null);
       dateRangePickerRef.current?.setClearable(false);
     }
-    const api = gridApiRef.current;
-    if (api && !hasCachedOrders(value)) api.showLoadingOverlay();
-    if (value === ALL_ORDERS_VALUE) await loadAllOrders();
-    else if (value !== CUSTOM_ORDERS_VALUE) {
-      const [month, year] = value.split('-').map(Number);
-      await loadOrdersForPeriod(month, year);
+    if (!hasCachedOrders(value)) setTableLoading(true);
+    try {
+      if (value === ALL_ORDERS_VALUE) await loadAllOrders();
+      else if (value !== CUSTOM_ORDERS_VALUE) {
+        const [month, year] = value.split('-').map(Number);
+        await loadOrdersForPeriod(month, year);
+      }
+    } finally {
+      setTableLoading(false);
     }
   }
 
+  const [dateRangeBtnNode, setDateRangeBtnNode] = useState<HTMLButtonElement | null>(null);
+  const dateRangePickerRef = useRef<DateRangePickerHandle | null>(null);
+  const moreActionsBtnRef = useRef<HTMLSpanElement | null>(null);
+
   useEffect(() => {
-    const api = gridApiRef.current;
-    if (!api) return;
-    if (orders.length === 0) api.showNoRowsOverlay(); else api.hideOverlay();
-  }, [orders]);
+    if (!moreActionsOpen) return;
+    const close = (e: Event) => {
+      if (!(e.target as HTMLElement).closest('.orders-more-actions')) setMoreActionsOpen(false);
+    };
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setMoreActionsOpen(false); };
+    document.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    return () => { document.removeEventListener('click', close); document.removeEventListener('keydown', onKey); };
+  }, [moreActionsOpen]);
 
   useEffect(() => {
     if (!dateRangeBtnNode) return;
@@ -359,9 +434,8 @@ export function OrdersPage() {
         setPeriod(CUSTOM_ORDERS_VALUE);
         handle?.setLabel('Range set', formatOrdersDateRangeLabel(from, to));
         handle?.setClearable(true);
-        const api = gridApiRef.current;
-        if (api) api.showLoadingOverlay();
-        await loadOrdersForDateRange(from, to);
+        setTableLoading(true);
+        try { await loadOrdersForDateRange(from, to); } finally { setTableLoading(false); }
       },
       onClear: async () => {
         setDateRange(null);
@@ -370,9 +444,8 @@ export function OrdersPage() {
         handle?.setClearable(false);
         const { month, year } = getCurrentOrdersPeriod(fiscalMonthStartDay);
         setPeriod(`${month}-${year}`);
-        const api = gridApiRef.current;
-        if (api) api.showLoadingOverlay();
-        await loadOrdersForPeriod(month, year);
+        setTableLoading(true);
+        try { await loadOrdersForPeriod(month, year); } finally { setTableLoading(false); }
       },
     });
     dateRangePickerRef.current = handle;
@@ -398,8 +471,6 @@ export function OrdersPage() {
         document.body.classList.remove('orders-table-fullscreen');
       }
     }
-    // Also sync when the browser itself leaves fullscreen (F11, or its own Esc banner) -
-    // not just our own Escape keydown handler above.
     function onFullscreenChange() {
       if (!document.fullscreenElement && document.body.classList.contains('orders-table-fullscreen')) {
         setFullscreen(false);
@@ -415,47 +486,16 @@ export function OrdersPage() {
   }, []);
 
   function exportToExcel() {
-    const api = gridApiRef.current;
-    if (!api) return;
-    const columns = (api.getAllGridColumns() || []).map((col) => {
-      const colDef: any = col.getColDef ? col.getColDef() : null;
-      if (colDef?.checkboxSelection) return null;
-      const field = colDef?.field || col.getColId?.();
-      const header = colDef?.headerName || field;
-      if (!header) return null;
-      return { field, header, col };
-    }).filter(Boolean) as Array<{ field: string; header: string; col: any }>;
-    const rows: Record<string, unknown>[] = [];
-    api.forEachNodeAfterFilterAndSort((node) => {
-      if (!node?.data) return;
+    const rows = filteredOrders.map((o) => {
       const out: Record<string, unknown> = {};
-      for (const c of columns) {
-        let value = api.getValue(c.col, node);
-        if (value == null) { out[c.header] = ''; continue; }
-        const colDef = c.col.getColDef?.();
-        if (colDef?.valueFormatter && typeof colDef.valueFormatter === 'function') {
-          value = colDef.valueFormatter({ value, data: node.data });
-        }
-        out[c.header] = Array.isArray(value) ? value.join(', ') : typeof value === 'object' ? JSON.stringify(value) : value;
-      }
-      rows.push(out);
+      ORDERS_COLUMNS.forEach((c) => { out[c.heading] = c.exportValue(o); });
+      return out;
     });
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(rows), 'Orders');
     XLSX.writeFile(workbook, `inventory-orders-${new Date().toISOString().slice(0, 10)}.xlsx`);
     showToast('Excel exported (1 sheet)', 'success');
     setMoreActionsOpen(false);
-  }
-
-  function downloadBlob(blob: Blob, filename: string) {
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => window.URL.revokeObjectURL(url), 60000);
   }
 
   async function generateInvoice() {
@@ -488,39 +528,6 @@ export function OrdersPage() {
     }
   }
 
-  async function printAirwayBills() {
-    setMoreActionsOpen(false);
-    const rows = selectedRows.filter((r) => r.order_number);
-    const eligible = rows.filter((o) => {
-      const c = (o.courier || '').trim().toUpperCase();
-      return (c === 'POSTEX' || c === 'COURIERS NEXT') && !!o.tracking_number;
-    });
-    if (eligible.length === 0) { showToast('No selected orders have an airway bill available', 'error'); return; }
-    const skipped = rows.length - eligible.length;
-    try {
-      const postexOrders = eligible.filter((o) => (o.courier || '').trim().toUpperCase() === 'POSTEX');
-      const cnOrders = eligible.filter((o) => (o.courier || '').trim().toUpperCase() === 'COURIERS NEXT');
-      const cnTab = cnOrders.length > 0 ? window.open('', '_blank') : null;
-      if (postexOrders.length > 0) {
-        const res = await apiRequest('/orders/postex-airway-bills', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(postexOrders.map((o) => o.id)),
-          fallback: 'Failed to fetch airway bills',
-        });
-        const blob = await res.blob();
-        const d = new Date();
-        const p = (n: number) => String(n).padStart(2, '0');
-        downloadBlob(blob, `airway_bills_${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}.pdf`);
-      }
-      if (cnOrders.length > 0) {
-        const { url } = await apiJson<{ url: string }>('/orders/couriers-next-airway-bills', { method: 'POST', body: cnOrders.map((o) => o.id), fallback: 'Failed to fetch airway bills' });
-        if (cnTab && !cnTab.closed) cnTab.location.href = url;
-      }
-      showToast(`Airway bills ready${skipped > 0 ? ` (${skipped} order(s) skipped - not fulfilled or unsupported courier)` : ''}`, 'success');
-    } catch (e: any) {
-      showToast(e?.message || 'Failed to print airway bills', 'error');
-    }
-  }
-
   function applyDeliveryStatusUpdate(orderId: string, merged: any) {
     setOrders((prev) => prev.map((o) => {
       if (o.id !== orderId) return o;
@@ -534,10 +541,9 @@ export function OrdersPage() {
     }));
   }
 
+  const autoFetchedDeliveryStatusRef = useRef(false);
   // Silently refresh delivery status for non-terminal PostEx/Couriers Next orders from the
-  // last 2 months, once per visit right after orders finish their first load - a background
-  // top-up, same as delivery-status.js's autoFetchRecentDeliveryStatus (there fired once at
-  // app boot; here once per Orders page visit, since data now loads per-route not at boot).
+  // last 2 months, once per visit right after orders finish their first load.
   useEffect(() => {
     if (autoFetchedDeliveryStatusRef.current || orders.length === 0) return;
     autoFetchedDeliveryStatusRef.current = true;
@@ -573,18 +579,9 @@ export function OrdersPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orders]);
 
-  function onGridContainerClick(e: ReactMouseEvent) {
-    const btn = (e.target as HTMLElement).closest('.grid-delivery-refresh-btn') as HTMLElement | null;
-    if (!btn) return;
-    e.stopPropagation();
-    const id = btn.dataset.refreshOrderId;
-    if (id) setDeliveryStatusForId(id);
-  }
-
   /** Live-fetch delivery status for selected orders (skipping cancelled and anything not on
    * PostEx/Couriers Next with a tracking number), then always show the report. */
   async function fetchDeliveryStatusSelected() {
-    setMoreActionsOpen(false);
     const selected = selectedRows.filter((row) => (row.order_status || '').toLowerCase() !== 'cancelled');
     if (selected.length === 0) {
       showToast('Select orders to fetch delivery status for', 'warning', { silent: true });
@@ -630,8 +627,131 @@ export function OrdersPage() {
     }
   }
 
+  const selectionSums = useMemo(() => (selectedRows.length > 0 ? calculateSelectedSums(selectedRows) : null), [selectedRows]);
+
+  // Column widths for the aggregate row below (see .orders-aggregate-row in JSX) - it's a plain
+  // div sibling *after* the scrolling IndexTable, not a row inside it, because Chrome doesn't
+  // support `position: sticky; bottom` on a <tr>/<td> (confirmed: it just scrolls with the rest
+  // of the table, unlike the same trick on thead th above, which works fine) - so it can't get
+  // Polaris's auto table-layout widths for free and needs them mirrored in from the real <th>s.
+  const [aggregateColumnWidths, setAggregateColumnWidths] = useState<number[]>([]);
+  useLayoutEffect(() => {
+    const headerCells = document.querySelectorAll('#ordersView .Polaris-IndexTable thead th');
+    if (headerCells.length === 0) return;
+    const recalcColumnWidths = () => {
+      setAggregateColumnWidths(Array.from(headerCells).map((el) => el.getBoundingClientRect().width));
+    };
+    recalcColumnWidths();
+    const observer = new ResizeObserver(recalcColumnWidths);
+    headerCells.forEach((el) => observer.observe(el));
+    return () => observer.disconnect();
+  }, [pageRows.length > 0]);
+
+  // The table itself scrolls horizontally when columns overflow the card's width (its own
+  // scrollbar, not just the page's) - since the aggregate row lives outside that scroll
+  // container (see above), it needs its horizontal position mirrored in by hand, or its cells
+  // stop lining up with the real columns the moment you scroll sideways. Set directly on the
+  // DOM (not React state) so a fast scroll doesn't re-render the whole orders page per frame.
+  const aggregateRowInnerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!selectionSums) return;
+    const scrollContainer = document.querySelector('#ordersView .Polaris-IndexTable-ScrollContainer') as HTMLElement | null;
+    const inner = aggregateRowInnerRef.current;
+    if (!scrollContainer || !inner) return;
+    const syncScroll = () => { inner.style.transform = `translateX(${-scrollContainer.scrollLeft}px)`; };
+    syncScroll();
+    scrollContainer.addEventListener('scroll', syncScroll, { passive: true });
+    return () => scrollContainer.removeEventListener('scroll', syncScroll);
+  }, [selectionSums != null]);
+
+  useStickyIndexTableHeader('#ordersView', pageRows.length > 0);
+
+  // Per-column filters live in the header row rendered just below IndexTable's real
+  // headings (see the `rowType="subheader"` row below) - this only turns each active one
+  // into a removable chip in the filter bar, same as before.
+  const appliedFilters = Object.entries(columnFilters)
+    .filter(([, v]) => (Array.isArray(v) ? v.length > 0 : !!v))
+    .map(([key, v]) => {
+      const display = (s: string) => (key === 'order_status' ? orderStatusDisplayLabel(s) : s);
+      return {
+        key,
+        label: `${ORDERS_COLUMNS.find((c) => c.key === key)?.heading || key}: ${Array.isArray(v) ? v.map(display).join(', ') : display(v)}`,
+        onRemove: () => setColumnFilters((f) => { const next = { ...f }; delete next[key]; return next; }),
+      };
+    });
+
+  function setColumnFilter(key: string, value: string) {
+    setColumnFilters((f) => ({ ...f, [key]: value }));
+  }
+
+  function setColumnFilterValues(key: string, values: string[] | null) {
+    setColumnFilters((f) => {
+      if (values === null) { const next = { ...f }; delete next[key]; return next; }
+      return { ...f, [key]: values };
+    });
+  }
+
+  function renderColumnFilterCell(key: string) {
+    switch (key) {
+      case 'order_number':
+      case 'folio':
+        return (
+          <TextField
+            label="" labelHidden autoComplete="off" variant="borderless" size="slim" clearButton
+            placeholder="Search..." value={(columnFilters[key] as string) || ''}
+            onChange={(v) => setColumnFilter(key, v)}
+            onClearButtonClick={() => setColumnFilter(key, '')}
+          />
+        );
+      case 'courier':
+        return (
+          <Dropdown
+            multiple fullWidth allLabel="All" options={courierOptions}
+            value={(columnFilters.courier as string[] | undefined) ?? null}
+            onChange={(v) => setColumnFilterValues('courier', v)}
+          />
+        );
+      case 'order_status':
+        return (
+          <Dropdown
+            multiple fullWidth allLabel="All" options={ORDER_STATUS_VALUES.map((v) => ({ value: v, label: orderStatusDisplayLabel(v) }))}
+            value={(columnFilters.order_status as string[] | undefined) ?? null}
+            onChange={(v) => setColumnFilterValues('order_status', v)}
+          />
+        );
+      case 'piece_received':
+        return (
+          <Dropdown
+            multiple fullWidth allLabel="All" options={PIECE_RECEIVED_VALUES}
+            value={(columnFilters.piece_received as string[] | undefined) ?? null}
+            onChange={(v) => setColumnFilterValues('piece_received', v)}
+          />
+        );
+      case 'final_status':
+        return (
+          <Dropdown
+            multiple fullWidth allLabel="All" options={FINAL_STATUS_VALUES}
+            value={(columnFilters.final_status as string[] | undefined) ?? null}
+            onChange={(v) => setColumnFilterValues('final_status', v)}
+          />
+        );
+      case 'delivery':
+        return null;
+      default:
+        return (
+          <TextField
+            label="" labelHidden autoComplete="off" variant="borderless" align="right" size="slim" clearButton
+            placeholder="=" value={(columnFilters[key] as string) || ''}
+            onChange={(v) => setColumnFilter(key, v)}
+            onClearButtonClick={() => setColumnFilter(key, '')}
+          />
+        );
+    }
+  }
+
   usePageHeader({
     title: 'Orders',
+    search: { value: search, onChange: setSearch, placeholder: 'Search orders...' },
     actions: (
       <>
         {lastOrdersSyncAt != null && (
@@ -639,36 +759,42 @@ export function OrdersPage() {
             Synced with Shopify {formatRelativeTime(lastOrdersSyncAt)}
           </span>
         )}
-        <div className="orders-period-filter-wrap header-inline">
-          <label htmlFor="ordersPeriodFilter" className="orders-period-filter-label">Period:</label>
-          <select id="ordersPeriodFilter" className="orders-period-filter" value={period} onChange={(e) => onPeriodChange(e.target.value)}>
-            <option value={ALL_ORDERS_VALUE}>Recent Orders</option>
-            {buildStaticPeriodOptions(fiscalMonthStartDay).map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-            {period === CUSTOM_ORDERS_VALUE && dateRange && (
-              <option value={CUSTOM_ORDERS_VALUE}>{formatOrdersDateRangeLabel(dateRange.from, dateRange.to)}</option>
-            )}
-          </select>
+        <div className="orders-period-filter-wrap">
+          <Dropdown
+            value={period}
+            onChange={onPeriodChange}
+            options={[
+              { label: 'Recent Orders', value: ALL_ORDERS_VALUE },
+              ...buildStaticPeriodOptions(fiscalMonthStartDay),
+              ...(period === CUSTOM_ORDERS_VALUE && dateRange
+                ? [{ label: formatOrdersDateRangeLabel(dateRange.from, dateRange.to), value: CUSTOM_ORDERS_VALUE }]
+                : []),
+            ]}
+          />
         </div>
         <div className="orders-date-range-wrap header-inline">
-          <button ref={setDateRangeBtnNode} className="btn btn-secondary header-toolbar-btn" title="Filter by date range">Date range</button>
+          <HeaderRefButton ref={setDateRangeBtnNode} label="Date range" title="Filter by date range" />
         </div>
         <div className={'orders-more-actions' + (moreActionsOpen ? ' open' : '')}>
-          <button
-            ref={moreActionsBtnRef}
-            type="button" className="btn btn-secondary header-toolbar-btn" aria-haspopup="true" aria-expanded={moreActionsOpen}
-            onClick={() => {
-              if (!moreActionsOpen && moreActionsBtnRef.current) {
-                const rect = moreActionsBtnRef.current.getBoundingClientRect();
-                setMoreActionsPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - 220) });
-              }
-              setMoreActionsOpen((v) => !v);
-            }}
-          >
-            <span>More actions</span><span className="orders-more-actions__caret" aria-hidden="true" />
-          </button>
+          <span ref={moreActionsBtnRef} style={{ display: 'inline-block' }}>
+            <HeaderButton
+              disclosure={moreActionsOpen ? 'up' : 'down'}
+              ariaExpanded={moreActionsOpen}
+              onClick={() => {
+                if (!moreActionsOpen && moreActionsBtnRef.current) {
+                  const rect = moreActionsBtnRef.current.getBoundingClientRect();
+                  setMoreActionsPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - 220) });
+                }
+                setMoreActionsOpen((v) => !v);
+              }}
+            >
+              More actions
+            </HeaderButton>
+          </span>
           {moreActionsOpen && (
             <div className="orders-more-actions__menu" role="menu" style={moreActionsPos}>
-              <button type="button" className="orders-more-actions__item" role="menuitem" disabled={fetchingDeliveryStatus} onClick={fetchDeliveryStatusSelected}>Track Delivery Status</button>
+              <button type="button" className="orders-more-actions__item" role="menuitem" disabled={fetchingDeliveryStatus} onClick={() => { setMoreActionsOpen(false); fetchDeliveryStatusSelected(); }}>Track delivery status</button>
+              <button type="button" className="orders-more-actions__item" role="menuitem" onClick={generateInvoice}>Generate invoice</button>
               <button type="button" className="orders-more-actions__item" role="menuitem" onClick={() => { setMoreActionsOpen(false); setBulkUpdateOpen(true); }}>Bulk update order</button>
               <button
                 type="button" className="orders-more-actions__item" role="menuitem"
@@ -678,101 +804,131 @@ export function OrdersPage() {
               </button>
               <button type="button" className="orders-more-actions__item" role="menuitem" onClick={() => { setMoreActionsOpen(false); setLoadSheetModalOpen(true); }}>Generate Load Sheet</button>
               <button type="button" className="orders-more-actions__item" role="menuitem" onClick={() => { setMoreActionsOpen(false); setPackagingListModalOpen(true); }}>Generate Packaging List</button>
-              <button type="button" className="orders-more-actions__item" role="menuitem" onClick={generateInvoice}>Generate Invoice</button>
-              <button type="button" className="orders-more-actions__item" role="menuitem" onClick={printAirwayBills}>Print Airway Bills</button>
               <button type="button" className="orders-more-actions__item" role="menuitem" onClick={exportToExcel}>Export Data to Excel</button>
             </div>
           )}
         </div>
         <div className="header-orders-app-actions" role="group" aria-label="App security and view">
-          <button
-            type="button" className="btn btn-secondary header-toolbar-btn header-toolbar-btn-icon-only header-orders-app-actions-btn"
-            title="Full screen (Esc to exit)" onClick={toggleFullscreen}
-          >
-            <span className="header-fullscreen-icon" aria-hidden="true">&#x26F6;</span>
-          </button>
+          <Tooltip content="Full screen (Esc to exit)">
+            <HeaderButton icon={MaximizeIcon} accessibilityLabel="Full screen (Esc to exit)" onClick={toggleFullscreen} />
+          </Tooltip>
         </div>
       </>
     ),
   });
 
   return (
-    <>
-      <div className="orders-metrics-strip" role="group" aria-label="Order summary">
-        {[
+    <div id="ordersView" className="view active">
+      <MetricsStrip
+        label="Order summary"
+        tiles={[
           { label: 'Orders', value: metrics.orders.toLocaleString('en-US') },
           { label: 'Items ordered', value: metrics.items.toLocaleString('en-US') },
           { label: 'COD to collect', value: compactRs(metrics.cod) },
           { label: 'Delivered', value: metrics.delivered.toLocaleString('en-US') },
           { label: 'Returned', value: metrics.returned.toLocaleString('en-US') },
           { label: 'Net profit', value: compactRs(metrics.netProfit), negative: metrics.netProfit < 0 },
-        ].map((t) => (
-          <div className="orders-metric" key={t.label}>
-            <span className="orders-metric__label">{t.label}</span>
-            <span className={'orders-metric__value' + (t.negative ? ' orders-metric__value--neg' : '')}>{t.value}</span>
-          </div>
-        ))}
-      </div>
+        ]}
+      />
       <div className="orders-table-card">
-        <div className="orders-view-tabs" role="tablist" aria-label="Filter orders by status">
-          {ORDERS_VIEW_TABS.map((t) => (
-            <button
-              type="button" key={t.id} className={'orders-view-tab' + (activeTab === t.id ? ' active' : '')}
-              role="tab" aria-selected={activeTab === t.id} onClick={() => applyViewTab(t.id)}
-            >
-              <span className="orders-view-tab__label">{t.label}</span>
-              <span className="orders-view-tab__count">{(tabCounts[t.id] ?? '').toLocaleString?.('en-US') ?? tabCounts[t.id]}</span>
-            </button>
-          ))}
-        </div>
-        <div className="ag-theme-alpine grid-container" onClick={onGridContainerClick}>
-          <AgGridReact
-            columnDefs={columnDefs}
-            rowData={orders}
-            rowSelection="multiple"
-            suppressRowClickSelection
-            pinnedBottomRowData={footerRow}
-            defaultColDef={defaultColDef}
-            animateRows={false}
-            pagination={false}
-            domLayout="normal"
-            suppressCellFocus={false}
-            stopEditingWhenCellsLoseFocus
-            singleClickEdit
-            getRowId={(p) => p.data.id}
-            getRowStyle={(p) => {
-              if (p.data.id === '__footer__') return { backgroundColor: 'var(--bg-secondary, #f5f5f5)', borderTop: '2px solid var(--primary, #007bff)', fontWeight: 'bold' } as any;
-              const status = (p.data.order_status || '').toLowerCase();
-              if (status === 'cancelled') return { opacity: '0.5', textDecoration: 'line-through' } as any;
-              return undefined;
-            }}
-            rowClassRules={{ 'orders-row-focused': (p) => !!p.data && p.data.id === focusedRowIdRef.current }}
-            onCellFocused={(p) => {
-              const api = p.api;
-              if (!api) return;
-              const node = (!p.rowPinned && p.rowIndex != null) ? api.getDisplayedRowAtIndex(p.rowIndex) : null;
-              const nextId = (node && node.data && node.data.id !== '__footer__') ? node.id! : null;
-              const prevId = focusedRowIdRef.current;
-              if (nextId === prevId) return;
-              focusedRowIdRef.current = nextId;
-              if (prevId != null) document.querySelector(`.ag-row[row-id="${CSS.escape(String(prevId))}"]`)?.classList.remove('orders-row-focused');
-              if (nextId != null) document.querySelector(`.ag-row[row-id="${CSS.escape(String(nextId))}"]`)?.classList.add('orders-row-focused');
-            }}
-            onGridReady={onGridReady}
-            onFilterChanged={onFilterChanged}
-            onSelectionChanged={onSelectionChanged}
-            onCellValueChanged={onSelectionChanged}
+        <div className="orders-index-filters-wrap">
+          <IndexFilters
+            mode={mode}
+            setMode={setMode}
+            tabs={ORDERS_VIEW_TABS.map((t) => ({ id: t.id, content: t.label, badge: String(tabCounts[t.id] ?? '') }))}
+            selected={Math.max(0, ORDERS_VIEW_TABS.findIndex((t) => t.id === activeTab))}
+            onSelect={(index) => setActiveTab(ORDERS_VIEW_TABS[index]?.id || 'all')}
+            onQueryChange={() => {}}
+            onQueryClear={() => {}}
+            filters={[]}
+            appliedFilters={appliedFilters}
+            onClearAll={() => setColumnFilters({})}
+            cancelAction={{ onAction: () => {}, disabled: true }}
+            hideQueryField
+            hideFilters
+            canCreateNewView={false}
           />
+          {Object.keys(columnFilters).length > 0 && (
+            <Tooltip content="Clear filters">
+              <HeaderButton
+                icon={<FilterX size={16} />}
+                accessibilityLabel="Clear filters"
+                onClick={() => setColumnFilters({})}
+                variant="tertiary"
+              />
+            </Tooltip>
+          )}
         </div>
+          <IndexTable
+            resourceName={{ singular: 'order', plural: 'orders' }}
+            // Polaris swaps the whole <table> (thead included) for `emptyState` once
+            // itemCount hits 0, taking our filter subheader row down with it - keep
+            // itemCount at 1 and render the empty message as a row instead, see below.
+            itemCount={pageRows.length || 1}
+            selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+            onSelectionChange={handleSelectionChange}
+            headings={ORDERS_COLUMNS.map((c) => ({ title: c.heading, alignment: c.alignment })) as any}
+            sortable={ORDERS_COLUMNS.map((c) => !!c.sortable)}
+            sortColumnIndex={sort?.index}
+            sortDirection={sort?.direction}
+            onSort={(index, direction) => setSort({ index, direction })}
+            loading={tableLoading}
+            condensed={false}
+          >
+            <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
+              {ORDERS_COLUMNS.map((col) => (
+                <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>
+              ))}
+            </IndexTable.Row>
+            {pageRows.length === 0 && !tableLoading && (
+              <IndexTable.Row id="__empty__" position={-2} hideSelectable>
+                <IndexTable.Cell colSpan={ORDERS_COLUMNS.length}>
+                  <div className="orders-table-empty">{hasAnyOrders ? 'No orders match this filter' : 'No orders yet'}</div>
+                </IndexTable.Cell>
+              </IndexTable.Row>
+            )}
+            {pageRows.map((order, index) => (
+              <OrderRow
+                key={order.id} order={order} index={index}
+                selected={selectedResources.includes(order.id)}
+                tone={(order.order_status || '').toLowerCase() === 'cancelled' ? 'subdued' : undefined}
+                columnCtx={columnCtx}
+              />
+            ))}
+          </IndexTable>
+          {selectionSums && (
+            <div className="orders-aggregate-row">
+              <div className="orders-aggregate-row__inner" ref={aggregateRowInnerRef}>
+                {aggregateColumnWidths[0] != null && <div style={{ width: aggregateColumnWidths[0], flex: '0 0 auto' }} />}
+                {ORDERS_COLUMNS.map((col, i) => (
+                  <div
+                    key={col.key} className="Polaris-IndexTable__TableCell"
+                    style={{ width: aggregateColumnWidths[i + 1], flex: '0 0 auto', boxSizing: 'border-box' }}
+                  >
+                    {i === 0
+                      ? <Text as="span" fontWeight="semibold">{selectedRows.length} selected</Text>
+                      : aggregateCell(col, selectionSums)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          <div className="orders-pagination-wrapper">
+            <Pagination
+              type="table"
+              hasNext={page < pageCount - 1}
+              hasPrevious={page > 0}
+              onNext={() => setPage((p) => p + 1)}
+              onPrevious={() => setPage((p) => p - 1)}
+              label={`${filteredOrders.length === 0 ? 0 : page * PAGE_SIZE + 1}-${Math.min((page + 1) * PAGE_SIZE, filteredOrders.length)} of ${filteredOrders.length}`}
+            />
+          </div>
       </div>
-      {selectedRows.length > 0 && (
-        <div className="orders-selected-count">{selectedRows.length} row(s) selected</div>
-      )}
       <BulkUpdateOrderModal
         open={bulkUpdateOpen}
         onClose={() => setBulkUpdateOpen(false)}
         onChanged={reload}
-        gridApi={gridApiRef.current}
+        onSelectOrderNumbers={selectOrderNumbers}
         prefill={selectedRows.filter((r) => r.order_number).map((r) => r.order_number).join('\n')}
         orders={orders}
       />
@@ -823,6 +979,6 @@ export function OrdersPage() {
       {postExUploadReport && (
         <PostExUploadReportModal data={postExUploadReport} onClose={() => setPostExUploadReport(null)} />
       )}
-    </>
+    </div>
   );
 }

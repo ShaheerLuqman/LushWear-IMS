@@ -8,44 +8,13 @@ import { apiJson, apiRequest } from '../../api';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderButton } from '../../components/HeaderButton';
+import { Dropdown } from '../../components/Dropdown';
 import { BILL_STATUSES, BILL_STATUS_LABELS } from '../../logic/bills';
 import { useLedgersData } from './useLedgersData';
 import { useInventoryData } from '../inventory/useInventoryData';
 import { buildBillsColumnDefs, type Bill } from './BillsGridCells';
 import { BillModal } from './BillModal';
-
-function StatusFilterDropdown({ selected, onChange }: { selected: string[] | null; onChange: (v: string[] | null) => void }) {
-  const [open, setOpen] = useState(false);
-  const ticked = selected ?? BILL_STATUSES;
-
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [open]);
-
-  const label = ticked.length === BILL_STATUSES.length ? 'All statuses' : ticked.length === 0 ? 'None' : ticked.length === 1 ? (BILL_STATUS_LABELS[ticked[0]] || ticked[0]) : `${ticked.length} selected`;
-
-  function toggle(status: string) {
-    const next = ticked.includes(status) ? ticked.filter((s) => s !== status) : [...ticked, status];
-    onChange(next.length === BILL_STATUSES.length ? null : next);
-  }
-
-  return (
-    <div className="pa-customize" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="orders-period-filter checkbox-filter-control__btn" onClick={() => setOpen((v) => !v)}>{label}</button>
-      {open && (
-        <div className="pa-pop">
-          <label><input type="checkbox" checked={ticked.length === BILL_STATUSES.length} onChange={() => onChange(ticked.length === BILL_STATUSES.length ? [] : null)} /> All</label>
-          {BILL_STATUSES.map((s) => (
-            <label key={s}><input type="checkbox" checked={ticked.includes(s)} onChange={() => toggle(s)} /> {s.charAt(0).toUpperCase() + s.slice(1)}</label>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export function BillsPage() {
   const location = useLocation();
@@ -154,8 +123,8 @@ export function BillsPage() {
     title: 'Purchase Bills',
     actions: (
       <>
-        <StatusFilterDropdown selected={statusFilter} onChange={setStatusFilter} />
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setModalBillId(null)}><i className="fa-solid fa-plus" /> New Bill</button>
+        <Dropdown multiple allLabel="All statuses" options={BILL_STATUSES.map((v) => ({ value: v, label: BILL_STATUS_LABELS[v] || v }))} value={statusFilter} onChange={setStatusFilter} />
+        <HeaderButton variant="primary" icon={<i className="fa-solid fa-plus" />} onClick={() => setModalBillId(null)}>New Bill</HeaderButton>
       </>
     ),
   });

@@ -89,7 +89,22 @@ export function useOrdersData() {
   function saveCache(periodKey: string, rows: Order[]) {
     const key = cacheKey(periodKey);
     if (!key) return;
-    try { localStorage.setItem(key, JSON.stringify(rows)); } catch { /* ignore */ }
+    const payload = JSON.stringify(rows);
+    try {
+      localStorage.setItem(key, payload);
+    } catch {
+      // Quota exceeded, likely from other periods' caches piling up over time (nothing ever
+      // pruned them). Those are stale-until-reloaded anyway, so evict them to make room for
+      // the one the user is actually looking at now, and retry once.
+      if (!currentOrgId) return;
+      const prefix = `${ORDERS_CACHE_KEY_PREFIX}${currentOrgId}_`;
+      for (const k of Object.keys(localStorage)) {
+        if (k.startsWith(prefix) && k !== key) {
+          try { localStorage.removeItem(k); } catch { /* ignore */ }
+        }
+      }
+      try { localStorage.setItem(key, payload); } catch { /* ignore */ }
+    }
   }
 
   const hasCachedOrders = useCallback((periodKey: string): boolean => {

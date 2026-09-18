@@ -1,5 +1,5 @@
 // Session/auth state as a React Context - replaces the old window-global
-// model (frontend/engine's earlier auth.ts) now that every consumer is a
+// model (this app's earlier auth.ts) now that every consumer is a
 // React component. Handles: session resume at boot, the superadmin
 // "impersonate an org" flow, multi-org switch-to-last-used, and edit lock /
 // enabled-features state that pages read via useAuth().
@@ -10,6 +10,7 @@ import { runBootShopifyProductSync, startOrdersAutoSync, stopOrdersAutoSync } fr
 
 const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
 const LAST_USED_ORG_KEY = 'lushwear_last_used_org';
+const ACCOUNT_CACHE_KEY = 'lushwear_account_cache';
 
 export interface Account {
   id: string;
@@ -57,6 +58,26 @@ function decodeTokenPayload(token: string): any {
     return JSON.parse(atob(padded));
   } catch {
     return null;
+  }
+}
+
+/** Lets the app render immediately from the last-known account on boot, instead of behind
+ * a blocking spinner for the /auth/me round trip - same stale-while-revalidate pattern as
+ * the orders cache. /auth/me still confirms/refreshes it right after. */
+function loadCachedAccount(): Account | null {
+  try {
+    return JSON.parse(localStorage.getItem(ACCOUNT_CACHE_KEY) || 'null');
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedAccount(account: Account | null): void {
+  try {
+    if (account) localStorage.setItem(ACCOUNT_CACHE_KEY, JSON.stringify(account));
+    else localStorage.removeItem(ACCOUNT_CACHE_KEY);
+  } catch {
+    /* ignore */
   }
 }
 
@@ -182,6 +203,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const onAuthExpired = useCallback(() => {
     clearAuthToken();
+    saveCachedAccount(null);
     setAccount(null);
     setStatus('gate');
   }, []);
@@ -209,13 +231,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [status]);
 
   useEffect(() => {
+    const impersonating = consumeImpersonationToken();
+    if (!impersonating && getAuthToken()) {
+      const cached = loadCachedAccount();
+      if (cached) {
+        setAccount(cached);
+        setStatus('ready');
+      }
+    }
     (async () => {
-      const impersonating = consumeImpersonationToken();
       const resumed = impersonating ? await apiJson<Account>('/auth/me').catch(() => null) : await tryResumeSession();
       if (resumed) {
         setAccount(resumed);
+        saveCachedAccount(resumed);
         setStatus('ready');
       } else {
+        saveCachedAccount(null);
         setStatus('gate');
       }
     })();
@@ -235,12 +266,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     const fresh = await apiJson<Account>('/auth/me');
     setAccount(fresh);
+    saveCachedAccount(fresh);
     setStatus('ready');
   }, []);
 
   const logout = useCallback(() => {
     clearAuthToken();
     try { localStorage.removeItem(SUPERADMIN_TOKEN_KEY); } catch { /* ignore */ }
+    saveCachedAccount(null);
     setAccount(null);
     setStatus('gate');
   }, []);

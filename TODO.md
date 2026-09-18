@@ -18,6 +18,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Keyboard shortcuts** — add shortcuts for common actions.
 - [ ] **Reduce base font size** — tighten the type scale app-wide.
 - [ ] **Refresh color theme** — update the UI's color palette.
+- [ ] **Migrate remaining modals/forms to Polaris** — port the legacy `.modal`/`.form-input` screens onto `FormModal` + Polaris fields.
 
 ### Backend
 
@@ -52,6 +53,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Shopify-style dropdowns everywhere** — one Polaris-based `Dropdown` (single, checkbox multi, searchable) replaced every native select and custom picker.
+- [x] **Reusable Polaris components** — added `SearchField`, `MetricsStrip`, `FormModal`; Shipping Details modal ported as the reference.
 - [x] **Shopify webhooks trigger order reconciliation** — `orders/create`, `orders/updated`, `orders/cancelled`, `orders/fulfilled` webhooks reconcile the order immediately (`reconcile_and_persist_single_order`) instead of waiting on the periodic poll.
 - [x] **Shipper advice from the delivery status report** — new "Under review" bucket groups parcels PostEx has parked awaiting a decision (history code 0008, checked as the newest event so already-returning parcels are excluded); a per-row Advise button opens a modal to reattempt delivery or return the parcel, with remarks for the rider, sending PostEx's save-shipper-advice via `POST /orders/postex-shipper-advice`, which re-checks eligibility server-side before writing.
 - [x] **Orders page restyled Shopify-style** — added a period summary strip (orders, items, COD to collect, delivered, returned, net profit) and status view-tabs wired to the grid's `order_status` filter, wrapped the grid in a framed table card with Polaris-style pills and quieter headers; AG Grid and all its behaviour kept, light theme only.

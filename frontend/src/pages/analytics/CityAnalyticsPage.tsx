@@ -8,11 +8,14 @@ import { create as createEasepick, DateTime } from '@easepick/bundle';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
 import {
   analyticsIsoDate, analyticsN, analyticsPct, analyticsRangeDates, analyticsRangeLabel, analyticsToday,
   ANALYTICS_TIME_PRESETS, type CustomRange,
 } from '../../logic/analyticsShared';
 import { AnalyticsDonut, legendList } from '../../logic/analyticsCharts';
+import { Dropdown } from '../../components/Dropdown';
+import { SearchField } from '../../components/SearchField';
 
 const CA_MAX_CITIES = 8;
 
@@ -86,7 +89,6 @@ export function CityAnalyticsPage() {
   // effect from usePageHeader() below, which is what actually mounts this button
   // into AppShell's header - a ref would still read null then. See ProductAnalyticsPage.
   const [timeBtnNode, setTimeBtnNode] = useState<HTMLButtonElement | null>(null);
-  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reqId = useRef(0);
 
   useEffect(() => {
@@ -155,7 +157,7 @@ export function CityAnalyticsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [timeRange, customRange.start, customRange.end]);
 
-  const view = useMemo(() => deriveView(data, collection, search), [data, collection, search]);
+  const view = useMemo(() => deriveView(data, collection, search.trim()), [data, collection, search]);
 
   const collectionOptions = useMemo(() => {
     const set = new Set<string>();
@@ -167,11 +169,6 @@ export function CityAnalyticsPage() {
     if (collection && !collectionOptions.includes(collection)) setCollection('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data]);
-
-  function onSearchChange(value: string) {
-    if (searchTimer.current) clearTimeout(searchTimer.current);
-    searchTimer.current = setTimeout(() => setSearch(value.trim()), 200);
-  }
 
   function exportExcel() {
     if (!view.products.length) { showToast('Nothing to export', 'warning', { silent: true }); return; }
@@ -189,20 +186,12 @@ export function CityAnalyticsPage() {
     title: 'Analytics by City',
     actions: (
       <>
-        <div className="transaction-search-wrap">
-          <i className="fa-solid fa-magnifying-glass transaction-search-icon" />
-          <input className="transaction-search-filter" placeholder="Search products…" autoComplete="off" onChange={(e) => onSearchChange(e.target.value)} />
-        </div>
+        <div className="toolbar-search"><SearchField placeholder="Search products…" value={search} onChange={setSearch} /></div>
         <div className="pa-time">
-          <button type="button" ref={setTimeBtnNode} className="pa-time-btn">
-            <i className="fa-regular fa-calendar" /><span>{rangeLabel}</span><i className="fa-solid fa-chevron-down" />
-          </button>
+          <HeaderRefButton ref={setTimeBtnNode} label={rangeLabel} />
         </div>
-        <select className="orders-period-filter" title="Filter by collection" value={collection} onChange={(e) => setCollection(e.target.value)}>
-          <option value="">All collections</option>
-          {collectionOptions.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" onClick={exportExcel}><i className="fa-solid fa-arrow-up-from-bracket" /> Export</button>
+        <Dropdown searchable options={[{ value: '', label: 'All collections' }, ...collectionOptions]} value={collection} onChange={setCollection} />
+        <HeaderButton icon={<i className="fa-solid fa-arrow-up-from-bracket" />} onClick={exportExcel}>Export</HeaderButton>
       </>
     ),
   });
@@ -228,10 +217,7 @@ export function CityAnalyticsPage() {
         <div className="pa-card ca-city-card">
           <div className="pa-widget-head">
             <h3>City Wise Sales</h3>
-            <select className="pa-mini-select" value={metric} onChange={(e) => setMetric(e.target.value as 'revenue' | 'orders')}>
-              <option value="revenue">Amount</option>
-              <option value="orders">Units</option>
-            </select>
+            <Dropdown size="slim" options={[{ value: 'revenue', label: 'Amount' }, { value: 'orders', label: 'Units' }]} value={metric} onChange={(v) => setMetric(v as 'revenue' | 'orders')} />
           </div>
           <ul className="ca-city-list">
             {loading ? (

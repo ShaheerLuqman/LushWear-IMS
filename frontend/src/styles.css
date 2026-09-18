@@ -10,20 +10,28 @@
     --bg-tertiary: #e8e8ec;
     --bg-card: #fafafa;
     --border-color: #d1d1d6;
-    --border-focus: #7c5cfc;
+    --border-focus: #2563eb;
     --text-primary: #1a1a1a;
     --text-secondary: #4a4a4f;
     --text-muted: #8e8e93;
-    --accent-primary: #7c5cfc;
-    --accent-secondary: #8b7bff;
-    --accent-glow: rgba(124, 92, 252, 0.2);
-    --accent-nav: #7c5cfc;
-    --accent-nav-glow: rgba(124, 92, 252, 0.25);
+    --accent-primary: #2563eb;
+    --accent-secondary: #3b82f6;
+    --accent-glow: rgba(37, 99, 235, 0.2);
+    --accent-nav: #2563eb;
+    --accent-nav-glow: rgba(37, 99, 235, 0.25);
     --danger: #c45c5c;
     --warning: #c4a35c;
     --success: #8b5cf6;
     --status-delivered: #5cc45c;
-    --font-primary: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --font-primary: 'Noto Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+    --p-font-family-sans: var(--font-primary);
+}
+
+/* Polaris redeclares --p-font-family-sans directly on .p-theme-light (the AppProvider
+   wrapper), which sits between :root and every Polaris component - the :root override
+   above never reaches through that. */
+.p-theme-light {
+    --p-font-family-sans: var(--font-primary);
     --font-mono: 'Roboto Mono', monospace;
     --radius-sm: 6px;
     --radius-md: 10px;
@@ -41,31 +49,11 @@
     --grid-header-foreground: #6b7280;
 }
 
-:root[data-theme="dark"] {
-    --bg-primary: #0d0e13;
-    --bg-secondary: #121319;
-    --bg-tertiary: #1c1d26;
-    --bg-card: #16171e;
-    --border-color: #262732;
-    --text-primary: #f3f3f6;
-    --text-secondary: #a4a4b0;
-    --text-muted: #6d6d78;
-    --danger: #ef4444;
-    --warning: #eab308;
-    --status-delivered: #22c55e;
-    --shadow: 0 4px 24px rgba(0, 0, 0, 0.5);
-    --shadow-lg: 0 8px 48px rgba(0, 0, 0, 0.6);
-
-    /* Keep AG Grid aligned with the app surfaces in dark mode too. */
-    --grid-bg: var(--bg-secondary);
-    --grid-header-bg: var(--bg-secondary);
-    --grid-border: var(--border-color);
-    --grid-row-hover: var(--bg-tertiary);
-    --grid-foreground: #f3f3f6;
-    --grid-header-foreground: #9494a0;
-}
-
 body {
+    /* Polaris's stylesheet (imported for the Orders page - see OrdersPage.tsx) resets
+       html/body font-size to 13px app-wide; re-pin it here since this rule loads after
+       Polaris's in main.tsx and wins the cascade at equal specificity. */
+    font-size: 16px;
     font-family: var(--font-primary);
     background: var(--bg-primary);
     color: var(--text-primary);
@@ -86,8 +74,8 @@ body {
     padding: 24px;
     background: var(--bg-primary);
     background-image:
-        radial-gradient(ellipse at 20% 20%, rgba(139, 92, 246, 0.06) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.04) 0%, transparent 50%);
+        radial-gradient(ellipse at 20% 20%, rgba(37, 99, 235, 0.06) 0%, transparent 50%),
+        radial-gradient(ellipse at 80% 80%, rgba(37, 99, 235, 0.04) 0%, transparent 50%);
 }
 
 .auth-gate-root[hidden] {
@@ -217,52 +205,124 @@ body {
     max-width: 440px;
 }
 
-.fulfillment-details-modal-content {
-    max-width: 520px;
-}
-
 .password-change-form .form-group {
     margin-bottom: 0;
 }
 
-.app-container {
-    display: flex;
+/* Polaris's Frame only sets min-height:100vh on itself (not a hard height) - fine for a page
+   that's meant to grow, but this app's inner containers (.content-area, .orders-table-card,
+   AG Grid) rely on being clipped to exactly one viewport tall so THEY scroll internally.
+   Without this, Frame just grows to fit all content (e.g. every order row) and body's own
+   overflow:hidden makes that extra height completely unreachable - nothing scrolls at all. */
+.Polaris-Frame {
     height: 100vh;
-    background: 
-        radial-gradient(ellipse at 20% 20%, rgba(139, 92, 246, 0.03) 0%, transparent 50%),
-        radial-gradient(ellipse at 80% 80%, rgba(139, 92, 246, 0.02) 0%, transparent 50%),
-        var(--bg-primary);
-    transition: opacity 0.3s ease-in;
-    visibility: hidden;
-    opacity: 0;
+    height: 100svh;
 }
 
-.app-container.visible {
-    visibility: visible;
-    opacity: 1;
-}
-
-/* Sidebar */
-/* Shopify-style rail: always expanded, fixed width, no hover-to-collapse. */
-.sidebar-rail {
-    width: 240px;
-    flex-shrink: 0;
-    position: relative;
-    z-index: 900;
-}
-
-.sidebar {
-    width: 240px;
-    height: 100%;
-    background: var(--bg-secondary);
-    border-right: 1px solid var(--border-color);
+/* Sidebar (nav-tree + mobile drawer now owned by Polaris Frame/Navigation, see AppShell.tsx) */
+/* Frame's nav wrapper (.Polaris-Frame__Navigation) is display:flex with no flex-direction set,
+   so it only stacks Polaris's own <Navigation> vertically - this wrapper stacks our extra
+   logo/lock-wrap siblings the same way our old .sidebar{flex-direction:column} used to. */
+.sidebar-nav-column {
+    /* Frame's own nav wrapper is transparent - only Polaris's inner .Polaris-Navigation
+       carries the gray nav background, so our sidebar-lock-wrap sibling would otherwise
+       sit on the page's white background instead of looking like part of the sidebar. */
     display: flex;
     flex-direction: column;
-    padding: 0 0 12px;
-    position: absolute;
-    top: 0;
-    left: 0;
-    overflow: hidden;
+    height: 100%;
+    background: var(--p-color-nav-bg);
+}
+
+.sidebar-nav-column .Polaris-Navigation {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    transition: max-width 0.18s ease;
+}
+
+/* Collapsed to an icon rail on desktop, expands on hover/focus - overlays the
+   content instead of pushing it, since .Polaris-Frame__Main's reserved
+   padding-left (also driven by --pg-layout-width-nav-base) stays at the rail
+   width the whole time. Mobile's drawer is untouched (its own display:none/flex
+   toggle lives outside this breakpoint) so it still opens at full width. */
+@media (min-width: 48em) {
+    :root {
+        --pg-layout-width-nav-base: 64px;
+    }
+
+    .Polaris-Frame__Navigation:hover .Polaris-Navigation,
+    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation {
+        max-width: var(--pg-navigation-width);
+    }
+
+    /* z-index drop on mouse-leave is delayed to match the 0.18s max-width
+       collapse above - without this, z-index snaps back to 1 the instant the
+       mouse leaves while the rail is still visually wide (mid-shrink), so the
+       orders table's sticky header/columns (z-index up to 60) paint over it
+       until the collapse finishes. Entering hover isn't delayed since the
+       :hover rule below doesn't list z-index in its own transition. */
+    .Polaris-Frame__Navigation {
+        transition: z-index 0s 0.18s;
+    }
+
+    .Polaris-Frame__Navigation:hover,
+    .Polaris-Frame__Navigation:focus-within {
+        /* Desktop Polaris only gives this z-index:1, fine for a rail that stays
+           inside its own reserved padding-left, but the orders table's sticky
+           header/columns run up to z-index:60 (see the ag-grid rules below) -
+           once expanded, the rail overlaps that content and needs to clear it.
+           516 matches Polaris's own --p-z-index-8, used for the mobile drawer. */
+        z-index: 516;
+        transition: z-index 0s;
+        box-shadow: var(--shadow-lg);
+    }
+
+    /* The visible nav list is Polaris's own <Navigation>/<Navigation.Item> markup
+       (.Polaris-Navigation__*, not our .nav-item/.nav-tooltip - those only style
+       SidebarUserMenu's button below). .sidebar-nav-scroll's overflow-x:hidden
+       already clips the label while it's opacity:0, so no width:0 trick needed
+       here; .sidebar-nav-settings needs the same clipping since it scrolls the
+       pinned Settings item, not the main list. */
+    .sidebar-nav-settings {
+        overflow-x: hidden;
+    }
+
+    .Polaris-Navigation__Text,
+    .Polaris-Navigation__Badge {
+        opacity: 0;
+        transition: opacity 0.12s ease;
+    }
+
+    /* Polaris's own .Polaris-Navigation__Text has no white-space/overflow rule -
+       fine at its normal fixed width, but while the rail is collapsed (or mid
+       hover-transition) it's narrower than long labels ("Courier Payment Report"
+       etc.), so it wraps to two lines and inflates the item's row height even
+       though the text itself is invisible. */
+    .Polaris-Navigation__Text {
+        white-space: nowrap;
+        overflow: hidden;
+    }
+
+    .Polaris-Frame__Navigation:hover .Polaris-Navigation__Text,
+    .Polaris-Frame__Navigation:hover .Polaris-Navigation__Badge,
+    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation__Text,
+    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation__Badge {
+        opacity: 1;
+    }
+}
+
+/* Settings sits in its own Section pinned below the main list (Shopify-admin style) -
+   .Polaris-Navigation is itself flex-direction:column, so .sidebar-nav-scroll taking flex:1
+   pushes .sidebar-nav-settings to the bottom instead of it trailing right after the list. */
+.sidebar-nav-scroll {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+.sidebar-nav-settings {
+    flex-shrink: 0;
 }
 
 /* Same height as .header's min-height, both flush with the top of the screen, so the
@@ -295,18 +355,20 @@ body {
     margin-left: 10px;
 }
 
-.nav-menu {
-    flex: 1;
-    padding: 4px 8px;
-    overflow-y: auto;
-    overflow-x: hidden;
-}
+@media (min-width: 48em) {
+    .logo-text {
+        width: 0;
+        margin-left: 0;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+    }
 
-/* Divider between nav groups instead of a text heading. */
-.nav-section + .nav-section {
-    margin-top: 8px;
-    padding-top: 8px;
-    border-top: 1px solid var(--border-color);
+    .Polaris-Frame__Navigation:hover .logo-text,
+    .Polaris-Frame__Navigation:focus-within .logo-text {
+        width: auto;
+        margin-left: 10px;
+        opacity: 1;
+    }
 }
 
 .nav-item {
@@ -330,22 +392,8 @@ body {
     text-decoration: none;
 }
 
-/* Nav items render as <a> (react-router NavLink) now, not <button> - an anchor's UA
-   stylesheet color/underline outrank a plain class selector's specificity. */
-a.nav-item,
-a.nav-item:visited {
-    color: var(--text-primary);
-    text-decoration: none;
-}
-
 .nav-item:hover {
     background: var(--bg-tertiary);
-}
-
-.nav-item.active {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    font-weight: 600;
 }
 
 .nav-icon {
@@ -364,7 +412,6 @@ a.nav-item:visited {
     stroke-width: 1.75;
 }
 
-/* Inline label - always visible, the rail no longer collapses to icons only. */
 .nav-tooltip {
     font-size: 13.5px;
     white-space: nowrap;
@@ -374,38 +421,32 @@ a.nav-item:visited {
     text-align: left;
 }
 
-/* Nested nav groups (e.g. Orders > Order Fulfillment) - children always visible,
-   matching Shopify's always-expanded submenu. */
-.nav-group {
-    margin-bottom: 1px;
+/* Rail is icon-only until the sidebar expands (see .Polaris-Frame__Navigation
+   hover rules above) - width:0 rather than just opacity:0, so a hidden label
+   doesn't hold open the space that centers the icon in the collapsed rail. */
+@media (min-width: 48em) {
+    .nav-tooltip {
+        flex: 0 1 auto;
+        width: 0;
+        margin-left: 0;
+        opacity: 0;
+        transition: opacity 0.12s ease;
+    }
+
+    .Polaris-Frame__Navigation:hover .nav-tooltip,
+    .Polaris-Frame__Navigation:focus-within .nav-tooltip {
+        flex: 1 1 auto;
+        width: auto;
+        margin-left: 10px;
+        opacity: 1;
+    }
 }
 
-.nav-item-parent-highlight:not(.active) {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.nav-children {
-    display: flex;
-    flex-direction: column;
-    padding-left: 18px;
-}
-
-/* Bottom-pinned group: edit lock + settings. */
+/* Bottom-pinned group: account switcher. */
 .sidebar-lock-wrap {
     margin-top: auto;
-    padding: 12px 12px 0;
+    padding: 12px;
     border-top: 1px solid var(--border-color);
-}
-
-.sidebar-lock-btn.locked {
-    background: var(--accent-glow);
-    color: var(--accent-primary);
-}
-
-.sidebar-lock-btn.locked:hover {
-    background: rgba(139, 92, 246, 0.25);
-    color: var(--accent-primary);
 }
 
 @keyframes pulse {
@@ -415,6 +456,10 @@ a.nav-item:visited {
 
 /* Main Content */
 .main-content {
+    /* Polaris Frame's .Polaris-Frame__Content is a flex item (definite resolved height),
+       not itself display:flex - height:100% is what pulls that height down to us, same
+       role the old .app-container{height:100vh} flex row used to play directly. */
+    height: 100%;
     flex: 1;
     display: flex;
     flex-direction: column;
@@ -435,6 +480,17 @@ a.nav-item:visited {
 
 .header-title {
     flex-shrink: 0;
+}
+
+.header-title-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.header-title-icon {
+    flex-shrink: 0;
+    color: var(--text-secondary);
 }
 
 .header-title h1 {
@@ -472,23 +528,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
 
 #ordersMoreActionsBtn {
     overflow: visible;
-}
-
-/* Drawn with borders rather than a "▾" glyph - the character renders
-   inconsistently across fonts and gets clipped by the button's overflow: hidden. */
-.orders-more-actions__caret {
-    flex: 0 0 auto;
-    width: 0;
-    height: 0;
-    margin-left: 8px;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid currentColor;
-    transition: transform 0.15s ease;
-}
-
-.orders-more-actions.open .orders-more-actions__caret {
-    transform: rotate(180deg);
 }
 
 /* Fixed, not absolute: .header-actions scrolls horizontally, which would clip an
@@ -533,41 +572,14 @@ body:has(#orderFulfillmentView.active) .header-actions {
     cursor: not-allowed;
 }
 
-/* Consistent toolbar buttons — fixed height across header */
-.header-actions .header-toolbar-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    padding: 8px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    height: 36px;
-    min-height: 36px;
-    max-height: 36px;
-    box-sizing: border-box;
-    white-space: nowrap;
-    text-align: center;
-    line-height: 1.3;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.header-toolbar-btn .header-toolbar-btn-icon {
-    margin-right: 6px;
-}
-
 /* Every per-view control that sits in the header row (selects, text/date
-   inputs, the cash-in-hand pill) pins to the same 36px as .header-toolbar-btn
-   above — otherwise each view's row grows to its tallest control's natural
-   height and the top row visibly changes size when switching views. */
-.header-actions .orders-period-filter,
+   inputs, the cash-in-hand pill) pins to the same 36px Polaris's own buttons
+   render at (see HeaderButton.tsx) - otherwise each view's row grows to its
+   tallest control's natural height and the top row visibly changes size when
+   switching views. */
 .header-actions .transaction-date-filter,
-.header-actions .transaction-search-filter,
 .header-actions .trial-balance-date,
-.header-actions .cash-in-hand-display,
-.header-actions .pa-time-btn,
-.header-actions .btn-sm,
-.header-actions .btn-icon-sm {
+.header-actions .cash-in-hand-display {
     height: 36px;
     min-height: 36px;
     max-height: 36px;
@@ -582,19 +594,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     white-space: nowrap;
 }
 
-.sync-btn-last-sync {
-    font-size: 11px;
-    font-weight: 400;
-    color: rgba(255, 255, 255, 0.85);
-    white-space: nowrap;
-}
-
-.sync-btn-last-sync:not(:empty)::before {
-    content: '\2022';
-    margin: 0 6px;
-    opacity: 0.7;
-}
-
 /* Date range / More actions share one width so the orders toolbar reads as an even
    group instead of label-sized buttons. Fixed width also stops the row shifting
    when labels swap mid-action ("Range set"). Sync from Shopify is excluded so it
@@ -604,7 +603,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     flex: 0 0 auto;
     width: 11.5em;
 }
-
 
 /* Icon-only (e.g. fullscreen): exact same height as other toolbar buttons */
 .header-actions .header-toolbar-btn-icon-only {
@@ -677,9 +675,18 @@ body:has(#orderFulfillmentView.active) .header-actions {
 
 /* Content Area */
 .content-area {
+    /* Every routed page renders directly here now (AppShell's <Outlet/>), and only
+       OrdersPage still wraps itself in the old .view.active flex/min-height/overflow
+       chain that used to make each view scrollable - every other page lost that
+       plumbing in the React migration and got silently clipped instead of scrolling.
+       Scrolling here, once, is what makes them all scroll again without touching
+       every page; pages with their own height:100% + internal scroll (Orders) still
+       fit exactly inside this box so this scrollbar never engages for them. */
     flex: 1;
+    min-height: 0;
     padding: 32px;
-    overflow: hidden;
+    overflow-y: auto;
+    overflow-x: hidden;
     display: flex;
     flex-direction: column;
 }
@@ -922,40 +929,36 @@ body:has(#orderFulfillmentView.active) .header-actions {
     box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
-.transaction-search-wrap {
-    position: relative;
-    display: flex;
-    align-items: center;
-}
-
-.transaction-search-icon {
-    position: absolute;
-    left: 12px;
-    color: var(--text-muted);
-    font-size: 12px;
-    pointer-events: none;
-}
-
-.transaction-search-filter {
-    padding: 10px 12px 10px 32px;
+.header-search {
+    flex: 1 1 auto;
+    max-width: 480px;
     min-width: 160px;
-    width: 200px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    /* body's line-height: 1.6 leaves an oversized line box around 13px text,
-       pushing it off-centre vertically (same fix as .ag-header-cell-text). */
-    line-height: 1.2;
-    transition: var(--transition);
+    margin: 0 auto;
 }
 
-.transaction-search-filter:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
+.dropdown--multi {
+    min-width: 120px;
+}
+
+/* Polaris's own reset (`:where([class*="Polaris-"]) { color: var(--p-color-text) }`) also
+   matches the tick's <path class="Polaris-Checkbox--checked">, so its stroke: currentColor
+   paints dark-on-dark and every checked box looks like a solid square. */
+.Polaris-Checkbox__Icon svg path {
+    color: inherit;
+}
+
+/* Polaris's 20px option checkboxes read oversized in a filter popover; shrink to 16px. */
+.dropdown-options .Polaris-OptionList-Option__Checkbox {
+    width: 16px;
+    height: 16px;
+}
+
+.dropdown-options .Polaris-OptionList-Option__Checkbox .Polaris-Checkbox {
+    margin: 0;
+}
+
+.header-actions .toolbar-search {
+    width: 240px;
 }
 
 #transactionsView,
@@ -995,6 +998,7 @@ body:has(#orderFulfillmentView.active) .header-actions {
 /* Override content-area padding for table views */
 .content-area:has(#transactionsView.active),
 .content-area:has(#ordersView.active),
+.content-area:has(#orderFulfillmentView.active),
 .content-area:has(#ledgerDetailView.active),
 .content-area:has(#ledgersView.active),
 .content-area:has(#billsView.active),
@@ -1003,6 +1007,7 @@ body:has(#orderFulfillmentView.active) .header-actions {
 .content-area:has(#courierPaymentReportDetailView.active),
 body:has(#transactionsView.active) .content-area,
 body:has(#ordersView.active) .content-area,
+body:has(#orderFulfillmentView.active) .content-area,
 body:has(#ledgerDetailView.active) .content-area,
 body:has(#ledgersView.active) .content-area,
 body:has(#billsView.active) .content-area,
@@ -1011,7 +1016,6 @@ body:has(#courierPaymentReportView.active) .content-area,
 body:has(#courierPaymentReportDetailView.active) .content-area {
     padding: 0;
 }
-
 
 .stat-card {
     background: var(--bg-card);
@@ -1068,9 +1072,9 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
    Inventory view
    ============================================ */
 
-/* Stat-card accents. Same hues (and the same lift in dark mode) as the Product
-   Analytics palette, which scopes its own copy to .pa-scroll - so the two pages
-   read as one system without either owning the other's tokens. */
+/* Stat-card accents. Same hues as the Product Analytics palette, which scopes
+   its own copy to .pa-scroll - so the two pages read as one system without
+   either owning the other's tokens. */
 #productsView {
     min-height: 0;
     gap: 20px;
@@ -1079,13 +1083,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     --inv-accent-low: #b8862b;
     --inv-accent-out: #cf5a4f;
     --inv-accent-value: #12855a;
-}
-
-:root[data-theme="dark"] #productsView {
-    --inv-accent-stock: #7fc0ec;
-    --inv-accent-low: #fbbf24;
-    --inv-accent-out: #f87171;
-    --inv-accent-value: #4ade80;
 }
 
 /* Cards keep their height; the table card below takes the rest and scrolls
@@ -1198,16 +1195,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
 }
 
 .inventory-search-input,
-.inventory-toolbar-select {
-    height: 38px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: inherit;
-    font-size: 13px;
-    padding: 0 12px;
-}
 
 .inventory-search-input {
     width: 100%;
@@ -1215,15 +1202,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
 }
 
 .inventory-search-input:focus,
-.inventory-toolbar-select:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-}
-
-.inventory-toolbar-select {
-    cursor: pointer;
-    min-width: 150px;
-}
 
 .inventory-filters-toggle {
     height: 38px;
@@ -1384,7 +1362,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     font-size: 16px;
     font-weight: 600;
 }
-
 
 .product-details-meta {
     margin: 20px 0 0;
@@ -1666,10 +1643,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     background-position: right 16px center;
     background-size: 12px 8px;
     padding-right: 40px;
-}
-
-:root[data-theme="dark"] .form-group select {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
 }
 
 /* No spinner arrows on number inputs. Every numeric field in this app is money
@@ -2050,19 +2023,18 @@ input[type="number"] {
     flex-shrink: 0;
 }
 
-.header-notif-btn {
-    position: relative;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    line-height: 0;
+@keyframes bell-ring {
+    0%, 100% { transform: rotate(0); }
+    15% { transform: rotate(14deg); }
+    30% { transform: rotate(-12deg); }
+    45% { transform: rotate(9deg); }
+    60% { transform: rotate(-6deg); }
+    75% { transform: rotate(3deg); }
 }
 
-.header-notif-btn .lucide {
-    width: 18px;
-    height: 18px;
-    stroke: currentColor;
-    stroke-width: 2;
+.header-notif-wrap.ringing .Polaris-Icon {
+    animation: bell-ring 0.6s ease-in-out;
+    transform-origin: 50% 0;
 }
 
 .notif-badge {
@@ -2547,7 +2519,7 @@ input[type="number"] {
 
 .timeline-item.active .timeline-dot {
     background: var(--accent-primary);
-    box-shadow: 0 0 0 3px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 0 3px var(--accent-glow);
 }
 
 .timeline-item::before {
@@ -2795,9 +2767,6 @@ input[type="number"] {
     align-items: center;
     gap: 8px;
 }
-.orders-period-filter-wrap.header-inline {
-    padding: 0;
-}
 .orders-date-range-wrap {
     flex-shrink: 0;
 }
@@ -2823,30 +2792,6 @@ input[type="number"] {
     background: var(--bg-tertiary);
     color: var(--text-primary);
     border-color: var(--text-muted);
-}
-.orders-period-filter-label {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-.orders-period-filter {
-    min-width: 200px;
-    padding: 8px 12px;
-    font-size: 14px;
-    color: var(--text-primary);
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    appearance: auto;
-}
-.orders-period-filter:hover {
-    border-color: var(--accent-primary);
-}
-.orders-period-filter:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.2);
 }
 
 /* Orders grid: clear filters button (icon) in filter row */
@@ -2874,10 +2819,7 @@ input[type="number"] {
 }
 
 /* AG Grid Light Theme Customization */
-/* Shared sizing/typography for both AG Grid themes. Colours are left to each
-   theme's own stylesheet, plus the light-only overrides below. */
-.ag-theme-alpine,
-.ag-theme-alpine-dark {
+.ag-theme-alpine {
     --ag-selected-row-background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
     --ag-input-focus-border-color: var(--accent-primary);
     --ag-range-selection-border-color: var(--accent-primary);
@@ -2887,8 +2829,8 @@ input[type="number"] {
        Literal rgba, not color-mix(): if color-mix() isn't supported the whole
        declaration is invalid and silently dropped, falling back to the
        original teal with no visible error. */
-    --ag-value-change-value-highlight-background-color: rgba(124, 92, 252, 0.45);
-    --ag-font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+    --ag-value-change-value-highlight-background-color: rgba(37, 99, 235, 0.45);
+    --ag-font-family: var(--font-primary);
     --ag-font-size: 14px;
     --ag-cell-horizontal-padding: 16px;
     --ag-row-height: 48px;
@@ -2898,14 +2840,9 @@ input[type="number"] {
 
 /* Belt-and-braces over the variable above: ag-grid.css's own
    .ag-cell-data-changed rule already carries !important, so only a more
-   specific selector (not just a later one) is guaranteed to win. Dark mode
-   swaps the grid container's class to ag-theme-alpine-dark entirely (see
-   applyTheme in app-core.js) rather than adding it alongside ag-theme-alpine,
-   so both classes need their own selector here - .ag-theme-alpine alone
-   never matches a dark-mode grid. */
-.ag-theme-alpine .ag-cell-data-changed,
-.ag-theme-alpine-dark .ag-cell-data-changed {
-    background-color: rgba(124, 92, 252, 0.45) !important;
+   specific selector (not just a later one) is guaranteed to win. */
+.ag-theme-alpine .ag-cell-data-changed {
+    background-color: rgba(37, 99, 235, 0.45) !important;
 }
 
 .ag-theme-alpine {
@@ -2921,86 +2858,33 @@ input[type="number"] {
     --ag-control-panel-background-color: var(--grid-header-bg);
 }
 
-.ag-theme-alpine-dark {
-    --ag-background-color: var(--grid-bg);
-    --ag-header-background-color: var(--grid-header-bg);
-    --ag-even-row-background-color: var(--grid-bg);
-    --ag-odd-row-background-color: color-mix(in srgb, var(--grid-bg) 82%, var(--bg-tertiary) 18%);
-    --ag-row-hover-color: color-mix(in srgb, var(--grid-row-hover) 88%, var(--accent-primary) 12%);
-    --ag-border-color: var(--grid-border);
-    --ag-header-foreground-color: var(--grid-header-foreground);
-    --ag-foreground-color: var(--grid-foreground);
-    --ag-secondary-foreground-color: var(--text-secondary);
-    --ag-filter-tool-panel-background-color: var(--grid-header-bg);
-    --ag-control-panel-background-color: var(--grid-header-bg);
-}
-
-:root[data-theme="dark"] .ag-theme-alpine-dark,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-root-wrapper,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-body-viewport,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-paging-panel,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-menu,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-popup,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-filter-toolpanel-search,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-filter-body-wrapper {
-    background-color: var(--grid-bg) !important;
-    color: var(--grid-foreground) !important;
-    border-color: var(--grid-border) !important;
-}
-
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-header,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-header-row {
-    background-color: var(--grid-header-bg) !important;
-    color: var(--grid-header-foreground) !important;
-}
-
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-even {
-    background-color: var(--grid-bg) !important;
-}
-
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-odd {
-    background-color: color-mix(in srgb, var(--grid-bg) 82%, var(--bg-tertiary) 18%) !important;
-}
-
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row:hover,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.ag-row-hover,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row-selected {
-    background-color: var(--ag-row-hover-color) !important;
-}
-
 /* Orders grid: row highlight that follows the focused cell (click or arrow
    keys) via orders-row-focused (see initOrdersGrid) - kept visually distinct
-   from hover (tint + left accent bar) and made to win over the dark theme's
-   !important hover rule above by matching its selector weight. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.orders-row-focused {
+   from hover (tint + left accent bar). */
+.ag-theme-alpine .ag-row.orders-row-focused {
     background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
     box-shadow: inset 3px 0 0 0 var(--accent-primary);
 }
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.orders-row-focused,
-:root[data-theme="dark"] .ag-theme-alpine-dark .ag-row.orders-row-focused:hover {
-    background-color: color-mix(in srgb, var(--accent-primary) 22%, var(--grid-bg)) !important;
-    box-shadow: inset 3px 0 0 0 var(--accent-primary);
-}
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header {
+.ag-theme-alpine .ag-header {
     font-size: 12px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell {
+.ag-theme-alpine .ag-header-cell {
     padding-left: 12px;
     padding-right: 8px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-comp-wrapper {
+.ag-theme-alpine .ag-header-cell-comp-wrapper {
     gap: 2px;
 }
 
 /* Keep the header label and its sort arrow on one baseline - without this the
    indicator container aligns to the top of the cell instead of the text. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-label {
+.ag-theme-alpine .ag-header-cell-label {
     display: flex;
     align-items: center;
     height: 100%;
@@ -3008,72 +2892,72 @@ input[type="number"] {
 
 /* body's line-height: 1.6 makes a ~19px line box around 12px text, which throws
    the text off-centre against the 12px sort icon. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-text {
+.ag-theme-alpine .ag-header-cell-text {
     line-height: 1.2;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-sort-indicator-container {
+.ag-theme-alpine .ag-sort-indicator-container {
     display: flex;
     align-items: center;
     line-height: 1;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-cell {
+.ag-theme-alpine .ag-cell {
     display: flex;
     align-items: center;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-panel {
+.ag-theme-alpine .ag-paging-panel {
     background: var(--grid-header-bg);
     border-top: 1px solid var(--grid-border);
     padding: 12px 16px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-button {
+.ag-theme-alpine .ag-paging-button {
     cursor: pointer;
     padding: 6px 12px;
     border-radius: var(--radius-sm);
     transition: var(--transition);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-paging-button:hover {
+.ag-theme-alpine .ag-paging-button:hover {
     background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) input[class^="ag-"]:focus {
+.ag-theme-alpine input[class^="ag-"]:focus {
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-toolpanel-header,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-toolpanel-search,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-body-wrapper {
+.ag-theme-alpine .ag-filter-toolpanel-header,
+.ag-theme-alpine .ag-filter-toolpanel-search,
+.ag-theme-alpine .ag-filter-body-wrapper {
     background: var(--grid-header-bg);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-popup {
+.ag-theme-alpine .ag-popup {
     background: var(--grid-header-bg);
     border: 1px solid var(--grid-border);
     border-radius: 8px;
     box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-menu {
+.ag-theme-alpine .ag-menu {
     background: var(--grid-header-bg);
     border: 1px solid var(--grid-border);
     border-radius: 8px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-menu-option-active {
+.ag-theme-alpine .ag-menu-option-active {
     background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-input {
+.ag-theme-alpine .ag-floating-filter-input {
     border-radius: 4px;
 }
 
 /* Vertically center content in floating filter row */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-body {
+.ag-theme-alpine .ag-floating-filter-body {
     display: flex;
     align-items: center;
 }
@@ -3129,36 +3013,6 @@ input[type="number"] {
     font-family: var(--font-primary);
 }
 
-/* Toolbar/filter-bar checkbox filter (grid-filters.js) standing in for a <select>. The button
-   keeps the replaced select's own class, so it only needs the bits a <button> lacks. */
-/* Sized by the button inside it, which keeps the replaced <select>'s own width rules - the
-   wrapper must not shrink past that in a flex toolbar. */
-.checkbox-filter-control {
-    display: inline-flex;
-    flex-shrink: 0;
-}
-/* Carries a chevron like the <select> it replaces, so it still reads as a dropdown. The
-   fulfillment filter bar overrides the sizing/colors but reuses this same chevron. */
-.checkbox-filter-control__btn {
-    text-align: left;
-    appearance: none;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    padding-right: 32px;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    background-size: 12px 8px;
-}
-
-:root[data-theme="dark"] .checkbox-filter-control__btn {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    background-size: 12px 8px;
-}
-
 /* Order Status checkbox filter popup (reuses .date-range-menu for the panel) */
 .order-status-filter-menu {
     width: max-content;
@@ -3188,7 +3042,7 @@ input[type="number"] {
 }
 
 /* Editable cells highlight */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-cell-inline-editing {
+.ag-theme-alpine .ag-cell-inline-editing {
     background: var(--grid-header-bg);
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
@@ -3196,15 +3050,15 @@ input[type="number"] {
 
 /* Filtering is already visible in the floating filter row, so the header funnel is
    redundant - the only header indicator is the sort arrow below. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-filter,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-filter-icon {
+.ag-theme-alpine .ag-icon-filter,
+.ag-theme-alpine .ag-filter-icon {
     display: none !important;
 }
 
 /* Sort icons - flex-centred rather than line-height aligned, so the glyph sits on
    the header text's optical centre instead of its baseline. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc {
+.ag-theme-alpine .ag-icon-asc,
+.ag-theme-alpine .ag-icon-desc {
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
@@ -3213,124 +3067,124 @@ input[type="number"] {
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-sort-indicator-icon {
+.ag-theme-alpine .ag-sort-indicator-icon {
     display: flex;
     align-items: center;
     margin-left: 3px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc::before,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc::before {
+.ag-theme-alpine .ag-icon-asc::before,
+.ag-theme-alpine .ag-icon-desc::before {
     font-family: inherit;
     font-size: 9px;
     line-height: 1;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-asc::before {
+.ag-theme-alpine .ag-icon-asc::before {
     content: "▲";
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-desc::before {
+.ag-theme-alpine .ag-icon-desc::before {
     content: "▼";
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-menu::before {
+.ag-theme-alpine .ag-icon-menu::before {
     content: "▼";
     font-family: inherit;
     font-size: 6px;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-menu {
+.ag-theme-alpine .ag-icon-menu {
     width: 10px !important;
     height: 10px !important;
     line-height: 10px;
 }
 
 /* Hide dropdown/menu beside column name */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-menu-button {
+.ag-theme-alpine .ag-header-cell-menu-button {
     display: none !important;
 }
 
 /* Hide dropdown/button beside search bar in floating filter */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-floating-filter-button {
+.ag-theme-alpine .ag-floating-filter-button {
     display: none !important;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-header-cell-filter-button {
+.ag-theme-alpine .ag-header-cell-filter-button {
     display: none !important;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-picker-field-icon {
+.ag-theme-alpine .ag-picker-field-icon {
     display: inline-flex !important;
     align-items: center !important;
     justify-content: center !important;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-columns::before {
+.ag-theme-alpine .ag-icon-columns::before {
     content: "⊞";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-pin::before {
+.ag-theme-alpine .ag-icon-pin::before {
     content: "📌";
     font-family: inherit;
     font-size: 12px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-first::before {
+.ag-theme-alpine .ag-icon-first::before {
     content: "⏮";
     font-family: inherit;
     font-size: 14px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-previous::before {
+.ag-theme-alpine .ag-icon-previous::before {
     content: "◀";
     font-family: inherit;
     font-size: 14px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-next::before {
+.ag-theme-alpine .ag-icon-next::before {
     content: "▶";
     font-family: inherit;
     font-size: 14px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-last::before {
+.ag-theme-alpine .ag-icon-last::before {
     content: "⏭";
     font-family: inherit;
     font-size: 14px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-checked::before {
+.ag-theme-alpine .ag-icon-checkbox-checked::before {
     content: "☑";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-unchecked::before {
+.ag-theme-alpine .ag-icon-checkbox-unchecked::before {
     content: "☐";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-checkbox-indeterminate::before {
+.ag-theme-alpine .ag-icon-checkbox-indeterminate::before {
     content: "▣";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-none::before {
+.ag-theme-alpine .ag-icon-none::before {
     content: "";
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-loading::before {
+.ag-theme-alpine .ag-icon-loading::before {
     content: "⟳";
     font-family: inherit;
     animation: spin 1s linear infinite;
 }
 
 /* Dropdown arrow (page size, filters, menus) – single rule to avoid double triangle */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-down::before,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tree-closed::before {
+.ag-theme-alpine .ag-icon-small-down::before,
+.ag-theme-alpine .ag-icon-tree-closed::before {
     content: "▼";
     font-family: inherit;
     font-size: 8px;
@@ -3338,45 +3192,45 @@ input[type="number"] {
     line-height: 1;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-up::before,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tree-open::before {
+.ag-theme-alpine .ag-icon-small-up::before,
+.ag-theme-alpine .ag-icon-tree-open::before {
     content: "▲";
     font-family: inherit;
     font-size: 8px;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-left::before {
+.ag-theme-alpine .ag-icon-small-left::before {
     content: "◀";
     font-family: inherit;
     font-size: 8px;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-small-right::before {
+.ag-theme-alpine .ag-icon-small-right::before {
     content: "▶";
     font-family: inherit;
     font-size: 8px;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-cross::before {
+.ag-theme-alpine .ag-icon-cross::before {
     content: "✕";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-cancel::before {
+.ag-theme-alpine .ag-icon-cancel::before {
     content: "✕";
     font-family: inherit;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-tick::before {
+.ag-theme-alpine .ag-icon-tick::before {
     content: "✓";
     font-family: inherit;
 }
 
 /* Hide original icon font glyph (we use ::before for our icons) */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon {
+.ag-theme-alpine .ag-icon {
     font-family: inherit !important;
     font-size: 0;
     line-height: 1;
@@ -3385,14 +3239,14 @@ input[type="number"] {
     justify-content: center !important;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-expanded::before {
+.ag-theme-alpine .ag-icon-expanded::before {
     content: "▼";
     font-family: inherit;
     font-size: 8px;
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-icon-contracted::before {
+.ag-theme-alpine .ag-icon-contracted::before {
     content: "▶";
     font-family: inherit;
     font-size: 8px;
@@ -3723,18 +3577,8 @@ input[type="number"] {
     border-top: 1px solid var(--border-color);
 }
 
-/* Orders Selected Count - Bottom Right */
-.orders-selected-count {
-    position: absolute;
-    bottom: 8px;
-    right: 16px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    pointer-events: none;
-    z-index: 10;
-}
-
-#ordersView {
+#ordersView,
+#orderFulfillmentView {
     position: relative;
     overflow: hidden;
     gap: 0;
@@ -3742,28 +3586,16 @@ input[type="number"] {
     padding: 0;
 }
 
-#ordersView.active {
+#ordersView.active,
+#orderFulfillmentView.active {
     height: 100%;
     width: 100%;
     display: flex;
     flex-direction: column;
 }
 
-#ordersView #ordersGrid.grid-container {
-    border-radius: 0;
-    border: none;
-    min-height: 0;
-    flex: 1;
-    height: 100%;
-}
-
-#ordersView #ordersSelectedCount {
-    flex-shrink: 0;
-    padding: 4px 8px;
-}
-
 /* Order table full screen mode */
-body.orders-table-fullscreen .sidebar-rail,
+body.orders-table-fullscreen .Polaris-Frame__Navigation,
 body.orders-table-fullscreen .header {
     display: none !important;
 }
@@ -3783,19 +3615,19 @@ body.orders-table-fullscreen #ordersView {
     flex-direction: column;
 }
 
-body.orders-table-fullscreen #ordersView #ordersGrid {
+body.orders-table-fullscreen #ordersView .orders-table-card {
     flex: 1;
     min-height: 0;
 }
 
 /* AG Grid Footer Row Styles */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-pinned-bottom-row {
+.ag-theme-alpine .ag-pinned-bottom-row {
     background-color: var(--bg-secondary) !important;
     border-top: 2px solid var(--accent-primary) !important;
     font-weight: bold;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-pinned-bottom-row .ag-cell {
+.ag-theme-alpine .ag-pinned-bottom-row .ag-cell {
     background-color: var(--bg-secondary) !important;
     border-top: none !important;
 }
@@ -3855,31 +3687,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     outline: none;
     border-color: var(--accent-primary);
     box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-/* Same themed chevron as .form-group select: the native arrow is drawn by the
-   OS and ignores the field's background, so it disappears on dark. */
-.bill-line select.form-input {
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    background-size: 12px 8px;
-    padding-right: 32px;
-}
-
-:root[data-theme="dark"] .bill-line select.form-input {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-}
-
-/* Date and number inputs render native sub-widgets (calendar icon, spinners)
-   that the browser paints from the page's colour scheme, not from our
-   variables — without this they come out dark-on-dark in the dark theme. This
-   is the app's first use of <input type="date">, so it hasn't come up before. */
-:root[data-theme="dark"] {
-    color-scheme: dark;
 }
 
 /* Trial Balance */
@@ -4031,34 +3838,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-size: 10px;
     color: var(--text-muted);
     text-align: center;
-}
-
-/* Overrides folio-dropdown-btn's own (smaller, bg-card) sizing so the product
-   picker matches the row's other fields (Qty, Cost) instead of looking like a
-   shrunk-down transplant from the transactions grid. */
-.bill-line .bill-line-product-btn {
-    padding: 10px 12px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-primary);
-    font-size: 14px;
-    color: var(--text-primary);
-}
-
-.bill-line .bill-line-product-btn:hover {
-    background: var(--bg-tertiary);
-    border-color: var(--accent-primary);
-}
-
-.bill-line .bill-line-product-btn.open {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-.bill-line-product-btn:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
 }
 
 /* Sits below .bill-line-main in .bill-line-content's own column (see above),
@@ -4669,45 +4448,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     background: var(--bg-tertiary);
 }
 
-.folio-display-text.folio-required {
-    background: rgba(220, 38, 38, 0.1);
-    color: #dc2626;
-    border: 1px solid rgba(220, 38, 38, 0.3);
-}
-
-.folio-display-text.folio-required:hover {
-    background: rgba(220, 38, 38, 0.15);
-}
-
-.folio-display-text.folio-cash {
-    color: var(--text-primary);
-}
-
-/* Unsaved bottom row of the transactions grid - greyed regardless of side,
-   including Cash, to read as not-yet-posted rather than a saved entry. */
-.folio-display-text.folio-pending {
-    color: var(--text-muted);
-}
-
-.folio-dropdown-btn {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex: 1;
-    min-width: 0;
-    padding: 6px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-primary);
-    font-size: 12px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: var(--transition);
-    text-align: left;
-    gap: 8px;
-}
-
 .folio-goto-btn {
     display: flex;
     align-items: center;
@@ -4734,35 +4474,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: white;
 }
 
-.folio-dropdown-btn:hover {
-    border-color: var(--accent-primary);
-    background: var(--bg-tertiary);
-}
-
-.folio-dropdown-btn.open {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.folio-dropdown-btn:disabled {
-    color: var(--text-muted);
-    cursor: not-allowed;
-    opacity: .6;
-}
-
-.folio-dropdown-text {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.folio-dropdown-arrow {
-    font-size: 8px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
 .folio-dropdown-panel {
     position: fixed;
     background: var(--bg-card);
@@ -4774,27 +4485,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-}
-
-.folio-dropdown-search {
-    padding: 10px 12px;
-    border: none;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--bg-secondary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    color: var(--text-primary);
-    outline: none;
-}
-
-.folio-dropdown-search::placeholder {
-    color: var(--text-muted);
-}
-
-.folio-dropdown-options {
-    flex: 1;
-    overflow-y: auto;
-    max-height: 220px;
 }
 
 .folio-dropdown-option {
@@ -4810,29 +4500,15 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .folio-dropdown-option.selected {
-    background: rgba(139, 92, 246, 0.15);
+    background: var(--accent-glow);
     color: var(--accent-primary);
     font-weight: 600;
     border-left: 3px solid var(--accent-primary);
     padding-left: 9px;
 }
 
-.folio-dropdown-empty {
-    padding: 16px 12px;
-    font-size: 13px;
-    color: var(--text-muted);
-    text-align: center;
-    font-style: italic;
-}
-
-.folio-dropdown-create {
-    border-top: 1px solid var(--border-color);
-    color: var(--accent-primary);
-    font-weight: 500;
-}
-
 /* Transaction required field highlighting */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-required-field {
+.ag-theme-alpine .transaction-required-field {
     background-color: rgba(245, 158, 11, 0.15) !important;
     border: 1px solid rgba(245, 158, 11, 0.5) !important;
 }
@@ -4840,14 +4516,14 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 /* The blank row at the foot of the transactions grid is where a new entry is typed.
    Tinted and accented so it reads as the place to start, not as a saved entry
    somebody left empty. Translucent so it sits on either theme's row colour. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ag-row.transaction-new-row {
+.ag-theme-alpine .ag-row.transaction-new-row {
     background-color: color-mix(in srgb, var(--accent-primary) 8%, transparent) !important;
     box-shadow: inset 3px 0 0 var(--accent-primary);
 }
 
 /* Full-width divider rows (see withLedgerMonthRows) heading each calendar month's
    entries so a long statement reads as month-by-month blocks. */
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row {
+.ag-theme-alpine .ledger-month-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -4862,34 +4538,34 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     cursor: pointer;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-label {
+.ag-theme-alpine .ledger-month-row-label {
     display: flex;
     align-items: center;
     gap: 8px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-label i {
+.ag-theme-alpine .ledger-month-row-label i {
     font-size: 10px;
     width: 10px;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .ledger-month-row-balance {
+.ag-theme-alpine .ledger-month-row-balance {
     color: var(--text-primary);
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-amount-cell,
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .bill-amount-cell {
+.ag-theme-alpine .transaction-amount-cell,
+.ag-theme-alpine .bill-amount-cell {
     color: var(--accent-primary);
     font-weight: 600;
     justify-content: flex-end;
     text-align: right;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-row-num-header .ag-header-cell-label {
+.ag-theme-alpine .transaction-row-num-header .ag-header-cell-label {
     justify-content: center;
 }
 
-:is(.ag-theme-alpine, .ag-theme-alpine-dark) .transaction-row-num-cell {
+.ag-theme-alpine .transaction-row-num-cell {
     color: var(--text-primary);
     text-align: center;
     justify-content: center;
@@ -4898,16 +4574,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .transaction-placeholder {
     color: var(--text-muted);
     font-style: italic;
-}
-
-/* Folio dropdown required highlighting */
-.folio-dropdown-btn.folio-required {
-    border-color: rgba(245, 158, 11, 0.7) !important;
-    background-color: rgba(245, 158, 11, 0.1) !important;
-}
-
-.folio-dropdown-btn.folio-required:hover {
-    border-color: rgba(245, 158, 11, 0.9) !important;
 }
 
 .bill-cell-center {
@@ -5600,39 +5266,28 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     --pa-bronze: #bd7a41;
 }
 
-:root[data-theme="dark"] .pa-scroll {
-    --pa-hero: #4ade80;
-    --pa-hero-bg: rgba(74, 222, 128, 0.14);
-    --pa-zero: #f87171;
-    --pa-zero-bg: rgba(248, 113, 113, 0.14);
-    --pa-avg: #9db4ff;
-    --pa-avg-bg: rgba(157, 180, 255, 0.14);
-    --pa-info: #7fc0ec;
-    --pa-info-bg: rgba(127, 192, 236, 0.14);
-    --pa-amber: #fbbf24;
-    --pa-amber-bg: rgba(251, 191, 36, 0.14);
-}
-
 /* --- header controls (Customize, Hero/Zero info) --- */
 .pa-customize,
 .pa-info {
     position: relative;
 }
 
+/* Matches .orders-more-actions__menu (padding/shadow) so every dropdown menu in the app
+   reads as the same component. */
 .pa-pop {
     position: absolute;
     right: 0;
     top: calc(100% + 6px);
     z-index: 45;
     min-width: 200px;
-    padding: 8px;
+    padding: 6px;
     display: flex;
     flex-direction: column;
     gap: 2px;
     background: var(--bg-card);
     border: 1px solid var(--border-color);
     border-radius: var(--radius-md);
-    box-shadow: var(--shadow);
+    box-shadow: var(--shadow-lg);
 }
 
 .pa-pop[hidden] { display: none; }
@@ -5657,20 +5312,24 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .pa-pop label {
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 7px 8px;
+    gap: 6px;
+    padding: 8px 12px;
     font-size: 13px;
     color: var(--text-primary);
     border-radius: var(--radius-sm);
     cursor: pointer;
 }
 
+.pa-pop label input[type="checkbox"] {
+    accent-color: var(--accent-primary);
+}
+
 .pa-pop label:hover {
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    background: var(--bg-tertiary);
 }
 
 .pa-pop button {
-    padding: 8px 10px;
+    padding: 8px 12px;
     font: inherit;
     font-size: 13px;
     text-align: left;
@@ -5682,38 +5341,12 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .pa-pop button:hover {
-    background: color-mix(in srgb, var(--accent-primary) 8%, transparent);
+    background: var(--bg-tertiary);
 }
 
 /* Time range control now lives in the app header row (see .header-actions
    pinned-height rules) — sized to match the other header controls there. */
 .pa-time { position: relative; }
-
-.pa-time-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 10px;
-    justify-content: space-between;
-    padding: 0 14px;
-    font-family: inherit;
-    font-size: 13px;
-    color: var(--text-primary);
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    min-width: 200px;
-}
-
-.pa-time-btn > span {
-    flex: 1;
-    text-align: left;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.pa-time-btn i { color: var(--text-muted); font-size: 12px; }
 
 /* --- KPI cards --- */
 .pa-kpis {
@@ -5985,17 +5618,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .pa-widget-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .pa-widget-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }
 
-.pa-mini-select {
-    height: 30px;
-    padding: 0 8px;
-    font-family: inherit;
-    font-size: 12px;
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
 .pa-muted { color: var(--text-muted); font-size: 13px; }
 
 /* trend chart */
@@ -6085,7 +5707,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 @media (max-width: 1080px) {
     .pa-kpis { grid-template-columns: 1fr 1fr; }
 }
-
 
 @media (max-width: 680px) {
     .pa-widgets { grid-template-columns: 1fr; }
@@ -6208,7 +5829,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-muted);
     font-size: 14px;
 }
-
 
 /* Advance amount cell: amount with a status indicator dot */
 .advance-cell {
@@ -6345,89 +5965,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
-.fulfillment-filter-group {
-    display: flex;
-    align-items: center;
-    flex-shrink: 0;
-}
-
-/* The control's own default text ("All Cities" / "All Tags" / the date placeholder) already
-   names it in the compact header row. */
-.fulfillment-filter-group label {
-    display: none;
-}
-
-/* The multi-select filters (grid-filters.js) replace their <select> with a button inside a
-   wrapper, which has to fill the group the same way a bare field would. */
-.fulfillment-filter-group .checkbox-filter-control {
-    display: flex;
-}
-
-/* .form-input on these <select>s is only a marker class with no rules of its own (see the
-   note by .bill-line .form-input) - style them directly instead, matching the height/
-   background/border look the chip-input and date-range fields next to them already use.
-   The multi-select filters render a <button> in place of their <select>, so it has to match
-   here rather than inherit anything from the element name. */
-.fulfillment-filter-group select,
-.fulfillment-filter-group .checkbox-filter-control__btn {
-    min-width: 150px;
-    height: 36px;
-    padding: 0 32px 0 12px;
-    background-color: var(--bg-secondary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-    /* Repeated for the bare <select>, which has no chevron of its own. */
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 12px center;
-    background-size: 12px 8px;
-}
-
-.fulfillment-filter-group select:focus,
-.fulfillment-filter-group .checkbox-filter-control__btn:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-:root[data-theme="dark"] .fulfillment-filter-group select,
-:root[data-theme="dark"] .fulfillment-filter-group .checkbox-filter-control__btn {
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%23b9b9c4' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-}
-
-.fulfillment-date-range-input-wrap {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
-    padding: 0 10px;
-    height: 36px;
-    color: var(--text-muted);
-}
-
-.fulfillment-date-range-input {
-    border: none;
-    background: transparent;
-    outline: none;
-    font-size: 13px;
-    color: var(--text-primary);
-    width: 140px;
-    cursor: pointer;
-}
-
-.fulfillment-clear-filters-btn {
-    height: 36px;
-    flex-shrink: 0;
-}
-
 .fulfillment-body {
     display: flex;
     align-items: stretch;
@@ -6489,7 +6026,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .fulfillment-toolbar-badge {
-    background: rgba(124, 92, 252, .15);
+    background: var(--accent-glow);
     color: var(--accent-primary);
     font-size: 12px;
     font-weight: 600;
@@ -6543,7 +6080,7 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 }
 
 .fulfillment-table tbody tr.fulfillment-row--selected {
-    background: rgba(124, 92, 252, .08);
+    background: rgba(37, 99, 235, .08);
 }
 
 .fulfillment-col-check {
@@ -6572,71 +6109,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     font-family: var(--font-mono);
 }
 
-.fulfillment-editable-cell {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    max-width: 260px;
-}
-
-.fulfillment-editable-text {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.fulfillment-edit-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 2px;
-    display: inline-flex;
-    flex-shrink: 0;
-}
-
-.fulfillment-edit-btn:hover {
-    color: var(--accent-primary);
-}
-
-.fulfillment-edit-btn .lucide {
-    width: 13px;
-    height: 13px;
-}
-
-.fulfillment-edit-input {
-    border: 1px solid var(--border-focus);
-    border-radius: 4px;
-    padding: 4px 6px;
-    font-size: 13px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    width: 100%;
-}
-
-.fulfillment-tags-cell {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    flex-wrap: wrap;
-    position: relative;
-}
-
-.fulfillment-tag-badge {
-    font-size: 11px;
-    font-weight: 600;
-    padding: 3px 8px;
-    border-radius: 999px;
-    white-space: nowrap;
-}
-
-.fulfillment-tag-vip { background: rgba(124, 92, 252, .15); color: #7c5cfc; }
-.fulfillment-tag-repeat { background: rgba(34, 197, 94, .15); color: #16a34a; }
-.fulfillment-tag-new { background: rgba(139, 92, 246, .15); color: #8b5cf6; }
-.fulfillment-tag-wholesale { background: rgba(234, 179, 8, .15); color: #ca8a04; }
-
 .fulfillment-th-risk .lucide,
 .fulfillment-th-order-type .lucide,
 .fulfillment-th-cod .lucide,
@@ -6648,187 +6120,13 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     cursor: help;
 }
 
-.fulfillment-city-fixed {
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-
-.fulfillment-risk-cell {
-    min-width: 170px;
-}
-
-.fulfillment-risk-badge {
-    display: flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    font-weight: 600;
-}
-
-.fulfillment-risk-badge .lucide {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-}
-
-.fulfillment-risk-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-}
-
-.fulfillment-risk-badge--trusted, .fulfillment-risk-badge--low { color: #16a34a; }
-.fulfillment-risk-badge--trusted .lucide { color: #16a34a; }
-.fulfillment-risk-badge--low .fulfillment-risk-dot { background: #16a34a; }
-.fulfillment-risk-badge--new { color: #2563eb; }
-.fulfillment-risk-badge--new .lucide { color: #2563eb; }
-.fulfillment-risk-badge--medium { color: #ca8a04; }
-.fulfillment-risk-badge--medium .fulfillment-risk-dot { background: #ca8a04; }
-.fulfillment-risk-badge--high { color: #dc2626; }
-.fulfillment-risk-badge--high .fulfillment-risk-dot { background: #dc2626; }
-
-.fulfillment-risk-sub {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 11px;
-    color: var(--text-muted);
-    margin-top: 3px;
-    white-space: nowrap;
-}
-
-.fulfillment-risk-sub .lucide {
-    width: 11px;
-    height: 11px;
-    cursor: help;
-    flex-shrink: 0;
-}
-
-.fulfillment-tags-toggle {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 2px;
-    display: inline-flex;
-}
-
-.fulfillment-tags-toggle .lucide {
-    width: 13px;
-    height: 13px;
-}
-
-.fulfillment-tags-menu {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    padding: 6px;
-    z-index: 40;
-    min-width: 140px;
-    display: none;
-}
-
-.fulfillment-tags-menu.open {
-    display: block;
-}
-
-.fulfillment-tags-menu label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    padding: 6px 8px;
-    border-radius: 6px;
-    cursor: pointer;
-    color: var(--text-primary);
-}
-
-.fulfillment-tags-menu label:hover {
-    background: var(--bg-tertiary);
-}
-
-.fulfillment-courier-city-btn {
-    width: 140px;
-}
-
-/* Sits next to the Courier City cell's .folio-dropdown-btn, so it borrows that button's
-   look rather than the filter bar's taller fields - .form-input on it is only a marker
-   class with no rules of its own (see the note by .bill-line .form-input). A native
-   <select> can't use .folio-dropdown-arrow, so the chevron is a background image, same
-   trick as .fulfillment-filter-group select. */
-.fulfillment-order-type-select {
-    width: 130px;
-    padding: 6px 24px 6px 10px;
-    background-color: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-primary);
-    font-size: 12px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: var(--transition);
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 8px center;
-    background-size: 10px 7px;
-}
-
-.fulfillment-order-type-select:hover {
-    border-color: var(--accent-primary);
-    background-color: var(--bg-tertiary);
-}
-
-.fulfillment-order-type-select:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.fulfillment-order-type-none {
-    color: var(--text-muted);
-}
-
 .fulfillment-actions-cell {
     position: relative;
     text-align: center;
 }
 
-.fulfillment-kebab-btn {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 4px 8px;
-    font-size: 16px;
-    border-radius: 6px;
-    line-height: 1;
-}
-
-.fulfillment-kebab-btn:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
 .fulfillment-col-cod {
     white-space: nowrap;
-}
-
-.fulfillment-cod-input {
-    width: 90px;
-    padding: 4px 6px;
-    font-size: 13px;
-    border: 1px solid var(--border-color);
-    border-radius: 4px;
-    background: var(--bg-primary);
-    color: var(--text-primary);
 }
 
 /* Print Airway Bill: per-row Print button */
@@ -6843,67 +6141,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
 .print-awb-print-btn .lucide {
     width: 14px;
     height: 14px;
-}
-
-.fulfillment-cod-input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.fulfillment-details-subtitle {
-    margin: 0 0 16px;
-    color: var(--text-secondary);
-    font-size: 13px;
-}
-
-.fulfillment-details-modal-content [hidden] {
-    display: none !important;
-}
-
-.fulfillment-details-modal-content input[readonly],
-.fulfillment-details-modal-content textarea[readonly] {
-    background: var(--bg-tertiary);
-    color: var(--text-secondary);
-    cursor: default;
-}
-
-.fulfillment-details-grid {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 12px;
-}
-
-/* Invoice Division is PostEx-only, so the grid is single-column for Couriers Next. */
-.fulfillment-details-grid:has([data-postex-only][hidden]) {
-    grid-template-columns: 1fr;
-}
-
-.fulfillment-details-readonly label {
-    display: block;
-}
-
-.fulfillment-details-products {
-    margin: 0;
-    padding-left: 18px;
-    font-size: 13px;
-    color: var(--text-primary);
-}
-
-.fulfillment-details-products li {
-    margin: 2px 0;
-}
-
-.fulfillment-details-empty {
-    list-style: none;
-    margin-left: -18px;
-    color: var(--text-muted);
-}
-
-.fulfillment-side-panel-content {
-    display: flex;
-    align-items: center;
-    gap: 10px;
 }
 
 /* Order Fulfillment: live booking progress screen (#orderFulfillmentProgressView) */
@@ -7205,81 +6442,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     text-overflow: ellipsis;
 }
 
-#fulfillmentPickupSelect:disabled {
-    cursor: not-allowed;
-    opacity: .6;
-}
-
-.fulfillment-courier-select-wrap {
-    position: relative;
-}
-
-.fulfillment-courier-select-btn {
-    width: 180px;
-    height: 40px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    padding: 0 12px;
-    font-size: 13px;
-    cursor: pointer;
-}
-
-.fulfillment-courier-select-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.fulfillment-courier-select-caret {
-    width: 16px;
-    height: 16px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
-.fulfillment-courier-menu {
-    position: absolute;
-    left: 0;
-    top: 100%;
-    margin-top: 4px;
-    min-width: 100%;
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    z-index: 40;
-    display: none;
-    overflow: hidden;
-}
-
-.fulfillment-courier-menu.open {
-    display: block;
-}
-
-.fulfillment-courier-menu-item {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 12px;
-    font-size: 13px;
-    color: var(--text-primary);
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.fulfillment-courier-menu-item:hover {
-    background: var(--bg-tertiary);
-}
-
 .fulfillment-courier-logo-chip {
     width: 30px;
     height: 22px;
@@ -7309,16 +6471,20 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     flex-shrink: 0;
 }
 
-.fulfillment-pickup-group {
-    margin: 0;
+/* Courier / pickup / Fulfill controls, shown between the filter strip and the table while
+   rows are selected - the bulk-actions bar Polaris would otherwise overlay the header with is
+   hidden for every .orders-table-card (see .Polaris-IndexTable__BulkActionsWrapper). */
+.fulfillment-selection-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--p-color-border-secondary);
+    flex-wrap: wrap;
 }
 
-.fulfillment-fulfill-btn,
-.fulfillment-cancel-btn {
-    height: 40px;
-    padding: 0 20px;
-    font-size: 13px;
-    white-space: nowrap;
+.fulfillment-pickup-group {
+    min-width: 220px;
 }
 
 .bulk-entry-line-text {
@@ -7521,32 +6687,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     color: var(--text-primary);
 }
 
-.settings-theme-toggle {
-    display: inline-flex;
-    padding: 3px;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-sm);
-    flex-shrink: 0;
-}
-
-.settings-theme-btn {
-    padding: 6px 16px;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.settings-theme-btn.active {
-    background: var(--accent-primary);
-    color: #fff;
-}
-
 .settings-users-list {
     display: flex;
     flex-direction: column;
@@ -7578,15 +6718,6 @@ body.orders-table-fullscreen #ordersView #ordersGrid {
     align-items: center;
     gap: 8px;
     flex-shrink: 0;
-}
-
-.settings-user-row__role-select {
-    padding: 6px 28px 6px 10px;
-    font-size: 13px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
 }
 
 .settings-user-row--inactive .settings-user-row__email {
@@ -7887,14 +7018,6 @@ body.admin-portal-page {
 .mobile-nav-toggle__bars::before { top: -6px; }
 .mobile-nav-toggle__bars::after { top: 6px; }
 
-.sidebar-scrim {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.45);
-    z-index: 940;
-}
-
 @media (max-width: 1280px) {
     /* Toolbar buttons drop their shared fixed width and shrink to their labels. */
     .header-actions #ordersDateRangeBtn,
@@ -7902,9 +7025,6 @@ body.admin-portal-page {
         width: auto;
     }
 
-    .orders-period-filter {
-        min-width: 140px;
-    }
 }
 
 @media (max-width: 1024px) {
@@ -7940,37 +7060,6 @@ body.admin-portal-page {
         display: inline-flex;
     }
 
-    /* Rail no longer reserves space; the sidebar slides in over the content.
-       The rail is `position: relative; z-index: 900`, which makes it a stacking
-       context - so the sidebar's own z-index resolves *inside* it and can never
-       beat the scrim. The rail itself has to clear the scrim (940). */
-    .sidebar-rail {
-        width: 0;
-        z-index: 950;
-    }
-
-    .sidebar {
-        position: fixed;
-        width: 240px;
-        transform: translateX(-100%);
-        transition: transform 0.22s ease;
-        z-index: 950;
-        box-shadow: var(--shadow-lg);
-    }
-
-    body.mobile-nav-open .sidebar {
-        transform: translateX(0);
-    }
-
-    body.mobile-nav-open .sidebar-scrim {
-        display: block;
-    }
-
-    /* 100vh ignores the mobile address bar and overflows; dvh tracks it. */
-    .app-container {
-        height: 100dvh;
-    }
-
     .header {
         flex-wrap: wrap;
         padding: 10px 12px;
@@ -7995,14 +7084,6 @@ body.admin-portal-page {
     .header-actions #ordersDateRangeBtn,
     .header-actions #ordersMoreActionsBtn {
         max-width: none;
-    }
-
-    .orders-period-filter-label {
-        display: none;
-    }
-
-    .orders-period-filter {
-        min-width: 120px;
     }
 
     .content-area {
@@ -8060,7 +7141,6 @@ body.admin-portal-page {
 
     /* Comfortable touch targets (WCAG 2.5.8 asks for >=24px; 40 is roomier). */
     .btn,
-    .header-toolbar-btn,
     .orders-more-actions__item,
     .nav-item {
         min-height: 40px;
@@ -8070,9 +7150,7 @@ body.admin-portal-page {
     .form-group input,
     .form-group select,
     .form-group textarea,
-    .orders-period-filter,
     .transaction-date-filter,
-    .transaction-search-filter,
     .search-box input {
         font-size: 16px;
     }
@@ -8088,24 +7166,24 @@ body.admin-portal-page {
 }
 
 /* =====================================================================
-   Orders page — Shopify-style chrome (light theme)
+   Orders page — Shopify-style chrome
    Metrics strip + status view-tabs + a framed table card wrapping the
-   existing AG Grid. Layout is theme-agnostic (uses app tokens); the
-   Polaris greys are pinned under :root:not([data-theme="dark"]) so the
-   dark grid theme is left as it was.
+   existing AG Grid.
    ===================================================================== */
 
-body:has(#ordersView.active) .content-area {
+body:has(#ordersView.active) .content-area,
+body:has(#orderFulfillmentView.active) .content-area {
     background: var(--bg-secondary);
 }
 
-#ordersView.active {
+#ordersView.active,
+#orderFulfillmentView.active {
     padding: 16px;
     gap: 12px;
     background: transparent;
 }
 
-.orders-metrics-strip {
+.metrics-strip {
     display: flex;
     flex-shrink: 0;
     overflow-x: auto;
@@ -8114,7 +7192,7 @@ body:has(#ordersView.active) .content-area {
     border-radius: var(--radius-lg);
 }
 
-.orders-metric {
+.metric {
     flex: 1 0 auto;
     min-width: 148px;
     display: flex;
@@ -8124,23 +7202,23 @@ body:has(#ordersView.active) .content-area {
     border-right: 1px solid var(--border-color);
 }
 
-.orders-metric:last-child {
+.metric:last-child {
     border-right: 0;
 }
 
-.orders-metric__label {
+.metric__label {
     font-size: 12px;
     color: var(--text-secondary);
 }
 
-.orders-metric__value {
+.metric__value {
     font-size: 17px;
     font-weight: 600;
     color: var(--text-primary);
     font-variant-numeric: tabular-nums;
 }
 
-.orders-metric__value--neg {
+.metric__value--neg {
     color: var(--danger);
 }
 
@@ -8155,132 +7233,285 @@ body:has(#ordersView.active) .content-area {
     overflow: hidden;
 }
 
-.orders-view-tabs {
+/* Orders table itself is now a Polaris IndexTable (see OrdersPage.tsx) - Polaris supplies
+   its own header/row/badge styling. The aggregate row (.orders-aggregate-row, shown while rows
+   are selected) is a plain div sibling *after* the IndexTable, not a row inside it - Chrome
+   doesn't support `position: sticky; bottom` on a <tr>/<td> (it just scrolls with the table,
+   unlike the same trick on thead th), so pinning it below the scrollable table the way the old
+   selection-summary bar did (a flex sibling, always visible, never part of the scroll area) is
+   the only reliable option. Its cells reuse .Polaris-IndexTable__TableCell for matching
+   padding/type, with widths mirrored in from the real <th>s (see aggregateColumnWidths).) */
+.orders-aggregate-row {
+    flex-shrink: 0;
+    background: var(--bg-secondary);
+    /* Same grey divider as the filter row's own border-bottom (border-color-hover, 2px). */
+    border-top: 2px solid var(--p-color-border-hover);
+    border-bottom: 1px solid var(--border-color);
+    /* Clips .orders-aggregate-row__inner, which is shifted left/right by hand (see
+       OrdersPage.tsx) to mirror the real table's own horizontal scroll position - without this
+       the row's cells only line up with their columns while scrolled all the way left. */
+    overflow: hidden;
+}
+
+.orders-aggregate-row__inner {
+    display: flex;
+    width: fit-content;
+}
+
+.orders-table-empty {
+    padding: 40px 0;
+    text-align: center;
+    color: var(--text-muted);
+}
+
+/* IndexFilters' native search field + filter button are hidden (custom per-column filter
+   row below the headers replaces them) - the clear-filters icon button takes their old
+   spot. Flex + align-items:center, not absolute+translateY: Polaris's own Button CSS
+   carries a -4px top/bottom margin (a hit-area compaction trick), which throws off
+   translateY(-50%) math against the row's height but is symmetric and so a no-op for
+   flex centering (which centers on the margin box). */
+.orders-index-filters-wrap {
     display: flex;
     align-items: center;
-    gap: 2px;
-    flex-shrink: 0;
-    padding: 6px 8px;
-    overflow-x: auto;
-    background: var(--bg-primary);
-    border-bottom: 1px solid var(--border-color);
+}
+.orders-index-filters-wrap .Polaris-IndexFilters__IndexFiltersWrapper {
+    flex: 1;
+    min-width: 0;
+}
+.orders-index-filters-wrap .Polaris-Button {
+    margin-right: 12px;
 }
 
-.orders-view-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 10px;
-    border: 0;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    white-space: nowrap;
-    cursor: pointer;
+/* IndexTable sizes each column from its header text width, which is often narrower than
+   an editable amount cell's content (e.g. "Total" vs "12,146.00") - widen those inputs so
+   the column grows to fit instead of clipping the value. */
+.orders-table-card .Polaris-TextField--borderless {
+    min-width: 90px;
 }
 
-.orders-view-tab:hover {
-    background: var(--bg-secondary);
-    color: var(--text-primary);
+#__filters__ input::placeholder {
+    opacity: 0.5;
 }
 
-.orders-view-tab.active {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    font-weight: 600;
+/* IndexTable's own scroll container (.Polaris-IndexTable-ScrollContainer) already has
+   overflow-y:auto, but none of the three wrapper divs between it and .orders-table-card
+   opt into the flex layout - they just size to their content (all rows, unclamped), which
+   then gets clipped by .orders-table-card's overflow:hidden with no way to scroll to the
+   rest. Make each level flex so the scroll container actually gets a bounded height and
+   becomes the one thing that scrolls, same as the old AG Grid body did. */
+.orders-table-card .Polaris-IndexTable,
+.orders-table-card .Polaris-IndexTable__IndexTableWrapper {
+    display: flex;
+    flex-direction: column;
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
-.orders-view-tab__count {
-    padding: 1px 6px;
-    border-radius: 20px;
-    background: var(--bg-secondary);
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-muted);
-    font-variant-numeric: tabular-nums;
+.orders-table-card .Polaris-IndexTable-ScrollContainer {
+    flex: 1 1 auto;
+    min-height: 0;
+    position: relative;
 }
 
-.orders-view-tab.active .orders-view-tab__count {
-    background: var(--bg-primary);
+/* thead th and the filter row's cells (below) are each their own independent position:sticky
+   boxes, so however precisely --orders-sticky-top lines them up, they're still two separately
+   composited layers - Chrome/Edge round each one to a physical pixel on its own during scroll,
+   which can visibly desync them by a hairline for a frame (and confirmed here, even at rest:
+   the scrolled-away row underneath was showing through the seam). Rather than chase that
+   rounding, paint one solid, continuously-sticky panel behind both rows spanning their combined
+   height, so there's nothing but this row's own background for either row's edge to be a hair
+   off from. Sits behind both (z-index below their 45/50) and takes 0 layout space via the
+   negative margin, so it never pushes the real table content down. */
+.orders-table-card .Polaris-IndexTable-ScrollContainer::before {
+    content: '';
+    position: sticky;
+    top: 0;
+    z-index: 40;
+    display: block;
+    /* Matches thead's real rendered width (see OrdersPage.tsx), not the default 100% of this
+       scrolling container's own (viewport-clamped) box - otherwise on a horizontal scroll the
+       backdrop stopped at the container's width instead of panning along with the columns like
+       a real row would, and disappeared under whichever columns had been scrolled into view. */
+    width: var(--orders-sticky-backdrop-width, 100%);
+    height: calc(var(--orders-sticky-top, 0px) + var(--orders-sticky-filters-height, 0px) + 4px);
+    margin-bottom: calc(-1 * (var(--orders-sticky-top, 0px) + var(--orders-sticky-filters-height, 0px) + 4px));
+    background: var(--p-color-bg-surface-secondary);
+    /* The filter row's own border-bottom (below) is drawn on N independently position:sticky
+       cells, one per column - Chrome occasionally renders that whole row a frame late while
+       scrolling (confirmed via screenshot: a scrolled-away order row briefly painting through
+       where the filter row and its border should be), which takes its border down with it.
+       This backdrop is one plain sticky div, not N composited cells, so it doesn't glitch the
+       same way - draw the real divider here too, so there's always a reliable line even on the
+       frames where the filter row's own border drops out. */
+    border-bottom: 2px solid var(--p-color-border-hover);
+    pointer-events: none;
 }
 
-.orders-view-tab__count:empty {
+/* Polaris drops its "Loading orders" panel at top:0 of the table, absolutely positioned - which
+   is exactly where our sticky header + filter rows sit, so it covered the column names. Start it
+   at the backdrop's bottom edge instead (same height formula as ::before above), and stack it
+   below the backdrop (40) so its slide-in emerges from under the pinned rows rather than
+   crossing over them - Polaris's own z-index is 400, well above everything here. */
+.orders-table-card .Polaris-IndexTable__LoadingPanel {
+    top: calc(var(--orders-sticky-top, 0px) + var(--orders-sticky-filters-height, 0px) + 4px);
+    z-index: 35;
+}
+
+/* Pin the column-name row and the filter row (both real rows inside that same scrolling
+   <table>, see OrdersPage.tsx) to the top of .Polaris-IndexTable-ScrollContainer as the body
+   scrolls underneath. The filter row's offset is set as --orders-sticky-top on the <tr>
+   itself by the layout effect in OrdersPage.tsx, since it has to stack below whatever is
+   above it. z-index has to clear 30, not just the row above it: body cells are
+   position:static, so Polaris's own internal z-index on an editable TextField/Select's
+   backdrop/input (10-30, --pc-text-field-backdrop/--pc-select-input etc.) escapes straight up
+   to this shared stacking context instead of stopping at the cell, and would otherwise paint
+   over these sticky rows while scrolling. */
+.orders-table-card .Polaris-IndexTable thead th {
+    position: sticky;
+    top: 0;
+    z-index: 50;
+    /* Polaris draws the line between rows as border-top on the (position:static) <tr>, which
+       stays put at the row's real, scrolled-away position instead of following its sticky
+       cells - so the pinned block needs its own bottom border, painted on the cells that are
+       actually moving, to keep looking separated from the content scrolling under it. */
+    border-bottom: var(--p-border-width-025) solid var(--p-color-border-secondary);
+    /* This row and the filter row below are two independent position:sticky elements, each
+       composited (and pixel-snapped) on its own during scroll - so even with the 1px overlap
+       in --orders-sticky-top (see OrdersPage.tsx), Chrome can round their edges to different
+       physical pixels on a given scroll frame and flash a hairline gap between them mid-scroll,
+       though they land back flush at rest. Forcing both onto the GPU with a stable transform
+       layer keeps their rounding in sync instead of drifting independently frame to frame. */
+    will-change: transform;
+}
+
+/* Polaris's own "N selected / bulk actions" bar would otherwise overlay the real header the
+   moment a row is selected, hiding the column names and duplicating the selection count this
+   app already shows in the .orders-aggregate-row bar - all our bulk actions live in the "More
+   actions" menu instead, so the bar has nothing left to show. */
+.orders-table-card .Polaris-IndexTable__BulkActionsWrapper {
     display: none;
 }
 
-/* Grid sits flush inside the card - the card owns the frame now. */
-#ordersView .orders-table-card #ordersGrid.grid-container {
-    border: 0;
-    border-radius: 0;
-    flex: 1;
-    min-height: 0;
-    height: 100%;
+/* Row clicks no longer select (see OrdersPage.tsx's onClick={() => {}} on IndexTable.Row),
+   but Polaris still styles selectable rows with cursor:pointer since that class is keyed off
+   presence of an onClick handler, not whether it actually selects. Only the checkbox cell
+   should look clickable. */
+/* Polaris's own IndexTable cell padding (~6px top/bottom) is too tall for this dense
+   table - shrink it directly instead of fighting it via row height. */
+.orders-table-card .Polaris-IndexTable__TableCell {
+    padding-top: 3px;
+    padding-bottom: 3px;
 }
 
-#ordersView .ag-theme-alpine {
-    --ag-font-family: 'Inter', 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
-    /* Matches Polaris IndexTable's bodyMd text token (--p-text-body-md-font-size) -
-       Shopify's order table renders cell text at 13px, not the app's usual 14px grid text.
-       Set to 12px, not 13px: ag-theme-alpine.css hardcodes
-       ".ag-row { font-size: calc(var(--ag-font-size) + 1px) }", so the row text actually
-       renders at --ag-font-size + 1. */
-    --ag-font-size: 12px;
-    --ag-header-height: 40px;
-    --ag-row-height: 44px;
+.orders-table-card .Polaris-IndexTable__TableRow {
+    cursor: default;
 }
 
-/* Shopify's table headers are sentence-case and quiet, not the app's uppercase.
-   Sizing/weight matches Polaris IndexTable's heading token: 12px, medium weight
-   (Polaris uses a variable-font 550; 500 is the closest static weight Inter ships here). */
-#ordersView .ag-theme-alpine .ag-header {
-    text-transform: none;
-    letter-spacing: 0;
-    font-size: 12px;
-    font-weight: 500;
+/* Polaris freezes the checkbox column and the Order # column next to it during horizontal
+   scroll (position:sticky; left) by default - unwanted here, so drop the offset that makes
+   them stick. The header cells (TableHeading--first/--second) stay position:sticky - that's
+   also what pins the whole header row to the top on vertical scroll (see the thead th rule
+   above), which setting position:static here would have broken too since it's the same
+   property. Body cells have no such vertical pin, so those go fully static; keep
+   position:relative on the checkbox td rather than static, since its .Checkbox__Wrapper is
+   absolutely positioned against it (see below) to fill the cell. */
+.orders-table-card .Polaris-IndexTable__TableHeading--first,
+.orders-table-card .Polaris-IndexTable__TableHeading--second {
+    left: auto !important;
+}
+/* Polaris's own selector for this cell (".Table--sticky .TableHeading--second:not(...)")
+   still out-specificities the plain "thead th" rule above and sets z-index:29 regardless of
+   the left override - which sat below the sticky header/filter backdrop panel
+   (.Polaris-IndexTable-ScrollContainer::before, z-index 40) and let it paint over the "Order #"
+   label, hiding it outright even at rest. */
+.orders-table-card .Polaris-IndexTable thead th.Polaris-IndexTable__TableHeading--second {
+    z-index: 50 !important;
+}
+.orders-table-card .Polaris-IndexTable__TableCell--first + .Polaris-IndexTable__TableCell {
+    position: static !important;
+    left: auto !important;
+}
+.orders-table-card .Polaris-IndexTable__TableCell--first {
+    position: relative !important;
+    left: auto !important;
 }
 
-#ordersView .grid-status-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 2px 9px;
-    border-radius: 20px;
-    font-size: 12px;
-    font-weight: 500;
-    line-height: 1.5;
+/* The actual hit target under the mouse here is the transparent, full-cell
+   <input type="checkbox"> stacked over the visible backdrop (Polaris's accessible-checkbox
+   pattern) - browsers apply their own cursor:default straight to checkbox inputs, which wins
+   over inheriting pointer from the td, so the input needs its own explicit override. */
+.orders-table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first,
+.orders-table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first .Polaris-Checkbox__Input {
+    cursor: pointer;
+}
+/* The click handler (onInteraction) lives on .Polaris-IndexTable-Checkbox__Wrapper, but that
+   div only sizes to the checkbox glyph, not the cell's own padding - so the cursor above covers
+   more area than clicks actually reach. height:100% doesn't stretch it because the <td>'s own
+   height is auto (percentage heights only resolve against an explicit parent height), so
+   position it to fill the cell instead - .TableCell--first is already position:relative
+   (see the column-sticky override above), a valid containing block for an absolutely
+   positioned descendant. */
+.orders-table-card .Polaris-IndexTable__TableCell--first .Polaris-IndexTable-Checkbox__Wrapper {
+    position: absolute;
+    inset: 0;
 }
 
-#ordersView .grid-status-badge::before {
-    content: "";
-    width: 6px;
-    height: 6px;
-    border-radius: 50%;
-    background: currentColor;
+.orders-table-card .Polaris-IndexTable__TableRow--subheader .Polaris-IndexTable__TableCell {
+    position: sticky;
+    top: var(--orders-sticky-top, 0px);
+    z-index: 45;
+    /* Polaris only paints its own subheader background onto the first/second/last cells
+       (see its .Polaris-IndexTable__TableRow--subheader rule) and otherwise lets the <tr>'s
+       background show through - which doesn't happen once the cell is position:sticky, so
+       every other cell needs this set explicitly or scrolled rows show through it. */
+    background-color: var(--p-color-bg-surface-secondary);
+    /* Same reasoning as thead's border-bottom above: the row's own border-bottom doesn't move
+       with its sticky cells, so the outline has to live on the cells themselves - Polaris only
+       puts its own border-bottom on the first/second/last cells directly, so the middle cells
+       were falling back to the (non-sticky) <tr>'s border and visibly detaching from the row's
+       outline while scrolling. No border-top here: thead th (above) already paints a full-width
+       border-bottom immediately above this row, so a second border-top on top of it doubled the
+       line into a visible seam between the header and filter rows.
+       border-color-hover (not the standard -secondary divider token) and 2px, both !important:
+       Polaris's own subheader CSS also sets border-bottom-width on this selector shape and wins
+       outright without !important. Needed the stronger color and width because -secondary's
+       hairline (confirmed via computed style) was landing this row on the fractional pixel
+       --orders-sticky-top now uses (see OrdersPage.tsx) and anti-aliasing into near invisibility. */
+    border-bottom: 2px solid var(--p-color-border-hover) !important;
+    will-change: transform;
 }
 
-:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine {
-    --ag-header-background-color: #f7f7f7;
-    --ag-row-hover-color: #f6f6f7;
-    --ag-selected-row-background-color: #ebf3fe;
-    --ag-border-color: #e7e7e9;
-    --ag-checkbox-checked-color: #1a1a1a;
-    --ag-input-focus-border-color: #005bd3;
+/* Pagination sits after the table in DOM order (see OrdersPage.tsx) so it's naturally pinned
+   to the bottom of the card, below the now-scrollable table. Polaris's own IndexTable
+   `pagination` prop renders its Pagination control *inside* the table, after the rows -
+   rendering it ourselves as a sibling keeps it in the same visual spot instead. */
+.orders-pagination-wrapper {
+    flex-shrink: 0;
 }
 
-:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-header {
-    border-bottom: 1px solid #e1e1e1;
+/* Several Polaris primitives (TextField's <input>, Badge, a bare <Text> with no `variant`)
+   don't set their own font-size/family/color - they inherit it. That means they were
+   silently picking up this app's body rule (Outfit, 16px) instead of Shopify's own
+   (Inter, 13px), since Polaris's html/body rule in main.tsx loses that cascade fight.
+   :where() keeps this at zero specificity so it only fills the inheritance gap and never
+   outranks Polaris's own explicit classes (e.g. .Polaris-Text--headingMd) - and matching
+   on the class prefix (rather than an .orders-table-card ancestor scope) also reaches
+   popovers/selects that Polaris portals out to document.body. */
+:where([class*="Polaris-"]) {
+    font-family: var(--p-font-family-sans);
+    font-size: var(--p-font-size-325);
+    font-weight: var(--p-font-weight-regular);
+    line-height: var(--p-font-line-height-500);
+    color: var(--p-color-text);
 }
 
-:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-header-cell-text {
-    color: #616161;
-}
-
-:root:not([data-theme="dark"]) #ordersView .ag-theme-alpine .ag-pinned-bottom-row {
-    background-color: #f7f7f7 !important;
-    border-top: 1px solid #d0d0d0 !important;
+/* The :where() rule above is zero-specificity but still an explicit declaration, which beats
+   plain inheritance - so it was overriding a primary button's white label/icon back to the
+   same dark text color as its own black background, making the label invisible. Restore
+   inheritance from the button just for these two children. */
+.Polaris-Button--variantPrimary .Polaris-Text--root,
+.Polaris-Button--variantPrimary .Polaris-Button__Icon {
+    color: inherit;
 }
 
 /* Full screen: drop the summary strip and the card frame, maximise the grid. */
@@ -8304,7 +7535,7 @@ body.orders-table-fullscreen .orders-table-card {
         gap: 8px;
     }
 
-    .orders-metric {
+    .metric {
         min-width: 128px;
         padding: 10px 14px;
     }

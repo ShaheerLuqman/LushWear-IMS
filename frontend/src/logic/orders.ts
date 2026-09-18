@@ -45,11 +45,6 @@ export function orderStatusBadgeClass(status?: string): string {
   return 'grid-status-unfulfilled';
 }
 
-export const COURIER_LOGOS: Record<string, { src: string; alt: string; imgClass: string }> = {
-  POSTEX: { src: '/assets/postex_logo.png', alt: 'PostEx', imgClass: '' },
-  'COURIERS NEXT': { src: '/assets/courier_next_logo.png', alt: 'Couriers Next', imgClass: 'grid-courier-logo--couriersnext' },
-};
-
 export const FINAL_STATUS_VALUES = ['OK', 'Warning', 'None'];
 
 /** Health indicator for one order row, shown in the Status column and filtered on by

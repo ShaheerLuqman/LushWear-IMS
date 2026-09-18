@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { postExCashLedgerOptions, type Ledger } from '../../logic/ledgers';
+import { Dropdown } from '../../components/Dropdown';
 
 // Mirrors backend/app/services/postex.py's _folio_from_date: unpadded day/month, 2-digit
 // year (e.g. "2/9/26"), so a CSV upload's default folio parses the same way a PostEx
@@ -93,10 +94,7 @@ export function UploadPostExModal({
           </div>
           <div className="form-group">
             <label htmlFor="uploadPostExCashLedger">Amount Received In *</label>
-            <select id="uploadPostExCashLedger" className="form-input" value={cashLedgerId} onChange={(e) => setCashLedgerId(e.target.value)}>
-              <option value="">Select ledger...</option>
-              {postExCashLedgerOptions(ledgers).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
+            <Dropdown id="uploadPostExCashLedger" fullWidth placeholder="Select ledger..." options={postExCashLedgerOptions(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={cashLedgerId} onChange={setCashLedgerId} />
           </div>
         </div>
         <div className="modal-pinned-footer">

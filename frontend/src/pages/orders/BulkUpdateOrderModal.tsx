@@ -2,7 +2,6 @@
 // change to all of them, or select them in the grid. Ported from
 // modals-forms.js/orders-actions.js.
 import { useMemo, useState } from 'react';
-import type { GridApi } from 'ag-grid-community';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
@@ -25,12 +24,12 @@ function parseOrderNumbers(text: string): number[] {
 }
 
 export function BulkUpdateOrderModal({
-  open, onClose, onChanged, gridApi, prefill, orders,
+  open, onClose, onChanged, onSelectOrderNumbers, prefill, orders,
 }: {
   open: boolean;
   onClose: () => void;
   onChanged: () => void;
-  gridApi: GridApi | null;
+  onSelectOrderNumbers: (orderNumbers: number[]) => { matched: number; notFound: string[] };
   prefill: string;
   orders: Order[];
 }) {
@@ -122,30 +121,12 @@ export function BulkUpdateOrderModal({
 
   function selectInGrid() {
     if (!requireOrderNumbers()) return;
-    if (!gridApi) {
-      showToast('Orders grid is not available', 'error', { silent: true });
-      return;
-    }
-    const wanted = new Set(orderNumbers.map(String));
-    const matched = new Set<string>();
-    gridApi.deselectAll();
-    gridApi.forEachNode((node) => {
-      const data = node.data;
-      if (!data || data.id === '__footer__') return;
-      const num = String(data.order_number);
-      if (wanted.has(num)) {
-        node.setSelected(true);
-        matched.add(num);
-      }
-    });
-    const selectedRows = gridApi.getSelectedRows();
-    if (selectedRows.length > 0) gridApi.ensureNodeVisible(selectedRows[0], 'middle');
-    const notFound = [...wanted].filter((n) => !matched.has(n));
+    const { matched, notFound } = onSelectOrderNumbers(orderNumbers);
     close();
     if (notFound.length > 0) {
-      showToast(`Selected ${matched.size} order(s). Not in grid: ${notFound.join(', ')}`, matched.size > 0 ? 'info' : 'error');
+      showToast(`Selected ${matched} order(s). Not found: ${notFound.join(', ')}`, matched > 0 ? 'info' : 'error');
     } else {
-      showToast(`Selected ${matched.size} order(s) in grid`, 'success');
+      showToast(`Selected ${matched} order(s)`, 'success');
     }
   }
 

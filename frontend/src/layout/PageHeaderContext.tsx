@@ -17,6 +17,8 @@ export interface PageHeader {
   title: string;
   subtitle?: string;
   actions?: ReactNode;
+  /** Centered search box, for pages whose table filters live-as-you-type on it. */
+  search?: { value: string; onChange: (v: string) => void; placeholder?: string };
 }
 
 type SetHeader = (header: PageHeader) => void;
@@ -37,10 +39,11 @@ export function PageHeaderProvider({ children }: { children: ReactNode }) {
 export function usePageHeader(header: PageHeader): void {
   const setHeader = useContext(PageHeaderSetterContext);
   if (!setHeader) throw new Error('usePageHeader() used outside <PageHeaderProvider>');
-  const { title, subtitle, actions } = header;
+  const { title, subtitle, actions, search } = header;
+  const { value: searchValue, onChange: onSearchChange, placeholder: searchPlaceholder } = search ?? {};
   useEffect(() => {
-    setHeader({ title, subtitle, actions });
-  }, [setHeader, title, subtitle, actions]);
+    setHeader({ title, subtitle, actions, search: onSearchChange ? { value: searchValue ?? '', onChange: onSearchChange, placeholder: searchPlaceholder } : undefined });
+  }, [setHeader, title, subtitle, actions, searchValue, onSearchChange, searchPlaceholder]);
 }
 
 /** Used by AppShell only, to read what the current page set. */

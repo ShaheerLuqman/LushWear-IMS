@@ -4,9 +4,11 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderRefButton } from '../../components/HeaderButton';
 import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
 import { formatDateDDMMYYYY } from '../../logic/shared';
 import { formatMoney } from '../../logic/ledgers';
+import { Dropdown } from '../../components/Dropdown';
 
 interface PerfRow {
   city: string; courier: string; orders: number; delivered: number; returned: number; failed: number;
@@ -70,15 +72,9 @@ export function CourierPerformancePage() {
     title: 'Courier Performance',
     actions: (
       <>
-        <button ref={setDateBtnNode} type="button" className="btn btn-secondary header-toolbar-btn" title="Filter by fulfilled date range">{dateLabel}</button>
-        <select className="orders-period-filter" value={city} onChange={(e) => setCity(e.target.value)}>
-          <option value="">All Cities</option>
-          {cities.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <select className="orders-period-filter" value={courier} onChange={(e) => setCourier(e.target.value)}>
-          <option value="">All Couriers</option>
-          {couriers.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
+        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by fulfilled date range" />
+        <Dropdown searchable options={[{ value: '', label: 'All Cities' }, ...cities]} value={city} onChange={setCity} />
+        <Dropdown options={[{ value: '', label: 'All Couriers' }, ...couriers]} value={courier} onChange={setCourier} />
       </>
     ),
   });

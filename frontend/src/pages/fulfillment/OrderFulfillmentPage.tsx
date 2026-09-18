@@ -2,119 +2,85 @@
 // live booking-progress screen. Ported from order-fulfillment.js. The order list and
 // Fulfill are both live; editing a row's address/mobile/tags/city here is local-only
 // and is NOT sent to the courier, which books from what's stored on the order.
+// Same Polaris IndexTable/IndexFilters card as OrdersPage (shares its .orders-table-card CSS).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActionList, Badge, Button, IndexFilters, IndexTable, IndexTableSelectionType, Popover, Text, TextField, Tooltip,
+  useIndexResourceState, useSetIndexFiltersMode,
+} from '@shopify/polaris';
+import { MenuVerticalIcon } from '@shopify/polaris-icons';
+import { FilterX } from 'lucide-react';
 import { apiJson, apiJsonStream } from '../../api';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { Dropdown } from '../../components/Dropdown';
+import { useStickyIndexTableHeader } from '../../components/useStickyIndexTableHeader';
 import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { formatDateDDMMYYYY } from '../../logic/shared';
+import { formatDateDDMMYYYY, rowMatchesQuery } from '../../logic/shared';
 import { printAirwayBillsForOrders } from '../../logic/airwayBills';
 import { orderHasAirwayBill } from '../../logic/orders';
 import {
   FULFILLMENT_COURIERS, FULFILLMENT_DEFAULT_ORDER_TYPE, FULFILLMENT_DEFAULT_REMARK, FULFILLMENT_ORDER_TYPES,
-  FULFILLMENT_PROGRESS_STATE_META, FULFILLMENT_RISK_ICONS, fulfillmentFilteredOrders, fulfillmentLineItemCount,
-  fulfillmentPickupAddressLabel, fulfillmentTagBadgeClass, type FulfillmentCourier, type FulfillmentFilters,
+  FULFILLMENT_PROGRESS_STATE_META, fulfillmentFilteredOrders, fulfillmentLineItemCount,
+  fulfillmentPickupAddressLabel, type CustomerStatus, type FulfillmentCourier, type FulfillmentFilters,
   type FulfillmentOrder, type FulfillmentProgressOrder, type PickupAddress,
 } from '../../logic/fulfillment';
-import { CourierCityPicker } from './CourierCityPicker';
+import { EditableAmount } from '../orders/ordersPolarisColumns';
 import { FulfillmentDetailsModal } from './FulfillmentDetailsModal';
 
-function MultiSelectFilter({ allLabel, options, selected, onChange }: { allLabel: string; options: string[]; selected: string[] | null; onChange: (v: string[] | null) => void }) {
-  const [open, setOpen] = useState(false);
-  const ticked = selected ?? options;
+const COLUMNS: Array<{ key: string; title: string; alignment?: 'end'; tooltipContent?: string }> = [
+  { key: 'order_number', title: 'Order ID' },
+  { key: 'name', title: 'Name' },
+  { key: 'address', title: 'Complete Address' },
+  { key: 'mobile', title: 'Mobile Number' },
+  { key: 'tags', title: 'Tags' },
+  { key: 'city', title: 'City' },
+  { key: 'courier_city', title: 'Courier City', tooltipContent: 'Select a courier above to populate this with its supported cities' },
+  { key: 'order_type', title: 'Type', tooltipContent: "The courier's own order type." },
+  { key: 'cod', title: 'CoD', alignment: 'end', tooltipContent: 'Amount the rider collects on delivery.' },
+  { key: 'risk', title: 'Risk / Customer Status', tooltipContent: "Based on this customer's past delivered vs. total orders" },
+  { key: 'actions', title: 'Actions' },
+];
 
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [open]);
+// Tabs in the filter strip, same as OrdersPage's status tabs: null = no tier filter.
+const RISK_TABS: Array<{ id: string; label: string; tier: CustomerStatus['tier'] | null }> = [
+  { id: 'all', label: 'Unfulfilled', tier: null },
+  { id: 'new', label: 'New Customer', tier: 'new' },
+  { id: 'trusted', label: 'Trusted', tier: 'trusted' },
+  { id: 'low', label: 'Low Risk', tier: 'low' },
+  { id: 'medium', label: 'Medium Risk', tier: 'medium' },
+  { id: 'high', label: 'High Risk', tier: 'high' },
+];
 
-  const label = options.length === 0 ? allLabel : ticked.length === options.length ? allLabel : ticked.length === 0 ? 'None' : ticked.length === 1 ? ticked[0] : `${ticked.length} selected`;
+const TAG_TONES: Record<string, 'info' | 'success' | 'new' | 'warning'> = { VIP: 'info', Repeat: 'success', New: 'new', Wholesale: 'warning' };
+const RISK_TONES: Record<CustomerStatus['tier'], 'success' | 'info' | 'warning' | 'critical'> = {
+  trusted: 'success', low: 'success', new: 'info', medium: 'warning', high: 'critical',
+};
 
-  function toggle(v: string) {
-    const next = ticked.includes(v) ? ticked.filter((s) => s !== v) : [...ticked, v];
-    onChange(next.length === options.length ? null : next);
-  }
-
+/** Borderless inline text cell; commits on blur, blank reverts to the current value. */
+function EditableText({ value, minWidth, onCommit }: { value: string; minWidth?: number; onCommit: (v: string) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => { setText(value); }, [value]);
   return (
-    <div className="pa-customize" onClick={(e) => e.stopPropagation()}>
-      <button type="button" className="form-input checkbox-filter-control__btn" onClick={() => setOpen((v) => !v)}>{label}</button>
-      {open && (
-        <div className="pa-pop">
-          <label><input type="checkbox" checked={ticked.length === options.length} onChange={() => onChange(ticked.length === options.length ? [] : null)} /> {allLabel}</label>
-          {options.map((o) => <label key={o}><input type="checkbox" checked={ticked.includes(o)} onChange={() => toggle(o)} /> {o}</label>)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function EditableCell({ value, onCommit }: { value: string; onCommit: (v: string) => void }) {
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-  if (editing) {
-    return (
-      <input
-        type="text" className="fulfillment-edit-input" autoFocus value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => { setEditing(false); onCommit(draft); }}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter') { setEditing(false); onCommit(draft); }
-          if (e.key === 'Escape') setEditing(false);
-        }}
+    <div style={{ minWidth }}>
+      <TextField
+        label="" labelHidden autoComplete="off" variant="borderless" size="slim"
+        value={text} onChange={setText}
+        onBlur={() => { const next = text.trim(); if (next && next !== value) onCommit(next); else setText(value); }}
       />
-    );
-  }
-  return (
-    <div className="fulfillment-editable-cell">
-      <span className="fulfillment-editable-text" title={value}>{value}</span>
-      <button type="button" className="fulfillment-edit-btn" title="Edit" onClick={(e) => { e.stopPropagation(); setDraft(value); setEditing(true); }}><i className="fa-solid fa-pen" /></button>
-    </div>
-  );
-}
-
-function TagsCell({ tags, allTags, onChange }: { tags: string[]; allTags: string[]; onChange: (tags: string[]) => void }) {
-  const [open, setOpen] = useState(false);
-  useEffect(() => {
-    if (!open) return;
-    const close = () => setOpen(false);
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-  }, [open]);
-  return (
-    <div className="fulfillment-tags-cell" onClick={(e) => e.stopPropagation()}>
-      {tags.map((t) => <span className={`fulfillment-tag-badge ${fulfillmentTagBadgeClass(t)}`} key={t}>{t}</span>)}
-      <button type="button" className="fulfillment-tags-toggle" title="Edit tags" onClick={() => setOpen((v) => !v)}><i className="fa-solid fa-chevron-down" /></button>
-      {open && (
-        <div className="fulfillment-tags-menu open">
-          {allTags.map((t) => (
-            <label key={t}>
-              <input
-                type="checkbox" checked={tags.includes(t)}
-                onChange={(e) => onChange(e.target.checked ? [...tags, t] : tags.filter((x) => x !== t))}
-              /> {t}
-            </label>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
 
 function RiskCell({ order }: { order: FulfillmentOrder }) {
   const status = order.customer_status || { tier: 'new' as const, label: 'New Customer', received: 0, total: 0 };
-  const icon = FULFILLMENT_RISK_ICONS[status.tier];
-  const subtitle = status.total === 0 ? 'No previous orders' : `${status.received}/${status.total} orders delivered`;
   return (
-    <>
-      <div className={`fulfillment-risk-badge fulfillment-risk-badge--${status.tier}`}>
-        {icon ? <i className={`fa-solid ${icon === 'shield-check' ? 'fa-shield-halved' : 'fa-user-plus'}`} /> : <span className="fulfillment-risk-dot" />}
-        <span>{status.label}</span>
-      </div>
-      <div className="fulfillment-risk-sub"><span>{subtitle}</span><i className="fa-solid fa-circle-info" title="Based on this customer's past delivered vs. total orders" /></div>
-    </>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+      <Badge tone={RISK_TONES[status.tier]}>{status.label}</Badge>
+      {status.total > 0 && <Text as="span" tone="subdued" variant="bodyXs">{status.received}/{status.total} delivered</Text>}
+    </div>
   );
 }
 
@@ -124,10 +90,12 @@ export function OrderFulfillmentPage() {
 
   const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filters, setFilters] = useState<FulfillmentFilters>({ cities: null, tags: null, dateFrom: null, dateTo: null });
+  const [search, setSearch] = useState('');
+  const [riskTab, setRiskTab] = useState(0);
   const [selectedCourier, setSelectedCourier] = useState<FulfillmentCourier | null>(null);
   const [courierMenuOpen, setCourierMenuOpen] = useState(false);
+  const { mode, setMode } = useSetIndexFiltersMode();
   const [pickupAddresses, setPickupAddresses] = useState<PickupAddress[]>([]);
   const [pickupCode, setPickupCode] = useState('');
   const [courierCities, setCourierCities] = useState<string[]>([]);
@@ -188,19 +156,24 @@ export function OrderFulfillmentPage() {
 
   const allCities = useMemo(() => [...new Set(orders.map((o) => o.city).filter(Boolean))].sort(), [orders]);
   const allTags = useMemo(() => [...new Set(orders.flatMap((o) => o.tags))].sort(), [orders]);
-  const filtered = useMemo(() => fulfillmentFilteredOrders(orders, filters), [orders, filters]);
-  const selectedOrders = useMemo(() => orders.filter((o) => selectedIds.has(o.id)), [orders, selectedIds]);
+  const tierCounts = useMemo(() => {
+    const counts: Record<string, number> = { all: orders.length };
+    for (const o of orders) { const t = o.customer_status?.tier || 'new'; counts[t] = (counts[t] || 0) + 1; }
+    return counts;
+  }, [orders]);
+  const filtered = useMemo(() => {
+    const tier = RISK_TABS[riskTab]?.tier;
+    const rows = tier ? orders.filter((o) => (o.customer_status?.tier || 'new') === tier) : orders;
+    return fulfillmentFilteredOrders(rows, filters).filter((o) => rowMatchesQuery(o, search));
+  }, [orders, filters, riskTab, search]);
+  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } = useIndexResourceState(
+    filtered as unknown as Array<FulfillmentOrder & { [key: string]: unknown }>, { resourceIDResolver: (o) => o.id },
+  );
+  const selectedOrders = useMemo(() => orders.filter((o) => selectedResources.includes(o.id)), [orders, selectedResources]);
+  useStickyIndexTableHeader('#orderFulfillmentView', filtered.length > 0);
 
   function updateOrder(id: string, patch: Partial<FulfillmentOrder>) {
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
-  }
-
-  function toggleSelectAllVisible(checked: boolean) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      filtered.forEach((o) => { if (checked) next.add(o.id); else next.delete(o.id); });
-      return next;
-    });
   }
 
   async function pickCourier(courier: FulfillmentCourier) {
@@ -292,7 +265,7 @@ export function OrderFulfillmentPage() {
           });
           if (result.ok) {
             setOrders((prev) => prev.filter((o) => o.id !== result.order_id));
-            setSelectedIds((prev) => { const next = new Set(prev); next.delete(result.order_id); return next; });
+            handleSelectionChange(IndexTableSelectionType.Single, false, result.order_id);
           }
         } else if (event.type === 'shopify_sync') {
           setProgress((prevProgress) => (prevProgress ? { ...prevProgress, phase: 'shopify_sync' } : prevProgress));
@@ -347,30 +320,25 @@ export function OrderFulfillmentPage() {
     setDateRangeLabel('Date range');
   }
 
+  const hasFilters = !!(filters.cities || filters.tags || filters.dateFrom);
+  const appliedFilters = (['cities', 'tags'] as const)
+    .filter((key) => filters[key])
+    .map((key) => ({
+      key,
+      label: `${key === 'cities' ? 'City' : 'Tags'}: ${filters[key]!.join(', ')}`,
+      onRemove: () => setFilters((f) => ({ ...f, [key]: null })),
+    }));
+
   usePageHeader({
     title: 'Order Fulfillment',
+    search: { value: search, onChange: setSearch, placeholder: 'Search orders...' },
     actions: (
       <>
-        <div className="fulfillment-filters-bar">
-          <div className="fulfillment-filter-group">
-            <label>City</label>
-            <MultiSelectFilter allLabel="All Cities" options={allCities} selected={filters.cities} onChange={(v) => setFilters((f) => ({ ...f, cities: v }))} />
-          </div>
-          <div className="fulfillment-filter-group">
-            <label>Tags</label>
-            <MultiSelectFilter allLabel="All Tags" options={allTags} selected={filters.tags} onChange={(v) => setFilters((f) => ({ ...f, tags: v }))} />
-          </div>
-          <div className="fulfillment-filter-group">
-            <label>Date Range</label>
-            <div className="fulfillment-date-range-input-wrap">
-              <i className="fa-regular fa-calendar" />
-              <button ref={setDateRangeNode} type="button" className="fulfillment-date-range-input" style={{ textAlign: 'left' }}>{dateRangeLabel}</button>
-            </div>
-          </div>
-          <button type="button" className="btn btn-secondary fulfillment-clear-filters-btn" onClick={clearFilters}>Clear Filters</button>
+        <div className="orders-date-range-wrap header-inline">
+          <HeaderRefButton ref={setDateRangeNode} label={dateRangeLabel} title="Filter by order date" />
         </div>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" onClick={() => showToast('Export not implemented yet', 'info', { silent: true })}><i className="fa-solid fa-arrow-up-from-bracket" /> Export</button>
-        <button type="button" className="btn btn-secondary header-toolbar-btn" onClick={async () => { if (await fetchOrders()) showToast('Refreshed', 'success'); }}><i className="fa-solid fa-arrows-rotate" /> Refresh</button>
+        <HeaderButton onClick={() => showToast('Export not implemented yet', 'info', { silent: true })}>Export</HeaderButton>
+        <HeaderButton onClick={async () => { if (await fetchOrders()) showToast('Refreshed', 'success'); }}>Refresh</HeaderButton>
       </>
     ),
   });
@@ -434,124 +402,123 @@ export function OrderFulfillmentPage() {
     );
   }
 
-  const allSelected = filtered.length > 0 && filtered.every((o) => selectedIds.has(o.id));
-  const someSelected = !allSelected && filtered.some((o) => selectedIds.has(o.id));
   const orderTypes = (selectedCourier && FULFILLMENT_ORDER_TYPES[selectedCourier.id]) || [];
   const isCouriersNext = selectedCourier?.id === 'couriers_next';
   const pickupSelected = pickupAddresses.find((a) => a.code === pickupCode);
 
-  return (
-    <div className="fulfillment-body">
-      <div className="fulfillment-table-panel">
-        <div className="fulfillment-table-toolbar">
-          <label className="fulfillment-select-all">
-            <input type="checkbox" checked={allSelected} ref={(el) => { if (el) el.indeterminate = someSelected; }} onChange={(e) => toggleSelectAllVisible(e.target.checked)} />
-            <span>Select all</span>
-          </label>
-          <button type="button" className="fulfillment-link-btn" onClick={() => setSelectedIds(new Set())}>Clear Selection</button>
-          <div className="fulfillment-table-toolbar-spacer" />
-          <span className="fulfillment-toolbar-stat">Total Orders: {orders.length}</span>
-          {selectedIds.size > 0 && <span className="fulfillment-toolbar-badge">{selectedIds.size} selected</span>}
+  const courierChip = (c: FulfillmentCourier) => (c.logo
+    ? <span className="fulfillment-courier-logo-chip"><img src={c.logo} alt={c.name} /></span>
+    : <span className="fulfillment-courier-monogram" style={{ background: c.color }}>{c.monogram}</span>);
 
-          {selectedIds.size > 0 && (
-            <div className="fulfillment-side-panel-content" style={{ display: 'flex' }}>
-              <div className="fulfillment-courier-select-wrap">
-                <button type="button" className="fulfillment-courier-select-btn" onClick={(e) => { e.stopPropagation(); setCourierMenuOpen((v) => !v); }}>
-                  <span className="fulfillment-courier-select-label">
-                    {selectedCourier ? (selectedCourier.logo
-                      ? <span className="fulfillment-courier-logo-chip"><img src={selectedCourier.logo} alt={selectedCourier.name} /></span>
-                      : <span className="fulfillment-courier-monogram" style={{ background: selectedCourier.color }}>{selectedCourier.monogram}</span>) : null}
-                    {selectedCourier ? selectedCourier.name : 'Select Courier'}
-                  </span>
-                  <i className="fa-solid fa-chevron-down fulfillment-courier-select-caret" />
-                </button>
-                <div className={'fulfillment-courier-menu' + (courierMenuOpen ? ' open' : '')} onClick={(e) => e.stopPropagation()}>
-                  {FULFILLMENT_COURIERS.map((c) => (
-                    <div className="fulfillment-courier-menu-item" key={c.id} onClick={() => pickCourier(c)}>
-                      {c.logo ? <span className="fulfillment-courier-logo-chip"><img src={c.logo} alt={c.name} /></span> : <span className="fulfillment-courier-monogram" style={{ background: c.color }}>{c.monogram}</span>}
-                      <span>{c.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="form-group fulfillment-pickup-group">
-                <select className="form-input" disabled={pickupAddresses.length === 0} value={pickupCode} title={pickupSelected ? fulfillmentPickupAddressLabel(pickupSelected) : ''} onChange={(e) => setPickupCode(e.target.value)}>
-                  {pickupAddresses.length === 0
-                    ? <option value="">Select courier first</option>
-                    : pickupAddresses.map((a) => <option key={a.code} value={a.code} title={fulfillmentPickupAddressLabel(a)}>{fulfillmentPickupAddressLabel(a)}</option>)}
-                </select>
-              </div>
-              <button type="button" className="btn btn-primary fulfillment-fulfill-btn" disabled={!!disabledReason} title={disabledReason} onClick={fulfillSelected}>
-                <i className="fa-solid fa-circle-check" /> Fulfill Order
-              </button>
-              <button type="button" className="btn btn-secondary fulfillment-cancel-btn" onClick={() => setSelectedIds(new Set())}>Cancel</button>
-            </div>
+  function renderColumnFilterCell(key: string) {
+    if (key === 'city') {
+      return <Dropdown multiple searchable fullWidth allLabel="All" options={allCities} value={filters.cities} onChange={(v) => setFilters((f) => ({ ...f, cities: v }))} />;
+    }
+    if (key === 'tags') {
+      return <Dropdown multiple fullWidth allLabel="All" options={allTags} value={filters.tags} onChange={(v) => setFilters((f) => ({ ...f, tags: v }))} />;
+    }
+    return null;
+  }
+
+  return (
+    <div id="orderFulfillmentView" className="view active">
+      <div className="orders-table-card">
+        <div className="orders-index-filters-wrap">
+          <IndexFilters
+            mode={mode} setMode={setMode}
+            tabs={RISK_TABS.map((t) => ({ id: t.id, content: t.label, badge: String(tierCounts[t.id] ?? 0) }))}
+            selected={riskTab} onSelect={setRiskTab}
+            onQueryChange={() => {}} onQueryClear={() => {}}
+            filters={[]} appliedFilters={appliedFilters} onClearAll={clearFilters}
+            cancelAction={{ onAction: () => {}, disabled: true }}
+            hideQueryField hideFilters canCreateNewView={false}
+          />
+          {hasFilters && (
+            <Tooltip content="Clear filters">
+              <HeaderButton icon={<FilterX size={16} />} accessibilityLabel="Clear filters" onClick={clearFilters} variant="tertiary" />
+            </Tooltip>
           )}
         </div>
-        <div className="fulfillment-table-wrap">
-          <table className="fulfillment-table">
-            <thead>
-              <tr>
-                <th className="fulfillment-col-check"><input type="checkbox" checked={allSelected} onChange={(e) => toggleSelectAllVisible(e.target.checked)} /></th>
-                <th>Order ID</th>
-                <th>Name</th>
-                <th>Complete Address</th>
-                <th>Mobile Number</th>
-                <th>Tags</th>
-                <th>City</th>
-                <th className="fulfillment-th-courier-city">Courier City <i className="fa-solid fa-circle-info" title="Select a courier above to populate this with its supported cities" /></th>
-                <th className="fulfillment-th-order-type">Type <i className="fa-solid fa-circle-info" title="The courier's own order type." /></th>
-                <th className="fulfillment-th-cod">CoD <i className="fa-solid fa-circle-info" title="Amount the rider collects on delivery." /></th>
-                <th className="fulfillment-th-risk">Risk / Customer Status <i className="fa-solid fa-circle-info" title="Based on this customer's past delivered vs. total orders" /></th>
-                <th className="fulfillment-col-actions">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={12} className="empty-state">Loading unfulfilled orders…</td></tr>
-              ) : filtered.length === 0 ? (
-                <tr><td colSpan={12} className="empty-state">No unfulfilled orders match these filters.</td></tr>
-              ) : filtered.map((o) => (
-                <tr key={o.id} className={selectedIds.has(o.id) ? 'fulfillment-row--selected' : ''}>
-                  <td className="fulfillment-col-check">
-                    <input
-                      type="checkbox" checked={selectedIds.has(o.id)}
-                      onChange={(e) => setSelectedIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(o.id); else next.delete(o.id); return next; })}
-                    />
-                  </td>
-                  <td className="fulfillment-col-orderid"><span className="fulfillment-order-id">#{o.order_number}</span></td>
-                  <td className="fulfillment-col-name" title={o.name}>{o.name}</td>
-                  <td><EditableCell value={o.address} onCommit={(v) => updateOrder(o.id, { address: v.trim() || o.address })} /></td>
-                  <td><EditableCell value={o.mobile} onCommit={(v) => updateOrder(o.id, { mobile: v.trim() || o.mobile })} /></td>
-                  <td><TagsCell tags={o.tags} allTags={allTags} onChange={(tags) => updateOrder(o.id, { tags })} /></td>
-                  <td className="fulfillment-city-fixed" title="Entered by the customer">{o.city}</td>
-                  <td className="fulfillment-courier-city-cell">
-                    <CourierCityPicker value={o.courierCity} cities={courierCities} loading={courierCitiesLoading} onChange={(city) => updateOrder(o.id, { courierCity: city })} />
-                  </td>
-                  <td className="fulfillment-order-type-cell">
-                    {orderTypes.length === 0
-                      ? <span className="fulfillment-order-type-none">—</span>
-                      : (
-                        <select className="fulfillment-order-type-select" value={o.orderType} onChange={(e) => updateOrder(o.id, { orderType: e.target.value })}>
-                          {orderTypes.map((t) => <option key={t} value={t}>{t}</option>)}
-                        </select>
-                      )}
-                  </td>
-                  <td className="fulfillment-col-cod">
-                    <input
-                      type="number" className="fulfillment-cod-input" min={0} step={0.01} defaultValue={o.codAmount}
-                      onBlur={(e) => updateOrder(o.id, { codAmount: Math.max(0, parseFloat(e.target.value) || 0) })}
-                    />
-                  </td>
-                  <td className="fulfillment-risk-cell"><RiskCell order={o} /></td>
-                  <td className="fulfillment-actions-cell">
-                    <button type="button" className="fulfillment-kebab-btn" title="Shipping details" onClick={() => setDetailsForId(o.id)}>&#8942;</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {selectedOrders.length > 0 && (
+          <div className="fulfillment-selection-bar">
+            <Text as="span" fontWeight="semibold">{selectedOrders.length} selected</Text>
+            <Popover
+              active={courierMenuOpen} onClose={() => setCourierMenuOpen(false)}
+              activator={(
+                <Button disclosure icon={selectedCourier ? courierChip(selectedCourier) : undefined} onClick={() => setCourierMenuOpen((v) => !v)}>
+                  {selectedCourier ? selectedCourier.name : 'Select Courier'}
+                </Button>
+              )}
+            >
+              <ActionList items={FULFILLMENT_COURIERS.map((c) => ({ content: c.name, prefix: courierChip(c), onAction: () => pickCourier(c) }))} />
+            </Popover>
+            <div className="fulfillment-pickup-group" title={pickupSelected ? fulfillmentPickupAddressLabel(pickupSelected) : ''}>
+              <Dropdown
+                disabled={pickupAddresses.length === 0} placeholder="Select courier first" value={pickupCode} onChange={setPickupCode}
+                options={pickupAddresses.map((a) => ({ label: fulfillmentPickupAddressLabel(a), value: a.code }))}
+              />
+            </div>
+            <Tooltip content={disabledReason || 'Book the selected orders'}>
+              <Button variant="primary" disabled={!!disabledReason} onClick={fulfillSelected}>Fulfill Order</Button>
+            </Tooltip>
+            <Button onClick={clearSelection}>Cancel</Button>
+          </div>
+        )}
+        <IndexTable
+          resourceName={{ singular: 'order', plural: 'orders' }}
+          // Same trick as OrdersPage: keep itemCount >= 1 so Polaris doesn't swap the whole
+          // <table> (and our filter subheader row) for its emptyState when nothing matches.
+          itemCount={filtered.length || 1}
+          selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
+          onSelectionChange={handleSelectionChange}
+          headings={COLUMNS.map(({ title, alignment, tooltipContent }) => ({ title, alignment, tooltipContent })) as any}
+          loading={loading}
+          condensed={false}
+        >
+          <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
+            {COLUMNS.map((col) => <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>)}
+          </IndexTable.Row>
+          {filtered.length === 0 && !loading && (
+            <IndexTable.Row id="__empty__" position={-2} hideSelectable>
+              <IndexTable.Cell colSpan={COLUMNS.length}>
+                <div className="orders-table-empty">No unfulfilled orders match these filters.</div>
+              </IndexTable.Cell>
+            </IndexTable.Row>
+          )}
+          {filtered.map((o, index) => (
+            <IndexTable.Row id={o.id} key={o.id} position={index} selected={selectedResources.includes(o.id)} onClick={() => {}}>
+              <IndexTable.Cell><Text as="span" fontWeight="semibold">#{o.order_number}</Text></IndexTable.Cell>
+              <IndexTable.Cell><Text as="span">{o.name}</Text></IndexTable.Cell>
+              <IndexTable.Cell><EditableText value={o.address} minWidth={240} onCommit={(v) => updateOrder(o.id, { address: v })} /></IndexTable.Cell>
+              <IndexTable.Cell><EditableText value={o.mobile} minWidth={120} onCommit={(v) => updateOrder(o.id, { mobile: v })} /></IndexTable.Cell>
+              <IndexTable.Cell>
+                <div style={{ display: 'flex', gap: 4, whiteSpace: 'nowrap' }}>
+                  {o.tags.map((t) => <Badge key={t} tone={TAG_TONES[t] || 'new'}>{t}</Badge>)}
+                </div>
+              </IndexTable.Cell>
+              <IndexTable.Cell><Text as="span">{o.city}</Text></IndexTable.Cell>
+              <IndexTable.Cell>
+                <Dropdown
+                  searchable size="slim" disabled={courierCities.length === 0}
+                  placeholder={courierCitiesLoading ? 'Loading…' : courierCities.length ? 'Select city' : '—'}
+                  options={courierCities} value={o.courierCity || ''} onChange={(city) => updateOrder(o.id, { courierCity: city })}
+                />
+              </IndexTable.Cell>
+              <IndexTable.Cell>
+                {orderTypes.length === 0
+                  ? <Text as="span" tone="subdued">—</Text>
+                  : <Dropdown size="slim" options={orderTypes} value={o.orderType} onChange={(v) => updateOrder(o.id, { orderType: v })} />}
+              </IndexTable.Cell>
+              <IndexTable.Cell><EditableAmount value={o.codAmount} editable onSave={(n) => updateOrder(o.id, { codAmount: n })} /></IndexTable.Cell>
+              <IndexTable.Cell><RiskCell order={o} /></IndexTable.Cell>
+              <IndexTable.Cell>
+                <Tooltip content="Shipping details">
+                  <Button icon={MenuVerticalIcon} variant="tertiary" size="micro" accessibilityLabel="Shipping details" onClick={() => setDetailsForId(o.id)} />
+                </Tooltip>
+              </IndexTable.Cell>
+            </IndexTable.Row>
+          ))}
+        </IndexTable>
       </div>
       {detailsOrder && (
         <FulfillmentDetailsModal

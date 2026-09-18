@@ -1,7 +1,7 @@
 // Shared date-range popup (easepick), ported near-verbatim from utils.js's
 // createDateRangePicker/buildDateRangePresets - imperative DOM code, wrapped
 // by a small useEffect-based hook in each page that needs it.
-import { create as createEasepick, DateTime } from '@easepick/bundle';
+import { create as createEasepick, DateTime, RangePlugin, PresetPlugin } from '@easepick/bundle';
 import { getPKTDate } from './logic/shared';
 
 export interface DateRangePreset {
@@ -64,7 +64,7 @@ export function createDateRangePicker(
     grid: 1,
     calendars: 1,
     autoApply: true,
-    plugins: ['RangePlugin', 'PresetPlugin'] as any,
+    plugins: [RangePlugin, PresetPlugin],
     PresetPlugin: { position: 'left', customPreset: presets || buildDateRangePresets() },
   } as any);
 
@@ -119,7 +119,8 @@ export function createDateRangePicker(
   return {
     picker,
     setLabel(text: string, title?: string) {
-      triggerBtn.textContent = text;
+      const textEl = triggerBtn.querySelector<HTMLElement>('.Polaris-Text--root') ?? triggerBtn;
+      textEl.textContent = text;
       if (title !== undefined) triggerBtn.title = title;
     },
     setClearable(clearable: boolean) {

@@ -3,8 +3,7 @@ export interface FulfillmentCourier {
   id: string; name: string; logo?: string; monogram?: string; color?: string;
 }
 
-// Couriers actually integrated elsewhere (COURIER_LOGOS) get their real logo; the
-// rest are shown as plain monogram chips since no logo asset exists for them.
+// Couriers with a real logo asset show it; the rest use a plain monogram chip.
 export const FULFILLMENT_COURIERS: FulfillmentCourier[] = [
   { id: 'postex', name: 'PostEx', logo: '/assets/postex_logo.png' },
   { id: 'couriers_next', name: 'Couriers Next', logo: '/assets/courier_next_logo.png' },
@@ -66,12 +65,6 @@ export function fulfillmentLineItemCount(lineItems: FulfillmentLineItem[] | unde
 export function fulfillmentOrderDetailString(lineItems: FulfillmentLineItem[] | undefined): string {
   return (lineItems || []).filter((li) => li.name).map((li) => `[ ${li.qty} x ${fulfillmentLineItemLabel(li)} ]`).join(' ');
 }
-
-export function fulfillmentTagBadgeClass(tag: string): string {
-  return ({ VIP: 'fulfillment-tag-vip', Repeat: 'fulfillment-tag-repeat', New: 'fulfillment-tag-new', Wholesale: 'fulfillment-tag-wholesale' } as Record<string, string>)[tag] || 'fulfillment-tag-new';
-}
-
-export const FULFILLMENT_RISK_ICONS: Record<string, string> = { trusted: 'shield-check', new: 'user-plus' };
 
 export interface FulfillmentFilters { cities: string[] | null; tags: string[] | null; dateFrom: Date | null; dateTo: Date | null }
 

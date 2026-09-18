@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { SearchField } from '../../components/SearchField';
+import { HeaderButton } from '../../components/HeaderButton';
 import { SECTIONED_SYSTEM_KEYS, type Ledger } from '../../logic/ledgers';
 import { useLedgersData } from './useLedgersData';
 import { CreateLedgerModal, EditLedgerModal } from './LedgerModals';
@@ -30,11 +32,8 @@ export function LedgersPage() {
     title: 'Ledgers',
     actions: (
       <>
-        <div className="transaction-search-wrap">
-          <i className="fa-solid fa-magnifying-glass transaction-search-icon" />
-          <input className="transaction-search-filter" placeholder="Search ledgers..." autoComplete="off" value={search} onChange={(e) => setSearch(e.target.value)} />
-        </div>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => setCreateOpen(true)}><i className="fa-solid fa-plus" /> New Ledger</button>
+        <div className="toolbar-search"><SearchField placeholder="Search ledgers..." value={search} onChange={setSearch} /></div>
+        <HeaderButton variant="primary" icon={<i className="fa-solid fa-plus" />} onClick={() => setCreateOpen(true)}>New Ledger</HeaderButton>
       </>
     ),
   });

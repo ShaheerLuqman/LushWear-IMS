@@ -6,7 +6,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { apiJson, type ApiJsonOptions } from '../../api';
-import { useTheme } from '../../theme/ThemeContext';
 import { useToast } from '../../toast/ToastContext';
 
 const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
@@ -102,7 +101,6 @@ function AdminGate({ onLoggedIn }: { onLoggedIn: () => void }) {
 }
 
 function AdminHeader({ onLogout }: { onLogout: () => void }) {
-  const { theme, setTheme } = useTheme();
   return (
     <header className="admin-portal-header">
       <div className="admin-portal-header__brand">
@@ -110,10 +108,6 @@ function AdminHeader({ onLogout }: { onLogout: () => void }) {
         <div><h1>Super Admin Portal</h1></div>
       </div>
       <div className="admin-portal-header__actions">
-        <div className="settings-theme-toggle" role="radiogroup" aria-label="Theme">
-          <button type="button" className="settings-theme-btn" role="radio" aria-checked={theme === 'light'} onClick={() => setTheme('light')}>Light</button>
-          <button type="button" className="settings-theme-btn" role="radio" aria-checked={theme === 'dark'} onClick={() => setTheme('dark')}>Dark</button>
-        </div>
         <button type="button" className="btn btn-secondary" onClick={onLogout}>Log out</button>
       </div>
     </header>

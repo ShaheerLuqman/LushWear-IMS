@@ -106,3 +106,11 @@ export function formatRelativeTime(timestampMs: number): string {
   const days = Math.floor(hours / 24);
   return `${days} day${days === 1 ? '' : 's'} ago`;
 }
+
+/** Header search: true when any top-level primitive field of the row contains `query`
+ * (case-insensitive). Nested objects/arrays are skipped. */
+export function rowMatchesQuery(row: object, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  return Object.values(row).some((v) => (typeof v === 'string' || typeof v === 'number') && String(v).toLowerCase().includes(q));
+}

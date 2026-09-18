@@ -1,6 +1,7 @@
 // Header bell icon + dropdown history panel. React port of notifications.js's initNotifications().
 import { useEffect, useRef, useState } from 'react';
-import { Bell } from 'lucide-react';
+import { Button, Tooltip } from '@shopify/polaris';
+import { NotificationFilledIcon, NotificationIcon } from '@shopify/polaris-icons';
 import { useToast } from './ToastContext';
 
 function formatRelativeTime(timestampMs: number): string {
@@ -17,7 +18,20 @@ function formatRelativeTime(timestampMs: number): string {
 export function NotificationBell() {
   const { notifications, unreadCount, markAllRead, clearAll } = useToast();
   const [open, setOpen] = useState(false);
+  const [ringing, setRinging] = useState(false);
+  const [panelPos, setPanelPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
   const wrapRef = useRef<HTMLDivElement | null>(null);
+  const prevUnreadRef = useRef(unreadCount);
+
+  useEffect(() => {
+    if (unreadCount > prevUnreadRef.current) {
+      setRinging(true);
+      const timer = setTimeout(() => setRinging(false), 600);
+      prevUnreadRef.current = unreadCount;
+      return () => clearTimeout(timer);
+    }
+    prevUnreadRef.current = unreadCount;
+  }, [unreadCount]);
 
   useEffect(() => {
     if (!open) return;
@@ -35,21 +49,30 @@ export function NotificationBell() {
     };
   }, [open]);
 
-  function toggle(e: React.MouseEvent) {
-    e.stopPropagation();
+  function toggle() {
     const opening = !open;
+    if (opening && wrapRef.current) {
+      const rect = wrapRef.current.getBoundingClientRect();
+      setPanelPos({ top: rect.bottom + 4, left: Math.max(8, rect.right - 340) });
+    }
     setOpen(opening);
     if (opening) markAllRead();
   }
 
   return (
-    <div className="header-notif-wrap" ref={wrapRef}>
-      <button type="button" className="btn btn-secondary header-notif-btn" aria-haspopup="true" aria-expanded={open} title="Notifications" onClick={toggle}>
-        <Bell size={18} />
-        {unreadCount > 0 && <span className="notif-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>}
-      </button>
+    <div className={`header-notif-wrap${ringing ? ' ringing' : ''}`} ref={wrapRef}>
+      <Tooltip content="Notifications">
+        <Button
+          icon={unreadCount > 0 ? NotificationFilledIcon : NotificationIcon}
+          accessibilityLabel="Notifications"
+          ariaExpanded={open}
+          pressed={open}
+          onClick={toggle}
+        />
+      </Tooltip>
+      {unreadCount > 0 && <span className="notif-badge">{unreadCount > 9 ? '9+' : unreadCount}</span>}
       {open && (
-        <div className="notif-panel" role="menu" aria-label="Notifications" style={{ display: 'block' }}>
+        <div className="notif-panel" role="menu" aria-label="Notifications" style={{ display: 'block', top: panelPos.top, left: panelPos.left }}>
           <div className="notif-panel-header">
             <span>Notifications</span>
             <button type="button" className="notif-clear-btn" disabled={notifications.length === 0} onClick={clearAll}>Clear all</button>
