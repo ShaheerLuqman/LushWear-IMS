@@ -22,6 +22,7 @@ postex_csvs/
 node_modules/
 npm-debug.log*
 yarn-error.log*
+*.tsbuildinfo
 
 # Electron
 frontend/dist/

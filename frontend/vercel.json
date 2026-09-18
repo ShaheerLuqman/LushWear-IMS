@@ -1,5 +1,6 @@
 {
   "framework": null,
-  "buildCommand": null,
-  "outputDirectory": "."
+  "buildCommand": "cd engine && npm install && npm run build",
+  "outputDirectory": "engine/dist",
+  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }]
 }

@@ -1,8 +1,8 @@
 # Inventory Management System
 
 A web-based inventory management application built with a FastAPI (Python) backend,
-a static HTML/CSS/JS frontend, and a Supabase (Postgres) database. The backend and
-frontend are deployed **separately** (Render + Vercel).
+a React + Vite + TypeScript frontend, and a Supabase (Postgres) database. The backend
+and frontend are deployed **separately** (Render + Vercel).
 
 ## Features
 
@@ -17,7 +17,7 @@ frontend are deployed **separately** (Render + Vercel).
 
 - **Python 3.9+** - [Download](https://www.python.org/downloads/) (backend)
 - **Supabase Account** - [Sign up](https://supabase.com/) (database)
-- **Node.js 18+** (optional) - only for the `npm run dev` static server helper
+- **Node.js 18+** (frontend)
 
 ## Quick Setup
 
@@ -54,18 +54,16 @@ cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-**Terminal 2 — Frontend (static site):** serve the `frontend/` folder with any static
-server, then open it in your browser. For example:
-
+**Terminal 2 — Frontend:**
 ```bash
-cd frontend
-npm run dev            # serves on http://127.0.0.1:8080
-# or, without Node:
-python -m http.server 8080
+cd frontend/engine
+npm install
+npm run dev             # serves on http://127.0.0.1:5173
 ```
 
-Then open **http://127.0.0.1:8080**. The frontend reads its backend URL from
-`frontend/config.js` (`window.API_BASE`), which defaults to `http://127.0.0.1:8000/api`.
+Then open **http://127.0.0.1:5173**. The frontend picks its backend URL automatically
+based on hostname (see `API_BASE` in `frontend/engine/src/api.ts`) - localhost talks to
+`http://127.0.0.1:8000/api`, any other host uses the deployed backend URL.
 
 ## Project Structure
 
@@ -81,23 +79,18 @@ inventory-system/
 │   ├── requirements.txt
 │   └── .env                 # Your credentials (create this)
 │
-├── frontend/                # Static web frontend (no build step)
-│   ├── index.html
-│   ├── config.js            # Sets window.API_BASE (swap per environment)
-│   ├── utils.js             # Shared helpers (apiJson/apiRequest, escapeHtml, ...)
-│   ├── js/                  # App logic, loaded in order as plain scripts
-│   │   ├── app-core.js      # Auth fetch wrapper, shared state, PIN gate
-│   │   ├── orders-grid.js   # Orders/products grid column defs & renderers
-│   │   ├── orders-actions.js
-│   │   ├── navigation.js
-│   │   ├── data-api.js
-│   │   ├── transactions.js
-│   │   ├── ledgers.js
-│   │   ├── sync-summary.js
-│   │   ├── modals-forms.js
-│   │   └── delivery-status.js
-│   ├── styles.css
-│   └── assets/
+├── frontend/
+│   └── engine/               # React + Vite + TypeScript SPA
+│       ├── src/
+│       │   ├── api.ts        # API_BASE + auth token + apiJson/apiRequest
+│       │   ├── App.tsx       # Router (main app + /admin superadmin portal)
+│       │   ├── auth/         # AuthContext (session, superadmin impersonation)
+│       │   ├── pages/        # One folder per feature area (orders, inventory,
+│       │   │                 # finance, fulfillment, analytics, dashboard,
+│       │   │                 # settings, admin)
+│       │   └── logic/        # Pure business-logic modules, unit-testable
+│       │                     # independent of any component
+│       └── public/           # assets/, manifest.json, service-worker.js
 │
 ├── supabase_schema.sql      # Database schema
 ├── start-backend.bat        # Backend launcher (Windows)
@@ -109,9 +102,11 @@ inventory-system/
 - **Backend → Render:** connect the repo with root `backend/`, start command
   `uvicorn app.main:app --host 0.0.0.0 --port $PORT`, and set the env vars from your
   `.env` (Supabase + Shopify). Note the resulting `https://...onrender.com` URL.
-- **Frontend → Vercel:** connect the repo with root `frontend/` (no build step). Set
-  `window.API_BASE` in `config.js` to `https://<your-render-url>/api`, and pin the
-  backend's `ALLOWED_ORIGINS` / CSP `connect-src` to the Vercel domain.
+- **Frontend → Vercel:** connect the repo with root `frontend/`. `frontend/vercel.json`
+  builds `frontend/engine` (`npm install && npm run build`) and serves `engine/dist`
+  with an SPA-fallback rewrite. `API_BASE` in `src/api.ts` auto-detects a non-local
+  hostname and points at the deployed backend - pin the backend's `ALLOWED_ORIGINS` /
+  CSP `connect-src` to the Vercel domain.
 
 See `plan.md` for the full migration/deployment plan.
 
@@ -136,7 +131,7 @@ See `plan.md` for the full migration/deployment plan.
 
 ### Frontend shows "Disconnected"
 - Make sure the backend is running (default port 8000)
-- Confirm `window.API_BASE` in `config.js` points at the backend
+- Confirm `API_BASE` in `frontend/engine/src/api.ts` points at the backend
 - Check the browser console (F12) for CORS or CSP errors
 
 ### Database errors
