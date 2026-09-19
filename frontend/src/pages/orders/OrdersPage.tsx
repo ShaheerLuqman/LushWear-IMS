@@ -874,9 +874,16 @@ export function OrdersPage() {
     ),
   });
 
+  const formatExactMetric = (n: number, isMoney: boolean) => isMoney
+    ? `Rs ${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    : n.toLocaleString('en-US');
+
   const kpi = (label: string, value: string, cur: number, prev: number, isMoney: boolean, negative?: boolean) => ({
     label, value, negative,
-    title: isMoney ? `Rs ${Math.round(cur).toLocaleString('en-US')}` : undefined,
+    title: [
+      `Current: ${formatExactMetric(cur, isMoney)}`,
+      hasPrevPeriod ? `Previous: ${formatExactMetric(prev, isMoney)}` : null,
+    ].filter(Boolean).join(' • '),
     detail: (
       <InlineStack gap="200" blockAlign="center">
         <Text as="span" tone="subdued" variant="bodySm">vs previous: {hasPrevPeriod ? (isMoney ? compactRs(prev) : prev.toLocaleString('en-US')) : '—'}</Text>
@@ -892,7 +899,7 @@ export function OrdersPage() {
         tiles={[
           kpi('Orders', metrics.orders.toLocaleString('en-US'), metrics.orders, prevMetrics.orders, false),
           kpi('Items ordered', metrics.items.toLocaleString('en-US'), metrics.items, prevMetrics.items, false),
-          kpi('Total orders', compactRs(metrics.total), metrics.total, prevMetrics.total, true),
+          kpi('Total Sales', compactRs(metrics.total), metrics.total, prevMetrics.total, true),
           kpi('Delivered', metrics.delivered.toLocaleString('en-US'), metrics.delivered, prevMetrics.delivered, false),
           kpi('Returned', metrics.returned.toLocaleString('en-US'), metrics.returned, prevMetrics.returned, false),
           kpi('Net profit', compactRs(metrics.netProfit), metrics.netProfit, prevMetrics.netProfit, true, metrics.netProfit < 0),
