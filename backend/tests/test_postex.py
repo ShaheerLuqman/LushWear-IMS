@@ -316,6 +316,7 @@ class TestGetAirwayBill:
             def __init__(self):
                 self.status_code = status_code
                 self.content = pdf_bytes if pdf_bytes is not None else _tracking_pdf(tracking_numbers or [])
+                self.text = "" if json_body is None else str(json_body)
 
             def json(self):
                 if json_body is None:
@@ -705,6 +706,7 @@ class TestSaveShipperAdvice:
             async def put(self, url, headers=None, json=None):
                 class _Response:
                     status_code = 502
+                    text = "not json"
 
                     def json(self):
                         raise ValueError("not json")

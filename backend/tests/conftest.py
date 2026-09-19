@@ -13,6 +13,11 @@ def _reset_rate_limiter():
     limiter.reset()
 
 
+@pytest.fixture(autouse=True)
+def _no_retry_delay(monkeypatch):
+    monkeypatch.setattr("app.retry._DELAY", 0)
+
+
 class FakeQuery:
     """Chainable stand-in for a supabase-py query builder.
 

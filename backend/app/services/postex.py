@@ -18,6 +18,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 from pypdf import PdfReader, PdfWriter
 
+from app.retry import with_retry
+
 logger = logging.getLogger("app.postex")
 
 
@@ -369,10 +371,17 @@ async def fetch_pickup_addresses(merchant_token: str) -> List[dict]:
     live response marks exactly one address per merchant "Default Address" and the rest
     "Pickup/Return Address"; confirmed against a real account's get-merchant-address call.
     """
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        r = await client.get(f"{_BASE_URL}/v1/get-merchant-address", headers={"token": merchant_token})
-    if r.status_code != 200:
-        logger.warning("PostEx merchant-address fetch failed: status=%s body=%s", r.status_code, r.text[:300])
+    async def _attempt() -> httpx.Response:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.get(f"{_BASE_URL}/v1/get-merchant-address", headers={"token": merchant_token})
+        if r.status_code != 200:
+            logger.warning("PostEx merchant-address fetch failed: status=%s response=%s", r.status_code, r.text)
+            raise PostexBookingError(f"HTTP {r.status_code}")
+        return r
+
+    try:
+        r = await with_retry(_attempt, "PostEx merchant-address fetch")
+    except PostexBookingError:
         return []
     return [
         {
@@ -444,29 +453,43 @@ async def create_order(
     if instructions:
         payload["transactionNotes"] = instructions
 
-    try:
-        response = await client.post(
-            f"{_BASE_URL}/v3/create-order",
-            headers={"token": merchant_token, "Content-Type": "application/json"},
-            json=payload,
-        )
-    except httpx.HTTPError as exc:
-        raise PostexBookingError(f"Could not reach PostEx: {exc}") from exc
+    async def _attempt() -> str:
+        try:
+            response = await client.post(
+                f"{_BASE_URL}/v3/create-order",
+                headers={"token": merchant_token, "Content-Type": "application/json"},
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("PostEx booking call failed: request=%s error=%s", payload, exc)
+            raise PostexBookingError(f"Could not reach PostEx: {exc}") from exc
 
-    try:
-        body = response.json()
-    except ValueError:
-        raise PostexBookingError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
+        try:
+            body = response.json()
+        except ValueError:
+            logger.warning(
+                "PostEx booking returned non-JSON: status=%s request=%s response=%s",
+                response.status_code, payload, response.text,
+            )
+            raise PostexBookingError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
 
-    if str(body.get("statusCode")) != _SUCCESS_STATUS:
-        raise PostexBookingError(body.get("statusMessage") or f"PostEx rejected the order (HTTP {response.status_code})")
+        if str(body.get("statusCode")) != _SUCCESS_STATUS:
+            logger.warning(
+                "PostEx rejected the order: status=%s request=%s response=%s", response.status_code, payload, body,
+            )
+            raise PostexBookingError(body.get("statusMessage") or f"PostEx rejected the order (HTTP {response.status_code})")
 
-    tracking_number = (body.get("dist") or {}).get("trackingNumber")
-    if not tracking_number:
-        # Booked but unusable: without a tracking number nothing downstream (status
-        # polling, the CSV reconcile) can ever match this parcel back to the order.
-        raise PostexBookingError("PostEx accepted the order but returned no tracking number")
-    return str(tracking_number)
+        tracking_number = (body.get("dist") or {}).get("trackingNumber")
+        if not tracking_number:
+            # Booked but unusable: without a tracking number nothing downstream (status
+            # polling, the CSV reconcile) can ever match this parcel back to the order.
+            logger.warning(
+                "PostEx accepted the order but returned no tracking number: request=%s response=%s", payload, body,
+            )
+            raise PostexBookingError("PostEx accepted the order but returned no tracking number")
+        return str(tracking_number)
+
+    return await with_retry(_attempt, f"PostEx booking {payload['orderRefNumber']}")
 
 
 class PostexShipperAdviceError(Exception):
@@ -496,27 +519,40 @@ async def save_shipper_advice(
     (singular), which 404s at their nginx - the live route is /services/ like every other
     call in this file.
     """
-    try:
-        response = await client.put(
-            f"{_BASE_URL}/v2/save-shipper-advice",
-            headers={"token": merchant_token, "Content-Type": "application/json"},
-            json={
-                "trackingNumber": tracking_number,
-                "statusId": SHIPPER_ADVICE_STATUS_IDS[advice],
-                "remarks": remarks,
-            },
-        )
-    except httpx.HTTPError as exc:
-        raise PostexShipperAdviceError(f"Could not reach PostEx: {exc}") from exc
+    payload = {
+        "trackingNumber": tracking_number,
+        "statusId": SHIPPER_ADVICE_STATUS_IDS[advice],
+        "remarks": remarks,
+    }
+    async def _attempt() -> None:
+        try:
+            response = await client.put(
+                f"{_BASE_URL}/v2/save-shipper-advice",
+                headers={"token": merchant_token, "Content-Type": "application/json"},
+                json=payload,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("PostEx shipper-advice call failed: request=%s error=%s", payload, exc)
+            raise PostexShipperAdviceError(f"Could not reach PostEx: {exc}") from exc
 
-    try:
-        body = response.json()
-    except ValueError:
-        raise PostexShipperAdviceError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
+        try:
+            body = response.json()
+        except ValueError:
+            logger.warning(
+                "PostEx shipper-advice returned non-JSON: status=%s request=%s response=%s",
+                response.status_code, payload, response.text,
+            )
+            raise PostexShipperAdviceError(f"PostEx returned a non-JSON response (HTTP {response.status_code})")
 
-    if str(body.get("statusCode")) != _SUCCESS_STATUS:
-        raise PostexShipperAdviceError(
-            body.get("statusMessage") or f"PostEx rejected the advice (HTTP {response.status_code})")
+        if str(body.get("statusCode")) != _SUCCESS_STATUS:
+            logger.warning(
+                "PostEx rejected the shipper advice: status=%s request=%s response=%s",
+                response.status_code, payload, body,
+            )
+            raise PostexShipperAdviceError(
+                body.get("statusMessage") or f"PostEx rejected the advice (HTTP {response.status_code})")
+
+    await with_retry(_attempt, f"PostEx shipper advice {tracking_number}")
 
 
 async def _fetch_invoice_pdf(
@@ -525,23 +561,33 @@ async def _fetch_invoice_pdf(
     """One get-invoice call. Unlike every other endpoint in this file it returns the PDF
     bytes directly rather than the usual {statusCode, statusMessage, dist} envelope - a
     failure comes back as a non-200 with a plain-text or JSON body instead."""
-    try:
-        response = await client.get(
-            f"{_BASE_URL}/v1/get-invoice",
-            headers={"token": merchant_token},
-            params={"trackingNumbers": ",".join(tracking_numbers)},
-        )
-    except httpx.HTTPError as exc:
-        raise PostexInvoiceError(f"Could not reach PostEx: {exc}") from exc
+    params = {"trackingNumbers": ",".join(tracking_numbers)}
 
-    if response.status_code != 200:
+    async def _attempt() -> bytes:
         try:
-            message = response.json().get("statusMessage")
-        except ValueError:
-            message = None
-        raise PostexInvoiceError(
-            message or f"PostEx rejected the airway bill request (HTTP {response.status_code})")
-    return response.content
+            response = await client.get(
+                f"{_BASE_URL}/v1/get-invoice",
+                headers={"token": merchant_token},
+                params=params,
+            )
+        except httpx.HTTPError as exc:
+            logger.warning("PostEx get-invoice call failed: request=%s error=%s", params, exc)
+            raise PostexInvoiceError(f"Could not reach PostEx: {exc}") from exc
+
+        if response.status_code != 200:
+            try:
+                message = response.json().get("statusMessage")
+            except ValueError:
+                message = None
+            logger.warning(
+                "PostEx rejected the airway bill request: status=%s request=%s response=%s",
+                response.status_code, params, response.text,
+            )
+            raise PostexInvoiceError(
+                message or f"PostEx rejected the airway bill request (HTTP {response.status_code})")
+        return response.content
+
+    return await with_retry(_attempt, "PostEx get-invoice")
 
 
 def _merge_pdfs(pdfs: List[bytes]) -> bytes:

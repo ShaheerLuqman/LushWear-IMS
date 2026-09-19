@@ -17,6 +17,8 @@ from typing import List, Optional, Tuple
 
 import httpx
 
+from app.retry import with_retry
+
 logger = logging.getLogger("app.couriers_next")
 
 _BASE_URL = "https://portal.couriersnext.com/API"
@@ -37,13 +39,26 @@ class CouriersNextInvoiceError(Exception):
     """The airway bill's order_id could not be resolved for one or more tracking numbers."""
 
 
-def _parse_body(response: httpx.Response, what: str) -> dict:
+def _redact(payload: dict) -> dict:
+    """auth_key is a live credential - never let it reach the logs."""
+    return {**payload, "auth_key": "***"} if "auth_key" in payload else payload
+
+
+def _parse_body(response: httpx.Response, what: str, payload: dict) -> dict:
     try:
         body = response.json()
     except ValueError:
+        logger.warning(
+            "Couriers Next %s call failed: status=%s request=%s response=%s",
+            what, response.status_code, _redact(payload), response.text,
+        )
         raise CouriersNextBookingError(
             f"Couriers Next returned a non-JSON {what} response (HTTP {response.status_code})")
     if not isinstance(body, dict):
+        logger.warning(
+            "Couriers Next %s call failed: status=%s request=%s response=%s",
+            what, response.status_code, _redact(payload), body,
+        )
         raise CouriersNextBookingError(f"Couriers Next returned an unexpected {what} response")
     return body
 
@@ -68,15 +83,22 @@ async def fetch_shippers(auth_key: str) -> Tuple[Optional[str], List[dict]]:
     page from their edge/WAF, confirmed live: POST with the same body returns 200 with
     the real payload.
     """
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        r = await client.post(f"{_BASE_URL}/ProductAndService.php", json={"auth_key": auth_key})
-    if r.status_code >= 400:
-        logger.warning("Couriers Next profile fetch failed: status=%s body=%s", r.status_code, r.text[:300])
-        return None, []
+    payload = {"auth_key": auth_key}
+
+    async def _attempt() -> dict:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            r = await client.post(f"{_BASE_URL}/ProductAndService.php", json=payload)
+        if r.status_code >= 400:
+            logger.warning(
+                "Couriers Next profile fetch failed: status=%s request=%s response=%s",
+                r.status_code, _redact(payload), r.text,
+            )
+            raise CouriersNextBookingError(f"HTTP {r.status_code}")
+        return _parse_body(r, "profile fetch", payload)
+
     try:
-        body = r.json()
-    except ValueError:
-        logger.warning("Couriers Next profile fetch returned non-JSON: %s", r.text[:300])
+        body = await with_retry(_attempt, "Couriers Next profile fetch")
+    except CouriersNextBookingError:
         return None, []
 
     # Their response nests default_profile inside a key of the same name.
@@ -157,20 +179,28 @@ async def create_order(
         "api_vendor": "auto",
     }
 
-    try:
-        response = await client.post(f"{_BASE_URL}/CreateOrder.php", json=payload)
-    except httpx.HTTPError as exc:
-        raise CouriersNextBookingError(f"Could not reach Couriers Next: {exc}") from exc
+    async def _attempt() -> str:
+        try:
+            response = await client.post(f"{_BASE_URL}/CreateOrder.php", json=payload)
+        except httpx.HTTPError as exc:
+            logger.warning("Couriers Next booking call failed: request=%s error=%s", _redact(payload), exc)
+            raise CouriersNextBookingError(f"Could not reach Couriers Next: {exc}") from exc
 
-    body = _parse_body(response, "booking")
+        body = _parse_body(response, "booking", payload)
 
-    tracking_number = body.get("tracking_no")
-    if not tracking_number:
-        # They report validation failures as a plain message with no tracking_no,
-        # on an otherwise successful-looking HTTP status.
-        raise CouriersNextBookingError(
-            body.get("error") or body.get("message") or f"Couriers Next rejected the order (HTTP {response.status_code})")
-    return str(tracking_number)
+        tracking_number = body.get("tracking_no")
+        if not tracking_number:
+            # They report validation failures as a plain message with no tracking_no,
+            # on an otherwise successful-looking HTTP status.
+            logger.warning(
+                "Couriers Next rejected the order: status=%s request=%s response=%s",
+                response.status_code, _redact(payload), body,
+            )
+            raise CouriersNextBookingError(
+                body.get("error") or body.get("message") or f"Couriers Next rejected the order (HTTP {response.status_code})")
+        return str(tracking_number)
+
+    return await with_retry(_attempt, f"Couriers Next booking {payload['order_id']}")
 
 
 # ==================== AIRWAY BILL LOOKUP ====================
@@ -194,20 +224,36 @@ async def _fetch_order_ids_by_tracking(auth_key: str) -> dict:
     if cached and (time.monotonic() - cached[0]) < _ORDER_LIST_CACHE_TTL:
         return cached[1]
 
-    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-        try:
-            r = await client.post(f"{_BASE_URL}/GetOrderList.php", json={"auth_key": auth_key})
-        except httpx.HTTPError as exc:
-            raise CouriersNextInvoiceError(f"Could not reach Couriers Next: {exc}") from exc
-    if r.status_code >= 400:
-        raise CouriersNextInvoiceError(f"Couriers Next rejected the order list request (HTTP {r.status_code})")
-    try:
-        rows = r.json()
-    except ValueError:
-        raise CouriersNextInvoiceError("Couriers Next returned a non-JSON order list response")
-    if not isinstance(rows, list):
-        raise CouriersNextInvoiceError("Couriers Next returned an unexpected order list response")
+    payload = {"auth_key": auth_key}
 
+    async def _attempt() -> list:
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            try:
+                r = await client.post(f"{_BASE_URL}/GetOrderList.php", json=payload)
+            except httpx.HTTPError as exc:
+                logger.warning("Couriers Next order list call failed: request=%s error=%s", _redact(payload), exc)
+                raise CouriersNextInvoiceError(f"Could not reach Couriers Next: {exc}") from exc
+        if r.status_code >= 400:
+            logger.warning(
+                "Couriers Next order list request rejected: status=%s request=%s response=%s",
+                r.status_code, _redact(payload), r.text,
+            )
+            raise CouriersNextInvoiceError(f"Couriers Next rejected the order list request (HTTP {r.status_code})")
+        try:
+            rows = r.json()
+        except ValueError:
+            logger.warning(
+                "Couriers Next order list returned non-JSON: request=%s response=%s", _redact(payload), r.text,
+            )
+            raise CouriersNextInvoiceError("Couriers Next returned a non-JSON order list response")
+        if not isinstance(rows, list):
+            logger.warning(
+                "Couriers Next order list returned unexpected shape: request=%s response=%s", _redact(payload), rows,
+            )
+            raise CouriersNextInvoiceError("Couriers Next returned an unexpected order list response")
+        return rows
+
+    rows = await with_retry(_attempt, "Couriers Next order list")
     by_tracking = {
         str(row["tracking_no"]): row["id"]
         for row in rows
