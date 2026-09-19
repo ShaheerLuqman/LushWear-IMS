@@ -1,7 +1,8 @@
 // Order Fulfillment: bulk "select orders, pick a courier, fulfill" screen, plus its
 // live booking-progress screen. Ported from order-fulfillment.js. The order list and
-// Fulfill are both live; editing a row's address/mobile/tags/city here is local-only
-// and is NOT sent to the courier, which books from what's stored on the order.
+// Fulfill are both live. Edits to a row's address/mobile are sent with the booking and
+// override what's stored on the order for that parcel only (the order itself is not
+// updated); tags/city edits are display-only.
 // Same Polaris IndexTable/IndexFilters card as OrdersPage (shares its .table-card CSS).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -269,6 +270,7 @@ export function OrderFulfillmentPage() {
           courier: selectedCourier!.id, pickup_address_code: pickupCode,
           orders: targets.map((o) => ({
             order_id: o.id, courier_city: o.courierCity, order_type: o.orderType, cod_amount: o.codAmount,
+            customer_phone: o.mobile, customer_address: o.address,
             customer_email: o.email || null, instructions: o.instructions || null, pieces: o.pieces,
             invoice_division: o.invoiceDivision, handling: o.handling,
           })),
@@ -533,7 +535,7 @@ export function OrderFulfillmentPage() {
               <IndexTable.Cell>
                 <Dropdown
                   searchable size="slim" disabled={courierCities.length === 0}
-                  placeholder={courierCitiesLoading ? 'Loading…' : courierCities.length ? 'Select city' : '—'}
+                  placeholder={courierCitiesLoading ? 'Loading…' : '—'}
                   options={courierCities} value={o.courierCity || ''} onChange={(city) => updateOrder(o.id, { courierCity: city })}
                 />
               </IndexTable.Cell>

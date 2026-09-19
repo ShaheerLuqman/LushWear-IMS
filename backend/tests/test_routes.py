@@ -612,7 +612,8 @@ class TestFulfillOrdersRoute:
             "courier": "postex", "pickup_address_code": "PA1",
             "orders": [{"order_id": "o1", "courier_city": "Lahore",
                         "cod_amount": 750, "instructions": "Leave at gate", "customer_email": " a@b.com ",
-                        "pieces": 3, "invoice_division": 2}],
+                        "pieces": 3, "invoice_division": 2,
+                        "customer_phone": "+92 311 9998877", "customer_address": " 9 New Rd "}],
         })
         assert r.status_code == 200
         assert captured["invoice_payment"] == 750.0
@@ -620,6 +621,9 @@ class TestFulfillOrdersRoute:
         assert captured["customer_email"] == "a@b.com"
         assert captured["items"] == 3
         assert captured["invoice_division"] == 2
+        # Row edits on the fulfillment screen override the stored order for this booking.
+        assert captured["customer_phone"] == "03119998877"
+        assert captured["delivery_address"] == "9 New Rd"
 
     def test_fragile_handling_adds_a_bullet_to_the_instructions_note(self, make_client, monkeypatch):
         from types import SimpleNamespace

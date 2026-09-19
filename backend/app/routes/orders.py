@@ -431,6 +431,10 @@ class FulfillOrderRequest(BaseModel):
     # pieces None falls back to the summed line-item quantity; invoice_division is
     # PostEx-only (airway-bill split count).
     cod_amount: Optional[float] = None
+    # Edited inline on the fulfillment row; override the stored order's values for this
+    # booking only, blank/None falls back to the row.
+    customer_phone: Optional[str] = None
+    customer_address: Optional[str] = None
     customer_email: Optional[str] = None
     instructions: Optional[str] = None
     pieces: Optional[int] = None
@@ -531,11 +535,13 @@ async def _book_one_order(
             order_id=order_id, order_number=order_number, ok=False, error="Already fulfilled",
         ), None
 
+    raw_phone = (request.customer_phone or "").strip() or (row.get("customer_phone") or "")
+    delivery_address = (request.customer_address or "").strip() or (row.get("customer_address") or "")
     missing = [
         label for label, value in (
             ("customer name", row.get("customer_name")),
-            ("phone", row.get("customer_phone")),
-            ("address", row.get("customer_address")),
+            ("phone", raw_phone),
+            ("address", delivery_address),
             ("courier city", request.courier_city),
         ) if not (value or "").strip()
     ]
@@ -548,11 +554,11 @@ async def _book_one_order(
     # Shopify stores whatever the customer typed - normalised to 03xxxxxxxxx (what PostEx
     # mandates, and what Couriers Next riders dial) and rejected here so it reads as a
     # fixable data problem rather than the courier generic validation error.
-    customer_phone = postex.normalize_phone(row["customer_phone"])
+    customer_phone = postex.normalize_phone(raw_phone)
     if not customer_phone:
         return FulfillOrderResult(
             order_id=order_id, order_number=order_number, ok=False,
-            error=f"Invalid phone number ({row['customer_phone']})",
+            error=f"Invalid phone number ({raw_phone})",
         ), None
 
     line_items = row.get("line_items") or []
@@ -582,7 +588,7 @@ async def _book_one_order(
                 order_ref_number=str(order_number),
                 customer_name=row["customer_name"].strip(),
                 customer_phone=customer_phone,
-                delivery_address=row["customer_address"].strip(),
+                delivery_address=delivery_address.strip(),
                 city_name=request.courier_city.strip(),
                 invoice_payment=cod_amount,
                 items=items,
@@ -602,7 +608,7 @@ async def _book_one_order(
                 order_ref_number=str(order_number),
                 customer_name=row["customer_name"].strip(),
                 customer_phone=customer_phone,
-                delivery_address=row["customer_address"].strip(),
+                delivery_address=delivery_address.strip(),
                 origin_city=_COURIERS_NEXT_ORIGIN,
                 city_name=request.courier_city.strip(),
                 collection_amount=cod_amount,
