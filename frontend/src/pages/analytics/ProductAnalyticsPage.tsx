@@ -350,7 +350,7 @@ export function ProductAnalyticsPage() {
           <Card>
             <BlockStack gap="300">
               <Text as="h3" variant="headingSm">Top Products by Units</Text>
-              <div className="pa-donut-wrap">
+              <div className="pa-donut-wrap pa-donut-wrap--lg">
                 <AnalyticsDonut slices={donutSlices} total={view.totals.units} metric="units" />
                 <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.units) : <li className="pa-muted">No sales</li>}</ul>
               </div>

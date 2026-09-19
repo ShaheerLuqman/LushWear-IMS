@@ -1443,6 +1443,12 @@ body.orders-table-fullscreen #ordersView .table-card {
 .pa-legend-dot--4 { background: #e87ba4; }
 .pa-legend-dot--5 { background: var(--text-muted); }
 
+.pa-donut-wrap--lg { gap: 28px; }
+.pa-donut-wrap--lg .pa-donut { width: 190px; height: 190px; }
+.pa-donut-wrap--lg .pa-donut-total { font-size: 22px; }
+.pa-donut-wrap--lg .pa-legend-list { gap: 12px; }
+.pa-donut-wrap--lg .pa-legend-list li { font-size: 13px; }
+
 /* --- responsive --- */
 
 /* City Analytics - reuses .pa-card/.pa-table/.pa-widget-head/.pa-donut-wrap */

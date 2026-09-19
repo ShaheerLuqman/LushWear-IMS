@@ -74,6 +74,15 @@ export function analyticsComparisonWord(key: string): string {
 export const analyticsN = (n: number) => Math.round(n || 0).toLocaleString('en-US');
 export const analyticsPct = (part: number, whole: number) => (whole ? (part / whole) * 100 : 0);
 
+// For fixed-size spots (donut center, stat tiles) where a big total would otherwise overflow.
+export function analyticsCompactN(n: number): string {
+  const v = Math.round(n || 0);
+  const abs = Math.abs(v);
+  if (abs >= 1_000_000) return `${(v / 1_000_000).toFixed(abs >= 10_000_000 ? 1 : 2)}M`;
+  if (abs >= 1_000) return `${Math.round(v / 1_000).toLocaleString('en-US')}K`;
+  return v.toLocaleString('en-US');
+}
+
 export interface DeltaInfo { dir: 'up' | 'down' | 'flat' | 'new'; text: string }
 
 export function analyticsDelta(cur: number, prev: number, hasPrev: boolean): DeltaInfo | null {

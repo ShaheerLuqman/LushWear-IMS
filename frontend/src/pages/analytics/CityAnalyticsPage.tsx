@@ -62,7 +62,6 @@ function deriveView(data: RawData | null, collection: string, search: string) {
   };
 
   const topCities = cities.slice(0, CA_MAX_CITIES);
-  const moreCities = cities.length - topCities.length;
 
   const productAgg = new Map<string, { key: string; name: string; collection: string; byCity: Record<string, { units: number; revenue: number }> }>();
   for (const r of cityProducts) {
@@ -76,7 +75,7 @@ function deriveView(data: RawData | null, collection: string, search: string) {
     .map((p) => ({ ...p, total: Object.values(p.byCity).reduce((s, v) => s + v.revenue, 0) }))
     .sort((a, b) => b.total - a.total);
 
-  return { cities, topCities, moreCities, totals, prevTotals, products, hasPrev: d.hasPrev };
+  return { cities, topCities, totals, prevTotals, products, hasPrev: d.hasPrev };
 }
 
 export function CityAnalyticsPage() {
@@ -189,7 +188,10 @@ export function CityAnalyticsPage() {
       </InlineStack>
     ),
   });
-  const maxCityRevenue = Math.max(1, ...view.topCities.map((c) => c.revenue));
+  const top5Cities = view.cities.slice(0, 5);
+  const otherCitiesRevenue = view.cities.slice(5).reduce((s, c) => s + c.revenue, 0);
+  const cityBars = otherCitiesRevenue ? [...top5Cities, { city: 'Others', revenue: otherCitiesRevenue }] : top5Cities;
+  const maxCityRevenue = Math.max(1, ...cityBars.map((c) => c.revenue));
   const rankedProducts = [...view.products].sort((a, b) => b.total - a.total);
   const top5 = rankedProducts.slice(0, 5);
   const othersTotal = rankedProducts.slice(5).reduce((s, p) => s + p.total, 0);
@@ -234,24 +236,23 @@ export function CityAnalyticsPage() {
               </InlineStack>
               {loading ? (
                 <Text as="p" tone="subdued">Crunching sales by city…</Text>
-              ) : view.topCities.length === 0 ? (
+              ) : cityBars.length === 0 ? (
                 <Text as="p" tone="subdued">No sales in this range.</Text>
-              ) : view.topCities.map((c, i) => (
+              ) : cityBars.map((c, i) => (
                 <BlockStack gap="100" key={c.city}>
                   <InlineStack align="space-between" blockAlign="center">
-                    <Text as="span"><Text as="span" tone="subdued">{i + 1}.</Text> {c.city}</Text>
+                    <Text as="span">{c.city === 'Others' ? <Text as="span" tone="subdued">Others</Text> : <><Text as="span" tone="subdued">{i + 1}.</Text> {c.city}</>}</Text>
                     <Text as="span" numeric>Rs {analyticsN(c.revenue)} <Text as="span" tone="subdued">({analyticsPct(c.revenue, view.totals.revenue).toFixed(1)}%)</Text></Text>
                   </InlineStack>
                   <ProgressBar progress={(c.revenue / maxCityRevenue) * 100} size="small" tone="primary" />
                 </BlockStack>
               ))}
-              {view.moreCities > 0 && <Text as="p" tone="subdued" variant="bodySm">+{view.moreCities} more cit{view.moreCities === 1 ? 'y' : 'ies'}</Text>}
             </BlockStack>
           </Card>
           <Card>
             <BlockStack gap="300">
               <Text as="h3" variant="headingSm">Top Products Overall</Text>
-              <div className="pa-donut-wrap">
+              <div className="pa-donut-wrap pa-donut-wrap--lg">
                 <AnalyticsDonut slices={donutSlices} total={view.totals.revenue} metric="revenue" />
                 <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.revenue) : <li className="pa-muted">No sales</li>}</ul>
               </div>

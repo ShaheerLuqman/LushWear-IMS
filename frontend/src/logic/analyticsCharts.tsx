@@ -2,7 +2,7 @@ import { Badge } from '@shopify/polaris';
 import { ArrowDownIcon, ArrowUpIcon, MinusIcon } from '@shopify/polaris-icons';
 // Small inline SVG charts shared by Product Analytics and City Analytics -
 // ported 1:1 (same pixel math) from product-analytics.js's paLineChart/paDonut.
-import { analyticsN, analyticsPct } from './analyticsShared';
+import { analyticsCompactN, analyticsN, analyticsPct } from './analyticsShared';
 
 function fmtVal(v: number, metric: 'units' | 'revenue') {
   return metric === 'revenue' ? `PKR ${analyticsN(v)}` : analyticsN(v);
@@ -67,7 +67,7 @@ export function AnalyticsDonut({ slices, total, metric }: { slices: Array<{ name
     <svg className="pa-donut" viewBox="0 0 128 128" role="img" aria-label={`Top products by ${metric}`}>
       <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border-color)" strokeWidth={16} />
       {segs}
-      <text x={64} y={60} className="pa-donut-total">{analyticsN(total)}</text>
+      <text x={64} y={60} className="pa-donut-total">{analyticsCompactN(total)}<title>{analyticsN(total)}</title></text>
       <text x={64} y={76} className="pa-donut-label">Total {metric === 'revenue' ? 'PKR' : 'units'}</text>
     </svg>
   );
