@@ -524,6 +524,93 @@ class TestCouriersNextAirwayBillsRoute:
         assert r.status_code == 400
 
 
+class TestUnbookAndCancelRoutes:
+    """The two explicit ways a booking's lifecycle is changed from the app - the Shopify
+    sync itself never clears a booking (see test_sync_integration's
+    TestAppBookingIsNeverVoidedBySync). Shopify mutations are spied, not performed."""
+
+    BOOKED = {"id": "o1", "order_number": 101, "order_status": "fulfilled", "courier": "PostEx",
+              "tracking_number": "PX1", "tags": "Confirmed, PostEx"}
+
+    @staticmethod
+    def _spy_shopify(monkeypatch, shopify_order_id=555):
+        import app.routes.orders as orders
+
+        calls = []
+
+        async def _lookup(_order_number, _org_id):
+            return shopify_order_id, object()
+
+        async def _cancel_fulfillments(order_id, *_a):
+            calls.append(("cancel_fulfillments", order_id))
+            return 1
+
+        async def _cancel_order(order_id, *_a):
+            calls.append(("cancel_order", order_id))
+
+        monkeypatch.setattr(orders, "_shopify_order_id_for", _lookup)
+        monkeypatch.setattr(orders.shopify, "cancel_fulfillments", _cancel_fulfillments)
+        monkeypatch.setattr(orders.shopify, "cancel_order", _cancel_order)
+        return calls
+
+    def test_unbook_cancels_the_shopify_fulfillment_and_frees_the_order(self, make_client, monkeypatch):
+        calls = self._spy_shopify(monkeypatch)
+        r = make_client({"shopify_orders": [self.BOOKED]}).post("/api/orders/o1/unbook")
+
+        assert r.status_code == 200
+        assert r.json() == {"order_number": 101, "order_status": "unfulfilled"}
+        assert calls == [("cancel_fulfillments", 555)]
+
+    def test_unbook_skips_shopify_when_the_order_is_not_there(self, make_client, monkeypatch):
+        calls = self._spy_shopify(monkeypatch, shopify_order_id=None)
+        r = make_client({"shopify_orders": [self.BOOKED]}).post("/api/orders/o1/unbook")
+
+        assert r.status_code == 200
+        assert calls == []
+
+    def test_unbook_refuses_an_unbooked_order(self, make_client, monkeypatch):
+        self._spy_shopify(monkeypatch)
+        row = {**self.BOOKED, "courier": "Unassigned", "tracking_number": None, "order_status": "unfulfilled"}
+        assert make_client({"shopify_orders": [row]}).post("/api/orders/o1/unbook").status_code == 400
+
+    def test_unbook_refuses_once_money_has_resolved(self, make_client, monkeypatch):
+        self._spy_shopify(monkeypatch)
+        row = {**self.BOOKED, "order_status": "delivered"}
+        assert make_client({"shopify_orders": [row]}).post("/api/orders/o1/unbook").status_code == 400
+
+    def test_unbook_leaves_the_row_alone_when_shopify_refuses(self, make_client, monkeypatch):
+        import app.routes.orders as orders
+
+        self._spy_shopify(monkeypatch)
+
+        async def _boom(*_a):
+            raise RuntimeError("shopify down")
+
+        monkeypatch.setattr(orders.shopify, "cancel_fulfillments", _boom)
+        r = make_client({"shopify_orders": [self.BOOKED]}).post("/api/orders/o1/unbook")
+        assert r.status_code == 502
+
+    def test_cancel_cancels_on_shopify_then_locally(self, make_client, monkeypatch):
+        calls = self._spy_shopify(monkeypatch)
+        r = make_client({"shopify_orders": [self.BOOKED]}).post("/api/orders/o1/cancel")
+
+        assert r.status_code == 200
+        assert r.json() == {"order_number": 101, "order_status": "cancelled"}
+        assert calls == [("cancel_order", 555)]
+
+    def test_cancel_refuses_an_already_cancelled_or_resolved_order(self, make_client, monkeypatch):
+        self._spy_shopify(monkeypatch)
+        for status in ("cancelled", "delivered", "returned"):
+            row = {**self.BOOKED, "order_status": status}
+            assert make_client({"shopify_orders": [row]}).post("/api/orders/o1/cancel").status_code == 400
+
+    def test_unknown_order_is_404(self, make_client, monkeypatch):
+        self._spy_shopify(monkeypatch)
+        client = make_client({"shopify_orders": []})
+        assert client.post("/api/orders/nope/unbook").status_code == 404
+        assert client.post("/api/orders/nope/cancel").status_code == 404
+
+
 class TestFulfillOrdersRoute:
     """Request-validation branches and the newline-delimited JSON stream shape. The
     courier booking round trip is faked here, same precedent as

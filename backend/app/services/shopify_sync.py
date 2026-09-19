@@ -175,17 +175,6 @@ def _parcel_has_moved(existing_order: dict) -> bool:
     return latest not in _STATIONARY_STATUSES
 
 
-_TERMINAL_ORDER_STATUSES = {"delivered", "returned", "cancelled"}
-
-
-def _has_booking(existing_order: dict) -> bool:
-    """Whether a courier was ever booked for this order - i.e. whether there is anything to
-    void. "Unassigned" is the table's no-courier value, so it does not count as one."""
-    if (existing_order.get("tracking_number") or "").strip():
-        return True
-    return (existing_order.get("courier") or "").strip().lower() not in ("", "unassigned")
-
-
 _OTHER_COURIER_TAG_CHARGE_RE = re.compile(r"^\D.*?\s(\d+(?:\.\d+)?)\s*$")
 
 
@@ -750,7 +739,7 @@ def _reconcile_one_order(
     Returns None if `sp_order` carries no order_number - nothing to reconcile. Shared by
     _sync_shopify_orders (called once per order in its periodic fetch) and the webhook
     handler (called for the single order an event carries) so the reconciliation rules
-    below - the freeze-after-fulfilled logic, voided-booking detection, `<n>-R` replacement
+    below - the freeze-after-fulfilled logic, app-owned bookings, `<n>-R` replacement
     handling - live in exactly one place."""
     order_number = sp_order.get("order_number")
     if not order_number:
@@ -923,7 +912,14 @@ def _reconcile_one_order(
         return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
 
     existing_status = (existing_order.get("order_status") or "").strip().lower()
-    booking_was_voided = False
+    # A booking made through /fulfill is owned by this app, not mirrored from Shopify: its
+    # courier/tracking never sync back from Shopify's snapshot, and only an explicit
+    # cancellation (cancelled_at) can move its status - never Shopify merely showing no
+    # fulfillment, which is ambiguous (push still pending or failed, a late webhook, the
+    # courier-tag write that precedes the fulfillment POST...) and voided real parcels
+    # three days running (2026-09-17 13839/13803, 09-18 13915, 09-19 13940). Undoing a
+    # booking is /orders/{id}/unbook's job, and a DB trigger enforces the same invariant.
+    booked_in_app = bool(existing_order.get("fulfilled_at"))
     if existing_status in ("delivered", "returned"):
         existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
         shopify_courier_lower = (courier or "").strip().lower()
@@ -972,41 +968,17 @@ def _reconcile_one_order(
     if shopify_order_status == "cancelled":
         order_data["order_status"] = shopify_order_status
     elif shopify_order_status == "returned" and existing_status == "fulfilled" and not _parcel_has_moved(existing_order):
-        # We booked a parcel, then the order was cancelled on Shopify before the
-        # courier ever scanned it. extract_order_status calls that "returned" off
-        # the cancelled_at/fulfillment timestamps alone, but nothing shipped and
-        # nothing is coming back - it must not reach the courier bill as a return.
-        # Reset it to bookable instead; the booking fields are cleared below.
-        order_data["order_status"] = "unfulfilled"
-        booking_was_voided = True
+        # Cancelled on Shopify after we booked but before the courier ever scanned it.
+        # extract_order_status calls that "returned" off the cancelled_at/fulfillment
+        # timestamps alone, but nothing shipped and nothing is coming back - it must not
+        # reach the courier bill as a return. The booking itself stays on record.
+        order_data["order_status"] = "cancelled"
     elif shopify_order_status == "fulfilled" and existing_status == "unfulfilled":
         order_data["order_status"] = shopify_order_status
-    elif (
-        shopify_order_status == "unfulfilled"
-        and existing_status not in _TERMINAL_ORDER_STATUSES
-        # Only when there is actually a booking to void. Without this an ordinary
-        # never-booked order matches on every sync and is rewritten forever.
-        and _has_booking(existing_order)
-        # And only once we know Shopify was actually told about it. Without this, a
-        # booking whose own push to Shopify simply hasn't succeeded yet (still pending,
-        # or permanently failed on a transient error - see shopify_fulfillment_sync_error)
-        # looks identical to one Shopify genuinely undid, and gets wrongly voided: cleared
-        # locally even though the courier already has the real parcel (2026-09-18: order
-        # 13915, picked up by PostEx, reverted to unfulfilled/Unassigned this way while its
-        # fulfillment push had failed with a transient connection error). Voiding a booking
-        # Shopify never heard about also makes it invisible to
-        # sweep_unsynced_shopify_fulfillments, which only retries orders still
-        # order_status="fulfilled" - so nothing would ever push it to Shopify again either.
-        and existing_order.get("shopify_fulfillment_synced_at")
-    ):
-        # Shopify reports "unfulfilled" for an order whose every fulfillment has
-        # been cancelled. That is a deliberate undo of the fulfillment - the parcel
-        # is not going out under this booking - so it outranks whatever courier
-        # tracking last told us and the order goes back to bookable. Statuses that
-        # already resolved into money (delivered/returned) or a cancellation are
-        # left alone; they are not waiting on a booking.
-        order_data["order_status"] = "unfulfilled"
-        booking_was_voided = True
+    elif shopify_order_status == "unfulfilled" and existing_status != "cancelled" and not booked_in_app:
+        # A fulfillment Shopify itself owned (created there, never booked here) has been
+        # cancelled there - the order is bookable again. Never for an app-made booking.
+        order_data["order_status"] = shopify_order_status
     else:
         order_data["order_status"] = existing_order.get("order_status")
     # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
@@ -1032,42 +1004,21 @@ def _reconcile_one_order(
         or _line_items_incomplete(existing_line_items)
     )
 
-    # Compare and update courier and tracking_number from Shopify if they differ
     shopify_courier = (courier or "").strip()
     shopify_tracking = (tracking_number or "").strip() if tracking_number else None
-
-    # Normalize for comparison (handle "Unassigned" vs empty)
     existing_courier_normalized = existing_courier.lower() if existing_courier else "unassigned"
     shopify_courier_normalized = shopify_courier.lower() if shopify_courier else "unassigned"
+    # A cancelled order keeps whatever booking it had on record, whoever made it. An
+    # app-booked row with nothing on record (a booking wrongly cleared before the guard
+    # existed) has nothing to keep - let Shopify's fulfillment fill it back in.
+    keep_booking = (booked_in_app and (courier_is_assigned or bool(existing_tracking))) or order_data["order_status"] == "cancelled"
+    courier_changed = not keep_booking and existing_courier_normalized != shopify_courier_normalized
+    tracking_changed = not keep_booking and existing_tracking != shopify_tracking
 
-    # Update courier and tracking_number from Shopify if they differ
-    courier_changed = existing_courier_normalized != shopify_courier_normalized
-    tracking_changed = existing_tracking != shopify_tracking
-
-    # Shopify reporting no active fulfillment is only trustworthy enough to clear a real
-    # local booking when Shopify was actually told about it before (shopify_fulfillment_
-    # synced_at set) and has since dropped it - otherwise "Unassigned" here just means the
-    # push hasn't landed yet (still pending, or permanently failed - see
-    # shopify_fulfillment_sync_error), and clobbering the booking with it loses the
-    # courier/tracking info for a parcel that may already be with the courier (same gap,
-    # and same 2026-09-18 order-13915 incident, as the order_status void guard above).
-    # Cancelled/returned is a stronger, unambiguous signal (Shopify said so outright via
-    # cancelled_at) than plain "unfulfilled", and already means the booking should clear
-    # regardless of push status - only "unfulfilled" is the case that's genuinely
-    # ambiguous between "never told Shopify" and "Shopify undid it".
-    trust_shopify_courier = (
-        shopify_courier_normalized != "unassigned"
-        or shopify_order_status != "unfulfilled"
-        or not _has_booking(existing_order)
-        or bool(existing_order.get("shopify_fulfillment_synced_at"))
-    )
-
-    if trust_shopify_courier and (courier_changed or tracking_changed):
-        # Update courier and tracking_number from Shopify
+    if courier_changed or tracking_changed:
         order_data["courier"] = courier
         order_data["tracking_number"] = tracking_number
     else:
-        # Keep existing values if they match
         order_data["courier"] = existing_order.get("courier")
         order_data["tracking_number"] = existing_order.get("tracking_number")
 
@@ -1148,10 +1099,7 @@ def _reconcile_one_order(
     # covers the same blind spot for a customer's name/phone/address/city/id. has_changed never
     # compares tags in either field list, so tags_changed catches a tag added/removed on Shopify
     # with nothing else about the order changing (e.g. a courier tag set after the order synced).
-    # booking_was_voided is listed explicitly: it clears courier/tracking to values
-    # that differ from BOTH Shopify (which still carries the cancelled fulfillment)
-    # and the existing row, so neither courier_changed nor has_changed sees it.
-    if booking_was_voided or courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or tags_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
+    if courier_changed or tracking_changed or cancelled_total_needs_fix or delivery_charge_changed or customer_info_changed or tags_changed or has_changed(order_data, existing_order, skip_assigned_courier_fields=skip_fields):
         order_data["id"] = existing_order["id"]
         return OrderReconciliation("update", order_number, order_data, replacement_of)
     return OrderReconciliation("skip", order_number, replacement_of=replacement_of)
@@ -1188,7 +1136,7 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
         "delivery_status, piece_received, courier, tracking_number, "
         "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
         "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-        "customer_address, customer_city, tags, shopify_updated_at, shopify_fulfillment_synced_at"
+        "customer_address, customer_city, tags, shopify_updated_at, fulfilled_at"
     ).eq("order_number", order_number).execute().data or []
 
     products_cost_map: Dict[str, float] = {}
@@ -1288,7 +1236,7 @@ async def _sync_shopify_orders(org_id: str) -> dict:
             "delivery_status, piece_received, courier, tracking_number, "
             "cost_price, line_items, total_amount, advance_amount, order_receiving_date, "
             "replacement_of_order_no, customer_id, customer_name, customer_phone, "
-            "customer_address, customer_city, tags, shopify_updated_at, shopify_fulfillment_synced_at"
+            "customer_address, customer_city, tags, shopify_updated_at, fulfilled_at"
         )
         shopify_order_numbers_list = list(shopify_order_numbers)
         order_chunks = [

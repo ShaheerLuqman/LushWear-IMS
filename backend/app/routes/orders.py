@@ -864,6 +864,23 @@ async def sweep_unsynced_shopify_fulfillments() -> None:
     orgs = supabase.table("system_organizations").select("id").execute().data or []
     for org in orgs:
         org_id = org["id"]
+        # The booking-guard trigger should make this impossible; if it ever fires, a
+        # booking was cleared behind the app's back (the 13940-class incident) and the
+        # parcel is with a courier the order no longer names.
+        voided = (
+            org_table(supabase, org_id, "shopify_orders")
+            .select("order_number")
+            .eq("order_status", "unfulfilled")
+            .not_.is_("fulfilled_at", "null")
+            .execute()
+            .data
+            or []
+        )
+        if voided:
+            logger.error(
+                "Booked orders reverted to unfulfilled for org %s: %s",
+                org_id, sorted(r["order_number"] for r in voided),
+            )
         rows = (
             org_table(supabase, org_id, "shopify_orders")
             .select("id, order_number, courier, tracking_number")
@@ -1315,7 +1332,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             .select(
                 "id, order_number, courier, tracking_number, order_status, piece_received, delivery_status, "
                 "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no, "
-                "cost_price, line_items"
+                "cost_price, line_items, fulfilled_at"
             )
             .in_("order_number", order_numbers_input)
             .execute()
@@ -1627,6 +1644,10 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 "order_receiving_date": (existing_order.get("order_receiving_date") if existing_order else order_received_date),
                 "line_items": final_line_items,
                 "replacement_of_order_no": replacement_of,
+                # Force-sync is the user saying Shopify is right, so unlike the normal sync
+                # it may override an app-made booking - and must then also drop its
+                # ownership marker, or the shopify_orders booking-guard trigger refuses.
+                "fulfilled_at": (existing_order or {}).get("fulfilled_at") if order_status != "unfulfilled" else None,
                 "updated_at": current_time,
                 # Keep in step with _reconcile_one_order's staleness guard - a force-sync
                 # fetches Shopify's current state directly, so it's always newer; without
@@ -2158,6 +2179,106 @@ async def get_order(order_id: str, org_id: str = Depends(get_org_id)):
     except Exception:
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+_MONEY_RESOLVED_STATUSES = ("delivered", "returned")
+
+
+async def _order_for_action(supabase, org_id: str, order_id: str) -> dict:
+    rows = (
+        org_table(supabase, org_id, "shopify_orders")
+        .select("id, order_number, order_status, courier, tracking_number, tags")
+        .eq("id", order_id).limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return rows[0]
+
+
+async def _shopify_order_id_for(order_number: int, org_id: str) -> Tuple[Optional[int], Optional[OrgIntegrationSettings]]:
+    """(shopify_order_id, creds) for a mutation against Shopify, or (None, None) when the org
+    has no Shopify integration to mirror into."""
+    org_creds = get_org_integration_settings(org_id)
+    if not org_creds.shopify_store_url:
+        return None, None
+    org_creds = await ensure_valid_shopify_token(org_id, org_creds)
+    sp_order = await _fetch_shopify_order_by_order_number(str(order_number), org_creds)
+    return (int(sp_order["id"]) if sp_order else None), org_creds
+
+
+@router.post("/{order_id}/unbook")
+async def unbook_order(order_id: str, org_id: str = Depends(get_org_id)):
+    """Undo the app's own courier booking: cancel the Shopify fulfillment it pushed and clear
+    the booking locally so the order is bookable again. The only sanctioned way to clear a
+    booking - the Shopify sync never does (see shopify_sync._reconcile_one_order's
+    booked_in_app) and the DB's booking-guard trigger refuses any write that tries without
+    also clearing fulfilled_at, which this does. Does not cancel the parcel with the courier."""
+    supabase = get_supabase()
+    row = await _order_for_action(supabase, org_id, order_id)
+    if (row.get("order_status") or "").lower() in _MONEY_RESOLVED_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Order is already {row['order_status']} - nothing to unbook.")
+    if not (row.get("tracking_number") or (row.get("courier") or "").lower() not in ("", "unassigned")):
+        raise HTTPException(status_code=400, detail="Order has no courier booking to undo.")
+
+    try:
+        shopify_order_id, org_creds = await _shopify_order_id_for(row["order_number"], org_id)
+        if shopify_order_id:
+            async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+                await shopify.cancel_fulfillments(shopify_order_id, org_creds, client)
+    except Exception as exc:
+        logger.exception("Unbook: could not cancel the Shopify fulfillment for order %s", row["order_number"])
+        raise HTTPException(status_code=502, detail=f"Could not cancel the Shopify fulfillment: {exc}")
+
+    org_table(supabase, org_id, "shopify_orders").update({
+        "courier": "Unassigned",
+        "tracking_number": None,
+        "order_status": "unfulfilled",
+        "delivery_status": None,
+        "fulfilled_at": None,
+        "shopify_fulfillment_synced_at": None,
+        "shopify_fulfillment_sync_error": None,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", order_id).execute()
+    event_bus.publish(org_id, {"type": "orders_changed"})
+    return {"order_number": row["order_number"], "order_status": "unfulfilled"}
+
+
+@router.post("/{order_id}/cancel")
+async def cancel_order(order_id: str, org_id: str = Depends(get_org_id)):
+    """Cancel an order from the app: cancel its Shopify fulfillment and the Shopify order
+    (tagged shopify.CANCELLED_TAG), then mark it cancelled here. The courier booking stays on
+    record - the parcel may already be with the courier and the tracking number is how it
+    is followed back."""
+    supabase = get_supabase()
+    row = await _order_for_action(supabase, org_id, order_id)
+    status = (row.get("order_status") or "").lower()
+    if status == "cancelled":
+        raise HTTPException(status_code=400, detail="Order is already cancelled.")
+    if status in _MONEY_RESOLVED_STATUSES:
+        raise HTTPException(status_code=400, detail=f"Order is already {row['order_status']} and cannot be cancelled.")
+
+    try:
+        shopify_order_id, org_creds = await _shopify_order_id_for(row["order_number"], org_id)
+        if shopify_order_id:
+            async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+                await shopify.cancel_order(shopify_order_id, org_creds, client)
+    except Exception as exc:
+        logger.exception("Cancel: could not cancel order %s on Shopify", row["order_number"])
+        raise HTTPException(status_code=502, detail=f"Could not cancel the order on Shopify: {exc}")
+
+    tags = [t.strip() for t in (row.get("tags") or "").split(",") if t.strip()]
+    if not any(t.lower() == shopify.CANCELLED_TAG.lower() for t in tags):
+        tags.append(shopify.CANCELLED_TAG)
+    # Same shape the sync writes for a Shopify-cancelled order, so its webhook is a no-op.
+    org_table(supabase, org_id, "shopify_orders").update({
+        "order_status": "cancelled",
+        "total_amount": 0.0,
+        "advance_amount": 0.0,
+        "tags": ", ".join(tags),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", order_id).execute()
+    event_bus.publish(org_id, {"type": "orders_changed"})
+    return {"order_number": row["order_number"], "order_status": "cancelled"}
 
 
 @router.post("/postex-airway-bills")

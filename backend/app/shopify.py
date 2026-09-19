@@ -541,6 +541,48 @@ async def add_order_tag(
         json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [tag])}})
 
 
+async def cancel_fulfillments(
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, client: httpx.AsyncClient
+) -> int:
+    """Cancel every non-cancelled fulfillment on a Shopify order; returns how many.
+
+    Shopify refuses to cancel an order that still has a live fulfillment, so this runs
+    ahead of cancel_order as well as on its own for /unbook. Idempotent: an order whose
+    fulfillments are all already cancelled is a no-op."""
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        params={"fields": "id,fulfillments"})
+    live = [f for f in response.json()["order"].get("fulfillments") or [] if f.get("status") != "cancelled"]
+    for fulfillment in live:
+        await _request_with_retry(
+            client, "POST", f"{base}/fulfillments/{fulfillment['id']}/cancel.json", headers=headers)
+    return len(live)
+
+
+CANCELLED_TAG = "Cancelled"
+
+
+async def cancel_order(
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, client: httpx.AsyncClient
+) -> None:
+    """Cancel a Shopify order (fulfillments first - see cancel_fulfillments) and tag it
+    CANCELLED_TAG. Stock is not restocked: Shopify's API default, and whether the goods
+    are back on the shelf is only known once the parcel is physically received."""
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    await cancel_fulfillments(shopify_order_id, org_creds, client)
+    await _request_with_retry(
+        client, "POST", f"{base}/orders/{shopify_order_id}/cancel.json", headers=headers,
+        json={"reason": "customer", "email": False})
+    await add_order_tag(shopify_order_id, CANCELLED_TAG, org_creds, client)
+
+
 # Run as a bulk operation, not a paged query: `first` is ignored on every connection
 # inside one, so this reads the whole catalog - products, their variants and their
 # collection membership - without page-size tuning, truncation repair, or any of it

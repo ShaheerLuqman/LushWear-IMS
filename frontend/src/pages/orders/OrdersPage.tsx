@@ -218,12 +218,55 @@ export function OrdersPage() {
     });
   }, [confirm]);
 
+  const runOrderAction = useCallback(async (order: Order, action: 'unbook' | 'cancel', prompt: { title: string; message: string; confirmText: string }) => {
+    if (!await confirm({ ...prompt, danger: true })) return;
+    try {
+      const result = await apiJson<{ order_status: string }>(`/orders/${order.id}/${action}`, { method: 'POST', fallback: `Failed to ${action} order` });
+      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, order_status: result.order_status } : o)));
+      showToast(`Order #${order.order_number} ${action === 'unbook' ? 'unbooked' : 'cancelled'}`, 'success');
+    } catch (error: any) {
+      showToast(error?.message || `Failed to ${action} order`, 'error');
+    }
+  }, [confirm, setOrders, showToast]);
+
+  // Single-row versions of the Bulk update modal's actions - same endpoints, one order number.
+  const bulkForOne = useCallback(async (order: Order, path: string, body: Record<string, unknown>, patch: Partial<Order>, done: string) => {
+    try {
+      await apiJson(path, { method: 'POST', body: { order_numbers: [order.order_number], ...body }, fallback: `Failed to ${done.toLowerCase()} order` });
+      setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, ...patch } : o)));
+      showToast(`Order #${order.order_number} ${done.toLowerCase()}`, 'success');
+    } catch (error: any) {
+      showToast(error?.message || `Failed to ${done.toLowerCase()} order`, 'error');
+    }
+  }, [setOrders, showToast]);
+
   const columnCtx: OrdersColumnCtx = useMemo(() => ({
     isEditingAllowed,
     saveOrderField,
     confirmActionOnTerminalOrders,
     onRefreshDelivery: (orderId) => setDeliveryStatusForId(orderId),
-  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders]);
+    onSetStatus: async (order, status, pieceReceived) => {
+      const label = pieceReceived ? 'mark it Returned + Piece Received' : `mark it ${status === 'delivered' ? 'Delivered' : 'Returned'}`;
+      const conflicting = pieceReceived ? ['delivered'] : ['delivered', 'returned'].filter((s) => s !== status);
+      if (!await confirmActionOnTerminalOrders([order.order_number!], label, conflicting)) return;
+      await bulkForOne(order, '/orders/bulk-update-status',
+        { order_status: status, ...(pieceReceived ? { piece_received: 'Received' } : {}) },
+        { order_status: status, ...(pieceReceived ? { piece_received: 'Received' } : {}) },
+        pieceReceived ? 'Marked returned + piece received' : `Marked ${status}`);
+    },
+    onSetSettled: (order, settled) => bulkForOne(order, '/orders/bulk-update-order-settled',
+      { is_order_settled: settled }, { is_order_settled: settled }, settled ? 'Marked settled' : 'Marked unsettled'),
+    onUnbook: (order) => runOrderAction(order, 'unbook', {
+      title: `Unbook order #${order.order_number}?`,
+      message: `This cancels the Shopify fulfillment and clears the ${getCourierDisplayName(order)} booking (${order.tracking_number || 'no tracking number'}) so the order can be booked again.\n\nThe parcel itself is not cancelled with the courier.`,
+      confirmText: 'Unbook',
+    }),
+    onCancel: (order) => runOrderAction(order, 'cancel', {
+      title: `Cancel order #${order.order_number}?`,
+      message: 'This cancels the order on Shopify (and its fulfillment, if any) and marks it cancelled here. Any courier booking stays on record.',
+      confirmText: 'Cancel order',
+    }),
+  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne]);
 
   function removeFetchedByNumberRows() {
     if (fetchedByNumberIdsRef.current.size === 0) return;
@@ -505,7 +548,7 @@ export function OrdersPage() {
   function exportToExcel() {
     const rows = filteredOrders.map((o) => {
       const out: Record<string, unknown> = {};
-      ORDERS_COLUMNS.forEach((c) => { out[c.heading] = c.exportValue(o); });
+      ORDERS_COLUMNS.forEach((c) => { if (c.exportValue) out[c.heading] = c.exportValue(o); });
       return out;
     });
     const workbook = XLSX.utils.book_new();

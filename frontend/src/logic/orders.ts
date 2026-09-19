@@ -23,6 +23,7 @@ export interface Order {
   cost_price?: number;
   folio?: string | null;
   piece_received?: string;
+  is_order_settled?: boolean;
   order_receiving_date?: string;
   created_at?: string;
   line_items?: Array<{ name?: string; variant_title?: string; qty?: number }>;

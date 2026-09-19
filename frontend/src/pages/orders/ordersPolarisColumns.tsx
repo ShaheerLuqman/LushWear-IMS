@@ -5,6 +5,7 @@ import { Badge, Text, Button, Tooltip } from '@shopify/polaris';
 import { RefreshIcon } from '@shopify/polaris-icons';
 import { Dropdown } from '../../components/Dropdown';
 import { EditableAmount, EditableText } from '../../components/EditableCell';
+import { RowActions } from '../../components/RowActions';
 import { getCourierDisplayName } from '../../logic/shared';
 import {
   advanceStatusMeta, computeFinalStatus, computeNetProfit, computeReceivable,
@@ -16,6 +17,10 @@ export interface OrdersColumnCtx {
   saveOrderField: (orderId: string, field: string, value: unknown) => void;
   confirmActionOnTerminalOrders: (orderNumbers: Array<string | number>, actionLabel: string, statuses?: string[]) => Promise<boolean>;
   onRefreshDelivery: (orderId: string) => void;
+  onSetStatus: (order: Order, status: 'delivered' | 'returned', pieceReceived?: boolean) => void;
+  onSetSettled: (order: Order, settled: boolean) => void;
+  onUnbook: (order: Order) => void;
+  onCancel: (order: Order) => void;
 }
 
 export const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];
@@ -100,13 +105,35 @@ function DeliveryCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
   );
 }
 
+function ActionsCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
+  if (!ctx.isEditingAllowed()) return <span className="row-actions-spacer" />;
+  const status = (order.order_status || '').toLowerCase();
+  const resolved = status === 'delivered' || status === 'returned';
+  const courier = (order.courier || '').trim().toLowerCase();
+  const booked = !!order.tracking_number || (courier !== '' && courier !== 'unassigned');
+  const pieceReceived = (order.piece_received || '').trim() === 'Received';
+  const items = [];
+  if (status !== 'cancelled') {
+    if (status !== 'delivered') items.push({ content: 'Mark Delivered', onAction: () => ctx.onSetStatus(order, 'delivered') });
+    if (status !== 'returned') items.push({ content: 'Mark Returned', onAction: () => ctx.onSetStatus(order, 'returned') });
+    if (!(status === 'returned' && pieceReceived)) items.push({ content: 'Mark Returned + Piece Received', onAction: () => ctx.onSetStatus(order, 'returned', true) });
+    items.push(order.is_order_settled
+      ? { content: 'Mark Unsettled', onAction: () => ctx.onSetSettled(order, false) }
+      : { content: 'Mark Settled', onAction: () => ctx.onSetSettled(order, true) });
+  }
+  if (booked && !resolved) items.push({ content: 'Unbook courier', onAction: () => ctx.onUnbook(order) });
+  if (status !== 'cancelled' && !resolved) items.push({ content: 'Cancel order', destructive: true, onAction: () => ctx.onCancel(order) });
+  return <RowActions items={items} accessibilityLabel={`Actions for order ${order.order_number}`} />;
+}
+
 export interface OrdersColumnDef {
   key: string;
   heading: string;
   alignment?: 'start' | 'end';
   sortable?: boolean;
   sortValue?: (order: Order) => number | string;
-  exportValue: (order: Order) => string | number;
+  /** Absent for UI-only columns (actions), which the Excel export skips. */
+  exportValue?: (order: Order) => string | number;
   render: (order: Order, ctx: OrdersColumnCtx) => React.ReactNode;
 }
 
@@ -244,6 +271,10 @@ export const ORDERS_COLUMNS: OrdersColumnDef[] = [
       if (value === 'None') return <Text as="span" tone="subdued">-</Text>;
       return <Badge tone={value === 'OK' ? 'success' : 'warning'}>{value}</Badge>;
     },
+  },
+  {
+    key: 'actions', heading: 'Actions',
+    render: (o, ctx) => <ActionsCell order={o} ctx={ctx} />,
   },
 ];
 
