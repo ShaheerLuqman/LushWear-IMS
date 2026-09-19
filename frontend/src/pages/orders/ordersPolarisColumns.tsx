@@ -48,7 +48,7 @@ function statusTone(status?: string): 'attention' | 'info' | 'success' | 'warnin
 }
 
 function EditableFolio({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
-  return <EditableText value={order.folio} editable={ctx.isEditingAllowed()} onSave={(v) => ctx.saveOrderField(order.id, 'folio', v || null)} />;
+  return <EditableText value={order.folio} placeholder="-" editable={ctx.isEditingAllowed()} onSave={(v) => ctx.saveOrderField(order.id, 'folio', v || null)} />;
 }
 
 function PieceReceivedCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
@@ -87,7 +87,7 @@ function DeliveryCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
   const isCancelled = (order.order_status || '').trim().toLowerCase() === 'cancelled';
   const supportsRefresh = !isCancelled && (courierNormalized === 'POSTEX' || courierNormalized === 'COURIERS NEXT');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }} title={statusText}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 6, width: 120 }} title={statusText}>
       {supportsRefresh && (
         <Tooltip content="Refresh status">
           <Button icon={RefreshIcon} variant="tertiary" size="micro" accessibilityLabel="Refresh delivery status" onClick={() => ctx.onRefreshDelivery(order.id)} />

@@ -8,7 +8,7 @@ import {
   Badge, BlockStack, Box, Button, Card, IndexFilters, IndexTable, IndexTableSelectionType, InlineStack, Popover, ProgressBar, Spinner, Text, TextField, Tooltip,
   useIndexResourceState, useSetIndexFiltersMode,
 } from '@shopify/polaris';
-import { MenuHorizontalIcon, PrintIcon } from '@shopify/polaris-icons';
+import { MenuHorizontalIcon, PrintIcon, RefreshIcon } from '@shopify/polaris-icons';
 import { MetricsStrip } from '../../components/MetricsStrip';
 import { Filter, FilterX } from 'lucide-react';
 import { apiJson, apiJsonStream } from '../../api';
@@ -237,15 +237,37 @@ export function OrderFulfillmentPage() {
       state: 'pending', tracking_number: null, error: null,
     }));
     if (progressOrders[0]) progressOrders[0].state = 'booking';
-    setFulfilling(true);
     setProgress({ orders: progressOrders, phase: 'booking' });
+    await runBooking(selectedOrders);
+  }
 
+  function retryFailed() {
+    if (!progress) return;
+    const failedIds = new Set(progress.orders.filter((o) => o.state === 'fail').map((o) => o.id));
+    const targets = orders.filter((o) => failedIds.has(o.id));
+    if (targets.length === 0) return;
+    let first = true;
+    setProgress({
+      phase: 'booking',
+      orders: progress.orders.map((o) => {
+        if (!failedIds.has(o.id)) return o;
+        const state = first ? 'booking' as const : 'pending' as const;
+        first = false;
+        return { ...o, state, error: null };
+      }),
+    });
+    void runBooking(targets);
+  }
+
+  /** Streams bookings for `targets`, updating their rows in the already-shown progress screen. */
+  async function runBooking(targets: FulfillmentOrder[]) {
+    setFulfilling(true);
     const courierName = selectedCourier!.name;
     try {
       for await (const event of apiJsonStream<any>('/orders/fulfill', {
         body: {
           courier: selectedCourier!.id, pickup_address_code: pickupCode,
-          orders: selectedOrders.map((o) => ({
+          orders: targets.map((o) => ({
             order_id: o.id, courier_city: o.courierCity, order_type: o.orderType, cod_amount: o.codAmount,
             customer_email: o.email || null, instructions: o.instructions || null, pieces: o.pieces,
             invoice_division: o.invoiceDivision, handling: o.handling,
@@ -420,6 +442,7 @@ export function OrderFulfillmentPage() {
             </BlockStack>
             <InlineStack align="end" gap="200">
               <Button icon={PrintIcon} disabled={!progress.orders.some((o) => orderHasAirwayBill(o as any))} onClick={printAll}>Print All Airway Bills</Button>
+              {done && failed > 0 && <Button icon={RefreshIcon} onClick={retryFailed}>{`Retry Failed (${failed})`}</Button>}
               <Button variant="primary" disabled={!done} onClick={() => setProgress(null)}>Done</Button>
             </InlineStack>
           </BlockStack>
