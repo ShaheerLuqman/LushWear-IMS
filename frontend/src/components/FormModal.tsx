@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { Modal, type ModalProps } from '@shopify/polaris';
 
 export function FormModal({
-  title, onClose, onSubmit, submitLabel = 'Save', saving, disabled, destructive, size, children,
+  title, onClose, onSubmit, submitLabel = 'Save', saving, disabled, destructive, size, children, extraActions = [],
 }: {
   title: string;
   onClose: () => void;
@@ -15,12 +15,14 @@ export function FormModal({
   destructive?: boolean;
   size?: ModalProps['size'];
   children: ReactNode;
+  /** Footer buttons besides Cancel/submit (e.g. "Upload PDFs"). */
+  extraActions?: NonNullable<ModalProps['secondaryActions']>;
 }) {
   return (
     <Modal
       open onClose={onClose} title={title} size={size}
       primaryAction={{ content: submitLabel, onAction: onSubmit, loading: saving, disabled, destructive }}
-      secondaryActions={[{ content: 'Cancel', onAction: onClose, disabled: saving }]}
+      secondaryActions={[...extraActions, { content: 'Cancel', onAction: onClose, disabled: saving }]}
     >
       <Modal.Section>
         <form autoComplete="off" onSubmit={(e) => { e.preventDefault(); onSubmit(); }}>
@@ -28,6 +30,23 @@ export function FormModal({
           <button type="submit" hidden />
         </form>
       </Modal.Section>
+    </Modal>
+  );
+}
+
+/** Read-only modal (reports, details): a Close button plus any extra actions. */
+export function InfoModal({
+  title, onClose, size, children, actions = [],
+}: {
+  title: string;
+  onClose: () => void;
+  size?: ModalProps['size'];
+  children: ReactNode;
+  actions?: NonNullable<ModalProps['secondaryActions']>;
+}) {
+  return (
+    <Modal open onClose={onClose} title={title} size={size} primaryAction={{ content: 'Close', onAction: onClose }} secondaryActions={actions}>
+      <Modal.Section>{children}</Modal.Section>
     </Modal>
   );
 }

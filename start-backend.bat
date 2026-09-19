@@ -14,7 +14,7 @@ if "%SHOW_TERMINALS%"=="0" (
 )
 
 echo ========================================
-echo Starting Inventory Management Backend
+echo Starting QuikMerchant Backend
 echo ========================================
 echo.
 

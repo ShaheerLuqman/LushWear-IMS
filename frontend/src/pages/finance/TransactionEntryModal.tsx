@@ -9,7 +9,9 @@ import {
   bulkEntryValidationHtml, defaultTransactionParticulars, getOrdersLedgerId, orderAdvanceParticularPlaceholder,
   parseBulkEntryText,
 } from '../../logic/transactionsBulkEntry';
+import { Banner, BlockStack, Checkbox, Collapsible, FormLayout, List, Text, TextField } from '@shopify/polaris';
 import { Dropdown } from '../../components/Dropdown';
+import { FormModal } from '../../components/FormModal';
 import { CreateLedgerModal } from './LedgerModals';
 
 function generateIdempotencyKey(): string {
@@ -17,26 +19,24 @@ function generateIdempotencyKey(): string {
 }
 
 function LedgerSelect({
-  id, label, value, onChange, ledgers, disabled, onCreateLedger,
+  label, value, onChange, ledgers, onCreateLedger,
 }: {
-  id: string; label: string; value: string; onChange: (v: string) => void; ledgers: Ledger[]; disabled?: boolean; onCreateLedger: () => void;
+  label: string; value: string; onChange: (v: string) => void; ledgers: Ledger[]; onCreateLedger: () => void;
 }) {
   return (
-    <div className="form-group">
-      <label htmlFor={id}>{label}</label>
-      <Dropdown
-        id={id} fullWidth searchable disabled={disabled} value={value} onChange={onChange}
-        options={[{ value: '', label: cashSideLabel(ledgers) }, ...selectableLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))]}
-        action={{ content: '+ Create new ledger...', onAction: onCreateLedger }}
-      />
-    </div>
+    <Dropdown
+      label={label} fullWidth searchable value={value} onChange={onChange}
+      options={[{ value: '', label: cashSideLabel(ledgers) }, ...selectableLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))]}
+      action={{ content: '+ Create new ledger...', onAction: onCreateLedger }}
+    />
   );
 }
 
 export function TransactionEntryModal({
-  ledgers, entryDate, onClose, onDone, onLedgersChanged,
+  ledgers, entryDate, initialMode, onClose, onDone, onLedgersChanged,
 }: {
   ledgers: Ledger[];
+  initialMode: 'single' | 'bulk';
   entryDate: string;
   onClose: () => void;
   onDone: (patches: LedgerBalancePatch | LedgerBalancePatch[] | undefined) => void;
@@ -44,7 +44,7 @@ export function TransactionEntryModal({
 }) {
   const { isEditingAllowed } = useAuth();
   const { showToast } = useToast();
-  const [mode, setMode] = useState<'single' | 'bulk'>('single');
+  const [mode, setMode] = useState(initialMode);
   const [isAdvance, setIsAdvance] = useState(false);
   const [orderNumber, setOrderNumber] = useState('');
   const [fromId, setFromId] = useState('');
@@ -63,15 +63,6 @@ export function TransactionEntryModal({
     if (ledgers.length === 0) showToast('No ledgers available. Create a ledger first.', 'error', { silent: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-
-  useEffect(() => {
-    if (!infoOpen) return;
-    function close(e: Event) { if (!(e.target as HTMLElement).closest('.bulk-entry-info-wrap')) setInfoOpen(false); }
-    function onKey(e: KeyboardEvent) { if (e.key === 'Escape') setInfoOpen(false); }
-    document.addEventListener('click', close);
-    document.addEventListener('keydown', onKey);
-    return () => { document.removeEventListener('click', close); document.removeEventListener('keydown', onKey); };
-  }, [infoOpen]);
 
   function ledgerName(id: string) { return ledgers.find((l) => l.id === id)?.name || ''; }
 
@@ -156,104 +147,64 @@ export function TransactionEntryModal({
     }
   }
 
+  const bulkDisabled = !bulkValidated || bulkParsed.hasError || !bulkParsed.hasAny;
+
   return (
     <>
-      <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-        <div className="modal-content transaction-entry-modal-content">
-          <div className="modal-header">
-            <h2>Create Transaction Entry</h2>
-            <button type="button" className="modal-close" aria-label="Close" onClick={onClose} disabled={saving}>&times;</button>
+      <FormModal
+        title="Create Transaction Entry" onClose={onClose} saving={saving}
+        onSubmit={mode === 'single' ? submitSingle : submitBulk} submitLabel={mode === 'single' ? 'Create' : 'Create entries'}
+        disabled={mode === 'bulk' && bulkDisabled}
+      >
+        <BlockStack gap="400">
+          <div className="entry-mode-toggle" data-mode={mode} role="tablist">
+            <button type="button" role="tab" aria-selected={mode === 'single'} disabled={saving} onClick={() => setMode('single')}>Single Entry</button>
+            <button type="button" role="tab" aria-selected={mode === 'bulk'} disabled={saving} onClick={() => setMode('bulk')}>Bulk Text Entry</button>
           </div>
-          <div className="modal-body">
-            <div className="transaction-entry-mode" role="tablist" aria-label="Entry mode">
-              <button type="button" className={'transaction-entry-mode-btn' + (mode === 'single' ? ' active' : '')} role="tab" aria-selected={mode === 'single'} disabled={saving} onClick={() => setMode('single')}>Single Entry</button>
-              <button type="button" className={'transaction-entry-mode-btn' + (mode === 'bulk' ? ' active' : '')} role="tab" aria-selected={mode === 'bulk'} disabled={saving} onClick={() => setMode('bulk')}>Bulk Text Entry</button>
-            </div>
-
-            {mode === 'single' ? (
-              <form className="ledger-form" onSubmit={(e) => { e.preventDefault(); submitSingle(); }}>
-                <label className="transaction-entry-toggle">
-                  <input type="checkbox" checked={isAdvance} onChange={(e) => setIsAdvance(e.target.checked)} />
-                  <span>Order Advance Amount</span>
-                </label>
-                {isAdvance && (
-                  <div className="form-group">
-                    <label htmlFor="transactionEntryOrderNumber">Order number *</label>
-                    <input type="text" id="transactionEntryOrderNumber" className="form-input" placeholder="e.g. 1234" autoComplete="off" required value={orderNumber} onChange={(e) => setOrderNumber(e.target.value)} />
-                  </div>
-                )}
-                <div className="form-group">
-                  <label htmlFor="transactionEntryAmount">Amount *</label>
-                  <input type="number" id="transactionEntryAmount" className="form-input" min={0.01} step={0.01} placeholder="0.00" required value={amount} onChange={(e) => setAmount(e.target.value)} />
-                </div>
-                <div className="transaction-entry-sides">
-                  {!isAdvance && (
-                    <LedgerSelect id="transactionEntryFrom" label="From Account (Credit)" value={fromId} onChange={setFromId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('from')} />
-                  )}
-                  <LedgerSelect id="transactionEntryTo" label="To Account (Debit)" value={toId} onChange={setToId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('to')} />
-                </div>
-                <p className="form-hint">An empty side is Cash. Name both and the money moves without touching cash.</p>
-                <div className="form-group">
-                  <label htmlFor="transactionEntryParticular">Particulars</label>
-                  <input type="text" id="transactionEntryParticular" className="form-input" autoComplete="off" placeholder={particularPlaceholder} value={particular} onChange={(e) => setParticular(e.target.value)} />
-                </div>
-              </form>
-            ) : (
-              <div>
-                <div className="form-group">
-                  <div className="bulk-entry-label-row">
-                    <label htmlFor="bulkEntryInput">Entries</label>
-                    <div className="bulk-entry-info-wrap">
-                      <button type="button" className="bulk-entry-info-btn" aria-expanded={infoOpen} onClick={(e) => { e.stopPropagation(); setInfoOpen((v) => !v); }}>ⓘ Format help</button>
-                      {infoOpen && (
-                        <div className="bulk-entry-help bulk-entry-info-card open">
-                          <p>One entry per line. Format: <b><code>&lt;AMOUNT&gt; from &lt;LEDGER&gt; to &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></b></p>
-                          <p><strong>Leave a side out and that side is cash.</strong></p>
-                          <ul>
-                            <li><b><code>2064 from TCS (Received order payment)</code></b> — cash received from TCS</li>
-                            <li><b><code>2064 to Meezan Bank</code></b> — cash paid to Meezan Bank</li>
-                            <li><b><code>2064 from Meezan Bank to Fabric Supplier</code></b> — bank pays the supplier; <strong>cash is not touched</strong></li>
-                          </ul>
-                          <p>Particulars are optional — omit them and a default description is generated.</p>
-                          <p>Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger:</p>
-                          <code>3500 from Order# 11473<br />3500 from Order# 11473 to Meezan Bank</code>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  <textarea
-                    id="bulkEntryInput" className="form-input bulk-entry-textarea" rows={6} spellCheck={false}
-                    placeholder="2064 from TCS (Received order payment)" disabled={saving}
-                    value={bulkText} onChange={(e) => onBulkChange(e.target.value)}
-                  />
-                  {bulkValidated && (
-                    !bulkParsed.hasAny ? (
-                      <div className="bulk-entry-validation" style={{ display: 'block' }}><div className="bulk-entry-msg bulk-entry-msg-error">No entries to validate.</div></div>
-                    ) : (
-                      <div className="bulk-entry-validation" style={{ display: 'block' }} dangerouslySetInnerHTML={{ __html: bulkEntryValidationHtml(ledgers, bulkParsed) }} />
-                    )
-                  )}
-                </div>
-                {progress && (
-                  <div className={'bulk-entry-progress' + (progress.kind === 'ok' ? ' bulk-entry-progress-ok' : '') + (progress.kind === 'error' ? ' bulk-entry-progress-error' : '')} style={{ display: 'block' }}>
-                    {progress.text}
-                  </div>
-                )}
-              </div>
-            )}
+          <div className="entry-mode-body">
+          {mode === 'single' ? (
+            <FormLayout>
+              <Checkbox label="Order Advance Amount" checked={isAdvance} onChange={setIsAdvance} />
+              {isAdvance && <TextField label="Order number" autoComplete="off" placeholder="e.g. 1234" requiredIndicator value={orderNumber} onChange={setOrderNumber} />}
+              <TextField label="Amount" type="number" autoComplete="off" min={0.01} step={0.01} placeholder="0.00" requiredIndicator value={amount} onChange={setAmount} />
+              <FormLayout.Group>
+                {!isAdvance && <LedgerSelect label="From Account (Credit)" value={fromId} onChange={setFromId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('from')} />}
+                <LedgerSelect label="To Account (Debit)" value={toId} onChange={setToId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('to')} />
+              </FormLayout.Group>
+              <Text as="p" tone="subdued">An empty side is Cash. Name both and the money moves without touching cash.</Text>
+              <TextField label="Particulars" autoComplete="off" placeholder={particularPlaceholder} value={particular} onChange={setParticular} />
+            </FormLayout>
+          ) : (
+            <BlockStack gap="300">
+              <TextField
+                label="Entries" autoComplete="off" multiline={11} spellCheck={false} monospaced disabled={saving}
+                placeholder="2064 from TCS (Received order payment)" value={bulkText} onChange={onBulkChange}
+                labelAction={{ content: infoOpen ? 'Hide format help' : 'Format help', onAction: () => setInfoOpen((v) => !v) }}
+              />
+              <Collapsible open={infoOpen} id="bulkEntryHelp">
+                <Banner>
+                  <BlockStack gap="200">
+                    <Text as="p">One entry per line. Format: <code>&lt;AMOUNT&gt; from &lt;LEDGER&gt; to &lt;LEDGER&gt; [(&lt;PARTICULARS&gt;)]</code></Text>
+                    <Text as="p" fontWeight="semibold">Leave a side out and that side is cash.</Text>
+                    <List>
+                      <List.Item><code>2064 from TCS (Received order payment)</code> — cash received from TCS</List.Item>
+                      <List.Item><code>2064 to Meezan Bank</code> — cash paid to Meezan Bank</List.Item>
+                      <List.Item><code>2064 from Meezan Bank to Fabric Supplier</code> — bank pays the supplier; cash is not touched</List.Item>
+                    </List>
+                    <Text as="p">Particulars are optional — omit them and a default description is generated.</Text>
+                    <Text as="p">Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger: <code>3500 from Order# 11473</code></Text>
+                  </BlockStack>
+                </Banner>
+              </Collapsible>
+              {bulkValidated && (!bulkParsed.hasAny
+                ? <Banner tone="warning">No entries to validate.</Banner>
+                : <div className="bulk-entry-validation" dangerouslySetInnerHTML={{ __html: bulkEntryValidationHtml(ledgers, bulkParsed) }} />)}
+              {progress && <Banner tone={progress.kind === 'ok' ? 'success' : progress.kind === 'error' ? 'critical' : 'info'}>{progress.text}</Banner>}
+            </BlockStack>
+          )}
           </div>
-          <div className="modal-pinned-footer">
-            <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-            {mode === 'single' ? (
-              <button type="button" className="btn btn-primary" disabled={saving} onClick={submitSingle}>{saving ? 'Creating...' : 'Create'}</button>
-            ) : (
-              <button type="button" className="btn btn-primary" disabled={saving || !bulkValidated || bulkParsed.hasError || !bulkParsed.hasAny} onClick={submitBulk}>
-                {saving ? 'Creating...' : 'Create entries'}
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
+        </BlockStack>
+      </FormModal>
       {creatingFor && (
         <CreateLedgerModal
           ledgers={ledgers}

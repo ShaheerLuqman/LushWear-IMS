@@ -1,6 +1,11 @@
 // Product details / adjust stock / cost history / edit variant costs / bulk cost
 // price modals. Ported from inventory.js + modals-forms.js.
 import { useEffect, useState } from 'react';
+import { BlockStack, Box, Checkbox, ChoiceList, DescriptionList, FormLayout, InlineStack, Text, TextField } from '@shopify/polaris';
+import { ProductIdentity } from '../../components/ProductIdentity';
+import { StatGrid } from '../../components/StatGrid';
+import { FormModal, InfoModal } from '../../components/FormModal';
+import { ReportTable } from '../../components/ReportTable';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
@@ -10,44 +15,39 @@ import {
   productStockStatus, productStockValue, productUnitCost, sortVariantsBySize, STOCK_STATUS_LABELS, type Product,
 } from '../../logic/products';
 
-function productThumb(product: Product | null | undefined) {
-  return product?.image_url
-    ? <img src={product.image_url} alt="" />
-    : <div className="grid-image-placeholder">No Img</div>;
-}
+const STOCK_TONE = { in: 'success', low: 'warning', out: 'critical' } as const;
 
-function productSubtitle(product: Product | null | undefined) {
-  const collection = product?.collection || '—';
-  const count = (product?.variants || []).length;
-  return `Collection: ${collection} • ${count} variant${count === 1 ? '' : 's'}`;
-}
-
-function ProductIdentity({ product, withStatus = true }: { product: Product | null | undefined; withStatus?: boolean }) {
-  const status = product ? productStockStatus(product) : null;
+function ProductHeader({ product, withStatus = true }: { product: Product; withStatus?: boolean }) {
+  const status = productStockStatus(product);
+  const count = (product.variants || []).length;
   return (
-    <div className="product-details-identity">
-      <div className="product-details-thumb">{productThumb(product)}</div>
-      <div className="product-details-identity-text">
-        <div className="product-details-name-row">
-          <h3>{product?.name || ''}</h3>
-          {withStatus && status && <span className={`grid-status-badge ${status}`}>{STOCK_STATUS_LABELS[status]}</span>}
-        </div>
-        <p className="product-details-sub">{productSubtitle(product)}</p>
-      </div>
-    </div>
+    <ProductIdentity
+      name={product.name || ''} imageUrl={product.image_url}
+      subtitle={`Collection: ${product.collection || '—'} · ${count} variant${count === 1 ? '' : 's'}`}
+      badge={withStatus ? { label: STOCK_STATUS_LABELS[status], tone: STOCK_TONE[status] } : undefined}
+    />
   );
 }
 
-function StockGrid({ rows }: { rows: Array<[string, string]> }) {
+/** Audit + "recalculate orders" fields shared by the cost-price modals. */
+function CostAuditFields({ effectiveFrom, setEffectiveFrom, reason, setReason, recalcAfter, setRecalcAfter, scopeNote }: {
+  effectiveFrom: string; setEffectiveFrom: (v: string) => void; reason: string; setReason: (v: string) => void;
+  recalcAfter: string; setRecalcAfter: (v: string) => void; scopeNote: string;
+}) {
   return (
-    <div className="product-details-stock-grid">
-      {rows.map(([label, value]) => (
-        <div className="product-details-stock-cell" key={label}>
-          <span className="product-details-stock-label">{label}</span>
-          <span className="product-details-stock-value">{value}</span>
-        </div>
-      ))}
-    </div>
+    <>
+      <FormLayout.Group>
+        <TextField label="Applicable from" type="date" autoComplete="off" value={effectiveFrom} onChange={setEffectiveFrom} />
+        <Dropdown label="Reason (optional)" fullWidth placeholder="Select reason" options={COST_REASONS} value={reason} onChange={setReason} />
+      </FormLayout.Group>
+      <Box paddingBlockStart="200" borderBlockStartWidth="025" borderColor="border">
+        <BlockStack gap="200">
+          <Text as="h3" variant="headingSm">Recalculate order costs</Text>
+          <Text as="p" tone="subdued">{scopeNote}</Text>
+          <TextField label="Update orders created on or after" type="datetime-local" autoComplete="off" value={recalcAfter} onChange={setRecalcAfter} />
+        </BlockStack>
+      </Box>
+    </>
   );
 }
 
@@ -76,32 +76,21 @@ export function ProductDetailsModal({
   ];
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content product-details-modal-content">
-        <div className="modal-header">
-          <h2>Product Details</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <ProductIdentity product={product} />
-          <div className="product-details-stock">
-            <StockGrid rows={summary} />
-            {sizes.length > 0 && <StockGrid rows={sizes} />}
-          </div>
-          <dl className="product-details-meta">
-            {meta.map(([k, v]) => (
-              <div className="product-details-meta-row" key={k}><dt>{k}</dt><dd>{v}</dd></div>
-            ))}
-          </dl>
-        </div>
-        <div className="modal-pinned-footer product-details-actions">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
-          <button type="button" className="btn btn-secondary" onClick={() => onUpdateCost(product)}><i className="fa-solid fa-tag" /> Update Cost</button>
-          <button type="button" className="btn btn-secondary" onClick={() => onAdjustStock(product)}><i className="fa-solid fa-boxes-stacked" /> Adjust Stock</button>
-          <button type="button" className="btn btn-primary" onClick={() => onHistory(product)}><i className="fa-solid fa-clock-rotate-left" /> View History</button>
-        </div>
-      </div>
-    </div>
+    <InfoModal
+      title="Product Details" onClose={onClose}
+      actions={[
+        { content: 'Update Cost', onAction: () => onUpdateCost(product) },
+        { content: 'Adjust Stock', onAction: () => onAdjustStock(product) },
+        { content: 'View History', onAction: () => onHistory(product) },
+      ]}
+    >
+      <BlockStack gap="400">
+        <ProductHeader product={product} />
+        <StatGrid rows={summary} />
+        {sizes.length > 0 && <StatGrid rows={sizes} />}
+        <DescriptionList gap="tight" items={meta.map(([term, description]) => ({ term, description }))} />
+      </BlockStack>
+    </InfoModal>
   );
 }
 
@@ -166,58 +155,28 @@ export function AdjustStockModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Adjust Stock</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <ProductIdentity product={product} />
-          <div className="form-group">
-            <label>Adjustment type</label>
-            <div className="adjust-stock-type">
-              <label className="adjust-stock-radio"><input type="radio" name="adjustStockType" checked={type === 'add'} onChange={() => setType('add')} /><span>Add Stock</span></label>
-              <label className="adjust-stock-radio"><input type="radio" name="adjustStockType" checked={type === 'remove'} onChange={() => setType('remove')} /><span>Remove Stock</span></label>
-            </div>
-          </div>
-          <div className="adjust-stock-variants">
-            {variants.map((v) => (
-              <div className="adjust-stock-row" key={v.id}>
-                <span className="adjust-stock-row-title">{v.title}<span className="adjust-stock-row-current">in stock: {v.quantity || 0}</span></span>
-                <input
-                  type="number" className="form-input adjust-stock-input" min={0} step={1} placeholder="0"
-                  value={qtyByVariant[v.id] || ''}
-                  onChange={(e) => setQtyByVariant((prev) => ({ ...prev, [v.id]: e.target.value }))}
-                />
-              </div>
-            ))}
-          </div>
-          <div className="adjust-stock-meta">
-            <div className="form-group">
-              <label htmlFor="adjustStockReason">Reason *</label>
-              <select id="adjustStockReason" className="form-input" value={reason} onChange={(e) => setReason(e.target.value)}>
-                <option value="">Select reason</option>
-                <option value="Stock Count Correction">Stock Count Correction</option>
-                <option value="Damaged / Written Off">Damaged / Written Off</option>
-                <option value="Returned to Supplier">Returned to Supplier</option>
-                <option value="Customer Return">Customer Return</option>
-                <option value="Transfer">Transfer</option>
-                <option value="Other">Other</option>
-              </select>
-            </div>
-            <div className="form-group">
-              <label htmlFor="adjustStockNotes">Notes (optional)</label>
-              <textarea id="adjustStockNotes" className="form-input adjust-stock-notes" rows={3} placeholder="Add a note..." value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </div>
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Updating...' : 'Update Stock'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Adjust Stock" onClose={onClose} onSubmit={submit} submitLabel="Update Stock" saving={saving}>
+      <BlockStack gap="400">
+        <ProductHeader product={product} />
+        <ChoiceList
+          title="Adjustment type" selected={[type]} onChange={(v) => setType(v[0] as 'add' | 'remove')}
+          choices={[{ value: 'add', label: 'Add Stock' }, { value: 'remove', label: 'Remove Stock' }]}
+        />
+        <FormLayout>
+          {variants.map((v) => (
+            <TextField
+              key={v.id} label={`${v.title} · in stock: ${v.quantity || 0}`} type="number" autoComplete="off" min={0} step={1} placeholder="0"
+              value={qtyByVariant[v.id] || ''} onChange={(val) => setQtyByVariant((prev) => ({ ...prev, [v.id]: val }))}
+            />
+          ))}
+          <Dropdown
+            label="Reason" fullWidth placeholder="Select reason" value={reason} onChange={setReason}
+            options={['Stock Count Correction', 'Damaged / Written Off', 'Returned to Supplier', 'Customer Return', 'Transfer', 'Other']}
+          />
+          <TextField label="Notes (optional)" autoComplete="off" multiline={3} placeholder="Add a note..." value={notes} onChange={setNotes} />
+        </FormLayout>
+      </BlockStack>
+    </FormModal>
   );
 }
 
@@ -245,42 +204,19 @@ export function CostHistoryModal({ product, onClose }: { product: Product | null
   if (!product) return null;
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content cost-history-modal-content">
-        <div className="modal-header">
-          <h2>Cost History</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <ProductIdentity product={product} withStatus={false} />
-          <div className="cost-history-table-wrap">
-            <table className="cost-history-table">
-              <thead><tr><th>Date</th><th>Variant</th><th>Cost per Unit</th><th>Changed By</th><th>Reason</th></tr></thead>
-              <tbody>
-                {error ? (
-                  <tr><td colSpan={5} className="cost-history-empty">{error}</td></tr>
-                ) : rows == null ? (
-                  <tr><td colSpan={5} className="cost-history-empty">Loading…</td></tr>
-                ) : rows.length === 0 ? (
-                  <tr><td colSpan={5} className="cost-history-empty">No cost changes recorded yet. Costs set by receiving a purchase bill are audited on that bill.</td></tr>
-                ) : rows.map((r, i) => (
-                  <tr key={i}>
-                    <td>{formatDateTimeDDMMYYYY(r.created_at)}</td>
-                    <td>{r.variant_title || 'All variants'}</td>
-                    <td>{r.new_cost_price == null ? '—' : `PKR ${formatAmount(r.new_cost_price)}`}</td>
-                    <td>{r.changed_by_name || 'System'}</td>
-                    <td>{r.reason || '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
+    <InfoModal title="Cost History" onClose={onClose} size="large">
+      <BlockStack gap="400">
+        <ProductHeader product={product} withStatus={false} />
+        <ReportTable
+          headings={['Date', 'Variant', 'Cost per Unit', 'Changed By', 'Reason']} numeric={[2]}
+          emptyMessage={error || (rows == null ? 'Loading…' : 'No cost changes recorded yet. Costs set by receiving a purchase bill are audited on that bill.')}
+          rows={(error ? [] : rows || []).map((r) => [
+            formatDateTimeDDMMYYYY(r.created_at), r.variant_title || 'All variants',
+            r.new_cost_price == null ? '—' : `PKR ${formatAmount(r.new_cost_price)}`, r.changed_by_name || 'System', r.reason || '—',
+          ])}
+        />
+      </BlockStack>
+    </InfoModal>
   );
 }
 
@@ -401,70 +337,31 @@ export function EditVariantCostsModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Update Cost — {product.name}</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Blank falls back to the product's own cost price.</p>
-          {multiVariant && (
-            <label className="ledger-form-toggle">
-              <input type="checkbox" checked={perVariant} onChange={(e) => setPerVariant(e.target.checked)} />
-              <span>Set cost price separately for each variant</span>
-            </label>
-          )}
-          <div className="edit-variant-costs-current">
-            <span className="edit-variant-costs-current-label">Current cost per unit</span>
-            <span className="edit-variant-costs-current-value">{currentCost != null ? `PKR ${formatAmount(currentCost)}` : (variants.length ? 'Mixed across variants' : '—')}</span>
-          </div>
-          {sharedMode ? (
-            <div className="form-group">
-              <label htmlFor="editVariantCostsSharedInput">New cost per unit (Rs)</label>
-              <input type="number" id="editVariantCostsSharedInput" className="form-input" min={0} step={0.01} placeholder="0.00" value={sharedCost} onChange={(e) => setSharedCost(e.target.value)} />
-            </div>
-          ) : (
-            <div className="edit-variant-costs-list">
-              {rows.map((r) => (
-                <div className="edit-variant-costs-row" key={r.id}>
-                  <span className="edit-variant-costs-title">{r.title}{r.qty != null && <span className="edit-variant-costs-qty"> (qty: {r.qty})</span>}</span>
-                  <input
-                    type="number" className="edit-variant-costs-input" min={0} step={0.01} placeholder="0.00"
-                    value={rowCosts[r.id] || ''} onChange={(e) => setRowCosts((prev) => ({ ...prev, [r.id]: e.target.value }))}
-                  />
-                </div>
-              ))}
-            </div>
-          )}
-          <div className="edit-variant-costs-meta">
-            <div className="form-group">
-              <label htmlFor="editVariantCostsEffectiveFrom">Applicable from</label>
-              <input type="date" id="editVariantCostsEffectiveFrom" className="form-input" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="editVariantCostsReason">Reason (optional)</label>
-              <Dropdown id="editVariantCostsReason" fullWidth placeholder="Select reason" options={COST_REASONS} value={reason} onChange={setReason} />
-            </div>
-          </div>
-          <div className="edit-variant-costs-recalc">
-            <h3>Recalculate order costs</h3>
-            <p className="modal-description">Refresh order cost totals from the costs above. Only orders on or after the date below that include this product are updated.</p>
-            <div className="form-group">
-              <label htmlFor="editVariantCostsRecalcCreatedAfter">Update orders created on or after *</label>
-              <input type="datetime-local" id="editVariantCostsRecalcCreatedAfter" className="form-input" required value={recalcAfter} onChange={(e) => setRecalcAfter(e.target.value)} />
-            </div>
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={!!saving} onClick={submitSave}>{saving === 'save' ? 'Saving...' : 'Save'}</button>
-          <button type="button" className="btn btn-secondary" disabled={!!saving || !recalcAfter} onClick={submitSaveAndRecalc}>
-            {saving === 'recalc' ? 'Saving...' : 'Save and recalculate orders'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <FormModal
+      title={`Update Cost — ${product.name}`} onClose={onClose} onSubmit={submitSave} saving={saving === 'save'} disabled={!!saving}
+      extraActions={[{ content: 'Save and recalculate orders', loading: saving === 'recalc', disabled: !!saving || !recalcAfter, onAction: submitSaveAndRecalc }]}
+    >
+      <FormLayout>
+        <Text as="p" tone="subdued">Blank falls back to the product's own cost price.</Text>
+        <InlineStack gap="200" blockAlign="center">
+          <Text as="span" tone="subdued">Current cost per unit:</Text>
+          <Text as="span" fontWeight="semibold">{currentCost != null ? `PKR ${formatAmount(currentCost)}` : (variants.length ? 'Mixed across variants' : '—')}</Text>
+        </InlineStack>
+        {multiVariant && <Checkbox label="Set cost price separately for each variant" checked={perVariant} onChange={setPerVariant} />}
+        {sharedMode ? (
+          <TextField label="New cost per unit (Rs)" type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00" value={sharedCost} onChange={setSharedCost} />
+        ) : rows.map((r) => (
+          <TextField
+            key={r.id} label={r.qty != null ? `${r.title} (qty: ${r.qty})` : r.title} type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00"
+            value={rowCosts[r.id] || ''} onChange={(val) => setRowCosts((prev) => ({ ...prev, [r.id]: val }))}
+          />
+        ))}
+        <CostAuditFields
+          effectiveFrom={effectiveFrom} setEffectiveFrom={setEffectiveFrom} reason={reason} setReason={setReason} recalcAfter={recalcAfter} setRecalcAfter={setRecalcAfter}
+          scopeNote="Refresh order cost totals from the costs above. Only orders on or after the date below that include this product are updated."
+        />
+      </FormLayout>
+    </FormModal>
   );
 }
 
@@ -534,45 +431,18 @@ export function BulkUpdateCostPriceModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Bulk update cost price</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Set the cost price (Rs) for {productIds.length === 1 ? '1 product' : `${productIds.length} products`}. This also applies to every variant of each selected product.</p>
-          <div className="form-group" style={{ marginTop: 16 }}>
-            <label htmlFor="bulkUpdateCostPriceValue">Cost price (Rs) *</label>
-            <input type="number" id="bulkUpdateCostPriceValue" className="form-input" min={0} step={0.01} placeholder="0.00" value={cost} onChange={(e) => setCost(e.target.value)} autoFocus />
-          </div>
-          <div className="edit-variant-costs-meta">
-            <div className="form-group">
-              <label htmlFor="bulkUpdateCostPriceEffectiveFrom">Applicable from</label>
-              <input type="date" id="bulkUpdateCostPriceEffectiveFrom" className="form-input" value={effectiveFrom} onChange={(e) => setEffectiveFrom(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="bulkUpdateCostPriceReason">Reason (optional)</label>
-              <Dropdown id="bulkUpdateCostPriceReason" fullWidth placeholder="Select reason" options={COST_REASONS} value={reason} onChange={setReason} />
-            </div>
-          </div>
-          <div className="edit-variant-costs-recalc">
-            <h3>Recalculate order costs</h3>
-            <p className="modal-description">Refresh order cost totals from the new costs. Only orders on or after the date below that include one of the selected products are updated.</p>
-            <div className="form-group">
-              <label htmlFor="bulkUpdateCostPriceRecalcCreatedAfter">Update orders created on or after *</label>
-              <input type="datetime-local" id="bulkUpdateCostPriceRecalcCreatedAfter" className="form-input" value={recalcAfter} onChange={(e) => setRecalcAfter(e.target.value)} />
-            </div>
-          </div>
-        </div>
-        <div className="bulk-update-actions modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={!!saving} onClick={submitSave}>{saving === 'save' ? 'Updating...' : 'Confirm'}</button>
-          <button type="button" className="btn btn-secondary" disabled={!!saving || !recalcAfter} onClick={submitSaveAndRecalc}>
-            {saving === 'recalc' ? 'Saving...' : 'Save and recalculate orders'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <FormModal
+      title="Bulk update cost price" onClose={onClose} onSubmit={submitSave} submitLabel="Confirm" saving={saving === 'save'} disabled={!!saving}
+      extraActions={[{ content: 'Save and recalculate orders', loading: saving === 'recalc', disabled: !!saving || !recalcAfter, onAction: submitSaveAndRecalc }]}
+    >
+      <FormLayout>
+        <Text as="p" tone="subdued">Set the cost price (Rs) for {productIds.length === 1 ? '1 product' : `${productIds.length} products`}. This also applies to every variant of each selected product.</Text>
+        <TextField label="Cost price (Rs)" type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00" requiredIndicator autoFocus value={cost} onChange={setCost} />
+        <CostAuditFields
+          effectiveFrom={effectiveFrom} setEffectiveFrom={setEffectiveFrom} reason={reason} setReason={setReason} recalcAfter={recalcAfter} setRecalcAfter={setRecalcAfter}
+          scopeNote="Refresh order cost totals from the new costs. Only orders on or after the date below that include one of the selected products are updated."
+        />
+      </FormLayout>
+    </FormModal>
   );
 }

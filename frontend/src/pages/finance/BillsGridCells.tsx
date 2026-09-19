@@ -1,9 +1,9 @@
-// Bills grid column defs + cell renderers - ported from bills.js's
-// supplierCellRenderer/createBillViewButton/createBillRowMenu.
-import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
+// Bills table columns and row cells.
 import { useNavigate } from 'react-router-dom';
-import type { ColDef } from 'ag-grid-community';
+import { Badge, Button, InlineStack, Text } from '@shopify/polaris';
+import { ArrowRightIcon, ViewIcon } from '@shopify/polaris-icons';
+import type { DataColumn } from '../../components/DataTable';
+import { RowActions } from '../../components/RowActions';
 import { formatMoney, ledgerNameById, type Ledger } from '../../logic/ledgers';
 import { formatDateDDMMYYYY } from '../../logic/shared';
 import { BILL_STATUS_LABELS } from '../../logic/bills';
@@ -22,101 +22,49 @@ export interface BillsColumnsCtx {
   onDelete: (bill: Bill) => void;
 }
 
-function SupplierCell({ bill, ctx }: { bill: Bill; ctx: BillsColumnsCtx }) {
+const STATUS_TONE: Record<string, 'success' | 'attention' | 'critical' | 'info'> = { paid: 'success', partially_paid: 'attention', unpaid: 'attention', cancelled: 'critical' };
+
+/** Ledger name with a "go to ledger" arrow - shared with the Transactions folio cells. */
+export function LedgerLink({ id, name }: { id?: string | null; name: string }) {
   const navigate = useNavigate();
-  const name = ledgerNameById(ctx.ledgers, bill.supplier_id);
   return (
-    <div className="folio-dropdown">
-      <span className="folio-display-text">{bill.supplier_id ? name : ''}</span>
-      <button
-        type="button" className="folio-goto-btn" title={bill.supplier_id ? `Go to ${name}` : 'No supplier'}
-        style={{ opacity: bill.supplier_id ? 1 : 0.4, cursor: bill.supplier_id ? 'pointer' : 'not-allowed' }}
-        onClick={(e) => { e.stopPropagation(); if (bill.supplier_id) navigate(`/ledgers/${bill.supplier_id}`); }}
-      >
-        <i className="fa-solid fa-arrow-right" />
-      </button>
-    </div>
+    <InlineStack gap="100" blockAlign="center" wrap={false}>
+      {name && <Text as="span" fontWeight="semibold">{name}</Text>}
+      <Button icon={ArrowRightIcon} variant="tertiary" size="micro" disabled={!id} accessibilityLabel={id ? `Go to ${name}` : 'No ledger'} onClick={() => { if (id) navigate(`/ledgers/${id}`); }} />
+    </InlineStack>
   );
 }
 
-function ViewButton({ bill, ctx }: { bill: Bill; ctx: BillsColumnsCtx }) {
-  if (!bill?.id) return null;
-  return (
-    <div className="bill-cell-center">
-      <button type="button" className="bill-view-btn" title="View bill" onClick={() => ctx.onView(bill)}>
-        <i className="fa-solid fa-eye" /><span>View Bill</span>
-      </button>
-    </div>
-  );
-}
-
-function RowMenu({ bill, ctx }: { bill: Bill; ctx: BillsColumnsCtx }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  const btnRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.bill-menu-panel') && target !== btnRef.current) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  if (!bill?.id || (bill.status !== 'draft' && bill.status !== 'received')) return null;
-
-  function toggle() {
-    if (!open && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 2, left: Math.max(rect.right - 180, 8) });
-    }
-    setOpen((v) => !v);
-  }
-
-  const item = (label: string, icon: string, danger: boolean, onClick: () => void) => (
-    <div className={'folio-dropdown-option' + (danger ? ' bill-menu-option-danger' : '')} onClick={() => { setOpen(false); onClick(); }}>
-      <i className={`fa-solid ${icon}`} /><span>{label}</span>
-    </div>
-  );
-
-  return (
-    <div className="bill-cell-center">
-      <button ref={btnRef} type="button" className={'bill-menu-btn' + (open ? ' open' : '')} title="More actions" onClick={(e) => { e.stopPropagation(); toggle(); }}>
-        <i className="fa-solid fa-ellipsis" />
-      </button>
-      {open && createPortal(
-        <div className="folio-dropdown-panel bill-menu-panel" style={{ top: pos.top, left: pos.left }}>
-          {bill.status === 'draft' && item('Confirm Bill', 'fa-check', false, () => ctx.onReceive(bill))}
-          {bill.status === 'draft' && item('Delete', 'fa-trash', true, () => ctx.onDelete(bill))}
-          {bill.status === 'received' && item('Revert to Draft', 'fa-rotate-left', false, () => ctx.onUnreceive(bill))}
-          {bill.status === 'received' && item('Cancel', 'fa-ban', true, () => ctx.onCancel(bill))}
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
-}
-
-export function buildBillsColumnDefs(ctx: BillsColumnsCtx): ColDef[] {
+export function buildBillsColumns(ctx: BillsColumnsCtx): DataColumn<Bill>[] {
+  const supplier = (b: Bill) => (b.supplier_id ? ledgerNameById(ctx.ledgers, b.supplier_id) : '');
   return [
-    { headerName: 'Bill #', field: 'bill_number', flex: 12, minWidth: 110 },
+    { key: 'bill_number', heading: 'Bill #', render: (b) => <Text as="span" fontWeight="semibold">{b.bill_number || ''}</Text>, sortValue: (b) => b.bill_number },
+    { key: 'supplier', heading: 'Supplier', render: (b) => <LedgerLink id={b.supplier_id} name={supplier(b)} />, sortValue: supplier },
+    { key: 'supplier_ref', heading: 'Supplier ref', render: (b) => b.supplier_ref || '', sortValue: (b) => b.supplier_ref },
+    { key: 'bill_date', heading: 'Date', render: (b) => (b.bill_date ? formatDateDDMMYYYY(b.bill_date) : ''), sortValue: (b) => b.bill_date },
+    { key: 'total', heading: 'Total (Rs)', alignment: 'end', render: (b) => formatMoney(b.total), sortValue: (b) => Number(b.total) || 0 },
+    { key: 'outstanding', heading: 'Outstanding (Rs)', alignment: 'end', render: (b) => formatMoney(b.outstanding), sortValue: (b) => Number(b.outstanding) || 0 },
     {
-      headerName: 'Supplier', field: 'supplier_id', flex: 25, minWidth: 160,
-      valueGetter: (p: any) => ledgerNameById(ctx.ledgers, p.data?.supplier_id),
-      cellRenderer: (p: any) => <SupplierCell bill={p.data} ctx={ctx} />,
+      key: 'payment_status', heading: 'Status', sortValue: (b) => b.payment_status,
+      render: (b) => <Badge tone={STATUS_TONE[b.payment_status || '']}>{BILL_STATUS_LABELS[b.payment_status || ''] || b.payment_status || ''}</Badge>,
     },
-    { headerName: 'Supplier ref', field: 'supplier_ref', flex: 12, minWidth: 120 },
-    { headerName: 'Date', field: 'bill_date', flex: 10, minWidth: 100, valueFormatter: (p: any) => (p.value ? formatDateDDMMYYYY(p.value) : '') },
-    { headerName: 'Total (Rs)', field: 'total', flex: 11, minWidth: 110, type: 'rightAligned', cellClass: 'bill-amount-cell', valueFormatter: (p: any) => formatMoney(p.value) },
-    { headerName: 'Outstanding (Rs)', field: 'outstanding', flex: 12, minWidth: 130, type: 'rightAligned', cellClass: 'bill-amount-cell', valueFormatter: (p: any) => formatMoney(p.value) },
     {
-      headerName: 'Status', field: 'payment_status', flex: 11, minWidth: 110,
-      valueFormatter: (p: any) => BILL_STATUS_LABELS[p.value] || p.value || '',
-      cellClass: (p: any) => `bill-status bill-status-${p.value || ''}`,
+      key: 'actions', heading: '', alignment: 'end',
+      render: (b) => (
+        <InlineStack gap="100" blockAlign="center" align="end" wrap={false}>
+          <Button icon={ViewIcon} size="slim" onClick={() => ctx.onView(b)}>View Bill</Button>
+          <RowActions items={[
+            ...(b.status === 'draft' ? [
+              { content: 'Confirm Bill', onAction: () => ctx.onReceive(b) },
+              { content: 'Delete', destructive: true, onAction: () => ctx.onDelete(b) },
+            ] : []),
+            ...(b.status === 'received' ? [
+              { content: 'Revert to Draft', onAction: () => ctx.onUnreceive(b) },
+              { content: 'Cancel', destructive: true, onAction: () => ctx.onCancel(b) },
+            ] : []),
+          ]} />
+        </InlineStack>
+      ),
     },
-    { headerName: '', colId: 'view', flex: 8, width: 92, minWidth: 92, sortable: false, filter: false, cellRenderer: (p: any) => <ViewButton bill={p.data} ctx={ctx} /> },
-    { headerName: '', colId: 'actions', flex: 3, width: 40, minWidth: 40, sortable: false, filter: false, cellRenderer: (p: any) => <RowMenu bill={p.data} ctx={ctx} /> },
   ];
 }

@@ -1,16 +1,19 @@
-// One ledger's statement: read-only, grouped into collapsible month blocks with a
-// running balance. Ported from ledgers.js's openLedgerDetail/renderLedgerDetailGrid.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
+import { Button, InlineStack, Text } from '@shopify/polaris';
+import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon } from '@shopify/polaris-icons';
 import { apiJson } from '../../api';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { DataTable, type DataColumn } from '../../components/DataTable';
 import { formatAmount, formatDateDDMMYYYY } from '../../logic/shared';
 import {
   CREDIT_NORMAL_TYPES, formatBalanceWithSide, LEDGER_VOUCHER_LABELS, withLedgerMonthRows,
-  type Ledger, type LedgerStatementEntry,
+  type Ledger, type LedgerMonthRow, type LedgerStatementEntry,
 } from '../../logic/ledgers';
+
+type StatementEntry = LedgerStatementEntry & { balance: number; monthBalance: number };
+type StatementRow = StatementEntry | LedgerMonthRow;
+const isMonthRow = (r: StatementRow): r is LedgerMonthRow => (r as LedgerMonthRow).month_row === true;
 
 function formatTransactionCell(value: unknown): string {
   if (value == null || value === '' || value === 0) return '';
@@ -21,33 +24,18 @@ function ParticularsCell({ entry }: { entry: LedgerStatementEntry }) {
   const navigate = useNavigate();
   const canGoTo = (entry.source_type === 'transaction_entry' || entry.source_type === 'bill') && !!entry.source_id;
   return (
-    <div className="folio-dropdown">
-      <span className="folio-display-text">{entry.particulars || ''}</span>
+    <InlineStack gap="100" blockAlign="center" wrap={false}>
+      <span>{entry.particulars || ''}</span>
       {canGoTo && (
-        <button
-          type="button" className="folio-goto-btn" title={entry.source_type === 'bill' ? 'Go to bill' : 'Go to transaction'}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (entry.source_type === 'transaction_entry') {
-              navigate('/transactions', { state: { focusDate: entry.entry_date, focusId: entry.source_id } });
-            } else {
-              navigate('/bills', { state: { focusId: entry.source_id } });
-            }
+        <Button
+          icon={ArrowRightIcon} variant="tertiary" size="micro" accessibilityLabel={entry.source_type === 'bill' ? 'Go to bill' : 'Go to transaction'}
+          onClick={() => {
+            if (entry.source_type === 'transaction_entry') navigate('/transactions', { state: { focusDate: entry.entry_date, focusId: entry.source_id } });
+            else navigate('/bills', { state: { focusId: entry.source_id } });
           }}
-        >
-          <i className="fa-solid fa-arrow-right" />
-        </button>
+        />
       )}
-    </div>
-  );
-}
-
-function MonthRow({ collapsed, label, balance, onToggle }: { collapsed: boolean; label: string; balance: number; onToggle: () => void }) {
-  return (
-    <div className={'ledger-month-row' + (collapsed ? ' ledger-month-row-collapsed' : '')} onClick={onToggle}>
-      <span className="ledger-month-row-label"><i className={`fa-solid ${collapsed ? 'fa-chevron-right' : 'fa-chevron-down'}`} />{label}</span>
-      <span className="ledger-month-row-balance">{formatBalanceWithSide(balance)}</span>
-    </div>
+    </InlineStack>
   );
 }
 
@@ -57,14 +45,13 @@ export function LedgerDetailPage() {
   const [ledger, setLedger] = useState<Ledger | null>(null);
   const [entries, setEntries] = useState<LedgerStatementEntry[]>([]);
   const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
-  const gridApiRef = useRef<GridApi | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     (async () => {
-      gridApiRef.current?.showLoadingOverlay();
-      let entryCount = 0;
+      setLoading(true);
       try {
         const [ledgerData, rawEntries] = await Promise.all([
           apiJson<Ledger>(`/ledgers/${id}`, { fallback: 'Failed to load ledger' }),
@@ -73,7 +60,6 @@ export function LedgerDetailPage() {
         if (cancelled) return;
         setLedger(ledgerData);
         const normalized = rawEntries.map((e) => ({ ...e, entry_date: e.entry_date ? String(e.entry_date).slice(0, 10) : '' }));
-        entryCount = normalized.length;
         setEntries(normalized);
         // Only the current month starts expanded; every other month collapses by default.
         const currentMonth = new Date().toISOString().slice(0, 7);
@@ -82,7 +68,7 @@ export function LedgerDetailPage() {
         console.error('Error loading ledger:', error);
         navigate('/ledgers');
       } finally {
-        if (!cancelled) { if (entryCount === 0) gridApiRef.current?.showNoRowsOverlay(); else gridApiRef.current?.hideOverlay(); }
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
@@ -92,12 +78,15 @@ export function LedgerDetailPage() {
   // of Nature. No synthetic opening-balance row: it's a real journal line, so it arrives
   // like any other row. Rows are already ordered by the get_ledger_statement RPC.
   const rowsWithBalance = useMemo(() => {
-    let running = 0;
+    let running = 0, monthRunning = 0, prevMonth = '';
     return entries.map((entry) => {
+      const month = (entry.entry_date || '').slice(0, 7);
+      if (month !== prevMonth) { monthRunning = 0; prevMonth = month; }
       const debit = parseFloat(String(entry.debit)) || 0;
       const credit = parseFloat(String(entry.credit)) || 0;
       running += debit - credit;
-      return { ...entry, debit, credit, balance: running };
+      monthRunning += debit - credit;
+      return { ...entry, debit, credit, balance: running, monthBalance: monthRunning };
     });
   }, [entries]);
 
@@ -114,53 +103,43 @@ export function LedgerDetailPage() {
     });
   }
 
-  const columnDefs: ColDef[] = useMemo(() => [
-    { headerName: 'Date', field: 'entry_date', width: 130, editable: false, valueFormatter: (p: any) => (p.value ? formatDateDDMMYYYY(p.value) : '') },
+  const balanceTone = (val: number) => {
+    if (!val) return undefined;
+    const isBad = CREDIT_NORMAL_TYPES.includes(ledger?.type || '') ? val > 0 : val < 0;
+    return isBad ? 'critical' as const : undefined;
+  };
+  const entry = (r: StatementRow) => r as StatementEntry;
+  const balanceCell = (r: StatementRow, value: number) => (
+    <Text as="span" tone={balanceTone(value)} fontWeight={isMonthRow(r) ? 'semibold' : undefined}>{formatBalanceWithSide(value)}</Text>
+  );
+  const columns: DataColumn<StatementRow>[] = [
     {
-      headerName: 'Particulars', field: 'particulars', flex: 2, editable: false,
-      cellRenderer: (p: any) => <ParticularsCell entry={p.data} />,
+      key: 'entry_date', heading: 'Date',
+      render: (r) => (isMonthRow(r) ? (
+        <InlineStack gap="200" blockAlign="center" wrap={false}>
+          <Button icon={r.collapsed ? ChevronRightIcon : ChevronDownIcon} variant="tertiary" size="micro" accessibilityLabel={r.collapsed ? 'Expand month' : 'Collapse month'} onClick={() => toggleMonth(r.month)} />
+          <Text as="span" variant="headingXs">{r.label}</Text>
+        </InlineStack>
+      ) : entry(r).entry_date ? formatDateDDMMYYYY(entry(r).entry_date!) : ''),
     },
-    {
-      headerName: 'Type', field: 'voucher_type', width: 110, editable: false,
-      valueFormatter: (p: any) => LEDGER_VOUCHER_LABELS[p.value] || p.value || '',
-    },
-    { headerName: 'Debit (Rs)', field: 'debit', width: 140, editable: false, valueFormatter: (p: any) => formatTransactionCell(p.value) },
-    { headerName: 'Credit (Rs)', field: 'credit', width: 140, editable: false, valueFormatter: (p: any) => formatTransactionCell(p.value) },
-    {
-      headerName: 'Balance (Rs)', field: 'balance', width: 160, editable: false,
-      valueFormatter: (p: any) => (p.value === '' || p.value == null ? '' : formatBalanceWithSide(p.value)),
-      cellStyle: (p: any) => {
-        const val = parseFloat(p.value);
-        if (Number.isNaN(val) || val === 0) return { color: 'var(--text-primary)' };
-        const isBad = CREDIT_NORMAL_TYPES.includes(ledger?.type || '') ? val > 0 : val < 0;
-        return { color: isBad ? 'var(--danger)' : 'var(--text-primary)' };
-      },
-    },
-  ], [ledger]);
+    { key: 'particulars', heading: 'Particulars', render: (r) => (isMonthRow(r) ? '' : <ParticularsCell entry={entry(r)} />) },
+    { key: 'voucher_type', heading: 'Type', render: (r) => (isMonthRow(r) ? '' : LEDGER_VOUCHER_LABELS[entry(r).voucher_type || ''] || entry(r).voucher_type || '') },
+    { key: 'debit', heading: 'Debit (Rs)', alignment: 'end', render: (r) => (isMonthRow(r) ? '' : formatTransactionCell(entry(r).debit)) },
+    { key: 'credit', heading: 'Credit (Rs)', alignment: 'end', render: (r) => (isMonthRow(r) ? '' : formatTransactionCell(entry(r).credit)) },
+    { key: 'month_balance', heading: 'Month Balance (Rs)', alignment: 'end', render: (r) => balanceCell(r, isMonthRow(r) ? r.balance : entry(r).monthBalance) },
+    { key: 'balance', heading: 'Balance (Rs)', alignment: 'end', render: (r) => balanceCell(r, isMonthRow(r) ? r.runningBalance : entry(r).balance) },
+  ];
 
-  usePageHeader({ title: ledger?.name || 'Ledger' });
+  usePageHeader({
+    title: ledger?.name || 'Ledger',
+    actions: <Button icon={ArrowLeftIcon} onClick={() => navigate('/ledgers')}>Back to Ledgers</Button>,
+  });
 
   return (
-    <>
-      <div className="ledger-detail-header">
-        <button className="btn btn-secondary btn-sm" onClick={() => navigate('/ledgers')}><i className="fa-solid fa-arrow-left" /> Back to Ledgers</button>
-        <h2 className="ledger-detail-title">{ledger?.name || ''}</h2>
-      </div>
-      <div className="ag-theme-alpine grid-container">
-        <AgGridReact
-          columnDefs={columnDefs}
-          rowData={monthRows}
-          defaultColDef={{ sortable: true, resizable: true, filter: true, floatingFilter: true, minWidth: 80 }}
-          animateRows
-          pagination={false}
-          domLayout="normal"
-          getRowId={(p) => p.data.id}
-          isFullWidthRow={(p) => !!(p.rowNode.data as any)?.month_row}
-          fullWidthCellRenderer={(p: any) => <MonthRow collapsed={p.data.collapsed} label={p.data.label} balance={p.data.balance} onToggle={() => toggleMonth(p.data.month)} />}
-          getRowHeight={(p) => ((p.data as any)?.month_row ? 40 : undefined)}
-          onGridReady={(e: GridReadyEvent) => { gridApiRef.current = e.api; }}
-        />
-      </div>
-    </>
+    <DataTable
+      columns={columns} rows={monthRows as StatementRow[]} rowId={(r) => r.id} loading={loading}
+      resourceName={{ singular: 'entry', plural: 'entries' }} emptyMessage="No entries yet"
+      rowTone={(r) => (isMonthRow(r) ? 'subdued' : undefined)}
+    />
   );
 }

@@ -1,8 +1,9 @@
-// Change password modal, opened from Settings > Account. Ported from the deleted
-// app-core.js's initChangePasswordModal.
+// Change password modal, opened from Settings > Account.
 import { useState } from 'react';
+import { FormLayout, InlineError, TextField } from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
+import { FormModal } from '../../components/FormModal';
 
 export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   const { showToast } = useToast();
@@ -14,6 +15,7 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
 
   async function submit() {
     setError('');
+    if (current.length < 8 || next.length < 8) { setError('Passwords must be at least 8 characters'); return; }
     if (next !== confirm) { setError('New passwords do not match'); return; }
     setSaving(true);
     try {
@@ -28,34 +30,13 @@ export function ChangePasswordModal({ onClose }: { onClose: () => void }) {
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content password-change-modal-content">
-        <div className="modal-header">
-          <h2>Change password</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <form className="password-change-form" autoComplete="off" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-            <div className="form-group">
-              <label htmlFor="changePasswordCurrent">Current password</label>
-              <input type="password" id="changePasswordCurrent" className="auth-gate-input" minLength={8} maxLength={128} required autoComplete="current-password" value={current} onChange={(e) => setCurrent(e.target.value)} autoFocus />
-            </div>
-            <div className="form-group">
-              <label htmlFor="changePasswordNew">New password</label>
-              <input type="password" id="changePasswordNew" className="auth-gate-input" minLength={8} maxLength={128} required autoComplete="new-password" value={next} onChange={(e) => setNext(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="changePasswordNewConfirm">Confirm new password</label>
-              <input type="password" id="changePasswordNewConfirm" className="auth-gate-input" minLength={8} maxLength={128} required autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-            </div>
-            {error && <p className="auth-gate-error" role="alert">{error}</p>}
-          </form>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving...' : 'Save password'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Change password" onClose={onClose} onSubmit={submit} submitLabel="Save password" saving={saving} size="small">
+      <FormLayout>
+        <TextField label="Current password" type="password" autoComplete="current-password" maxLength={128} value={current} onChange={setCurrent} autoFocus />
+        <TextField label="New password" type="password" autoComplete="new-password" maxLength={128} value={next} onChange={setNext} />
+        <TextField label="Confirm new password" type="password" autoComplete="new-password" maxLength={128} value={confirm} onChange={setConfirm} />
+        {error && <InlineError message={error} fieldID="changePassword" />}
+      </FormLayout>
+    </FormModal>
   );
 }

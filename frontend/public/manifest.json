@@ -1,6 +1,6 @@
 {
-    "name": "SoftLush Inventory Manager",
-    "short_name": "SoftLush IMS",
+    "name": "QuikMerchant",
+    "short_name": "QuikMerchant",
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
@@ -8,7 +8,7 @@
     "theme_color": "#2563eb",
     "icons": [
         {
-            "src": "/assets/Logo.png",
+            "src": "/assets/QuikMerchantLogo258.png",
             "sizes": "258x258",
             "type": "image/png",
             "purpose": "any"
@@ -21,7 +21,7 @@
             "url": "/?action=create-entry",
             "icons": [
                 {
-                    "src": "/assets/Logo.png",
+                    "src": "/assets/QuikMerchantLogo258.png",
                     "sizes": "258x258",
                     "type": "image/png"
                 }
@@ -33,7 +33,7 @@
             "url": "/?action=bulk-entry",
             "icons": [
                 {
-                    "src": "/assets/Logo.png",
+                    "src": "/assets/QuikMerchantLogo258.png",
                     "sizes": "258x258",
                     "type": "image/png"
                 }

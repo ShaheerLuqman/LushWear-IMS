@@ -1,7 +1,7 @@
 // Shared by Product Analytics and City Analytics - both read from a get_*_analytics
 // RPC that aggregates the picked range plus the equal-length window before it, and
 // both use the same time-preset set (deliberately not the shared buildDateRangePresets
-// in dateRangePicker.ts - these presets end "yesterday" for last7/last30 since today's
+// in DateRangePopover.tsx - these presets end "yesterday" for last7/last30 since today's
 // figures are still accumulating, and keep "Maximum"/"This week" wording).
 import { getPKTDate } from './shared';
 

@@ -1,4 +1,4 @@
-import { Navigate, Route, BrowserRouter, Routes } from 'react-router-dom';
+import { Navigate, Route, BrowserRouter, Routes, useLocation } from 'react-router-dom';
 import { useAuth } from './auth/AuthContext';
 import { AuthGate } from './AuthGate';
 import { AppShell } from './layout/AppShell';
@@ -26,7 +26,7 @@ function LoadingScreen() {
   return (
     <div className="loading-screen" style={{ display: 'flex' }}>
       <div className="loading-content">
-        <img src="/assets/Logo_Large.png" alt="SoftLush" className="loading-logo" />
+        <img src="/assets/Logo_Large.png" alt="QuikMerchant" className="loading-logo" />
         <div className="loading-spinner" />
         <p>Loading your data...</p>
       </div>
@@ -38,6 +38,12 @@ function LoadingScreen() {
  * Orders - a finance-only org would otherwise land on a hidden/blocked view. */
 function DefaultRedirect() {
   const { hasFeature } = useAuth();
+  // PWA shortcuts (manifest.json) land on /?action=create-entry|bulk-entry. Carried as
+  // router state, not a query param, so refresh/back doesn't re-open the modal.
+  const action = new URLSearchParams(useLocation().search).get('action');
+  if (hasFeature('finance') && (action === 'create-entry' || action === 'bulk-entry')) {
+    return <Navigate to="/transactions" state={{ entryMode: action === 'bulk-entry' ? 'bulk' : 'single' }} replace />;
+  }
   const to = hasFeature('orders') ? '/orders' : hasFeature('finance') ? '/transactions' : '/settings';
   return <Navigate to={to} replace />;
 }

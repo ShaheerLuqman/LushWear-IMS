@@ -4,18 +4,21 @@
 // line's product - data comes from GET /products/analytics-by-city.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
-import { create as createEasepick, DateTime } from '@easepick/bundle';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { HeaderButton } from '../../components/HeaderButton';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import {
-  analyticsIsoDate, analyticsN, analyticsPct, analyticsRangeDates, analyticsRangeLabel, analyticsToday,
+  analyticsComparisonWord, analyticsIsoDate, analyticsN, analyticsPct, analyticsRangeDates, analyticsRangeLabel, analyticsToday,
   ANALYTICS_TIME_PRESETS, type CustomRange,
 } from '../../logic/analyticsShared';
-import { AnalyticsDonut, legendList } from '../../logic/analyticsCharts';
+import { AnalyticsDeltaBadge, AnalyticsDonut, legendList } from '../../logic/analyticsCharts';
+import { BlockStack, Card, InlineGrid, InlineStack, ProgressBar, Text } from '@shopify/polaris';
+import { ExportIcon } from '@shopify/polaris-icons';
 import { Dropdown } from '../../components/Dropdown';
-import { SearchField } from '../../components/SearchField';
+import { DataTable, type DataColumn } from '../../components/DataTable';
+import { MetricsStrip } from '../../components/MetricsStrip';
 
 const CA_MAX_CITIES = 8;
 
@@ -51,6 +54,12 @@ function deriveView(data: RawData | null, collection: string, search: string) {
     cityCount: cities.length,
     productCount: new Set(cityProducts.map((r) => r.productId || r.name)).size,
   };
+  // No product-level previous-period breakdown from the API - approximate the filtered
+  // view's previous totals the same way `orders` already does, from each city's overall figure.
+  const prevTotals = {
+    revenue: cities.reduce((s, c) => s + (cityMeta.get(c.city)?.prevRevenue || 0), 0),
+    units: cities.reduce((s, c) => s + (cityMeta.get(c.city)?.prevUnits || 0), 0),
+  };
 
   const topCities = cities.slice(0, CA_MAX_CITIES);
   const moreCities = cities.length - topCities.length;
@@ -67,13 +76,13 @@ function deriveView(data: RawData | null, collection: string, search: string) {
     .map((p) => ({ ...p, total: Object.values(p.byCity).reduce((s, v) => s + v.revenue, 0) }))
     .sort((a, b) => b.total - a.total);
 
-  return { cities, topCities, moreCities, totals, products, hasPrev: d.hasPrev };
+  return { cities, topCities, moreCities, totals, prevTotals, products, hasPrev: d.hasPrev };
 }
 
 export function CityAnalyticsPage() {
   const { showToast } = useToast();
 
-  const [timeRange, setTimeRange] = useState('thisMonth');
+  const [timeRange, setTimeRange] = useState('last30');
   const [customRange, setCustomRange] = useState<CustomRange>({ start: '', end: '' });
   const [collection, setCollection] = useState('');
   const [search, setSearch] = useState('');
@@ -85,47 +94,20 @@ export function CityAnalyticsPage() {
   const [data, setData] = useState<RawData | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // State, not a plain ref: this page's own mount effects run before the setHeader
-  // effect from usePageHeader() below, which is what actually mounts this button
-  // into AppShell's header - a ref would still read null then. See ProductAnalyticsPage.
-  const [timeBtnNode, setTimeBtnNode] = useState<HTMLButtonElement | null>(null);
   const reqId = useRef(0);
 
-  useEffect(() => {
-    if (!timeBtnNode) return;
-    const picker = new (createEasepick as any)({
-      element: timeBtnNode as any,
-      css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.css'],
-      zIndex: 9999,
-      format: 'DD/MM/YYYY',
-      grid: 1,
-      calendars: 1,
-      autoApply: true,
-      plugins: ['RangePlugin', 'PresetPlugin'],
-      PresetPlugin: {
-        position: 'left',
-        customPreset: Object.fromEntries(ANALYTICS_TIME_PRESETS.map((p) => {
-          const [s, e] = analyticsRangeDates(p.key, { start: '', end: '' });
-          return [p.label, [new DateTime(s), new DateTime(e)]];
-        })),
-      },
+  function onRangeChange({ from, to }: DateRange) {
+    const matched = ANALYTICS_TIME_PRESETS.find((p) => {
+      const [s, e] = analyticsRangeDates(p.key, { start: '', end: '' });
+      return analyticsIsoDate(s) === from && analyticsIsoDate(e) === to;
     });
-    picker.on('select', (e: any) => {
-      const { start, end } = e.detail;
-      if (!start || !end) return;
-      const from = start.format('YYYY-MM-DD');
-      const to = end.format('YYYY-MM-DD');
-      const matched = ANALYTICS_TIME_PRESETS.find((p) => {
-        const [s, en] = analyticsRangeDates(p.key, { start: '', end: '' });
-        return analyticsIsoDate(s) === from && analyticsIsoDate(en) === to;
-      });
-      if (matched) setTimeRange(matched.key);
-      else { setTimeRange('custom'); setCustomRange({ start: from, end: to }); }
-    });
-    return () => picker.destroy();
-  }, [timeBtnNode]);
+    if (matched) setTimeRange(matched.key);
+    else { setTimeRange('custom'); setCustomRange({ start: from, end: to }); }
+  }
 
   const rangeLabel = analyticsRangeLabel(timeRange, customRange);
+  const [rangeStart, rangeEnd] = analyticsRangeDates(timeRange, customRange);
+  const comparisonWord = analyticsComparisonWord(timeRange);
 
   useEffect(() => {
     const id = ++reqId.current;
@@ -184,18 +166,29 @@ export function CityAnalyticsPage() {
 
   usePageHeader({
     title: 'Analytics by City',
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        <div className="toolbar-search"><SearchField placeholder="Search products…" value={search} onChange={setSearch} /></div>
-        <div className="pa-time">
-          <HeaderRefButton ref={setTimeBtnNode} label={rangeLabel} />
-        </div>
+        <DateRangePopover
+          value={{ from: analyticsIsoDate(rangeStart), to: analyticsIsoDate(rangeEnd) }} onChange={(r) => r && onRangeChange(r)}
+          label={rangeLabel} clearable={false}
+          presets={Object.fromEntries(ANALYTICS_TIME_PRESETS.map((p) => [p.label, analyticsRangeDates(p.key, { start: '', end: '' })]))}
+        />
         <Dropdown searchable options={[{ value: '', label: 'All collections' }, ...collectionOptions]} value={collection} onChange={setCollection} />
-        <HeaderButton icon={<i className="fa-solid fa-arrow-up-from-bracket" />} onClick={exportExcel}>Export</HeaderButton>
+        <HeaderButton icon={ExportIcon} onClick={exportExcel}>Export</HeaderButton>
       </>
     ),
   });
 
+  const kpi = (label: string, value: string, cur: number, prev: number, isMoney: boolean) => ({
+    label, value,
+    detail: (
+      <InlineStack gap="200" blockAlign="center">
+        <Text as="span" tone="subdued" variant="bodySm">{comparisonWord}: {view.hasPrev ? (isMoney ? `Rs ${analyticsN(prev)}` : analyticsN(prev)) : '—'}</Text>
+        <AnalyticsDeltaBadge cur={cur} prev={prev} hasPrev={view.hasPrev} />
+      </InlineStack>
+    ),
+  });
   const maxCityRevenue = Math.max(1, ...view.topCities.map((c) => c.revenue));
   const rankedProducts = [...view.products].sort((a, b) => b.total - a.total);
   const top5 = rankedProducts.slice(0, 5);
@@ -203,95 +196,77 @@ export function CityAnalyticsPage() {
   const donutSlices = top5.map((p) => ({ name: p.name, value: p.total }));
   if (othersTotal) donutSlices.push({ name: 'Others', value: othersTotal });
 
+  type ProductRow = typeof rankedProducts[number];
+  const matrixColumns: DataColumn<ProductRow>[] = [
+    { key: 'product', heading: 'Product', sortValue: (r) => r.name, render: (r) => <BlockStack gap="0"><Text as="span" fontWeight="semibold">{r.name}</Text><Text as="span" tone="subdued" variant="bodySm">{r.collection}</Text></BlockStack> },
+    ...view.topCities.map((c) => ({
+      key: `city-${c.city}`, heading: c.city, alignment: 'end' as const,
+      sortValue: (r: ProductRow) => (metric === 'revenue' ? r.byCity[c.city]?.revenue : r.byCity[c.city]?.units) || 0,
+      render: (r: ProductRow) => {
+        const v = r.byCity[c.city];
+        const empty = !v || (metric === 'revenue' ? !v.revenue : !v.units);
+        return empty ? <Text as="span" tone="subdued">–</Text> : (metric === 'revenue' ? `Rs ${analyticsN(v!.revenue)}` : analyticsN(v!.units));
+      },
+    })),
+    { key: 'total', heading: 'Total Sales', alignment: 'end', sortValue: (r) => r.total, render: (r) => <Text as="span" fontWeight="semibold" numeric>Rs {analyticsN(r.total)}</Text> },
+  ];
+
   return (
     <div className="pa-scroll">
-      <div className="stats-grid">
-        <StatCard label="Total Sales" value={`Rs ${analyticsN(view.totals.revenue)}`} />
-        <StatCard label="Total Orders" value={analyticsN(view.totals.orders)} />
-        <StatCard label="Total Products Sold" value={analyticsN(view.totals.units)} />
-        <StatCard label="Cities Covered" value={analyticsN(view.totals.cityCount)} />
-        <StatCard label="Total Products" value={analyticsN(view.totals.productCount)} />
-      </div>
+      <BlockStack gap="400">
+        <MetricsStrip
+          label="City analytics summary"
+          tiles={[
+            kpi('Total Sales', `Rs ${analyticsN(view.totals.revenue)}`, view.totals.revenue, view.prevTotals.revenue, true),
+            { label: 'Total Orders', value: analyticsN(view.totals.orders) },
+            kpi('Total Products Sold', analyticsN(view.totals.units), view.totals.units, view.prevTotals.units, false),
+            { label: 'Cities Covered', value: analyticsN(view.totals.cityCount) },
+            { label: 'Total Products', value: analyticsN(view.totals.productCount) },
+          ]}
+        />
 
-      <div className="ca-main-grid">
-        <div className="pa-card ca-city-card">
-          <div className="pa-widget-head">
-            <h3>City Wise Sales</h3>
-            <Dropdown size="slim" options={[{ value: 'revenue', label: 'Amount' }, { value: 'orders', label: 'Units' }]} value={metric} onChange={(v) => setMetric(v as 'revenue' | 'orders')} />
-          </div>
-          <ul className="ca-city-list">
-            {loading ? (
-              <li className="pa-muted">Crunching sales by city…</li>
-            ) : view.topCities.length === 0 ? (
-              <li className="pa-muted">No sales in this range.</li>
-            ) : view.topCities.map((c, i) => (
-              <li className="ca-city-row" key={c.city}>
-                <span className="ca-city-rank">{i + 1}.</span>
-                <span className="ca-city-name">{c.city}</span>
-                <span className="ca-city-bar-track"><span className="ca-city-bar-fill" style={{ width: `${((c.revenue / maxCityRevenue) * 100).toFixed(1)}%` }} /></span>
-                <span className="ca-city-pct">{analyticsPct(c.revenue, view.totals.revenue).toFixed(1)}%</span>
-                <span className="ca-city-val">Rs {analyticsN(c.revenue)}</span>
-              </li>
-            ))}
-          </ul>
-          {view.moreCities > 0 && <p className="ca-city-more">+{view.moreCities} more cit{view.moreCities === 1 ? 'y' : 'ies'}</p>}
-        </div>
-        <div className="pa-card ca-donut-card">
-          <div className="pa-widget-head"><h3>Top Products Overall</h3></div>
-          <div className="pa-donut-wrap">
-            <AnalyticsDonut slices={donutSlices} total={view.totals.revenue} metric="revenue" />
-            <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.revenue) : <li className="pa-muted">No sales</li>}</ul>
-          </div>
-        </div>
-      </div>
-
-      <div className="pa-widget-head ca-matrix-head"><h3>Product Performance by City</h3></div>
-      <div className="pa-card">
-        <div className="pa-table-wrap">
-          <table className="pa-table ca-matrix-table">
-            <thead>
-              <tr>
-                <th>Product</th>
-                {view.topCities.map((c) => <th key={c.city}>{c.city}</th>)}
-                <th>Total Sales</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rankedProducts.length === 0 ? (
-                <tr><td colSpan={view.topCities.length + 2} className="pa-empty">No products match these filters.</td></tr>
-              ) : rankedProducts.slice(0, 20).map((p) => (
-                <tr key={p.key}>
-                  <td className="ca-matrix-product">
-                    <span className="ca-matrix-name">{p.name}</span>
-                    <span className="ca-matrix-sub">{p.collection}</span>
-                  </td>
-                  {view.topCities.map((c) => {
-                    const v = p.byCity[c.city];
-                    const empty = !v || (metric === 'revenue' ? !v.revenue : !v.units);
-                    return (
-                      <td key={c.city} className={empty ? 'ca-matrix-empty' : undefined}>
-                        {empty ? '–' : (metric === 'revenue' ? `Rs ${analyticsN(v!.revenue)}` : analyticsN(v!.units))}
-                      </td>
-                    );
-                  })}
-                  <td className="ca-matrix-total">Rs {analyticsN(p.total)}</td>
-                </tr>
+        <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="h3" variant="headingSm">City Wise Sales</Text>
+                <Dropdown size="slim" options={[{ value: 'revenue', label: 'Amount' }, { value: 'orders', label: 'Units' }]} value={metric} onChange={(v) => setMetric(v as 'revenue' | 'orders')} />
+              </InlineStack>
+              {loading ? (
+                <Text as="p" tone="subdued">Crunching sales by city…</Text>
+              ) : view.topCities.length === 0 ? (
+                <Text as="p" tone="subdued">No sales in this range.</Text>
+              ) : view.topCities.map((c, i) => (
+                <BlockStack gap="100" key={c.city}>
+                  <InlineStack align="space-between" blockAlign="center">
+                    <Text as="span"><Text as="span" tone="subdued">{i + 1}.</Text> {c.city}</Text>
+                    <Text as="span" numeric>Rs {analyticsN(c.revenue)} <Text as="span" tone="subdued">({analyticsPct(c.revenue, view.totals.revenue).toFixed(1)}%)</Text></Text>
+                  </InlineStack>
+                  <ProgressBar progress={(c.revenue / maxCityRevenue) * 100} size="small" tone="primary" />
+                </BlockStack>
               ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
-  );
-}
+              {view.moreCities > 0 && <Text as="p" tone="subdued" variant="bodySm">+{view.moreCities} more cit{view.moreCities === 1 ? 'y' : 'ies'}</Text>}
+            </BlockStack>
+          </Card>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Top Products Overall</Text>
+              <div className="pa-donut-wrap">
+                <AnalyticsDonut slices={donutSlices} total={view.totals.revenue} metric="revenue" />
+                <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.revenue) : <li className="pa-muted">No sales</li>}</ul>
+              </div>
+            </BlockStack>
+          </Card>
+        </InlineGrid>
 
-function StatCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat-card">
-      <div className="stat-info">
-        <span className="stat-label">{label}</span>
-        <span className="stat-value">{value}</span>
-      </div>
+        <Text as="h3" variant="headingSm">Product Performance by City</Text>
+        <div className="pa-table-card">
+          <DataTable
+            columns={matrixColumns} rows={rankedProducts.slice(0, 20)} rowId={(r) => r.key} loading={loading}
+            resourceName={{ singular: 'product', plural: 'products' }} emptyMessage="No products match these filters."
+          />
+        </div>
+      </BlockStack>
     </div>
   );
 }

@@ -6,7 +6,10 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom';
 import { apiJson, type ApiJsonOptions } from '../../api';
-import { useToast } from '../../toast/ToastContext';
+import { ToastHost, useToast } from '../../toast/ToastContext';
+import { Badge, BlockStack, Button, Card, ChoiceList, FormLayout, Frame, InlineError, InlineGrid, InlineStack, Spinner, Text, TextField } from '@shopify/polaris';
+import { ArrowLeftIcon, PlusIcon } from '@shopify/polaris-icons';
+import { FormModal } from '../../components/FormModal';
 
 const SUPERADMIN_TOKEN_KEY = 'lushwear_superadmin_token';
 const LAST_USED_ORG_KEY = 'lushwear_last_used_org';
@@ -63,6 +66,7 @@ function AdminGate({ onLoggedIn }: { onLoggedIn: () => void }) {
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setError('');
+    if (!email.trim() || !password) { setError('Enter your email and password'); return; }
     setSubmitting(true);
     try {
       const data = await apiJson<{ token: string }>('/auth/login', { method: 'POST', body: { email, password } });
@@ -84,16 +88,14 @@ function AdminGate({ onLoggedIn }: { onLoggedIn: () => void }) {
     <div className="auth-gate-root">
       <div className="auth-gate-card">
         <img src="/assets/Logo_Large.png" alt="" className="auth-gate-logo" />
-        <h2 className="auth-gate-title">Super Admin login</h2>
-        <form className="auth-gate-form" autoComplete="off" onSubmit={handleSubmit}>
-          <label className="auth-gate-label" htmlFor="adminGateEmail">Email</label>
-          <input type="email" id="adminGateEmail" className="auth-gate-input" required autoComplete="username" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} autoFocus />
-          <label className="auth-gate-label" htmlFor="adminGatePassword">Password</label>
-          <input type="password" id="adminGatePassword" className="auth-gate-input" required autoComplete="current-password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
-          <p className="auth-gate-error" role="alert">{error}</p>
-          <button type="submit" className="btn btn-primary auth-gate-submit" disabled={submitting}>
-            {submitting ? <><span className="btn-spinner"></span>Logging in…</> : 'Log in'}
-          </button>
+        <Text as="h2" variant="headingLg" alignment="center">Super Admin login</Text>
+        <form autoComplete="off" onSubmit={handleSubmit}>
+          <FormLayout>
+            <TextField label="Email" type="email" autoComplete="username" placeholder="you@example.com" value={email} onChange={setEmail} autoFocus />
+            <TextField label="Password" type="password" autoComplete="current-password" value={password} onChange={setPassword} />
+            {error && <InlineError message={error} fieldID="adminGate" />}
+            <Button variant="primary" submit fullWidth loading={submitting}>Log in</Button>
+          </FormLayout>
         </form>
       </div>
     </div>
@@ -103,13 +105,11 @@ function AdminGate({ onLoggedIn }: { onLoggedIn: () => void }) {
 function AdminHeader({ onLogout }: { onLogout: () => void }) {
   return (
     <header className="admin-portal-header">
-      <div className="admin-portal-header__brand">
+      <InlineStack gap="300" blockAlign="center">
         <img src="/assets/Logo.png" alt="" className="admin-portal-header__logo" />
-        <div><h1>Super Admin Portal</h1></div>
-      </div>
-      <div className="admin-portal-header__actions">
-        <button type="button" className="btn btn-secondary" onClick={onLogout}>Log out</button>
-      </div>
+        <Text as="h1" variant="headingLg">Super Admin Portal</Text>
+      </InlineStack>
+      <Button onClick={onLogout}>Log out</Button>
     </header>
   );
 }
@@ -141,40 +141,16 @@ function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Create organization</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
-            <p className="modal-description">Creates the organization and its first admin user in one step. That admin logs in themselves afterwards with the credentials you set here.</p>
-            <div className="form-group">
-              <label htmlFor="adminOrgName">Organization name</label>
-              <input type="text" id="adminOrgName" className="form-input" required placeholder="e.g. Acme Co" value={orgName} onChange={(e) => setOrgName(e.target.value)} autoFocus />
-            </div>
-            <div className="form-group">
-              <label htmlFor="adminOrgAdminName">First admin name</label>
-              <input type="text" id="adminOrgAdminName" className="form-input" required placeholder="e.g. Jane Doe" value={adminName} onChange={(e) => setAdminName(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="adminOrgAdminEmail">First admin email</label>
-              <input type="email" id="adminOrgAdminEmail" className="form-input" required placeholder="owner@acme.com" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="adminOrgAdminPassword">First admin password</label>
-              <input type="password" id="adminOrgAdminPassword" className="form-input" required minLength={8} placeholder="At least 8 characters" autoComplete="new-password" data-lpignore="true" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} />
-            </div>
-            {error && <p className="auth-gate-error" role="alert">{error}</p>}
-          </form>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Creating...' : 'Create organization'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Create organization" onClose={onClose} onSubmit={submit} submitLabel="Create organization" saving={saving}>
+      <FormLayout>
+        <Text as="p" tone="subdued">Creates the organization and its first admin user in one step. That admin logs in themselves afterwards with the credentials you set here.</Text>
+        <TextField label="Organization name" autoComplete="off" placeholder="e.g. Acme Co" requiredIndicator autoFocus value={orgName} onChange={setOrgName} />
+        <TextField label="First admin name" autoComplete="off" placeholder="e.g. Jane Doe" requiredIndicator value={adminName} onChange={setAdminName} />
+        <TextField label="First admin email" type="email" autoComplete="off" placeholder="owner@acme.com" requiredIndicator value={adminEmail} onChange={setAdminEmail} />
+        <TextField label="First admin password" type="password" autoComplete="new-password" placeholder="At least 8 characters" requiredIndicator value={adminPassword} onChange={setAdminPassword} />
+        {error && <InlineError message={error} fieldID="adminOrgForm" />}
+      </FormLayout>
+    </FormModal>
   );
 }
 
@@ -185,34 +161,33 @@ function AdminOrgListPage({ orgs, loading, reload }: { orgs: AdminOrg[]; loading
 
   return (
     <section className="admin-portal-section">
-      <div className="admin-portal-section__header">
-        <h2 className="settings-section__title">Organizations</h2>
-        <button type="button" className="btn btn-primary" onClick={() => setShowCreate(true)}>+ Create organization</button>
-      </div>
-      {loading && <p className="admin-portal-empty"><span className="btn-loading-spinner"></span>Loading organizations…</p>}
-      {!loading && orgs.length === 0 && (
-        <p className="admin-portal-empty">No organizations yet — create the first one above.</p>
-      )}
-      {!loading && orgs.length > 0 && (
-        <div className="admin-org-list">
-          {orgs.map((org) => (
-            <div key={org.id} className="admin-org-card" title="Open organization details" onClick={() => navigate(`/admin/organizations/${org.id}`)}>
-              <div className="admin-org-card__info">
-                <span className="admin-org-card__name">{org.name}</span>
-                <span className="admin-org-card__meta">{org.created_at ? `Created ${formatDate(org.created_at)}` : ''}</span>
+      <BlockStack gap="400">
+        <InlineStack align="space-between" blockAlign="center">
+          <Text as="h2" variant="headingMd">Organizations</Text>
+          <Button variant="primary" icon={PlusIcon} onClick={() => setShowCreate(true)}>Create organization</Button>
+        </InlineStack>
+        {loading && <div className="page-loading"><Spinner size="small" /><Text as="span" tone="subdued">Loading organizations…</Text></div>}
+        {!loading && orgs.length === 0 && <Text as="p" tone="subdued">No organizations yet — create the first one above.</Text>}
+        {!loading && orgs.length > 0 && (
+          <InlineGrid columns={{ xs: 1, sm: 2, md: 3 }} gap="300">
+            {orgs.map((org) => (
+              <div key={org.id} className="card-link" role="link" tabIndex={0} onClick={() => navigate(`/admin/organizations/${org.id}`)} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/admin/organizations/${org.id}`); }}>
+                <Card>
+                  <InlineStack align="space-between" blockAlign="center" wrap={false}>
+                    <BlockStack gap="050">
+                      <Text as="span" fontWeight="semibold">{org.name}</Text>
+                      <Text as="span" tone="subdued" variant="bodySm">{org.created_at ? `Created ${formatDate(org.created_at)}` : ''}</Text>
+                    </BlockStack>
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <Button size="slim" onClick={() => viewAsOrganization(org, showToast)}>View as org</Button>
+                    </span>
+                  </InlineStack>
+                </Card>
               </div>
-              <div className="admin-org-card__actions">
-                <button
-                  type="button" className="btn btn-primary" title="Open this organization's business app in a new tab"
-                  onClick={(e) => { e.stopPropagation(); viewAsOrganization(org, showToast); }}
-                >
-                  View as org
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+            ))}
+          </InlineGrid>
+        )}
+      </BlockStack>
       {showCreate && <CreateOrgModal onClose={() => setShowCreate(false)} onCreated={() => { setShowCreate(false); reload(); }} />}
     </section>
   );
@@ -278,10 +253,7 @@ function AdminOrgDetailPage({ orgs }: { orgs: AdminOrg[] }) {
 
   if (!org) return <Navigate to="/admin" replace />;
 
-  async function saveFeatures(e: FormEvent) {
-    e.preventDefault();
-    setFeaturesError('');
-    const enabled_features = [...(features.orders ? ['orders'] : []), ...(features.finance ? ['finance'] : [])];
+  async function saveFeatures() {    const enabled_features = [...(features.orders ? ['orders'] : []), ...(features.finance ? ['finance'] : [])];
     setSavingFeatures(true);
     try {
       await adminApiJson(`/admin/organizations/${org!.id}/features`, { method: 'PUT', body: { enabled_features } });
@@ -293,10 +265,7 @@ function AdminOrgDetailPage({ orgs }: { orgs: AdminOrg[] }) {
     }
   }
 
-  async function saveIntegrations(e: FormEvent) {
-    e.preventDefault();
-    setIntegrationsError('');
-    const body: Record<string, any> = {
+  async function saveIntegrations() {    const body: Record<string, any> = {
       shopify_store_url: storeUrl.trim() || null,
       shopify_api_version: apiVersion.trim() || null,
     };
@@ -317,84 +286,64 @@ function AdminOrgDetailPage({ orgs }: { orgs: AdminOrg[] }) {
 
   return (
     <section className="admin-portal-section">
-      <div className="admin-portal-section__header">
-        <div className="admin-org-detail-heading">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={() => navigate('/admin')}><i className="fa-solid fa-arrow-left"></i> Organizations</button>
-          <h2 className="settings-section__title">{org.name}</h2>
-        </div>
-        <button
-          type="button" className="btn btn-primary" disabled={viewAsBusy}
-          onClick={async () => { setViewAsBusy(true); await viewAsOrganization(org, showToast); setViewAsBusy(false); }}
-        >
-          View as org
-        </button>
-      </div>
+      <BlockStack gap="400">
+        <InlineStack align="space-between" blockAlign="center">
+          <InlineStack gap="300" blockAlign="center">
+            <Button icon={ArrowLeftIcon} onClick={() => navigate('/admin')}>Organizations</Button>
+            <Text as="h2" variant="headingMd">{org.name}</Text>
+          </InlineStack>
+          <Button variant="primary" loading={viewAsBusy} onClick={async () => { setViewAsBusy(true); await viewAsOrganization(org, showToast); setViewAsBusy(false); }}>View as org</Button>
+        </InlineStack>
 
-      <div className="settings-section">
-        <h3 className="settings-section__title">Users</h3>
-        {users === null && <p className="admin-portal-empty"><span className="btn-loading-spinner"></span>Loading users…</p>}
-        {users !== null && users.length === 0 && <p className="admin-portal-empty">No users in this organization yet.</p>}
-        {users !== null && users.length > 0 && (
-          <div className="settings-users-list">
-            {users.map((u) => (
-              <div key={u.id} className={'settings-user-row' + (u.is_active ? '' : ' settings-user-row--inactive')}>
-                <span className="settings-user-row__email">{u.name ? `${u.name} (${u.email})` : u.email}</span>
-                <span className="settings-user-row__controls">{u.role === 'admin' ? 'Admin' : 'Staff'}</span>
-              </div>
+        <Card>
+          <BlockStack gap="300">
+            <Text as="h3" variant="headingMd">Users</Text>
+            {users === null && <div className="page-loading"><Spinner size="small" /><Text as="span" tone="subdued">Loading users…</Text></div>}
+            {users !== null && users.length === 0 && <Text as="p" tone="subdued">No users in this organization yet.</Text>}
+            {users !== null && users.length > 0 && users.map((u) => (
+              <InlineStack key={u.id} align="space-between" blockAlign="center">
+                <Text as="span" tone={u.is_active ? undefined : 'subdued'}>{u.name ? `${u.name} (${u.email})` : u.email}</Text>
+                <Badge>{u.role === 'admin' ? 'Admin' : 'Staff'}</Badge>
+              </InlineStack>
             ))}
-          </div>
-        )}
-        <p className="form-hint">Read-only. To add or manage users, use "View as org" and open that org's own Settings &gt; Users.</p>
-      </div>
+            <Text as="p" tone="subdued" variant="bodySm">Read-only. To add or manage users, use "View as org" and open that org's own Settings &gt; Users.</Text>
+          </BlockStack>
+        </Card>
 
-      <div className="settings-section">
-        <h3 className="settings-section__title">Features</h3>
-        <p className="modal-description">Choose which sections this organization's users can see and use in the sidebar.</p>
-        <form onSubmit={saveFeatures}>
-          <label className="ledger-form-toggle">
-            <input type="checkbox" checked={features.orders} onChange={(e) => setFeatures((f) => ({ ...f, orders: e.target.checked }))} />
-            <span>Shopify order management (Dashboard, Orders, Products, Month Summary, Load Sheet Logs)</span>
-          </label>
-          <label className="ledger-form-toggle">
-            <input type="checkbox" checked={features.finance} onChange={(e) => setFeatures((f) => ({ ...f, finance: e.target.checked }))} />
-            <span>Finance (Transactions, Ledgers)</span>
-          </label>
-          {featuresError && <p className="auth-gate-error" role="alert">{featuresError}</p>}
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={savingFeatures}>{savingFeatures ? 'Saving...' : 'Save features'}</button>
-          </div>
-        </form>
-      </div>
+        <Card>
+          <form onSubmit={(e) => { e.preventDefault(); saveFeatures(); }}>
+            <FormLayout>
+              <Text as="h3" variant="headingMd">Features</Text>
+              <ChoiceList
+                title="Choose which sections this organization's users can see and use in the sidebar." allowMultiple
+                selected={[...(features.orders ? ['orders'] : []), ...(features.finance ? ['finance'] : [])]}
+                onChange={(v) => setFeatures({ orders: v.includes('orders'), finance: v.includes('finance') })}
+                choices={[
+                  { value: 'orders', label: 'Shopify order management', helpText: 'Dashboard, Orders, Products, Month Summary, Load Sheet Logs' },
+                  { value: 'finance', label: 'Finance', helpText: 'Transactions, Ledgers' },
+                ]}
+              />
+              {featuresError && <InlineError message={featuresError} fieldID="features" />}
+              <InlineStack align="end"><Button variant="primary" submit loading={savingFeatures}>Save features</Button></InlineStack>
+            </FormLayout>
+          </form>
+        </Card>
 
-      <div className="settings-section">
-        <h3 className="settings-section__title">Integrations</h3>
-        <form onSubmit={saveIntegrations}>
-          <div className="form-group">
-            <label htmlFor="adminShopifyStoreUrl">Shopify store URL</label>
-            <input type="text" id="adminShopifyStoreUrl" className="form-input" placeholder="your-store.myshopify.com" value={storeUrl} onChange={(e) => setStoreUrl(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="adminShopifyAccessToken">Shopify access token</label>
-            <input type="password" id="adminShopifyAccessToken" className="form-input" placeholder={tokenPlaceholder} autoComplete="new-password" data-lpignore="true" value={shopifyToken} onChange={(e) => setShopifyToken(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="adminShopifyApiVersion">Shopify API version</label>
-            <input type="text" id="adminShopifyApiVersion" className="form-input" placeholder="e.g. 2024-07" value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="adminPostexToken">PostEx merchant token</label>
-            <input type="password" id="adminPostexToken" className="form-input" placeholder={postexPlaceholder} autoComplete="new-password" data-lpignore="true" value={postexToken} onChange={(e) => setPostexToken(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="adminCouriersNextAuthKey">Couriers Next auth key</label>
-            <input type="password" id="adminCouriersNextAuthKey" className="form-input" placeholder={couriersNextPlaceholder} autoComplete="new-password" data-lpignore="true" value={couriersNextAuthKey} onChange={(e) => setCouriersNextAuthKey(e.target.value)} />
-          </div>
-          {integrationsError && <p className="auth-gate-error" role="alert">{integrationsError}</p>}
-          <div className="form-actions">
-            <button type="submit" className="btn btn-primary" disabled={savingIntegrations}>{savingIntegrations ? 'Saving...' : 'Save integrations'}</button>
-          </div>
-        </form>
-      </div>
+        <Card>
+          <form onSubmit={(e) => { e.preventDefault(); saveIntegrations(); }}>
+            <FormLayout>
+              <Text as="h3" variant="headingMd">Integrations</Text>
+              <TextField label="Shopify store URL" autoComplete="off" placeholder="your-store.myshopify.com" value={storeUrl} onChange={setStoreUrl} />
+              <TextField label="Shopify access token" type="password" autoComplete="new-password" placeholder={tokenPlaceholder} value={shopifyToken} onChange={setShopifyToken} />
+              <TextField label="Shopify API version" autoComplete="off" placeholder="e.g. 2024-07" value={apiVersion} onChange={setApiVersion} />
+              <TextField label="PostEx merchant token" type="password" autoComplete="new-password" placeholder={postexPlaceholder} value={postexToken} onChange={setPostexToken} />
+              <TextField label="Couriers Next auth key" type="password" autoComplete="new-password" placeholder={couriersNextPlaceholder} value={couriersNextAuthKey} onChange={setCouriersNextAuthKey} />
+              {integrationsError && <InlineError message={integrationsError} fieldID="integrations" />}
+              <InlineStack align="end"><Button variant="primary" submit loading={savingIntegrations}>Save integrations</Button></InlineStack>
+            </FormLayout>
+          </form>
+        </Card>
+      </BlockStack>
     </section>
   );
 }
@@ -442,16 +391,20 @@ export function AdminPortal() {
   }, [status, reloadOrgs]);
 
   if (status === 'loading') return null;
-  if (status === 'gate') return <AdminGate onLoggedIn={() => setStatus('ready')} />;
 
   return (
-    <div className="admin-portal-root">
-      <AdminHeader onLogout={() => { clearSuperadminToken(); setStatus('gate'); }} />
-      <Routes>
-        <Route index element={<AdminOrgListPage orgs={orgs} loading={orgsLoading} reload={reloadOrgs} />} />
-        <Route path="organizations/:id" element={<AdminOrgDetailPage orgs={orgs} />} />
-        <Route path="*" element={<Navigate to="/admin" replace />} />
-      </Routes>
-    </div>
+    <Frame>
+      {status === 'gate' ? <AdminGate onLoggedIn={() => setStatus('ready')} /> : (
+        <div className="admin-portal-root">
+          <AdminHeader onLogout={() => { clearSuperadminToken(); setStatus('gate'); }} />
+          <Routes>
+            <Route index element={<AdminOrgListPage orgs={orgs} loading={orgsLoading} reload={reloadOrgs} />} />
+            <Route path="organizations/:id" element={<AdminOrgDetailPage orgs={orgs} />} />
+            <Route path="*" element={<Navigate to="/admin" replace />} />
+          </Routes>
+        </div>
+      )}
+      <ToastHost />
+    </Frame>
   );
 }

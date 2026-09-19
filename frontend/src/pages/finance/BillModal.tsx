@@ -2,6 +2,8 @@
 // and a landed-cost preview. Ported from bills.js's openBillModal/renderBillLines/
 // collectBillPayload.
 import { useEffect, useMemo, useState } from 'react';
+import { BlockStack, Button, FormLayout, InlineStack, Modal, TextField, Thumbnail } from '@shopify/polaris';
+import { EditIcon, ImageIcon, ListBulletedIcon, XIcon } from '@shopify/polaris-icons';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
@@ -61,14 +63,12 @@ function BillLineRow({
   return (
     <div className="bill-line">
       <div className="bill-line-image-cell">
-        {product && (product.image_url
-          ? <img className="bill-line-product-thumb" src={product.image_url} alt="" />
-          : <div className="bill-line-product-thumb bill-line-product-thumb-empty">No Img</div>)}
+        {product && <Thumbnail size="large" source={product.image_url || ImageIcon} alt="" />}
       </div>
       <div className="bill-line-content">
         <div className="bill-line-main">
           {productMissing ? (
-            <input type="text" className="form-input" value={line.description || ''} disabled />
+            <TextField label="Item" labelHidden autoComplete="off" value={line.description || ''} disabled />
           ) : line.mode === 'product' ? (
             <Dropdown
               searchable fullWidth disabled={disabled} placeholder="Search product..."
@@ -76,21 +76,19 @@ function BillLineRow({
               value={line.product_id || ''} onChange={(id) => pickProduct(products.find((p) => p.id === id)!)}
             />
           ) : (
-            <input type="text" className="form-input bill-line-description" placeholder="e.g. Cotton fabric" disabled={disabled} value={line.description} onChange={(e) => onChange({ description: e.target.value })} />
+            <TextField label="Description" labelHidden autoComplete="off" placeholder="e.g. Cotton fabric" disabled={disabled} value={line.description} onChange={(description) => onChange({ description })} />
           )}
           {disabled ? <span /> : (
-            <button type="button" className="bill-line-mode-toggle" title={line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection'} onClick={toggleMode}>
-              <i className={`fa-solid ${line.mode === 'product' ? 'fa-pen-to-square' : 'fa-list-check'}`} />
-            </button>
+            <Button icon={line.mode === 'product' ? EditIcon : ListBulletedIcon} variant="tertiary" accessibilityLabel={line.mode === 'product' ? 'Switch to typed description' : 'Switch to product selection'} onClick={toggleMode} />
           )}
           {usesVariantGrid ? <span /> : (
-            <input type="number" className="form-input bill-line-quantity" min={0} step={0.001} placeholder="0" disabled={disabled} value={line.quantity} onChange={(e) => onChange({ quantity: e.target.value })} />
+            <TextField label="Qty" labelHidden type="number" autoComplete="off" min={0} step={0.001} placeholder="0" disabled={disabled} value={line.quantity} onChange={(quantity) => onChange({ quantity })} />
           )}
           {usesVariantGrid ? <span /> : (
-            <input type="number" className="form-input bill-line-cost" min={0} step={0.01} placeholder="0.00" disabled={disabled} value={line.unit_cost} onChange={(e) => onChange({ unit_cost: e.target.value })} />
+            <TextField label="Unit cost" labelHidden type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00" disabled={disabled} value={line.unit_cost} onChange={(unit_cost) => onChange({ unit_cost })} />
           )}
           <span className="bill-line-amount">{formatMoney(amount)}</span>
-          {!disabled && canRemove !== false && <button type="button" className="bill-line-remove" aria-label="Remove line" onClick={onRemove}>&times;</button>}
+          {!disabled && canRemove !== false ? <Button icon={XIcon} variant="tertiary" tone="critical" accessibilityLabel="Remove line" onClick={onRemove} /> : <span />}
         </div>
         {(usesVariantGrid || newCost != null) && (
           <div className="bill-line-extra">
@@ -109,15 +107,15 @@ function BillLineRow({
                         <span className="bill-line-variant-cost-effect">{effect && <CostEffectLabel {...effect} />}</span>
                       </span>
                       <span />
-                      <input
-                        type="number" className="form-input bill-line-variant-qty-input" min={0} step={1} placeholder="0" disabled={disabled}
+                      <TextField
+                        label="Qty" labelHidden type="number" autoComplete="off" size="slim" min={0} step={1} placeholder="0" disabled={disabled}
                         value={line.variantQuantities[v.id] ?? '0'}
-                        onChange={(e) => onChange({ variantQuantities: { ...line.variantQuantities, [v.id]: e.target.value } })}
+                        onChange={(val) => onChange({ variantQuantities: { ...line.variantQuantities, [v.id]: val } })}
                       />
-                      <input
-                        type="number" className="form-input bill-line-variant-cost-input" min={0} step={0.01} placeholder="0.00" disabled={disabled}
+                      <TextField
+                        label="Cost" labelHidden type="number" autoComplete="off" size="slim" min={0} step={0.01} placeholder="0.00" disabled={disabled}
                         value={line.variantCosts[v.id] ?? ''}
-                        onChange={(e) => onChange({ variantCosts: { ...line.variantCosts, [v.id]: e.target.value } })}
+                        onChange={(val) => onChange({ variantCosts: { ...line.variantCosts, [v.id]: val } })}
                       />
                       <span className="bill-line-variant-amount">{variantAmount}</span>
                       <span />
@@ -332,36 +330,39 @@ export function BillModal({
 
   if (loading) return null;
 
+  const totalLine = (label: string, value: string, grand = false) => (
+    <div className={'bill-total-line' + (grand ? ' bill-total-grand' : '')}><span>{label}</span><span>{value}</span></div>
+  );
+  const totalInput = (label: string, value: string, onChange: (v: string) => void) => (
+    <div className="bill-total-line"><span>{label}</span><TextField label={label} labelHidden type="number" autoComplete="off" size="slim" align="right" step={0.01} min={0} disabled={readOnly} value={value} onChange={onChange} /></div>
+  );
+
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content bill-modal-content">
-        <div className="modal-header">
-          <h2>{billId ? `${readOnly ? 'View' : 'Edit'} ${billNumber}` : 'New Bill'}</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <form className="ledger-form" autoComplete="off" onSubmit={(e) => { e.preventDefault(); save(); }}>
-            <div className="bill-form-row bill-form-row-3col">
-              <div className="form-group">
-                <label htmlFor="billSupplier">Supplier *</label>
-                <Dropdown id="billSupplier" fullWidth searchable placeholder="Select supplier..." disabled={readOnly} options={partyLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={supplierId} onChange={setSupplierId} />
-                <span className="form-hint">Party ledgers. Mark a ledger as a party in Edit Ledger.</span>
-              </div>
-              <div className="form-group">
-                <label htmlFor="billSupplierRef">Supplier's bill #</label>
-                <input type="text" id="billSupplierRef" className="form-input" placeholder="e.g. INV-2291" disabled={readOnly} value={supplierRef} onChange={(e) => setSupplierRef(e.target.value)} />
-              </div>
-              <div className="form-group">
-                <label htmlFor="billDate">Bill date *</label>
-                <input type="date" id="billDate" className="form-input" required disabled={readOnly} value={billDate} onChange={(e) => setBillDate(e.target.value)} />
-              </div>
-            </div>
+    <Modal
+      open onClose={onClose} size="large" title={billId ? `${readOnly ? 'View' : 'Edit'} ${billNumber}` : 'New Bill'}
+      primaryAction={!readOnly ? { content: 'Save draft', onAction: save, loading: saving === 'save', disabled: !!saving } : undefined}
+      secondaryActions={[
+        ...(status === 'draft' && billId ? [{ content: 'Confirm Bill', onAction: confirmBill, loading: saving === 'confirm', disabled: !!saving }] : []),
+        ...(status === 'received' ? [{ content: 'Revert to Draft', onAction: revertBill, loading: saving === 'revert', disabled: !!saving }] : []),
+        { content: readOnly ? 'Close' : 'Cancel', onAction: onClose },
+      ]}
+    >
+      <Modal.Section>
+        <form autoComplete="off" onSubmit={(e) => { e.preventDefault(); if (!readOnly) save(); }}>
+          <BlockStack gap="400">
+            <FormLayout>
+              <FormLayout.Group>
+                <Dropdown label="Supplier" helpText="Party ledgers. Mark a ledger as a party in Edit Ledger." fullWidth searchable placeholder="Select supplier..." disabled={readOnly} options={partyLedgers(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={supplierId} onChange={setSupplierId} />
+                <TextField label={"Supplier's bill #"} autoComplete="off" placeholder="e.g. INV-2291" disabled={readOnly} value={supplierRef} onChange={setSupplierRef} />
+                <TextField label="Bill date" type="date" autoComplete="off" requiredIndicator disabled={readOnly} value={billDate} onChange={setBillDate} />
+              </FormLayout.Group>
+            </FormLayout>
 
             <div className="bill-lines-wrap">
               <div className="bill-lines-header">
                 <span>Image</span><span>Item</span><span /><span>Qty</span><span>Unit cost</span><span>Amount</span><span />
               </div>
-              <div id="billLines">
+              <div>
                 {lines.map((line) => (
                   <BillLineRow
                     key={line._key} line={line} products={products} disabled={readOnly}
@@ -370,39 +371,22 @@ export function BillModal({
                   />
                 ))}
               </div>
-              {!readOnly && <button type="button" className="btn btn-secondary btn-sm" onClick={() => setLines((prev) => [...prev, emptyBillLine()])}>Add line</button>}
+              {!readOnly && <InlineStack><Button size="slim" onClick={() => setLines((prev) => [...prev, emptyBillLine()])}>Add line</Button></InlineStack>}
             </div>
 
             <div className="bill-totals">
-              <div className="bill-total-line"><span>Subtotal</span><span>{formatMoney(subtotal)}</span></div>
-              <div className="bill-total-line">
-                <label htmlFor="billDiscount">Discount</label>
-                <input type="number" id="billDiscount" className="form-input bill-tax-input" step={0.01} min={0} disabled={readOnly} value={discount} onChange={(e) => setDiscount(e.target.value)} />
-              </div>
-              <div className="bill-total-line">
-                <label htmlFor="billTax">Tax</label>
-                <input type="number" id="billTax" className="form-input bill-tax-input" step={0.01} min={0} disabled={readOnly} value={tax} onChange={(e) => setTax(e.target.value)} />
-              </div>
-              <div className="bill-total-line">
-                <label htmlFor="billOtherExpense" title="e.g. transport, loading, courier">Other expense</label>
-                <input type="number" id="billOtherExpense" className="form-input bill-tax-input" step={0.01} min={0} disabled={readOnly} value={otherExpense} onChange={(e) => setOtherExpense(e.target.value)} />
-              </div>
-              <div className="bill-total-line bill-total-grand"><span>Total</span><span>{formatMoney(total)}</span></div>
+              {totalLine('Subtotal', formatMoney(subtotal))}
+              {totalInput('Discount', discount, setDiscount)}
+              {totalInput('Tax', tax, setTax)}
+              {totalInput('Other expense', otherExpense, setOtherExpense)}
+              {totalLine('Total', formatMoney(total), true)}
             </div>
 
-            <div className="form-group">
-              <label htmlFor="billNotes">Notes</label>
-              <input type="text" id="billNotes" className="form-input" disabled={readOnly} value={notes} onChange={(e) => setNotes(e.target.value)} />
-            </div>
-          </form>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>{readOnly ? 'Close' : 'Cancel'}</button>
-          {status === 'received' && <button type="button" className="btn btn-secondary" disabled={!!saving} onClick={revertBill}>{saving === 'revert' ? 'Reverting...' : 'Revert to Draft'}</button>}
-          {status === 'draft' && billId && <button type="button" className="btn btn-primary" disabled={!!saving} onClick={confirmBill}>{saving === 'confirm' ? 'Confirming...' : 'Confirm Bill'}</button>}
-          {!readOnly && <button type="button" className="btn btn-primary" disabled={!!saving} onClick={save}>{saving === 'save' ? 'Saving...' : 'Save draft'}</button>}
-        </div>
-      </div>
-    </div>
+            <TextField label="Notes" autoComplete="off" disabled={readOnly} value={notes} onChange={setNotes} />
+            <button type="submit" hidden />
+          </BlockStack>
+        </form>
+      </Modal.Section>
+    </Modal>
   );
 }

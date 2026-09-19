@@ -33,11 +33,11 @@ export function billCourierLabel(bill: CourierBill): string {
   return formatCourierForDisplay(bill.courier) as string;
 }
 
-export const BILL_STATUS_META: Record<string, { label: string; cls: string; barColor: string }> = {
-  in_transit: { label: 'In Transit', cls: 'grid-status-unfulfilled', barColor: '#7c3aed' },
-  paid: { label: 'Paid', cls: 'grid-status-delivered', barColor: '#16a34a' },
-  partially_paid: { label: 'Partially Paid', cls: 'grid-status-fulfilled', barColor: '#ca8a04' },
-  unpaid: { label: 'Unpaid', cls: 'grid-status-returned', barColor: '#dc2626' },
+export const BILL_STATUS_META: Record<string, { label: string; tone: 'attention' | 'success' | 'info' | 'warning'; barColor: string }> = {
+  in_transit: { label: 'In Transit', tone: 'attention', barColor: '#7c3aed' },
+  paid: { label: 'Paid', tone: 'success', barColor: '#16a34a' },
+  partially_paid: { label: 'Partially Paid', tone: 'info', barColor: '#ca8a04' },
+  unpaid: { label: 'Unpaid', tone: 'warning', barColor: '#dc2626' },
 };
 
 export const PAYMENT_PROGRESS_COLORS = { received: '#16a34a', returned: '#dc2626', charges: '#f59e0b', taxes: '#0ea5e9', remaining: '#7c3aed' };

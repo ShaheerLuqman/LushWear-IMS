@@ -1,15 +1,11 @@
-// Products grid column definitions - ported from orders-grid.js's
-// buildProductsColumnDefs/createProductRowMenu/createProductViewButton.
-import { createElement, useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import type { ColDef } from 'ag-grid-community';
-import { makeCheckboxFloatingFilter, makeCheckboxSetFilter } from '../../gridFilters';
-import { escapeHtml, formatAmount } from '../../logic/shared';
+// Products table columns: how each is rendered and sorted.
+import { Badge, Button, InlineStack, Text, Thumbnail } from '@shopify/polaris';
+import { ImageIcon, ViewIcon } from '@shopify/polaris-icons';
+import type { DataColumn } from '../../components/DataTable';
+import { Dropdown } from '../../components/Dropdown';
+import { RowActions } from '../../components/RowActions';
+import { formatAmount } from '../../logic/shared';
 import { productStockStatus, productStockValue, productUnitCost, STOCK_STATUS_LABELS, type Product } from '../../logic/products';
-
-function htmlRenderer(fn: (params: any) => string) {
-  return (params: any) => createElement('span', { dangerouslySetInnerHTML: { __html: fn(params) } });
-}
 
 export interface ProductsColumnsCtx {
   isEditingAllowed: () => boolean;
@@ -18,157 +14,64 @@ export interface ProductsColumnsCtx {
   openEditVariantCosts: (product: Product) => void;
   openAdjustStock: (product: Product) => void;
   openCostHistory: (product: Product) => void;
-  getProducts: () => Product[];
 }
 
-function ProductViewButton({ data, ctx }: { data: Product; ctx: ProductsColumnsCtx }) {
-  if (!data?.id) return null;
-  return (
-    <div className="bill-cell-center">
-      <button type="button" className="product-view-btn" title="View product details" onClick={() => ctx.openProductDetails(data)}>
-        <i className="fa-solid fa-eye" /><span>View</span>
-      </button>
-    </div>
-  );
-}
+export const COLLECTIONS = ['Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers'];
+const STOCK_TONE = { in: 'success', low: 'warning', out: 'critical' } as const;
 
-const ROW_MENU_WIDTH = 190;
+const money = (v: number) => v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Null unit cost means the variants carry different costs, not "no cost".
+const unitCostLabel = (p: Product) => { const c = productUnitCost(p); return c != null ? `PKR ${formatAmount(c)}` : ((p.variants || []).length ? 'Mixed' : '—'); };
 
-function ProductRowMenu({ data, ctx }: { data: Product; ctx: ProductsColumnsCtx }) {
-  const [open, setOpen] = useState(false);
-  const [pos, setPos] = useState({ top: 0, left: 0 });
-  const btnRef = useRef<HTMLButtonElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const close = (e: MouseEvent) => {
-      const target = e.target as HTMLElement;
-      if (!target.closest('.product-menu-panel') && target !== btnRef.current) setOpen(false);
-    };
-    document.addEventListener('mousedown', close);
-    return () => document.removeEventListener('mousedown', close);
-  }, [open]);
-
-  if (!data?.id) return null;
-
-  function toggle() {
-    if (!open && btnRef.current) {
-      const rect = btnRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 2, left: Math.max(rect.right - ROW_MENU_WIDTH, 8) });
-    }
-    setOpen((v) => !v);
-  }
-
-  const item = (label: string, icon: string, onClick: () => void) => (
-    <div className="folio-dropdown-option" onClick={() => { setOpen(false); onClick(); }}>
-      <i className={`fa-solid ${icon}`} /><span>{label}</span>
-    </div>
-  );
-
-  return (
-    <div className="bill-cell-center">
-      <button ref={btnRef} type="button" className={'product-menu-btn' + (open ? ' open' : '')} title="More actions" onClick={toggle}>
-        <i className="fa-solid fa-ellipsis" />
-      </button>
-      {open && createPortal(
-        // Portaled to <body>, not left as a normal cell child - AG Grid rows are
-        // translate()'d for virtualization, which makes a `position: fixed` descendant
-        // clip/mis-position against that row's containing block instead of the viewport.
-        <div className="folio-dropdown-panel product-menu-panel" style={pos}>
-          {item('View details', 'fa-circle-info', () => ctx.openProductDetails(data))}
-          {item((data.variants || []).length ? 'Update variant price' : 'Update cost price', 'fa-tag', () => ctx.openEditVariantCosts(data))}
-          {item('Adjust stock', 'fa-boxes-stacked', () => ctx.openAdjustStock(data))}
-          {item('View history', 'fa-clock-rotate-left', () => ctx.openCostHistory(data))}
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
-}
-
-export function buildProductsColumnDefs(ctx: ProductsColumnsCtx): ColDef[] {
-  const CollectionSetFilter = makeCheckboxSetFilter((row: Product) => row.collection || '');
-  const CollectionFloatingFilter = makeCheckboxFloatingFilter(
-    () => {
-      const values = new Set<string>(['']);
-      ctx.getProducts().forEach((p) => values.add(p.collection || ''));
-      return ['', ...Array.from(values).filter((v) => v !== '').sort((a, b) => a.localeCompare(b))];
-    },
-    (v: string) => (v === '' ? '—' : v),
-  );
-  const StockStatusSetFilter = makeCheckboxSetFilter(productStockStatus);
-  const StockStatusFloatingFilter = makeCheckboxFloatingFilter(() => ['in', 'low', 'out'], (v: string) => STOCK_STATUS_LABELS[v]);
-
+export function buildProductsColumns(ctx: ProductsColumnsCtx): DataColumn<Product>[] {
   return [
     {
-      headerName: '', colId: 'select', width: 52, minWidth: 52, maxWidth: 52,
-      checkboxSelection: true, headerCheckboxSelection: true, headerCheckboxSelectionFilteredOnly: true,
-      sortable: false, filter: false, floatingFilter: false, suppressSizeToFit: true,
+      key: 'name', heading: 'Product', sortValue: (p) => p.name,
+      render: (p) => (
+        <InlineStack gap="300" blockAlign="center" wrap={false}>
+          <Thumbnail size="small" source={p.image_url || ImageIcon} alt="" />
+          <Text as="span" fontWeight="semibold">{p.name}</Text>
+        </InlineStack>
+      ),
     },
     {
-      headerName: 'Product', field: 'name', flex: 2, minWidth: 220,
-      filter: 'agTextColumnFilter', filterParams: { filterOptions: ['contains', 'startsWith', 'endsWith'], defaultOption: 'contains' },
-      cellRenderer: htmlRenderer((params: any) => {
-        const img = params.data?.image_url
-          ? `<img src="${escapeHtml(params.data.image_url)}" alt="">`
-          : '<div class="grid-image-placeholder">No Img</div>';
-        return `<div class="grid-product-cell"><div class="grid-image-cell">${img}</div><span class="grid-product-name">${escapeHtml(params.value || '')}</span></div>`;
-      }),
+      key: 'collection', heading: 'Collection', sortValue: (p) => p.collection || '',
+      render: (p) => (ctx.isEditingAllowed()
+        ? <Dropdown size="slim" variant="tertiary" placeholder="—" options={[{ value: '', label: '—' }, ...COLLECTIONS]} value={p.collection || ''} onChange={(v) => ctx.saveProductCollection(p.id, v)} />
+        : p.collection || '—'),
     },
+    { key: 'price', heading: 'Price (Rs)', alignment: 'end', sortValue: (p) => Number(p.price) || 0, render: (p) => money(Number(p.price) || 0) },
     {
-      headerName: 'Collection', field: 'collection', width: 130,
-      filter: CollectionSetFilter, floatingFilterComponent: CollectionFloatingFilter,
-      valueGetter: (params: any) => params.data?.collection ?? '',
-      valueFormatter: (params: any) => (params.value == null || params.value === '' ? '—' : params.value),
-      editable: () => ctx.isEditingAllowed(),
-      cellStyle: { cursor: 'pointer' } as any,
-      cellEditor: 'agSelectCellEditor',
-      cellEditorParams: { values: ['', 'Cami Sets', 'Linen PJs', 'Pajama T-Shirt', 'Silk Collection', 'Trousers'] },
-      valueSetter: (params: any) => {
-        const raw = params.newValue === '' ? '' : params.newValue;
-        params.data.collection = raw;
-        ctx.saveProductCollection(params.data.id, raw);
-        return true;
+      key: 'total_quantity', heading: 'Total Stock', sortValue: (p) => p.total_quantity || 0,
+      render: (p) => {
+        const count = (p.variants || []).length;
+        return (
+          <InlineStack gap="200" blockAlign="center" wrap={false}>
+            <Badge tone={STOCK_TONE[productStockStatus(p)]}>{String(p.total_quantity || 0)}</Badge>
+            {count > 0 && <Text as="span" tone="subdued">in stock · {count} variant{count === 1 ? '' : 's'}</Text>}
+          </InlineStack>
+        );
       },
     },
     {
-      headerName: 'Price (Rs)', field: 'price', width: 100, filter: 'agNumberColumnFilter',
-      valueFormatter: (params: any) => (parseFloat(params.value) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }),
+      key: 'status', heading: 'Status', sortValue: (p) => productStockStatus(p),
+      render: (p) => <Badge tone={STOCK_TONE[productStockStatus(p)]}>{STOCK_STATUS_LABELS[productStockStatus(p)]}</Badge>,
     },
+    { key: 'unitCost', heading: 'Cost per Unit', alignment: 'end', sortValue: (p) => productUnitCost(p), render: unitCostLabel },
+    { key: 'stockValue', heading: 'Value', alignment: 'end', sortValue: (p) => productStockValue(p), render: (p) => `PKR ${formatAmount(productStockValue(p))}` },
     {
-      headerName: 'Total Stock', field: 'total_quantity', width: 200, filter: 'agNumberColumnFilter',
-      cellRenderer: htmlRenderer((params: any) => {
-        const badge = `<span class="grid-quantity-badge ${productStockStatus(params.data)}">${params.value || 0}</span>`;
-        const count = (params.data?.variants || []).length;
-        if (!count) return badge;
-        return `${badge}<span class="grid-stock-variants">in stock · ${count} variant${count === 1 ? '' : 's'}</span>`;
-      }),
-    },
-    {
-      headerName: 'Status', colId: 'stockStatus', width: 130,
-      filter: StockStatusSetFilter, floatingFilterComponent: StockStatusFloatingFilter,
-      valueGetter: (params: any) => productStockStatus(params.data),
-      valueFormatter: (params: any) => STOCK_STATUS_LABELS[params.value] || '',
-      cellRenderer: htmlRenderer((params: any) => `<span class="grid-status-badge ${params.value}">${STOCK_STATUS_LABELS[params.value]}</span>`),
-    },
-    {
-      headerName: 'Cost per Unit', colId: 'unitCost', width: 140, filter: 'agNumberColumnFilter',
-      valueGetter: (params: any) => productUnitCost(params.data),
-      // Null means the variants carry different costs, not "no cost".
-      valueFormatter: (params: any) => (params.value != null ? `PKR ${formatAmount(params.value)}` : ((params.data?.variants || []).length ? 'Mixed' : '—')),
-    },
-    {
-      headerName: 'Value', colId: 'stockValue', width: 150, filter: 'agNumberColumnFilter',
-      valueGetter: (params: any) => productStockValue(params.data),
-      valueFormatter: (params: any) => `PKR ${formatAmount(params.value)}`,
-    },
-    {
-      headerName: '', colId: 'view', width: 92, minWidth: 92, filter: false, sortable: false,
-      cellRenderer: (params: any) => <ProductViewButton data={params.data} ctx={ctx} />,
-    },
-    {
-      headerName: 'Actions', colId: 'moreActions', width: 110, filter: false, sortable: false,
-      cellRenderer: (params: any) => <ProductRowMenu data={params.data} ctx={ctx} />,
+      key: 'actions', heading: 'Actions', alignment: 'end',
+      render: (p) => (
+        <InlineStack gap="100" blockAlign="center" align="end" wrap={false}>
+          <Button icon={ViewIcon} size="slim" accessibilityLabel="View product details" onClick={() => ctx.openProductDetails(p)} />
+          <RowActions items={[
+            { content: 'View details', onAction: () => ctx.openProductDetails(p) },
+            { content: (p.variants || []).length ? 'Update variant price' : 'Update cost price', onAction: () => ctx.openEditVariantCosts(p) },
+            { content: 'Adjust stock', onAction: () => ctx.openAdjustStock(p) },
+            { content: 'View history', onAction: () => ctx.openCostHistory(p) },
+          ]} />
+        </InlineStack>
+      ),
     },
   ];
 }

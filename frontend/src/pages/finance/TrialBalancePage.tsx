@@ -1,86 +1,65 @@
 // Trial Balance: every account with a non-zero balance, as at a date, split into
-// its Debit or Credit column. Ported from trial-balance.js.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
+// its Debit or Credit column.
+import { useEffect, useState } from 'react';
+import { Badge, Text } from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { DataTable, type DataColumn } from '../../components/DataTable';
+import { DateField } from '../../components/DateField';
 import { formatMoney } from '../../logic/ledgers';
 import { getPKTDateString } from '../../logic/shared';
 
-interface TrialBalanceRow { account_id: string; code?: string; name: string; type?: string; debit: number; credit: number; _isFooter?: boolean }
+interface TrialBalanceRow { account_id: string; code?: string; name: string; type?: string; debit: number; credit: number }
 interface TrialBalanceData { rows: TrialBalanceRow[]; total_debit: number; total_credit: number; balanced: boolean }
+
+const num = (v: unknown) => parseFloat(String(v)) || 0;
+// Zero on a trial balance means "this account is on the other side", not "zero rupees".
+const money = (v: number) => (v ? formatMoney(v) : '');
 
 export function TrialBalancePage() {
   const { showToast } = useToast();
   const [asOf, setAsOf] = useState(getPKTDateString());
-  const [rows, setRows] = useState<TrialBalanceRow[]>([]);
-  const [status, setStatus] = useState<{ text: string; ok: boolean } | null>(null);
-  const gridApiRef = useRef<GridApi | null>(null);
+  const [data, setData] = useState<TrialBalanceData | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async (date: string) => {
-    gridApiRef.current?.showLoadingOverlay();
-    let rowCount = 0;
-    try {
-      const data = await apiJson<TrialBalanceData>(`/journal/trial-balance?as_of=${date}`, { fallback: 'Failed to load trial balance' });
-      const nextRows = (data.rows || []).map((r) => ({ ...r, debit: parseFloat(String(r.debit)) || 0, credit: parseFloat(String(r.credit)) || 0 }));
-      rowCount = nextRows.length;
-      setRows(nextRows);
-      const difference = (parseFloat(String(data.total_debit)) || 0) - (parseFloat(String(data.total_credit)) || 0);
-      setStatus(data.balanced ? { text: 'Balanced', ok: true } : { text: `Out of balance by Rs ${formatMoney(Math.abs(difference))}`, ok: false });
-      gridApiRef.current?.setGridOption('pinnedBottomRowData', [{
-        account_id: '__total__', code: '', name: 'Total', type: '', debit: parseFloat(String(data.total_debit)) || 0, credit: parseFloat(String(data.total_credit)) || 0, _isFooter: true,
-      }]);
-    } catch (error) {
-      console.error('Error loading trial balance:', error);
-      showToast('Failed to load trial balance', 'error');
-      setRows([]);
-    } finally {
-      if (rowCount === 0) gridApiRef.current?.showNoRowsOverlay(); else gridApiRef.current?.hideOverlay();
-    }
-  }, [showToast]);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    apiJson<TrialBalanceData>(`/journal/trial-balance?as_of=${asOf}`, { fallback: 'Failed to load trial balance' })
+      .then((d) => { if (!cancelled) setData({ ...d, rows: (d.rows || []).map((r) => ({ ...r, debit: num(r.debit), credit: num(r.credit) })) }); })
+      .catch((error) => { console.error('Error loading trial balance:', error); showToast('Failed to load trial balance', 'error'); if (!cancelled) setData(null); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [asOf, showToast]);
 
-  useEffect(() => { load(asOf); }, [asOf, load]);
-
-  const columnDefs: ColDef[] = useMemo(() => [
-    { headerName: 'Code', field: 'code', width: 110 },
-    { headerName: 'Account', field: 'name', flex: 2, minWidth: 180 },
-    { headerName: 'Type', field: 'type', width: 140 },
-    // Zero on a trial balance means "this account is on the other side", not "zero
-    // rupees" - a blank cell reads that way, 0.00 doesn't.
-    { headerName: 'Debit (Rs)', field: 'debit', width: 160, type: 'rightAligned', valueFormatter: (p: any) => (p.value ? formatMoney(p.value) : '') },
-    { headerName: 'Credit (Rs)', field: 'credit', width: 160, type: 'rightAligned', valueFormatter: (p: any) => (p.value ? formatMoney(p.value) : '') },
-  ], []);
+  const difference = data ? num(data.total_debit) - num(data.total_credit) : 0;
 
   usePageHeader({
     title: 'Trial Balance',
     actions: (
       <>
-        <label htmlFor="trialBalanceAsOf">As at</label>
-        <input type="date" id="trialBalanceAsOf" className="form-input trial-balance-date" value={asOf} onChange={(e) => setAsOf(e.target.value || getPKTDateString())} />
-        {status && <span className={'trial-balance-status ' + (status.ok ? 'trial-balance-status-ok' : 'trial-balance-status-bad')}>{status.text}</span>}
+        <DateField label="As at" prefix="As at" value={asOf} onChange={(v) => setAsOf(v || getPKTDateString())} />
+        {data && (data.balanced
+          ? <Badge tone="success">Balanced</Badge>
+          : <Badge tone="critical">{`Out of balance by Rs ${formatMoney(Math.abs(difference))}`}</Badge>)}
       </>
     ),
   });
 
-  function onGridReady(e: GridReadyEvent) {
-    gridApiRef.current = e.api;
-    if (rows.length === 0) e.api.showNoRowsOverlay();
-  }
+  const bold = (v: string) => <Text as="span" fontWeight="semibold">{v}</Text>;
+  const columns: DataColumn<TrialBalanceRow>[] = [
+    { key: 'code', heading: 'Code', render: (r) => r.code || '', sortValue: (r) => r.code, footer: '' },
+    { key: 'name', heading: 'Account', render: (r) => r.name, sortValue: (r) => r.name, footer: bold('Total') },
+    { key: 'type', heading: 'Type', render: (r) => r.type || '', sortValue: (r) => r.type, footer: '' },
+    { key: 'debit', heading: 'Debit (Rs)', alignment: 'end', render: (r) => money(r.debit), sortValue: (r) => r.debit, footer: bold(money(num(data?.total_debit))) },
+    { key: 'credit', heading: 'Credit (Rs)', alignment: 'end', render: (r) => money(r.credit), sortValue: (r) => r.credit, footer: bold(money(num(data?.total_credit))) },
+  ];
 
   return (
-    <div className="ag-theme-alpine grid-container">
-      <AgGridReact
-        columnDefs={columnDefs}
-        rowData={rows}
-        defaultColDef={{ sortable: true, resizable: true, filter: true, minWidth: 90 }}
-        animateRows
-        pagination={false}
-        domLayout="normal"
-        getRowId={(p) => p.data.account_id}
-        onGridReady={onGridReady}
-      />
-    </div>
+    <DataTable
+      columns={columns} rows={data?.rows ?? []} rowId={(r) => r.account_id} loading={loading}
+      resourceName={{ singular: 'account', plural: 'accounts' }} emptyMessage="No balances as at this date"
+    />
   );
 }

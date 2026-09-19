@@ -1,10 +1,10 @@
 // Orders table cell config for the Polaris IndexTable rebuild (replaces the old AG Grid
 // ordersColumns.ts). One entry per visible column: how to render it, how to sort it, and
 // how to export it to Excel - single source of truth for all three so they can't drift.
-import { useState, useEffect } from 'react';
-import { Badge, Text, TextField, Button, Tooltip } from '@shopify/polaris';
+import { Badge, Text, Button, Tooltip } from '@shopify/polaris';
 import { RefreshIcon } from '@shopify/polaris-icons';
 import { Dropdown } from '../../components/Dropdown';
+import { EditableAmount, EditableText } from '../../components/EditableCell';
 import { getCourierDisplayName } from '../../logic/shared';
 import {
   advanceStatusMeta, computeFinalStatus, computeNetProfit, computeReceivable,
@@ -47,51 +47,8 @@ function statusTone(status?: string): 'attention' | 'info' | 'success' | 'warnin
   return 'attention';
 }
 
-/** Inline-editable numeric cell (borderless TextField) - matches Shopify's own pattern for
- * inline-editable table values (e.g. inventory quantity). Keeps its own draft text so typing
- * doesn't re-render the rest of the table; only commits (and re-renders) on blur. */
-/** Plain (no thousands separator) decimal string - `type="number"` inputs reject
- * comma-formatted values like money()'s "12,146.00" and silently render blank. */
-function plainDecimal(value: unknown): string {
-  return (parseFloat(String(value)) || 0).toFixed(2);
-}
-
-export function EditableAmount({ value, editable, onSave }: { value: unknown; editable: boolean; onSave: (v: number) => void }) {
-  const [text, setText] = useState(() => plainDecimal(value));
-  useEffect(() => { setText(plainDecimal(value)); }, [value]);
-
-  if (!editable) return <Text as="span" alignment="end" numeric>{money(value)}</Text>;
-  return (
-    <TextField
-      /* text, not number: Polaris renders a spin-button control for type="number" that
-         eats ~30px, too much in a narrow table cell - validation still happens on blur. */
-      label="" labelHidden autoComplete="off" type="text" inputMode="decimal" variant="borderless" align="right" size="slim"
-      value={text}
-      onChange={setText}
-      onBlur={() => {
-        const n = parseFloat(text);
-        if (!isNaN(n) && n >= 0 && n !== (parseFloat(String(value)) || 0)) onSave(n);
-        else setText(plainDecimal(value));
-      }}
-    />
-  );
-}
-
 function EditableFolio({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
-  const [text, setText] = useState(order.folio || '');
-  useEffect(() => { setText(order.folio || ''); }, [order.folio]);
-  if (!ctx.isEditingAllowed()) return <Text as="span">{order.folio || '-'}</Text>;
-  return (
-    <TextField
-      label="" labelHidden autoComplete="off" variant="borderless" size="slim"
-      value={text}
-      onChange={setText}
-      onBlur={() => {
-        const next = text.trim() || null;
-        if (next !== (order.folio || null)) ctx.saveOrderField(order.id, 'folio', next);
-      }}
-    />
-  );
+  return <EditableText value={order.folio} editable={ctx.isEditingAllowed()} onSave={(v) => ctx.saveOrderField(order.id, 'folio', v || null)} />;
 }
 
 function PieceReceivedCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {

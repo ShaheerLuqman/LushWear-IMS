@@ -3,6 +3,9 @@
 // Ported from delivery-status.js's showDeliveryStatusReportModal/renderDeliveryStatusReportDetail
 // /openShipperAdviceModal/submitShipperAdvice.
 import { useMemo, useState } from 'react';
+import { Badge, BlockStack, Button, Checkbox, ChoiceList, FormLayout, InlineStack, Tabs, Text, TextField } from '@shopify/polaris';
+import { FormModal, InfoModal } from '../../components/FormModal';
+import { ReportTable } from '../../components/ReportTable';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { formatCourierForDisplay } from '../../logic/shared';
@@ -52,99 +55,52 @@ export function DeliveryStatusReportModal({
     });
   }
 
+  const activeLabel = (DELIVERY_REPORT_CATEGORIES.find((c) => c.key === activeKey) || {}).label;
+  const allAdviseSelected = adviseIndexes.length > 0 && selectedAdvise.size === adviseIndexes.length;
+
   return (
     <>
-      <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-        <div className="modal-content">
-          <div className="modal-header">
-            <h2>Delivery status report</h2>
-            <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-          </div>
-          <div className="modal-body">
-            <p className="modal-description">Delivery status for {total} selected order{total === 1 ? '' : 's'}.</p>
-            <div className="status-report-cards">
-              {visibleCategories.map(({ key, label }) => {
-                const count = key === 'all' ? grandTotal : entries[key as keyof DeliveryReport].length;
-                const pct = grandTotal ? Math.round((count / grandTotal) * 100) : 0;
-                return (
-                  <button type="button" key={key} className={`status-report-card status-report-card--${key}` + (activeKey === key ? ' active' : '')} onClick={() => setActiveKey(key)}>
-                    <span className="status-report-card__count">{count}<span className="status-report-card__pct">{pct}%</span></span>
-                    <span className="status-report-card__label">{label}</span>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="status-report-detail">
-              <h3 className="status-report-detail__title">{(DELIVERY_REPORT_CATEGORIES.find((c) => c.key === activeKey) || {}).label} ({activeEntries.length})</h3>
-              {activeEntries.length === 0 ? (
-                <div className="no-status">No orders in this category.</div>
-              ) : (
-                <>
-                  {bulkEligible && (
-                    <div className="status-report-bulk-bar">
-                      <label className="status-report-bulk-select-all">
-                        <input
-                          type="checkbox" checked={selectedAdvise.size === adviseIndexes.length && adviseIndexes.length > 0}
-                          onChange={(e) => setSelectedAdvise(e.target.checked ? new Set(adviseIndexes) : new Set())}
-                        />
-                        Select all under review
-                      </label>
-                      <button
-                        type="button" className="btn btn-secondary btn-sm" disabled={selectedAdvise.size === 0}
-                        onClick={() => setAdviseFor([...selectedAdvise].map((i) => activeEntries[i]))}
-                      >
-                        Advise selected ({selectedAdvise.size})
-                      </button>
-                    </div>
-                  )}
-                  <div className="postex-mismatches-table-wrap">
-                    <table className="postex-mismatches-table">
-                      <thead>
-                        <tr>
-                          {bulkEligible && <th />}
-                          <th>Order #</th><th>Courier</th><th>Tracking</th>
-                          {showIssueColumn && <th>Issue</th>}
-                          <th>Latest status</th><th />
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {activeEntries.map((m, i) => (
-                          <tr key={m.order.id}>
-                            {bulkEligible && (
-                              <td className="status-report-select">
-                                {m.canAdvise && !m.advised && (
-                                  <input
-                                    type="checkbox" checked={selectedAdvise.has(i)}
-                                    onChange={(e) => setSelectedAdvise((prev) => { const next = new Set(prev); if (e.target.checked) next.add(i); else next.delete(i); return next; })}
-                                  />
-                                )}
-                              </td>
-                            )}
-                            <td>{m.order.order_number || ''}</td>
-                            <td>{formatCourierForDisplay(m.order.courier) || ''}</td>
-                            <td>{m.order.tracking_number || ''}</td>
-                            {showIssueColumn && <td>{m.issueType && <span className="grid-status-badge grid-status-rfd">{m.issueType}</span>}</td>}
-                            <td>{m.note || ''}</td>
-                            <td className="status-report-actions">
-                              {m.canViewDetails && <button type="button" className="status-report-view-btn" onClick={() => onViewOrder(m.order)}>View</button>}
-                              {m.canAdvise && (m.advised
-                                ? <button type="button" className="status-report-view-btn" disabled>{m.advised} sent</button>
-                                : <button type="button" className="status-report-view-btn status-report-advise-btn" onClick={() => setAdviseFor([m])}>Advise</button>)}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </>
-              )}
-            </div>
-          </div>
-          <div className="modal-pinned-footer">
-            <button type="button" className="btn btn-primary" onClick={onClose}>Close</button>
-          </div>
-        </div>
-      </div>
+      <InfoModal title="Delivery status report" onClose={onClose} size="large">
+        <BlockStack gap="400">
+          <Text as="p" tone="subdued">Delivery status for {total} selected order{total === 1 ? '' : 's'}.</Text>
+          <Tabs
+            tabs={visibleCategories.map(({ key, label }) => {
+              const count = key === 'all' ? grandTotal : entries[key as keyof DeliveryReport].length;
+              const pct = grandTotal ? Math.round((count / grandTotal) * 100) : 0;
+              return { id: key, content: `${label} · ${pct}%`, badge: String(count) };
+            })}
+            selected={Math.max(0, visibleCategories.findIndex((c) => c.key === activeKey))}
+            onSelect={(i) => { setActiveKey(visibleCategories[i].key); setSelectedAdvise(new Set()); }}
+          />
+          <InlineStack align="space-between" blockAlign="center">
+            <Text as="h3" variant="headingSm">{activeLabel} ({activeEntries.length})</Text>
+            {bulkEligible && (
+              <InlineStack gap="300" blockAlign="center">
+                <Checkbox label="Select all under review" checked={allAdviseSelected} onChange={(checked) => setSelectedAdvise(checked ? new Set(adviseIndexes) : new Set())} />
+                <Button size="slim" disabled={selectedAdvise.size === 0} onClick={() => setAdviseFor([...selectedAdvise].map((i) => activeEntries[i]))}>{`Advise selected (${selectedAdvise.size})`}</Button>
+              </InlineStack>
+            )}
+          </InlineStack>
+          <ReportTable
+            headings={[...(bulkEligible ? [''] : []), 'Order #', 'Courier', 'Tracking', ...(showIssueColumn ? ['Issue'] : []), 'Latest status', '']}
+            emptyMessage="No orders in this category."
+            rows={activeEntries.map((m, i) => [
+              ...(bulkEligible ? [m.canAdvise && !m.advised
+                ? <Checkbox label="" labelHidden checked={selectedAdvise.has(i)} onChange={(checked) => setSelectedAdvise((prev) => { const next = new Set(prev); if (checked) next.add(i); else next.delete(i); return next; })} />
+                : ''] : []),
+              String(m.order.order_number || ''), formatCourierForDisplay(m.order.courier) || '', m.order.tracking_number || '',
+              ...(showIssueColumn ? [m.issueType ? <Badge tone="attention">{m.issueType}</Badge> : ''] : []),
+              m.note || '',
+              <InlineStack gap="100" align="end" wrap={false}>
+                {m.canViewDetails && <Button size="micro" onClick={() => onViewOrder(m.order)}>View</Button>}
+                {m.canAdvise && (m.advised
+                  ? <Button size="micro" disabled>{`${m.advised} sent`}</Button>
+                  : <Button size="micro" variant="primary" onClick={() => setAdviseFor([m])}>Advise</Button>)}
+              </InlineStack>,
+            ])}
+          />
+        </BlockStack>
+      </InfoModal>
       {adviseFor && (
         <ShipperAdviceModal
           entries={adviseFor}
@@ -202,37 +158,18 @@ function ShipperAdviceModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Advise PostEx</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">{summary}</p>
-          <div className="form-group">
-            <label>Decision</label>
-            <div className="shipper-advice-options">
-              <label className="shipper-advice-option">
-                <input type="radio" name="shipperAdviceType" checked={advice === 'retry'} onChange={() => setAdvice('retry')} />
-                <span><strong>Reattempt delivery</strong> — ask PostEx to try the customer again.</span>
-              </label>
-              <label className="shipper-advice-option">
-                <input type="radio" name="shipperAdviceType" checked={advice === 'return'} onChange={() => setAdvice('return')} />
-                <span><strong>Return the parcel</strong> — send it back to the warehouse.</span>
-              </label>
-            </div>
-          </div>
-          <div className="form-group">
-            <label htmlFor="shipperAdviceRemarks">Remarks for the rider</label>
-            <textarea id="shipperAdviceRemarks" className="form-input" rows={4} placeholder="e.g. Customer asked to deliver after 5pm; correct address is House 21, Street 37" value={remarks} onChange={(e) => setRemarks(e.target.value)} autoFocus />
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={sending} onClick={submit}>{sending ? 'Sending...' : 'Send'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Advise PostEx" onClose={onClose} onSubmit={submit} submitLabel="Send" saving={sending}>
+      <FormLayout>
+        <Text as="p" tone="subdued">{summary}</Text>
+        <ChoiceList
+          title="Decision" selected={[advice]} onChange={(v) => setAdvice(v[0] as 'retry' | 'return')}
+          choices={[
+            { value: 'retry', label: 'Reattempt delivery', helpText: 'Ask PostEx to try the customer again.' },
+            { value: 'return', label: 'Return the parcel', helpText: 'Send it back to the warehouse.' },
+          ]}
+        />
+        <TextField label="Remarks for the rider" autoComplete="off" multiline={4} autoFocus placeholder="e.g. Customer asked to deliver after 5pm; correct address is House 21, Street 37" value={remarks} onChange={setRemarks} />
+      </FormLayout>
+    </FormModal>
   );
 }

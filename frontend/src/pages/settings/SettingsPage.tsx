@@ -1,7 +1,9 @@
 // Settings: Account, Users, Financial calendar, Integrations, Couriers.
-// Ported from auth-users.js's loadAccountSettings + the settingsView markup.
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
+import {
+  Badge, BlockStack, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Text, TextField,
+} from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
@@ -10,6 +12,20 @@ import { ChangePasswordModal } from './ChangePasswordModal';
 import { Dropdown } from '../../components/Dropdown';
 
 const ROLE_OPTIONS = [{ value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }];
+
+function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
+  return (
+    <Card>
+      <BlockStack gap="400">
+        <BlockStack gap="100">
+          <Text as="h2" variant="headingMd">{title}</Text>
+          {description && <Text as="p" tone="subdued">{description}</Text>}
+        </BlockStack>
+        {children}
+      </BlockStack>
+    </Card>
+  );
+}
 
 interface UserRow { id: string; name?: string; email: string; role: 'admin' | 'staff'; is_active: boolean }
 
@@ -58,9 +74,9 @@ function UsersSection() {
     }
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setError('');
+    if (!email.trim()) { setError('Email is required'); return; }
     const body: Record<string, unknown> = { email: email.trim(), role };
     if (name.trim()) body.name = name.trim();
     if (password) body.password = password;
@@ -78,44 +94,38 @@ function UsersSection() {
   }
 
   return (
-    <section className="settings-section">
-      <h2 className="settings-section__title">Users</h2>
-      <div className="settings-users-list">
+    <Section title="Users">
+      <BlockStack gap="200">
         {(users || []).map((user) => (
-          <div className={'settings-user-row' + (user.is_active ? '' : ' settings-user-row--inactive')} key={user.id}>
-            <span className="settings-user-row__email">{user.name ? `${user.name} (${user.email})` : user.email}</span>
-            <div className="settings-user-row__controls">
+          <InlineStack key={user.id} align="space-between" blockAlign="center" gap="300" wrap={false}>
+            <InlineStack gap="200" blockAlign="center">
+              <Text as="span" tone={user.is_active ? undefined : 'subdued'}>{user.name ? `${user.name} (${user.email})` : user.email}</Text>
+              {!user.is_active && <Badge>Inactive</Badge>}
+            </InlineStack>
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
               <Dropdown options={ROLE_OPTIONS} value={user.role} onChange={(v) => changeRole(user, v)} />
-              <button type="button" className="btn btn-secondary" disabled={busyId === user.id} onClick={() => toggleActive(user)}>
-                {user.is_active ? 'Deactivate' : 'Activate'}
-              </button>
-            </div>
-          </div>
+              <Button size="slim" loading={busyId === user.id} onClick={() => toggleActive(user)}>{user.is_active ? 'Deactivate' : 'Activate'}</Button>
+            </InlineStack>
+          </InlineStack>
         ))}
-      </div>
-      <form className="settings-add-user-form" onSubmit={submit}>
-        <div className="form-group">
-          <label htmlFor="settingsAddUserName">Name</label>
-          <input type="text" id="settingsAddUserName" className="form-input" maxLength={200} placeholder="Leave blank if they already have an account elsewhere" value={name} onChange={(e) => setName(e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsAddUserEmail">Email</label>
-          <input type="email" id="settingsAddUserEmail" className="form-input" required placeholder="teammate@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsAddUserPassword">Temporary password</label>
-          <input type="password" id="settingsAddUserPassword" className="form-input" minLength={8} placeholder="Leave blank if they already have an account elsewhere" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsAddUserRole">Role</label>
-          <Dropdown id="settingsAddUserRole" fullWidth options={ROLE_OPTIONS} value={role} onChange={(v) => setRole(v as 'staff' | 'admin')} />
-        </div>
-        {error && <p className="auth-gate-error" role="alert">{error}</p>}
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Adding...' : 'Add user'}</button>
-        </div>
+      </BlockStack>
+      <Divider />
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <FormLayout>
+          <Text as="h3" variant="headingSm">Add user</Text>
+          <FormLayout.Group>
+            <TextField label="Name" autoComplete="off" maxLength={200} value={name} onChange={setName} />
+            <TextField label="Email" type="email" autoComplete="off" placeholder="teammate@example.com" requiredIndicator value={email} onChange={setEmail} />
+          </FormLayout.Group>
+          <FormLayout.Group>
+            <TextField label="Temporary password" type="password" autoComplete="new-password" helpText="Leave blank if they already have an account elsewhere" value={password} onChange={setPassword} />
+            <Dropdown label="Role" fullWidth options={ROLE_OPTIONS} value={role} onChange={(v) => setRole(v as 'staff' | 'admin')} />
+          </FormLayout.Group>
+          {error && <InlineError message={error} fieldID="addUser" />}
+          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Add user</Button></InlineStack>
+        </FormLayout>
       </form>
-    </section>
+    </Section>
   );
 }
 
@@ -180,8 +190,7 @@ function IntegrationsSection() {
     })();
   }
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setError('');
     const body: Record<string, unknown> = { shopify_store_url: storeUrl.trim() || null, shopify_api_version: apiVersion.trim() || null };
     if (token) body.shopify_access_token = token;
@@ -199,36 +208,24 @@ function IntegrationsSection() {
   }
 
   return (
-    <section className="settings-section">
-      <h2 className="settings-section__title">Integrations</h2>
-      <form onSubmit={submit}>
-        <div className="form-group">
-          <label htmlFor="settingsShopifyStoreUrl">Shopify store URL</label>
-          <input type="text" id="settingsShopifyStoreUrl" className="form-input" placeholder="your-store.myshopify.com" value={storeUrl} onChange={(e) => setStoreUrl(e.target.value)} />
-          <div className="settings-inline-actions">
-            <button type="button" className="btn btn-secondary" disabled={connecting} onClick={connectShopify}>Connect Shopify</button>
-            <span className="form-hint">{connectStatus}</span>
-          </div>
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsShopifyAccessToken">Shopify access token (advanced)</label>
-          <input
-            type="password" id="settingsShopifyAccessToken" className="form-input" placeholder={tokenConfigured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
-            autoComplete="new-password" data-lpignore="true" value={token} onChange={(e) => setToken(e.target.value)}
+    <Section title="Integrations">
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <FormLayout>
+          <TextField
+            label="Shopify store URL" autoComplete="off" placeholder="your-store.myshopify.com" value={storeUrl} onChange={setStoreUrl}
+            connectedRight={<Button loading={connecting} onClick={connectShopify}>Connect Shopify</Button>} error={connectStatus || undefined}
           />
-          <span className="form-hint">{tokenConfigured ? 'Configured' : 'Not configured'}</span>
-          <span className="form-hint">Only needed as a manual fallback - "Connect Shopify" above sets this for you.</span>
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsShopifyApiVersion">Shopify API version</label>
-          <input type="text" id="settingsShopifyApiVersion" className="form-input" placeholder="e.g. 2024-07" value={apiVersion} onChange={(e) => setApiVersion(e.target.value)} />
-        </div>
-        {error && <p className="auth-gate-error" role="alert">{error}</p>}
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save integrations'}</button>
-        </div>
+          <TextField
+            label="Shopify access token (advanced)" type="password" autoComplete="new-password" placeholder={tokenConfigured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
+            helpText={`${tokenConfigured ? 'Configured' : 'Not configured'}. Only needed as a manual fallback - "Connect Shopify" above sets this for you.`}
+            value={token} onChange={setToken}
+          />
+          <TextField label="Shopify API version" autoComplete="off" placeholder="e.g. 2024-07" value={apiVersion} onChange={setApiVersion} />
+          {error && <InlineError message={error} fieldID="integrations" />}
+          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Save integrations</Button></InlineStack>
+        </FormLayout>
       </form>
-    </section>
+    </Section>
   );
 }
 
@@ -274,37 +271,26 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
   }
 
   return (
-    <div className="settings-couriers-row">
-      <div className="settings-couriers-row__head">
-        <label className="settings-couriers-row__toggle">
-          <input type="checkbox" checked={enabled} disabled={toggling} onChange={(e) => toggle(e.target.checked)} />
-          <span>{courier.label}</span>
-        </label>
-        <span className="settings-couriers-row__ledger">
-          {enabled && courier.ledger_id && (financeOn
-            ? <a href={`/ledgers/${courier.ledger_id}`} onClick={(e) => { e.preventDefault(); navigate(`/ledgers/${courier.ledger_id}`); }}>View ledger</a>
-            : 'Ledger ready')}
-        </span>
-      </div>
+    <BlockStack gap="300">
+      <InlineStack align="space-between" blockAlign="center">
+        <Checkbox label={courier.label} checked={enabled} disabled={toggling} onChange={toggle} />
+        {enabled && courier.ledger_id && (financeOn
+          ? <Link onClick={() => navigate(`/ledgers/${courier.ledger_id}`)}>View ledger</Link>
+          : <Text as="span" tone="subdued">Ledger ready</Text>)}
+      </InlineStack>
       {enabled && courier.credentials.length > 0 && (
-        <div className="settings-couriers-row__body">
+        <FormLayout>
           {courier.credentials.map((field) => (
-            <div className="form-group" key={field.key}>
-              <label>{field.label}</label>
-              <input
-                type="password" className="form-input" autoComplete="new-password" data-lpignore="true"
-                placeholder={field.configured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
-                value={values[field.key] || ''} onChange={(e) => setValues((prev) => ({ ...prev, [field.key]: e.target.value }))}
-              />
-              <span className="form-hint">{field.configured ? 'Configured' : 'Not configured'}</span>
-            </div>
+            <TextField
+              key={field.key} label={field.label} type="password" autoComplete="new-password"
+              placeholder={field.configured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET} helpText={field.configured ? 'Configured' : 'Not configured'}
+              value={values[field.key] || ''} onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
+            />
           ))}
-          <div className="settings-couriers-row__actions">
-            <button type="button" className="btn btn-primary" disabled={savingKeys} onClick={saveKeys}>{savingKeys ? 'Saving...' : 'Save keys'}</button>
-          </div>
-        </div>
+          <InlineStack align="end"><Button variant="primary" loading={savingKeys} onClick={saveKeys}>Save keys</Button></InlineStack>
+        </FormLayout>
       )}
-    </div>
+    </BlockStack>
   );
 }
 
@@ -323,14 +309,12 @@ function CouriersSection({ financeOn }: { financeOn: boolean }) {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
-    <section className="settings-section">
-      <h2 className="settings-section__title">Couriers</h2>
-      <p className="settings-section__desc">Turn on the couriers you ship with. Enabling a courier opens its integration keys and creates a ledger for it.</p>
-      <div className="settings-couriers-list">
+    <Section title="Couriers" description="Turn on the couriers you ship with. Enabling a courier opens its integration keys and creates a ledger for it.">
+      <BlockStack gap="400">
         {(couriers || []).map((c) => <CourierRowView key={c.id} courier={c} financeOn={financeOn} onChanged={load} />)}
-      </div>
-      {error && <p className="auth-gate-error" role="alert">{error}</p>}
-    </section>
+      </BlockStack>
+      {error && <InlineError message={error} fieldID="couriers" />}
+    </Section>
   );
 }
 
@@ -371,9 +355,9 @@ function FiscalSection() {
     ? (dayNum === 1 ? `${ordinal(1)} – last day of the month` : `${ordinal(dayNum)} – ${ordinal(dayNum - 1)} of the next month`)
     : '—';
 
-  async function submit(e: FormEvent) {
-    e.preventDefault();
+  async function submit() {
     setError('');
+    if (!(dayNum >= 1 && dayNum <= 28)) { setError('Start day must be between 1 and 28'); return; }
     setSaving(true);
     try {
       await apiJson('/org-settings/fiscal', { method: 'PUT', body: { fiscal_month_start_day: dayNum, fiscal_year_start_month: startMonthNum } });
@@ -388,28 +372,25 @@ function FiscalSection() {
   }
 
   return (
-    <section className="settings-section">
-      <h2 className="settings-section__title">Financial calendar</h2>
-      <form onSubmit={submit}>
-        <div className="form-group">
-          <label htmlFor="settingsFiscalMonthStartDay">Financial month starts on</label>
-          <input type="number" id="settingsFiscalMonthStartDay" className="form-input" min={1} max={28} required value={day} onChange={(e) => setDay(e.target.value)} />
-          <span className="form-hint">Day of the month a reporting period begins, e.g. 22 means each period runs the 22nd to the 21st of the next month.</span>
-        </div>
-        <div className="form-group">
-          <label htmlFor="settingsFiscalYearStartMonth">Financial year starts in</label>
-          <Dropdown id="settingsFiscalYearStartMonth" fullWidth options={FISCAL_MONTH_NAMES.map((name, i) => ({ value: String(i + 1), label: name }))} value={startMonth} onChange={setStartMonth} />
-        </div>
-        <div className="settings-fiscal-preview">
-          <span>Financial year: <strong>{yearPreview}</strong></span>
-          <span>Financial month: <strong>{monthPreview}</strong></span>
-        </div>
-        {error && <p className="auth-gate-error" role="alert">{error}</p>}
-        <div className="form-actions">
-          <button type="submit" className="btn btn-primary" disabled={saving}>{saving ? 'Saving...' : 'Save financial calendar'}</button>
-        </div>
+    <Section title="Financial calendar">
+      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+        <FormLayout>
+          <FormLayout.Group>
+            <TextField
+              label="Financial month starts on" type="number" autoComplete="off" min={1} max={28} value={day} onChange={setDay}
+              helpText="Day of the month a reporting period begins, e.g. 22 means each period runs the 22nd to the 21st of the next month."
+            />
+            <Dropdown label="Financial year starts in" fullWidth options={FISCAL_MONTH_NAMES.map((name, i) => ({ value: String(i + 1), label: name }))} value={startMonth} onChange={setStartMonth} />
+          </FormLayout.Group>
+          <InlineStack gap="600">
+            <Text as="span" tone="subdued">Financial year: <Text as="span" fontWeight="semibold">{yearPreview}</Text></Text>
+            <Text as="span" tone="subdued">Financial month: <Text as="span" fontWeight="semibold">{monthPreview}</Text></Text>
+          </InlineStack>
+          {error && <InlineError message={error} fieldID="fiscal" />}
+          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Save financial calendar</Button></InlineStack>
+        </FormLayout>
       </form>
-    </section>
+    </Section>
   );
 }
 
@@ -424,22 +405,23 @@ export function SettingsPage() {
 
   return (
     <div className="settings-container">
-      <section className="settings-section">
-        <h2 className="settings-section__title">Account</h2>
-        <div className="settings-row">
-          <div className="settings-row__text">
-            <span className="settings-row__label">{account ? (account.name || account.email) : '—'}</span>
-            <span className="settings-row__hint">{account?.name ? account.email : ''}</span>
-            <span className="settings-row__hint">{account ? (account.role === 'admin' ? 'Admin' : 'Staff') : ''}</span>
-          </div>
-          <button type="button" className="btn btn-secondary" onClick={() => setChangePasswordOpen(true)}>Change password</button>
-        </div>
-      </section>
+      <BlockStack gap="400">
+        <Section title="Account">
+          <InlineStack align="space-between" blockAlign="center">
+            <BlockStack gap="050">
+              <Text as="span" fontWeight="semibold">{account ? (account.name || account.email) : '—'}</Text>
+              <Text as="span" tone="subdued">{account?.name ? account.email : ''}</Text>
+              {account && <InlineStack><Badge>{account.role === 'admin' ? 'Admin' : 'Staff'}</Badge></InlineStack>}
+            </BlockStack>
+            <Button onClick={() => setChangePasswordOpen(true)}>Change password</Button>
+          </InlineStack>
+        </Section>
 
-      {isAdmin && <UsersSection />}
-      {isAdmin && <FiscalSection />}
-      {isAdmin && <IntegrationsSection />}
-      {isAdmin && <CouriersSection financeOn={financeOn} />}
+        {isAdmin && <UsersSection />}
+        {isAdmin && <FiscalSection />}
+        {isAdmin && <IntegrationsSection />}
+        {isAdmin && <CouriersSection financeOn={financeOn} />}
+      </BlockStack>
 
       {changePasswordOpen && <ChangePasswordModal onClose={() => setChangePasswordOpen(false)} />}
     </div>

@@ -66,12 +66,41 @@ export function fulfillmentOrderDetailString(lineItems: FulfillmentLineItem[] | 
   return (lineItems || []).filter((li) => li.name).map((li) => `[ ${li.qty} x ${fulfillmentLineItemLabel(li)} ]`).join(' ');
 }
 
-export interface FulfillmentFilters { cities: string[] | null; tags: string[] | null; dateFrom: Date | null; dateTo: Date | null }
+/** Per-column filter-row values keyed by column key: a string is a case-insensitive
+ * "contains" match, an array is a set of accepted values (any match for multi-valued tags). */
+export type FulfillmentColumnFilters = Record<string, string | string[]>;
+export interface FulfillmentFilters { columns: FulfillmentColumnFilters; dateFrom: Date | null; dateTo: Date | null }
+
+export const FULFILLMENT_COLUMN_VALUE: Record<string, (o: FulfillmentOrder) => string | string[]> = {
+  order_number: (o) => String(o.order_number),
+  name: (o) => o.name,
+  address: (o) => o.address,
+  mobile: (o) => o.mobile,
+  tags: (o) => o.tags,
+  city: (o) => o.city,
+  courier_city: (o) => o.courierCity || '',
+  order_type: (o) => o.orderType,
+  cod: (o) => String(o.codAmount),
+  risk: (o) => o.customer_status?.tier || 'new',
+};
+
+/** Header search: any column's value contains `query` (risk matches its badge label). */
+export function fulfillmentRowMatchesQuery(o: FulfillmentOrder, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  return !q || [...Object.values(FULFILLMENT_COLUMN_VALUE).map((get) => get(o)), o.customer_status?.label || 'New Customer']
+    .flat().some((v) => v.toLowerCase().includes(q));
+}
 
 export function fulfillmentFilteredOrders(orders: FulfillmentOrder[], filters: FulfillmentFilters): FulfillmentOrder[] {
+  const active = Object.entries(filters.columns)
+    .filter(([key, raw]) => FULFILLMENT_COLUMN_VALUE[key] && (Array.isArray(raw) || raw.trim()))
+    .map(([key, raw]) => [FULFILLMENT_COLUMN_VALUE[key], Array.isArray(raw) ? raw : raw.trim().toLowerCase()] as const);
   return orders.filter((o) => {
-    if (filters.cities && !filters.cities.includes(o.city)) return false;
-    if (filters.tags && !filters.tags.some((t) => o.tags.includes(t))) return false;
+    for (const [get, want] of active) {
+      const v = get(o);
+      const values = Array.isArray(v) ? v : [v];
+      if (!values.some((x) => (Array.isArray(want) ? want.includes(x) : x.toLowerCase().includes(want)))) return false;
+    }
     if (filters.dateFrom && o.order_date < filters.dateFrom) return false;
     if (filters.dateTo) {
       const endOfDay = new Date(filters.dateTo);

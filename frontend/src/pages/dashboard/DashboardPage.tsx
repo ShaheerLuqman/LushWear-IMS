@@ -1,40 +1,32 @@
-// Dashboard: product/stock stat cards + inventory value by collection. Ported
-// from sync-summary.js's updateDashboard/renderDashboardCollectionsBreakdown.
+// Dashboard: product/stock summary + inventory value by collection.
 import { useEffect, useMemo, useState } from 'react';
+import { BlockStack, Spinner, Text } from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { MetricsStrip } from '../../components/MetricsStrip';
+import { StatCardGrid } from '../../components/StatCardGrid';
 import type { Product } from '../../logic/products';
 
-/** Sums each variant's own cost_price (falling back to the product's), same fallback
- * used in bills.js/orders-grid.js. */
+/** Sums each variant's own cost_price (falling back to the product's). */
 function productCostValue(p: Product): number {
   const variants = p.variants || [];
   if (variants.length === 0) return (parseFloat(String(p.cost_price)) || 0) * (p.total_quantity || 0);
   return variants.reduce((sum, v) => sum + ((parseFloat(String(v.cost_price ?? p.cost_price)) || 0) * (v.quantity || 0)), 0);
 }
 
+const rs = (n: number) => `Rs ${Math.round(n).toLocaleString()}`;
+
 export function DashboardPage() {
   const [products, setProducts] = useState<Product[] | null>(null);
-  const [returnedDeliveryCharges, setReturnedDeliveryCharges] = useState<string>('—');
+  const [returnedDeliveryCharges, setReturnedDeliveryCharges] = useState('—');
 
   useEffect(() => {
-    (async () => {
-      try {
-        setProducts(await apiJson<Product[]>('/products/', { fallback: 'Failed to fetch products' }));
-      } catch (error) {
-        console.error('Error loading products:', error);
-        setProducts([]);
-      }
-    })();
-    (async () => {
-      try {
-        const data = await apiJson<{ sum: number }>('/orders/returned-delivery-charges-sum');
-        setReturnedDeliveryCharges(`Rs ${Math.round(parseFloat(String(data.sum)) || 0).toLocaleString()}`);
-      } catch (error) {
-        console.error('Error fetching returned delivery charges sum:', error);
-        setReturnedDeliveryCharges('—');
-      }
-    })();
+    apiJson<Product[]>('/products/', { fallback: 'Failed to fetch products' })
+      .then(setProducts)
+      .catch((error) => { console.error('Error loading products:', error); setProducts([]); });
+    apiJson<{ sum: number }>('/orders/returned-delivery-charges-sum')
+      .then((data) => setReturnedDeliveryCharges(rs(parseFloat(String(data.sum)) || 0)))
+      .catch((error) => { console.error('Error fetching returned delivery charges sum:', error); });
   }, []);
 
   usePageHeader({ title: 'Dashboard' });
@@ -56,41 +48,29 @@ export function DashboardPage() {
     });
   }, [products]);
 
-  if (!products) {
-    return (
-      <div className="content-loading"><div className="content-loading-spinner" /><p className="content-loading-text">Loading dashboard...</p></div>
-    );
-  }
+  if (!products) return <div className="page-loading"><Spinner size="small" /><Text as="span" tone="subdued">Loading dashboard...</Text></div>;
 
   const totalProducts = products.length;
-  const totalVariantRows = products.reduce((sum, p) => sum + (Array.isArray(p.variants) ? p.variants.length : 0), 0);
+  const totalVariantRows = products.reduce((sum, p) => sum + (p.variants?.length || 0), 0);
   const totalStock = products.reduce((sum, p) => sum + (p.total_quantity || 0), 0);
   const totalValue = products.reduce((sum, p) => sum + productCostValue(p), 0);
 
   return (
-    <div>
-      <div className="stats-grid">
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Products</span><span className="stat-value">{totalProducts}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total variants</span><span className="stat-value">{(totalProducts + totalVariantRows).toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Items in Stock</span><span className="stat-value">{totalStock.toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Value</span><span className="stat-value">Rs {Math.round(totalValue).toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Delivery charges (returned orders)</span><span className="stat-value">{returnedDeliveryCharges}</span></div></div>
-      </div>
-      <section className="dashboard-collections-section" aria-label="Inventory by collection">
-        <div className="dashboard-collections-grid">
-          {collections.length === 0 ? (
-            <p className="dashboard-collections-empty">No products to show.</p>
-          ) : collections.map(({ collection, count, value }) => (
-            <div className="stat-card" key={collection}>
-              <div className="stat-info">
-                <span className="stat-label">{collection}</span>
-                <span className="stat-detail">{count === 1 ? '1 product' : `${count.toLocaleString()} products`}</span>
-                <span className="stat-value">Rs {Math.round(value).toLocaleString()}</span>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
-    </div>
+    <BlockStack gap="400">
+      <MetricsStrip
+        label="Inventory summary"
+        tiles={[
+          { label: 'Total Products', value: totalProducts.toLocaleString() },
+          { label: 'Total variants', value: (totalProducts + totalVariantRows).toLocaleString() },
+          { label: 'Items in Stock', value: totalStock.toLocaleString() },
+          { label: 'Total Value', value: rs(totalValue) },
+          { label: 'Delivery charges (returned orders)', value: returnedDeliveryCharges },
+        ]}
+      />
+      <Text as="h2" variant="headingSm">Inventory by collection</Text>
+      {collections.length === 0
+        ? <Text as="p" tone="subdued">No products to show.</Text>
+        : <StatCardGrid tiles={collections.map((c) => ({ label: c.collection, value: rs(c.value), detail: c.count === 1 ? '1 product' : `${c.count.toLocaleString()} products` }))} />}
+    </BlockStack>
   );
 }

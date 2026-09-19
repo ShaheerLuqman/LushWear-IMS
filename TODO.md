@@ -1,6 +1,6 @@
 # TODO
 
-Open, non-urgent work items for SoftLush IMS. Backend/database design and
+Open, non-urgent work items for QuikMerchant. Backend/database design and
 settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 (descriptive, not a task list). Transactions/ledger work items live in
 [`CASHBOOK_IMPROVEMENTS.md`](CASHBOOK_IMPROVEMENTS.md).
@@ -18,7 +18,6 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Keyboard shortcuts** — add shortcuts for common actions.
 - [ ] **Reduce base font size** — tighten the type scale app-wide.
 - [ ] **Refresh color theme** — update the UI's color palette.
-- [ ] **Migrate remaining modals/forms to Polaris** — port the legacy `.modal`/`.form-input` screens onto `FormModal` + Polaris fields.
 
 ### Backend
 
@@ -53,6 +52,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Whole app on the Polaris theme** — every page, modal and table now uses Polaris; AG Grid removed; shared `DataTable`, `RowActions`, `FormModal`/`InfoModal`, `MetricsStrip`, `StatCardGrid`, `KeyValueList`, `ReportTable` components.
 - [x] **Shopify-style dropdowns everywhere** — one Polaris-based `Dropdown` (single, checkbox multi, searchable) replaced every native select and custom picker.
 - [x] **Reusable Polaris components** — added `SearchField`, `MetricsStrip`, `FormModal`; Shipping Details modal ported as the reference.
 - [x] **Shopify webhooks trigger order reconciliation** — `orders/create`, `orders/updated`, `orders/cancelled`, `orders/fulfilled` webhooks reconcile the order immediately (`reconcile_and_persist_single_order`) instead of waiting on the periodic poll.

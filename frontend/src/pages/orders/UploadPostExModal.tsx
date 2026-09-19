@@ -2,10 +2,12 @@
 // order it covers. Ported from orders-actions.js's openUploadPostExModal wiring +
 // ledgers.js's uploadPostExCsv/postExFolioFromDate.
 import { useState } from 'react';
+import { DropZone, FormLayout, Text, TextField } from '@shopify/polaris';
 import { apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { postExCashLedgerOptions, type Ledger } from '../../logic/ledgers';
 import { Dropdown } from '../../components/Dropdown';
+import { FormModal } from '../../components/FormModal';
 
 // Mirrors backend/app/services/postex.py's _folio_from_date: unpadded day/month, 2-digit
 // year (e.g. "2/9/26"), so a CSV upload's default folio parses the same way a PostEx
@@ -65,43 +67,16 @@ export function UploadPostExModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget && !uploading) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Upload PostEx CSV</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose} disabled={uploading}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Select a PostEx CSV file and the CPR date it settles.</p>
-          <div className="form-group">
-            <label htmlFor="uploadPostExFileInput">CSV File *</label>
-            <div className="upload-postex-file-row">
-              <input type="file" id="uploadPostExFileInput" accept=".csv" className="form-input" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-              <span className="upload-postex-filename">{file ? file.name : 'No file chosen'}</span>
-            </div>
-          </div>
-          <div className="form-group">
-            <label htmlFor="uploadPostExCprDate">CPR Date *</label>
-            <input type="date" id="uploadPostExCprDate" className="form-input" value={cprDate} onChange={(e) => onCprDateChange(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="uploadPostExAssignmentNumber">Folio</label>
-            <input
-              type="text" id="uploadPostExAssignmentNumber" className="form-input" placeholder="e.g. 2/9/26"
-              value={assignmentNumber}
-              onChange={(e) => { setAssignmentNumber(e.target.value); setAssignmentAutofilled(false); }}
-            />
-          </div>
-          <div className="form-group">
-            <label htmlFor="uploadPostExCashLedger">Amount Received In *</label>
-            <Dropdown id="uploadPostExCashLedger" fullWidth placeholder="Select ledger..." options={postExCashLedgerOptions(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={cashLedgerId} onChange={setCashLedgerId} />
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={uploading}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={uploading} onClick={upload}>{uploading ? 'Uploading...' : 'Upload'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Upload PostEx CSV" onClose={onClose} onSubmit={upload} submitLabel="Upload" saving={uploading}>
+      <FormLayout>
+        <Text as="p" tone="subdued">Select a PostEx CSV file and the CPR date it settles.</Text>
+        <DropZone label="CSV File" accept=".csv" type="file" allowMultiple={false} variableHeight onDrop={(files) => setFile(files[0] || null)}>
+          {file ? <div className="dropzone-selected"><Text as="p">{file.name}</Text></div> : <DropZone.FileUpload actionTitle="Choose CSV" actionHint="or drop it here" />}
+        </DropZone>
+        <TextField label="CPR Date" type="date" autoComplete="off" value={cprDate} onChange={onCprDateChange} requiredIndicator />
+        <TextField label="Folio" autoComplete="off" placeholder="e.g. 2/9/26" value={assignmentNumber} onChange={(v) => { setAssignmentNumber(v); setAssignmentAutofilled(false); }} />
+        <Dropdown label="Amount Received In" fullWidth placeholder="Select ledger..." options={postExCashLedgerOptions(ledgers).map((l) => ({ value: l.id, label: l.name }))} value={cashLedgerId} onChange={setCashLedgerId} />
+      </FormLayout>
+    </FormModal>
   );
 }

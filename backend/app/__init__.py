@@ -1,2 +1,2 @@
-# Inventory Management System - Backend
+# QuikMerchant - Backend
 

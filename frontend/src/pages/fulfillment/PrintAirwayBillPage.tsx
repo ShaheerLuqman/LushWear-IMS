@@ -1,48 +1,41 @@
 // Print Airway Bill: fulfilled PostEx/Couriers Next orders for a fulfillment-date
 // range, each with a Print action plus a header button to print the whole selection
 // at once. Ported from print-airway-bill.js.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Badge, Button, Text } from '@shopify/polaris';
+import { PrintIcon } from '@shopify/polaris-icons';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
-import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { formatDateDDMMYYYY, getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
+import { HeaderButton } from '../../components/HeaderButton';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
+import { getCourierDisplayName, getPKTDateString, rowMatchesQuery } from '../../logic/shared';
 import { formatMoney } from '../../logic/ledgers';
 import { printAirwayBillsForOrders } from '../../logic/airwayBills';
 import type { Order } from '../../logic/orders';
 import { Dropdown } from '../../components/Dropdown';
-
-function todayIso(): string {
-  const now = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`;
-}
+import { DataTable, type DataColumn } from '../../components/DataTable';
 
 export function PrintAirwayBillPage() {
   const { showToast } = useToast();
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [dateRange, setDateRange] = useState<{ from: string; to: string }>({ from: todayIso(), to: todayIso() });
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  // Backend filters fulfilled_at by PKT day, so "today" must be PKT too.
+  const today = getPKTDateString();
+  const [dateRange, setDateRange] = useState<DateRange | null>({ from: today, to: today });
   const [courier, setCourier] = useState('PostEx');
   const [search, setSearch] = useState('');
   const [printing, setPrinting] = useState<string | null>(null);
-  const [dateBtnNode, setDateBtnNode] = useState<HTMLButtonElement | null>(null);
-  const pickerRef = useRef<DateRangePickerHandle | null>(null);
-  const [dateLabel, setDateLabel] = useState('Date range');
 
   async function load() {
     setLoading(true);
     const params = new URLSearchParams();
-    if (dateRange.from) params.append('date_from', dateRange.from);
-    if (dateRange.to) params.append('date_to', dateRange.to);
+    if (dateRange) { params.append('date_from', dateRange.from); params.append('date_to', dateRange.to); }
     if (courier) params.append('courier', courier);
     try {
       const rows = await apiJson<Order[]>(`/orders/airway-bill-list?${params}`, { fallback: 'Failed to load fulfilled orders' });
       setOrders(rows);
-      const ids = new Set(rows.map((o) => o.id));
-      setSelectedIds((prev) => new Set([...prev].filter((id) => ids.has(id))));
     } catch (error: any) {
       console.error('Error loading airway bill list:', error);
       showToast(error?.message || 'Failed to load fulfilled orders', 'error');
@@ -54,38 +47,12 @@ export function PrintAirwayBillPage() {
 
   useEffect(() => { load(); }, [dateRange, courier]);
 
-  useEffect(() => {
-    if (!dateBtnNode) return;
-    const handle = createDateRangePicker(dateBtnNode, {
-      onSelect: (from, to) => {
-        setDateRange({ from, to });
-        setDateLabel(`${formatDateDDMMYYYY(from)} – ${formatDateDDMMYYYY(to)}`);
-        handle?.setClearable(true);
-      },
-      onClear: () => {
-        setDateRange({ from: '', to: '' });
-        setDateLabel('Date range');
-        handle?.picker.clear();
-        handle?.setClearable(false);
-      },
-    });
-    pickerRef.current = handle;
-    return () => handle?.destroy();
-  }, [dateBtnNode]);
-
   const visible = useMemo(() => orders.filter((o) => rowMatchesQuery(o, search)), [orders, search]);
 
   function clearFilters() {
     setCourier('PostEx');
     setSearch('');
-    setDateRange({ from: todayIso(), to: todayIso() });
-    setDateLabel('Date range');
-    pickerRef.current?.picker.clear();
-    pickerRef.current?.setClearable(false);
-  }
-
-  function toggleSelectAll(checked: boolean) {
-    setSelectedIds(checked ? new Set(visible.map((o) => o.id)) : new Set());
+    setDateRange({ from: today, to: today });
   }
 
   async function printOne(order: Order) {
@@ -100,7 +67,7 @@ export function PrintAirwayBillPage() {
   }
 
   async function printSelected() {
-    const selected = orders.filter((o) => selectedIds.has(o.id));
+    const selected = orders.filter((o) => selectedIds.includes(o.id));
     const targets = selected.length ? selected : visible;
     if (targets.length === 0) { showToast('No orders to print', 'error', { silent: true }); return; }
     try {
@@ -113,71 +80,41 @@ export function PrintAirwayBillPage() {
 
   usePageHeader({
     title: 'Print Airway Bill',
-    search: { value: search, onChange: setSearch, placeholder: 'Search order #, name, phone or tracking...' },
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by fulfillment date range" />
+        <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by fulfillment date range" />
         <Dropdown options={['PostEx', 'Couriers Next']} value={courier} onChange={setCourier} />
         <HeaderButton onClick={clearFilters}>Clear Filters</HeaderButton>
-        <HeaderButton variant="primary" icon={<i className="fa-solid fa-print" />} onClick={printSelected}>Print Airway Bill</HeaderButton>
+        <HeaderButton variant="primary" icon={PrintIcon} onClick={printSelected}>Print Airway Bill</HeaderButton>
       </>
     ),
   });
 
-  const allSelected = visible.length > 0 && visible.every((o) => selectedIds.has(o.id));
-  const someSelected = !allSelected && visible.some((o) => selectedIds.has(o.id));
+  const columns: DataColumn<Order>[] = [
+    { key: 'order_number', heading: 'Order ID', render: (o) => <Text as="span" fontWeight="semibold">#{o.order_number}</Text>, sortValue: (o) => o.order_number },
+    { key: 'customer_name', heading: 'Customer Name', render: (o) => String(o.customer_name || ''), sortValue: (o) => String(o.customer_name || '') },
+    { key: 'customer_address', heading: 'Complete Address', render: (o) => <div className="table-cell--wrap">{String(o.customer_address || '')}</div> },
+    { key: 'customer_phone', heading: 'Mobile Number', render: (o) => String(o.customer_phone || '') },
+    { key: 'customer_city', heading: 'City', render: (o) => String(o.customer_city || ''), sortValue: (o) => String(o.customer_city || '') },
+    { key: 'cod', heading: 'COD (PKR)', alignment: 'end', render: (o) => formatMoney(o.cod as number), sortValue: (o) => Number(o.cod) || 0 },
+    { key: 'tracking_number', heading: 'Tracking ID', render: (o) => o.tracking_number || '' },
+    { key: 'courier', heading: 'Courier', render: (o) => getCourierDisplayName(o), sortValue: (o) => getCourierDisplayName(o) },
+    { key: 'status', heading: 'Status', render: () => <Badge tone="info">Fulfilled</Badge> },
+    { key: 'print', heading: 'Airway Bill', alignment: 'end', render: (o) => <Button icon={PrintIcon} size="slim" loading={printing === o.id} onClick={() => printOne(o)}>Print</Button> },
+  ];
+  const onSelectionChange = useCallback((ids: string[]) => setSelectedIds(ids), []);
 
   return (
-    <div className="fulfillment-body">
-      <div className="fulfillment-table-panel">
-        <div className="fulfillment-table-toolbar">
-          <label className="fulfillment-select-all">
-            <input type="checkbox" checked={allSelected} ref={(el) => { if (el) el.indeterminate = someSelected; }} onChange={(e) => toggleSelectAll(e.target.checked)} />
-            <span>Select all</span>
-          </label>
-          <button type="button" className="fulfillment-link-btn" onClick={() => setSelectedIds(new Set())}>Clear Selection</button>
-          <div className="fulfillment-table-toolbar-spacer" />
-          <span className="fulfillment-toolbar-stat">Total Orders: {orders.length}</span>
-          {selectedIds.size > 0 && <span className="fulfillment-toolbar-badge">{selectedIds.size} selected</span>}
+    <DataTable
+      columns={columns} rows={visible} rowId={(o) => o.id} loading={loading} onSelectionChange={onSelectionChange}
+      resourceName={{ singular: 'order', plural: 'orders' }} emptyMessage="No fulfilled orders for this date range."
+      below={(
+        <div className="table-status-bar">
+          <Text as="span" tone="subdued">Total Orders: {orders.length}</Text>
+          {selectedIds.length > 0 && <Badge tone="info">{`${selectedIds.length} selected`}</Badge>}
         </div>
-        <div className="fulfillment-table-wrap">
-          <table className="fulfillment-table">
-            <thead>
-              <tr>
-                <th className="fulfillment-col-check"><input type="checkbox" checked={allSelected} onChange={(e) => toggleSelectAll(e.target.checked)} /></th>
-                <th>Order ID</th><th>Customer Name</th><th className="print-awb-col-address">Complete Address</th>
-                <th>Mobile Number</th><th>City</th><th className="fulfillment-th-cod">COD (PKR)</th>
-                <th>Tracking ID</th><th>Courier</th><th>Status</th><th className="fulfillment-col-actions">Airway Bill</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={11} className="empty-state">Loading fulfilled orders…</td></tr>
-              ) : visible.length === 0 ? (
-                <tr><td colSpan={11} className="empty-state">No fulfilled orders for this date range.</td></tr>
-              ) : visible.map((o: any) => (
-                <tr key={o.id} className={selectedIds.has(o.id) ? 'fulfillment-row--selected' : ''}>
-                  <td className="fulfillment-col-check">
-                    <input type="checkbox" checked={selectedIds.has(o.id)} onChange={(e) => setSelectedIds((prev) => { const next = new Set(prev); if (e.target.checked) next.add(o.id); else next.delete(o.id); return next; })} />
-                  </td>
-                  <td className="fulfillment-col-orderid"><span className="fulfillment-order-id">#{o.order_number}</span></td>
-                  <td className="fulfillment-col-name" title={o.customer_name}>{o.customer_name}</td>
-                  <td className="print-awb-col-address" title={o.customer_address}>{o.customer_address}</td>
-                  <td>{o.customer_phone}</td>
-                  <td>{o.customer_city}</td>
-                  <td className="fulfillment-col-cod">{formatMoney(o.cod)}</td>
-                  <td>{o.tracking_number}</td>
-                  <td>{getCourierDisplayName(o)}</td>
-                  <td><span className="grid-status-badge grid-status-fulfilled">Fulfilled</span></td>
-                  <td className="fulfillment-actions-cell">
-                    <button type="button" className="btn btn-secondary btn-sm" disabled={printing === o.id} onClick={() => printOne(o)}><i className="fa-solid fa-print" /> Print</button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+      )}
+    />
   );
 }

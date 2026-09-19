@@ -7,27 +7,28 @@ import {
 import * as XLSX from 'xlsx';
 import {
   IndexTable, IndexFilters, useSetIndexFiltersMode, useIndexResourceState,
-  IndexTableSelectionType, TextField, Text, Tooltip, Pagination,
+  IndexTableSelectionType, InlineStack, TextField, Text, Tooltip, Pagination,
 } from '@shopify/polaris';
 import { MaximizeIcon } from '@shopify/polaris-icons';
-import { FilterX } from 'lucide-react';
+import { Filter, FilterX } from 'lucide-react';
 import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { Dropdown } from '../../components/Dropdown';
 import { MetricsStrip } from '../../components/MetricsStrip';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { HeaderButton } from '../../components/HeaderButton';
 import { useStickyIndexTableHeader } from '../../components/useStickyIndexTableHeader';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import {
   computeNetProfit, FINAL_STATUS_VALUES, ORDER_STATUS_VALUES, orderStatusDisplayLabel, type Order,
 } from '../../logic/orders';
 import { getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
+import { AnalyticsDeltaBadge } from '../../logic/analyticsCharts';
 import {
   ALL_ORDERS_VALUE, buildStaticPeriodOptions, CUSTOM_ORDERS_VALUE, formatOrdersDateRangeLabel,
-  getCurrentOrdersPeriod, useOrdersData,
+  getCurrentOrdersPeriod, ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR, previousOrdersPeriod, useOrdersData,
 } from './useOrdersData';
 import {
   ORDERS_COLUMNS, PIECE_RECEIVED_VALUES, calculateSelectedSums, type OrdersColumnCtx, type OrdersColumnDef, type SelectionSums,
@@ -37,8 +38,6 @@ import { DeliveryStatusModal } from './DeliveryStatusModal';
 import { DeliveryStatusReportModal } from './DeliveryStatusReportModal';
 import { buildDeliveryStatusReport, deriveOrderStatusFromLatest, mergeDeliveryStatusData, type DeliveryReport } from '../../logic/deliveryStatus';
 import { ORDERS_CHANGED_EVENT } from '../../eventsStream';
-import { getLastOrdersSyncAt, ORDERS_SYNC_STATUS_CHANGED_EVENT } from '../../shopifySync';
-import { formatRelativeTime } from '../../logic/shared';
 import { useLedgersData } from '../finance/useLedgersData';
 import { useLoadSheetLogs } from './useLoadSheetLogs';
 import { GenerateLoadSheetModal } from './GenerateLoadSheetModal';
@@ -73,6 +72,21 @@ function compactRs(value: number): string {
   if (abs >= 1_000_000) return `Rs ${(v / 1_000_000).toFixed(2)}M`;
   if (abs >= 1_000) return `Rs ${Math.round(v / 1_000).toLocaleString('en-US')}K`;
   return `Rs ${v.toLocaleString('en-US')}`;
+}
+
+function computeOrderMetrics(rows: Order[]) {
+  let items = 0, cod = 0, delivered = 0, returned = 0, cancelled = 0, netProfit = 0;
+  for (const order of rows) {
+    const status = (order.order_status || '').toLowerCase();
+    if (status === 'cancelled') { cancelled += 1; continue; }
+    items += orderLineItemQty(order);
+    if (status === 'delivered') delivered += 1;
+    else if (status === 'returned') returned += 1;
+    else cod += (parseFloat(String(order.total_amount)) || 0) - (parseFloat(String(order.advance_amount)) || 0);
+    const rowProfit = computeNetProfit(order);
+    if (rowProfit != null) netProfit += rowProfit;
+  }
+  return { orders: rows.length - cancelled, items, cod, delivered, returned, cancelled, netProfit };
 }
 
 const AGGREGATE_SUM_KEYS: Partial<Record<string, keyof SelectionSums>> = {
@@ -124,9 +138,12 @@ export function OrdersPage() {
   } = useOrdersData();
 
   const [period, setPeriod] = useState<string>('');
-  const [dateRange, setDateRange] = useState<{ from: string; to: string } | null>(null);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
+  const [prevOrders, setPrevOrders] = useState<Order[]>([]);
+  const [hasPrevPeriod, setHasPrevPeriod] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [columnFilters, setColumnFilters] = useState<Record<string, string | string[]>>({});
+  const [showFilterRow, setShowFilterRow] = useState(false);
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<{ index: number; direction: 'ascending' | 'descending' } | null>(null);
   const [page, setPage] = useState(0);
@@ -156,16 +173,6 @@ export function OrdersPage() {
   const fetchedByNumberIdsRef = useRef<Set<string>>(new Set());
   const fetchByNumberInFlightRef = useRef<string | null>(null);
 
-  // "Synced with Shopify X ago" - re-renders on a sync (ORDERS_SYNC_STATUS_CHANGED_EVENT)
-  // and every 30s so the relative-time text keeps ticking forward.
-  const [, forceSyncLabelTick] = useState(0);
-  useEffect(() => {
-    const tick = () => forceSyncLabelTick((n) => n + 1);
-    window.addEventListener(ORDERS_SYNC_STATUS_CHANGED_EVENT, tick);
-    const intervalId = setInterval(tick, 30000);
-    return () => { window.removeEventListener(ORDERS_SYNC_STATUS_CHANGED_EVENT, tick); clearInterval(intervalId); };
-  }, []);
-  const lastOrdersSyncAt = getLastOrdersSyncAt();
 
   // Initial load: current period.
   useEffect(() => {
@@ -258,21 +265,8 @@ export function OrdersPage() {
 
   // Metrics strip + tab counts, derived from the currently loaded `orders` (not the current
   // filter/search - the strip always summarizes the whole loaded period).
-  const metrics = useMemo(() => {
-    const rows = ordersRealRows(orders);
-    let items = 0, cod = 0, delivered = 0, returned = 0, cancelled = 0, netProfit = 0;
-    for (const order of rows) {
-      const status = (order.order_status || '').toLowerCase();
-      if (status === 'cancelled') { cancelled += 1; continue; }
-      items += orderLineItemQty(order);
-      if (status === 'delivered') delivered += 1;
-      else if (status === 'returned') returned += 1;
-      else cod += (parseFloat(String(order.total_amount)) || 0) - (parseFloat(String(order.advance_amount)) || 0);
-      const rowProfit = computeNetProfit(order);
-      if (rowProfit != null) netProfit += rowProfit;
-    }
-    return { orders: rows.length - cancelled, items, cod, delivered, returned, cancelled, netProfit };
-  }, [orders]);
+  const metrics = useMemo(() => computeOrderMetrics(ordersRealRows(orders)), [orders]);
+  const prevMetrics = useMemo(() => computeOrderMetrics(ordersRealRows(prevOrders)), [prevOrders]);
 
   const tabCounts = useMemo(() => {
     const rows = ordersRealRows(orders);
@@ -394,10 +388,7 @@ export function OrdersPage() {
   // Period <select> + Date range button wiring.
   async function onPeriodChange(value: string) {
     setPeriod(value);
-    if (value !== CUSTOM_ORDERS_VALUE) {
-      setDateRange(null);
-      dateRangePickerRef.current?.setClearable(false);
-    }
+    if (value !== CUSTOM_ORDERS_VALUE) setDateRange(null);
     if (!hasCachedOrders(value)) setTableLoading(true);
     try {
       if (value === ALL_ORDERS_VALUE) await loadAllOrders();
@@ -410,8 +401,45 @@ export function OrdersPage() {
     }
   }
 
-  const [dateRangeBtnNode, setDateRangeBtnNode] = useState<HTMLButtonElement | null>(null);
-  const dateRangePickerRef = useRef<DateRangePickerHandle | null>(null);
+  // "vs previous period" for the metrics strip - fetched separately (like fetchOrderByNumber
+  // above) so it never touches `orders`/the cache the table itself renders from.
+  const prevPeriodReqId = useRef(0);
+  useEffect(() => {
+    const id = ++prevPeriodReqId.current;
+    (async () => {
+      try {
+        let url: string | null = null;
+        if (period === CUSTOM_ORDERS_VALUE) {
+          if (dateRange) {
+            const from = new Date(`${dateRange.from}T00:00:00`);
+            const to = new Date(`${dateRange.to}T00:00:00`);
+            const spanDays = Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+            const prevTo = new Date(from); prevTo.setDate(prevTo.getDate() - 1);
+            const prevFrom = new Date(prevTo); prevFrom.setDate(prevFrom.getDate() - (spanDays - 1));
+            const oldest = new Date(ORDERS_PERIOD_OLDEST_YEAR, ORDERS_PERIOD_OLDEST_MONTH - 1, 1);
+            if (prevTo >= oldest) {
+              const iso = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+              url = `/orders/?date_from=${iso(prevFrom)}&date_to=${iso(prevTo)}`;
+            }
+          }
+        } else if (period && period !== ALL_ORDERS_VALUE) {
+          const [month, year] = period.split('-').map(Number);
+          const prev = previousOrdersPeriod(month, year);
+          if (prev) url = `/orders/?month=${prev.month}&year=${prev.year}`;
+        }
+        if (!url) { setPrevOrders([]); setHasPrevPeriod(false); return; }
+        const rows = await apiJson<Order[]>(url, { fallback: 'Failed to fetch previous period orders' });
+        if (id !== prevPeriodReqId.current) return;
+        setPrevOrders(rows);
+        setHasPrevPeriod(true);
+      } catch {
+        if (id !== prevPeriodReqId.current) return;
+        setPrevOrders([]);
+        setHasPrevPeriod(false);
+      }
+    })();
+  }, [period, dateRange]);
+
   const moreActionsBtnRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
@@ -425,33 +453,22 @@ export function OrdersPage() {
     return () => { document.removeEventListener('click', close); document.removeEventListener('keydown', onKey); };
   }, [moreActionsOpen]);
 
-  useEffect(() => {
-    if (!dateRangeBtnNode) return;
-    const handle = createDateRangePicker(dateRangeBtnNode, {
-      presets: undefined,
-      onSelect: async (from, to) => {
-        setDateRange({ from, to });
+  async function onDateRangeChange(range: DateRange | null) {
+    setDateRange(range);
+    setTableLoading(true);
+    try {
+      if (range) {
         setPeriod(CUSTOM_ORDERS_VALUE);
-        handle?.setLabel('Range set', formatOrdersDateRangeLabel(from, to));
-        handle?.setClearable(true);
-        setTableLoading(true);
-        try { await loadOrdersForDateRange(from, to); } finally { setTableLoading(false); }
-      },
-      onClear: async () => {
-        setDateRange(null);
-        handle?.picker.clear();
-        handle?.setLabel('Date range', 'Filter by date range');
-        handle?.setClearable(false);
+        await loadOrdersForDateRange(range.from, range.to);
+      } else {
         const { month, year } = getCurrentOrdersPeriod(fiscalMonthStartDay);
         setPeriod(`${month}-${year}`);
-        setTableLoading(true);
-        try { await loadOrdersForPeriod(month, year); } finally { setTableLoading(false); }
-      },
-    });
-    dateRangePickerRef.current = handle;
-    return () => handle?.destroy();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateRangeBtnNode]);
+        await loadOrdersForPeriod(month, year);
+      }
+    } finally {
+      setTableLoading(false);
+    }
+  }
 
   function toggleFullscreen() {
     const next = !fullscreen;
@@ -751,14 +768,9 @@ export function OrdersPage() {
 
   usePageHeader({
     title: 'Orders',
-    search: { value: search, onChange: setSearch, placeholder: 'Search orders...' },
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        {lastOrdersSyncAt != null && (
-          <span className="orders-sync-status" title="Orders sync automatically from Shopify every 30 minutes">
-            Synced with Shopify {formatRelativeTime(lastOrdersSyncAt)}
-          </span>
-        )}
         <div className="orders-period-filter-wrap">
           <Dropdown
             value={period}
@@ -772,9 +784,11 @@ export function OrdersPage() {
             ]}
           />
         </div>
-        <div className="orders-date-range-wrap header-inline">
-          <HeaderRefButton ref={setDateRangeBtnNode} label="Date range" title="Filter by date range" />
-        </div>
+        <DateRangePopover
+          value={period === CUSTOM_ORDERS_VALUE ? dateRange : null} onChange={onDateRangeChange}
+          label={period === CUSTOM_ORDERS_VALUE && dateRange ? 'Range set' : undefined}
+          title={period === CUSTOM_ORDERS_VALUE && dateRange ? formatOrdersDateRangeLabel(dateRange.from, dateRange.to) : 'Filter by date range'}
+        />
         <div className={'orders-more-actions' + (moreActionsOpen ? ' open' : '')}>
           <span ref={moreActionsBtnRef} style={{ display: 'inline-block' }}>
             <HeaderButton
@@ -817,21 +831,31 @@ export function OrdersPage() {
     ),
   });
 
+  const kpi = (label: string, value: string, cur: number, prev: number, isMoney: boolean, negative?: boolean) => ({
+    label, value, negative,
+    detail: (
+      <InlineStack gap="200" blockAlign="center">
+        <Text as="span" tone="subdued" variant="bodySm">vs previous: {hasPrevPeriod ? (isMoney ? compactRs(prev) : prev.toLocaleString('en-US')) : '—'}</Text>
+        <AnalyticsDeltaBadge cur={cur} prev={prev} hasPrev={hasPrevPeriod} />
+      </InlineStack>
+    ),
+  });
+
   return (
     <div id="ordersView" className="view active">
       <MetricsStrip
         label="Order summary"
         tiles={[
-          { label: 'Orders', value: metrics.orders.toLocaleString('en-US') },
-          { label: 'Items ordered', value: metrics.items.toLocaleString('en-US') },
-          { label: 'COD to collect', value: compactRs(metrics.cod) },
-          { label: 'Delivered', value: metrics.delivered.toLocaleString('en-US') },
-          { label: 'Returned', value: metrics.returned.toLocaleString('en-US') },
-          { label: 'Net profit', value: compactRs(metrics.netProfit), negative: metrics.netProfit < 0 },
+          kpi('Orders', metrics.orders.toLocaleString('en-US'), metrics.orders, prevMetrics.orders, false),
+          kpi('Items ordered', metrics.items.toLocaleString('en-US'), metrics.items, prevMetrics.items, false),
+          kpi('COD to collect', compactRs(metrics.cod), metrics.cod, prevMetrics.cod, true),
+          kpi('Delivered', metrics.delivered.toLocaleString('en-US'), metrics.delivered, prevMetrics.delivered, false),
+          kpi('Returned', metrics.returned.toLocaleString('en-US'), metrics.returned, prevMetrics.returned, false),
+          kpi('Net profit', compactRs(metrics.netProfit), metrics.netProfit, prevMetrics.netProfit, true, metrics.netProfit < 0),
         ]}
       />
-      <div className="orders-table-card">
-        <div className="orders-index-filters-wrap">
+      <div className="table-card">
+        <div className="table-index-filters">
           <IndexFilters
             mode={mode}
             setMode={setMode}
@@ -858,6 +882,9 @@ export function OrdersPage() {
               />
             </Tooltip>
           )}
+          <Tooltip content={showFilterRow ? 'Hide filters' : 'Show filters'}>
+            <HeaderButton icon={<Filter size={16} />} accessibilityLabel="Toggle filters" onClick={() => setShowFilterRow((v) => !v)} variant="tertiary" pressed={showFilterRow} />
+          </Tooltip>
         </div>
           <IndexTable
             resourceName={{ singular: 'order', plural: 'orders' }}
@@ -875,15 +902,17 @@ export function OrdersPage() {
             loading={tableLoading}
             condensed={false}
           >
-            <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
-              {ORDERS_COLUMNS.map((col) => (
-                <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>
-              ))}
-            </IndexTable.Row>
+            {showFilterRow && (
+              <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
+                {ORDERS_COLUMNS.map((col) => (
+                  <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>
+                ))}
+              </IndexTable.Row>
+            )}
             {pageRows.length === 0 && !tableLoading && (
               <IndexTable.Row id="__empty__" position={-2} hideSelectable>
                 <IndexTable.Cell colSpan={ORDERS_COLUMNS.length}>
-                  <div className="orders-table-empty">{hasAnyOrders ? 'No orders match this filter' : 'No orders yet'}</div>
+                  <div className="table-empty">{hasAnyOrders ? 'No orders match this filter' : 'No orders yet'}</div>
                 </IndexTable.Cell>
               </IndexTable.Row>
             )}
@@ -913,7 +942,7 @@ export function OrdersPage() {
               </div>
             </div>
           )}
-          <div className="orders-pagination-wrapper">
+          <div className="table-pagination">
             <Pagination
               type="table"
               hasNext={page < pageCount - 1}

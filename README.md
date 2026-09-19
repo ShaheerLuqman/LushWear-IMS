@@ -1,4 +1,4 @@
-# Inventory Management System
+# QuikMerchant
 
 A web-based inventory management application built with a FastAPI (Python) backend,
 a React + Vite + TypeScript frontend, and a Supabase (Postgres) database. The backend

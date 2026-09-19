@@ -3,8 +3,6 @@ import type { ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Link } from 'react-router-dom';
 import '@fortawesome/fontawesome-free/css/all.min.css';
-import 'ag-grid-community/styles/ag-grid.css';
-import 'ag-grid-community/styles/ag-theme-alpine.css';
 import '@shopify/polaris/build/esm/styles.css';
 import { AppProvider } from '@shopify/polaris';
 import type { AppProviderProps } from '@shopify/polaris';

@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Inventory Management System",
+    title="QuikMerchant",
     description="API for managing inventory",
     version="1.0.0",
     docs_url=None if IS_PROD else "/docs",
@@ -164,7 +164,7 @@ app.include_router(auth_routes.router, prefix="/api")
 
 @app.get("/")
 async def root():
-    return {"message": "Inventory Management System API", "status": "running"}
+    return {"message": "QuikMerchant API", "status": "running"}
 
 
 @app.get("/health")

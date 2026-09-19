@@ -4,57 +4,61 @@
 // Frame app shell, per-view header content from PageHeaderContext (see
 // usePageHeader in each page component) instead of ~15 imperative show/hide calls.
 import { useEffect, useState } from 'react';
-import type { SVGProps } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
-import { Frame, Navigation } from '@shopify/polaris';
-import type { LucideIcon } from 'lucide-react';
+import { Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { Button, Frame, Icon, Navigation } from '@shopify/polaris';
+import { ArrowLeftIcon } from '@shopify/polaris-icons';
 import { Menu } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { NotificationBell } from '../toast/NotificationBell';
 import { SidebarUserMenu } from '../SidebarUserMenu';
 import type { NavGroup } from './navConfig';
-import { NAV_SECTIONS, SETTINGS_NAV_ITEM, getNavIconForPath } from './navConfig';
+import { NAV_SECTIONS, SETTINGS_NAV_ITEM, getNavEntryForPath } from './navConfig';
 import { PageHeaderProvider, useCurrentPageHeader } from './PageHeaderContext';
+import { ToastHost } from '../toast/ToastContext';
 import { SearchField } from '../components/SearchField';
 
 const MOBILE_BREAKPOINT = 820;
 
-// Polaris's Icon picks its render path via `typeof source === 'function'`, but lucide-react
-// icons are React.forwardRef objects (typeof 'object'), so they'd silently fall through to
-// Polaris's "external image" branch and render as a broken image. Thin plain-function wrapper.
-// Also: Polaris's CSS forces `.Polaris-Icon svg { fill: currentColor }` for its own filled
-// icon set, which beats lucide's inline `fill="none"` attribute and turns every closed shape
-// solid black - only an inline `style` (higher priority than that stylesheet rule) wins it back.
-function toIconSource(LucideIcon: LucideIcon) {
-  return function IconSource(props: SVGProps<SVGSVGElement>) {
-    return <LucideIcon {...props} style={{ fill: 'none' }} />;
-  };
-}
-
-function toNavItem(group: NavGroup, onNavigate: () => void) {
+function toNavItem(group: NavGroup, onNavigate: () => void, hover?: HoverState) {
   return {
     url: group.to,
     label: group.label,
-    icon: toIconSource(group.icon),
+    icon: group.icon,
     onClick: onNavigate,
+    // Polaris only renders a group's sub-items while it's selected (Section overwrites the
+    // `expanded` prop with its own state), so forcing `selected` on a hovered group is the
+    // only way to open a nest without first navigating to its parent. `undefined` keeps
+    // Polaris's own URL matching for the rest. Groups stay open until the pointer leaves the
+    // whole rail - closing on item mouse-leave shifted the list under the cursor mid-move.
+    selected: hover?.opened.includes(group.label) ? true : undefined,
+    onMouseEnter: hover?.open,
+    // SubNavigationItem's type omits `icon`, but Polaris spreads every sub-item prop into
+    // the same Item component, so it renders the icon just like a top-level entry.
     subNavigationItems: group.children?.map((child) => ({
-      url: child.to, label: child.label, onClick: onNavigate,
+      url: child.to, label: child.label, icon: child.icon, onClick: onNavigate,
     })),
   };
 }
 
+type HoverState = { opened: string[]; open: (label: string) => void };
+
 function Sidebar({ onNavigate }: { onNavigate: () => void }) {
   const { hasFeature } = useAuth();
   const location = useLocation();
+  const [opened, setOpened] = useState<string[]>([]);
+  const hover: HoverState = {
+    opened,
+    open: (label) => setOpened((prev) => (prev.includes(label) ? prev : [...prev, label])),
+  };
 
   return (
     // Frame's own nav wrapper is `display:flex` with no flex-direction:column set - it only
     // stacks its *own* Navigation component vertically, not arbitrary siblings we add next to
     // it. Without this wrapper, logo/nav/lock-wrap lay out as a flex row instead of a column.
-    <div className="sidebar-nav-column">
+    <div className="sidebar-nav-column" onMouseLeave={() => setOpened([])}>
       <div className="logo">
-        <img src="/assets/Logo.png" alt="SoftLush" className="logo-img" />
-        <span className="logo-text">SoftLush</span>
+        <img src="/assets/Logo.png" alt="QuikMerchant" className="logo-img" />
+        <span className="logo-text">QuikMerchant</span>
       </div>
       <Navigation location={location.pathname}>
         {/* A single Section for the main groups - Polaris puts visible spacing between
@@ -64,7 +68,7 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }) {
           <Navigation.Section
             items={NAV_SECTIONS.filter((section) => hasFeature(section.feature))
               .flatMap((section) => section.groups)
-              .map((group) => toNavItem(group, onNavigate))}
+              .map((group) => toNavItem(group, onNavigate, hover))}
           />
         </div>
         <div className="sidebar-nav-settings">
@@ -81,7 +85,8 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }) {
 function Header({ onToggleMobileNav }: { onToggleMobileNav: () => void }) {
   const header = useCurrentPageHeader();
   const location = useLocation();
-  const TitleIcon = getNavIconForPath(location.pathname);
+  const navigate = useNavigate();
+  const nav = getNavEntryForPath(location.pathname);
   return (
     <header className="header">
       <button type="button" className="mobile-nav-toggle" aria-label="Open navigation" onClick={onToggleMobileNav}>
@@ -89,7 +94,15 @@ function Header({ onToggleMobileNav }: { onToggleMobileNav: () => void }) {
       </button>
       <div className="header-title">
         <div className="header-title-row">
-          {TitleIcon && <TitleIcon size={20} className="header-title-icon" />}
+          <Button
+            icon={ArrowLeftIcon}
+            accessibilityLabel="Back"
+            disabled={!nav?.parent}
+            // idx is react-router's position in the session history: 0 means the app was opened
+            // straight onto this page (deep link / reload), so there's nothing in-app to go back to.
+            onClick={() => (window.history.state?.idx > 0 ? navigate(-1) : navigate(nav!.parent!))}
+          />
+          {nav && <span className="header-title-icon"><Icon source={nav.icon} /></span>}
           <h1>{header.title}</h1>
         </div>
         {header.subtitle && <p className="header-subtitle">{header.subtitle}</p>}
@@ -131,6 +144,7 @@ export function AppShell() {
             <Outlet />
           </div>
         </div>
+        <ToastHost />
       </Frame>
     </PageHeaderProvider>
   );

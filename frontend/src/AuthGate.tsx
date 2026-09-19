@@ -2,7 +2,8 @@
 // useAuth().status === 'gate'. Same two-phase flow as the old app-core.js
 // runAuthGate(): poll /auth/status, then show either a login form or a
 // first-run "set up your organization" form.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { Button, FormLayout, InlineError, InlineStack, Spinner, Text, TextField } from '@shopify/polaris';
 import { API_BASE, apiErrorMessage } from './api';
 import { useAuth } from './auth/AuthContext';
 
@@ -21,8 +22,6 @@ export function AuthGate() {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  const emailRef = useRef<HTMLInputElement | null>(null);
-  const passwordRef = useRef<HTMLInputElement | null>(null);
 
   const loadStatus = useCallback(async () => {
     for (;;) {
@@ -41,7 +40,6 @@ export function AuthGate() {
 
         setHasUsers(!!data.has_users);
         setPhase('form');
-        setTimeout(() => emailRef.current?.focus(), 0);
         return;
       } catch {
         setWaitingText('Waiting for server…');
@@ -57,6 +55,10 @@ export function AuthGate() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
+    if (!email.trim() || password.length < 8 || (!hasUsers && (!orgName.trim() || !name.trim()))) {
+      setError(password.length < 8 && password ? 'Password must be at least 8 characters' : 'Fill in every field');
+      return;
+    }
     if (!hasUsers && password !== confirmPassword) {
       setError('Passwords do not match');
       return;
@@ -86,7 +88,6 @@ export function AuthGate() {
       if (!r.ok) {
         setError(r.status === 401 ? 'Incorrect email or password' : apiErrorMessage(data, 'Request failed'));
         setPassword('');
-        setTimeout(() => passwordRef.current?.focus(), 0);
         return;
       }
       await completeLogin(data.token, data.user);
@@ -101,68 +102,21 @@ export function AuthGate() {
     <div className="auth-gate-root">
       <div className="auth-gate-card">
         <img src="/assets/Logo_Large.png" alt="" className="auth-gate-logo" />
-        {phase === 'form' && (
-          <h2 className="auth-gate-title">{hasUsers ? 'Log in' : 'Set up your organization'}</h2>
-        )}
         {phase === 'connecting' && (
-          <p className="auth-gate-waiting">
-            <span className="auth-gate-spinner"></span>
-            {waitingText}
-          </p>
+          <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">{waitingText}</Text></InlineStack>
         )}
         {phase === 'form' && (
-          <form className="auth-gate-form" autoComplete="off" onSubmit={handleSubmit}>
-            {!hasUsers && (
-              <div className="auth-gate-extra-field">
-                <label className="auth-gate-label" htmlFor="authGateOrgName">Organization name</label>
-                <input
-                  type="text" id="authGateOrgName" className="auth-gate-input" maxLength={200}
-                  placeholder="e.g. LushWear" required value={orgName}
-                  onChange={(e) => setOrgName(e.target.value)}
-                />
-              </div>
-            )}
-            {!hasUsers && (
-              <div className="auth-gate-extra-field">
-                <label className="auth-gate-label" htmlFor="authGateName">Your name</label>
-                <input
-                  type="text" id="authGateName" className="auth-gate-input" maxLength={200}
-                  placeholder="e.g. Jane Doe" required value={name}
-                  onChange={(e) => setName(e.target.value)}
-                />
-              </div>
-            )}
-            <label className="auth-gate-label" htmlFor="authGateEmail">Email</label>
-            <input
-              ref={emailRef} type="email" id="authGateEmail" className="auth-gate-input"
-              required autoComplete="username" placeholder="you@example.com" value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-            <label className="auth-gate-label" htmlFor="authGatePassword">Password</label>
-            <input
-              ref={passwordRef} type="password" id="authGatePassword" className="auth-gate-input"
-              minLength={8} maxLength={128} required
-              autoComplete={hasUsers ? 'current-password' : 'new-password'}
-              placeholder="••••••••" value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            {!hasUsers && (
-              <div className="auth-gate-extra-field">
-                <label className="auth-gate-label" htmlFor="authGateConfirmPassword">Confirm password</label>
-                <input
-                  type="password" id="authGateConfirmPassword" className="auth-gate-input"
-                  minLength={8} maxLength={128} required autoComplete="new-password"
-                  placeholder="••••••••" value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                />
-              </div>
-            )}
-            <p className="auth-gate-error" role="alert">{error}</p>
-            <button type="submit" className="btn btn-primary auth-gate-submit" disabled={submitting}>
-              {submitting
-                ? <><span className="btn-spinner"></span>{hasUsers ? 'Logging in…' : 'Setting up…'}</>
-                : 'Continue'}
-            </button>
+          <form autoComplete="off" onSubmit={handleSubmit}>
+            <FormLayout>
+              <Text as="h2" variant="headingLg" alignment="center">{hasUsers ? 'Log in' : 'Set up your organization'}</Text>
+              {!hasUsers && <TextField label="Organization name" autoComplete="off" maxLength={200} placeholder="e.g. LushWear" requiredIndicator value={orgName} onChange={setOrgName} />}
+              {!hasUsers && <TextField label="Your name" autoComplete="off" maxLength={200} placeholder="e.g. Jane Doe" requiredIndicator value={name} onChange={setName} />}
+              <TextField label="Email" type="email" autoComplete="username" placeholder="you@example.com" requiredIndicator value={email} onChange={setEmail} autoFocus />
+              <TextField label="Password" type="password" autoComplete={hasUsers ? 'current-password' : 'new-password'} maxLength={128} requiredIndicator value={password} onChange={setPassword} />
+              {!hasUsers && <TextField label="Confirm password" type="password" autoComplete="new-password" maxLength={128} requiredIndicator value={confirmPassword} onChange={setConfirmPassword} />}
+              {error && <InlineError message={error} fieldID="authGate" />}
+              <Button variant="primary" submit fullWidth loading={submitting}>Continue</Button>
+            </FormLayout>
           </form>
         )}
       </div>

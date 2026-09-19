@@ -96,21 +96,13 @@ export function parseDDMMYYYYToYYYYMMDD(str: unknown): string | null {
   return `${yy}-${mm}-${dd}`;
 }
 
-export function formatRelativeTime(timestampMs: number): string {
-  const seconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
-  if (seconds < 60) return 'just now';
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr${hours === 1 ? '' : 's'} ago`;
-  const days = Math.floor(hours / 24);
-  return `${days} day${days === 1 ? '' : 's'} ago`;
-}
-
 /** Header search: true when any top-level primitive field of the row contains `query`
  * (case-insensitive). Nested objects/arrays are skipped. */
 export function rowMatchesQuery(row: object, query: string): boolean {
   const q = query.trim().toLowerCase();
   if (!q) return true;
-  return Object.values(row).some((v) => (typeof v === 'string' || typeof v === 'number') && String(v).toLowerCase().includes(q));
+  const matches = (v: unknown): boolean => Array.isArray(v)
+    ? v.some(matches)
+    : (typeof v === 'string' || typeof v === 'number') && String(v).toLowerCase().includes(q);
+  return Object.values(row).some(matches);
 }

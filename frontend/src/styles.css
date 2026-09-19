@@ -32,6 +32,7 @@
    above never reaches through that. */
 .p-theme-light {
     --p-font-family-sans: var(--font-primary);
+    --p-color-nav-bg: var(--bg-secondary);
     --font-mono: 'Roboto Mono', monospace;
     --radius-sm: 6px;
     --radius-md: 10px;
@@ -100,117 +101,8 @@ body {
     margin: 0 auto 24px;
 }
 
-.auth-gate-title {
-    margin: 0 0 8px;
-    font-size: 22px;
-    font-weight: 600;
-    text-align: center;
-    color: var(--text-primary);
-}
-
-.auth-gate-waiting {
-    margin: 20px 0 24px;
-    text-align: center;
-    font-size: 14px;
-    color: var(--text-muted);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-}
-
-.auth-gate-spinner {
-    display: inline-block;
-    width: 16px;
-    height: 16px;
-    border: 2px solid var(--bg-tertiary);
-    border-top-color: var(--accent-primary);
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    flex-shrink: 0;
-}
-
-.auth-gate-form {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-}
-
-.auth-gate-label {
-    display: block;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    margin-bottom: 6px;
-    margin-top: 14px;
-}
-
-.auth-gate-form .auth-gate-label:first-of-type {
-    margin-top: 0;
-}
-
-.auth-gate-extra-field {
-    display: flex;
-    flex-direction: column;
-}
-
-.auth-gate-input {
-    width: 100%;
-    padding: 12px 14px;
-    font-size: 15px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    box-sizing: border-box;
-}
-
-.auth-gate-input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-.auth-gate-error {
-    min-height: 1.25em;
-    margin: 12px 0 0;
-    font-size: 13px;
-    color: var(--danger, #c94c4c);
-}
-
-.auth-gate-submit {
-    width: 100%;
-    margin-top: 20px;
-    padding: 12px;
-    font-size: 15px;
-}
-
-.auth-gate-submit .btn-spinner {
-    display: inline-block;
-    width: 15px;
-    height: 15px;
-    border: 2px solid rgba(255, 255, 255, 0.4);
-    border-top-color: #fff;
-    border-radius: 50%;
-    animation: spin 0.7s linear infinite;
-    vertical-align: -2px;
-    margin-right: 9px;
-}
-
-.auth-gate-submit:disabled {
-    cursor: progress;
-}
-
-.password-change-modal-content {
-    max-width: 440px;
-}
-
-.password-change-form .form-group {
-    margin-bottom: 0;
-}
-
 /* Polaris's Frame only sets min-height:100vh on itself (not a hard height) - fine for a page
-   that's meant to grow, but this app's inner containers (.content-area, .orders-table-card,
+   that's meant to grow, but this app's inner containers (.content-area, .table-card,
    AG Grid) rely on being clipped to exactly one viewport tall so THEY scroll internally.
    Without this, Frame just grows to fit all content (e.g. every order row) and body's own
    overflow:hidden makes that extra height completely unreachable - nothing scrolls at all. */
@@ -231,6 +123,7 @@ body {
     flex-direction: column;
     height: 100%;
     background: var(--p-color-nav-bg);
+    border-right: 1px solid var(--border-color);
 }
 
 .sidebar-nav-column .Polaris-Navigation {
@@ -251,7 +144,7 @@ body {
     }
 
     .Polaris-Frame__Navigation:hover .Polaris-Navigation,
-    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation {
+    .Polaris-Frame__Navigation:has(:focus-visible) .Polaris-Navigation {
         max-width: var(--pg-navigation-width);
     }
 
@@ -266,7 +159,7 @@ body {
     }
 
     .Polaris-Frame__Navigation:hover,
-    .Polaris-Frame__Navigation:focus-within {
+    .Polaris-Frame__Navigation:has(:focus-visible) {
         /* Desktop Polaris only gives this z-index:1, fine for a rail that stays
            inside its own reserved padding-left, but the orders table's sticky
            header/columns run up to z-index:60 (see the ag-grid rules below) -
@@ -305,9 +198,22 @@ body {
 
     .Polaris-Frame__Navigation:hover .Polaris-Navigation__Text,
     .Polaris-Frame__Navigation:hover .Polaris-Navigation__Badge,
-    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation__Text,
-    .Polaris-Frame__Navigation:focus-within .Polaris-Navigation__Badge {
+    .Polaris-Frame__Navigation:has(:focus-visible) .Polaris-Navigation__Text,
+    .Polaris-Frame__Navigation:has(:focus-visible) .Polaris-Navigation__Badge {
         opacity: 1;
+    }
+
+    /* A child item's only visible part in the rail is Polaris's tree-connector
+       pseudo-element (its label is opacity:0 above), leaving a stray "↳" under the
+       parent icon. The parent already carries Item--selected while a child is active,
+       so the sub-list can stay hidden until the rail expands. */
+    .Polaris-Navigation__SecondaryNavigation {
+        display: none;
+    }
+
+    .Polaris-Frame__Navigation:hover .Polaris-Navigation__SecondaryNavigation,
+    .Polaris-Frame__Navigation:has(:focus-visible) .Polaris-Navigation__SecondaryNavigation {
+        display: block;
     }
 }
 
@@ -333,15 +239,15 @@ body {
     align-items: center;
     justify-content: flex-start;
     height: 61px;
-    padding: 0 16px;
+    padding: 0 14px;
     flex-shrink: 0;
     overflow: hidden;
 }
 
 .logo-img {
     display: block;
-    width: 26px;
-    max-height: 40px;
+    width: 36px;
+    max-height: 48px;
     object-fit: contain;
     flex-shrink: 0;
 }
@@ -364,7 +270,7 @@ body {
     }
 
     .Polaris-Frame__Navigation:hover .logo-text,
-    .Polaris-Frame__Navigation:focus-within .logo-text {
+    .Polaris-Frame__Navigation:has(:focus-visible) .logo-text {
         width: auto;
         margin-left: 10px;
         opacity: 1;
@@ -434,7 +340,7 @@ body {
     }
 
     .Polaris-Frame__Navigation:hover .nav-tooltip,
-    .Polaris-Frame__Navigation:focus-within .nav-tooltip {
+    .Polaris-Frame__Navigation:has(:focus-visible) .nav-tooltip {
         flex: 1 1 auto;
         width: auto;
         margin-left: 10px;
@@ -475,11 +381,14 @@ body {
     background: var(--bg-secondary);
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
-    gap: 16px;
+    gap: 8px;
 }
 
 .header-title {
     flex-shrink: 0;
+    /* Wide enough for the longest page title, so the search box after it sits at the same
+       spot on every page instead of shifting with the title's length. */
+    min-width: 240px;
 }
 
 .header-title-row {
@@ -506,9 +415,18 @@ body {
     flex-wrap: nowrap;
     align-items: center;
     justify-content: flex-end;
-    gap: 10px;
+    gap: 8px;
     min-width: 0;
     margin-left: auto;
+}
+
+/* Controls never squash or wrap their label; on tight widths the search box gives way first
+   (see .header-search), and only then does the toolbar itself start to scroll/shrink. */
+.header-actions > * {
+    flex-shrink: 0;
+}
+.header-actions .Polaris-Button {
+    white-space: nowrap;
 }
 
 /* Only the orders and order-fulfillment toolbars are wide enough to need scrolling; applying
@@ -524,10 +442,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
 .orders-more-actions {
     position: relative;
     flex-shrink: 0;
-}
-
-#ordersMoreActionsBtn {
-    overflow: visible;
 }
 
 /* Fixed, not absolute: .header-actions scrolls horizontally, which would clip an
@@ -572,74 +486,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     cursor: not-allowed;
 }
 
-/* Every per-view control that sits in the header row (selects, text/date
-   inputs, the cash-in-hand pill) pins to the same 36px Polaris's own buttons
-   render at (see HeaderButton.tsx) - otherwise each view's row grows to its
-   tallest control's natural height and the top row visibly changes size when
-   switching views. */
-.header-actions .transaction-date-filter,
-.header-actions .trial-balance-date,
-.header-actions .cash-in-hand-display {
-    height: 36px;
-    min-height: 36px;
-    max-height: 36px;
-    box-sizing: border-box;
-}
-
-.orders-sync-status {
-    flex: 0 0 auto;
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--text-muted);
-    white-space: nowrap;
-}
-
-/* Date range / More actions share one width so the orders toolbar reads as an even
-   group instead of label-sized buttons. Fixed width also stops the row shifting
-   when labels swap mid-action ("Range set"). Sync from Shopify is excluded so it
-   can grow to fit its "last synced" suffix. */
-.header-actions #ordersDateRangeBtn,
-.header-actions #ordersMoreActionsBtn {
-    flex: 0 0 auto;
-    width: 11.5em;
-}
-
-/* Icon-only (e.g. fullscreen): exact same height as other toolbar buttons */
-.header-actions .header-toolbar-btn-icon-only {
-    min-width: 36px;
-    width: 36px;
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    padding: 0 !important;
-    line-height: 0;
-}
-
-.header-actions .header-toolbar-btn-icon-only span {
-    font-size: 1.1em;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.header-actions .header-toolbar-btn-icon-only .header-fullscreen-icon {
-    font-size: 1.45rem;
-    line-height: 1;
-}
-
-.header-fullscreen-icon .lucide {
-    width: 18px;
-    height: 18px;
-    stroke: currentColor;
-    stroke-width: 2;
-}
-
-.header-actions .header-toolbar-btn-icon-only i {
-    font-size: 1rem;
-    line-height: 1;
-}
-
 /* Orders: fullscreen is a fixed square */
 .header-orders-app-actions {
     display: none;
@@ -649,28 +495,6 @@ body:has(#orderFulfillmentView.active) .header-actions {
     gap: 8px;
     box-sizing: border-box;
     min-height: 36px;
-}
-
-.header-orders-app-actions #ordersFullScreenBtn.header-toolbar-btn-icon-only {
-    flex: 0 0 36px;
-    width: 36px !important;
-    min-width: 36px !important;
-    max-width: 36px !important;
-    height: 36px !important;
-    min-height: 36px !important;
-    max-height: 36px !important;
-    padding: 0 !important;
-    box-sizing: border-box;
-}
-
-.header-orders-app-actions #ordersFullScreenBtn .header-fullscreen-icon {
-    font-size: 1.55rem;
-}
-
-.delivery-refresh-progress {
-    font-size: 13px;
-    color: var(--text-secondary);
-    margin-left: 4px;
 }
 
 /* Content Area */
@@ -684,11 +508,13 @@ body:has(#orderFulfillmentView.active) .header-actions {
        fit exactly inside this box so this scrollbar never engages for them. */
     flex: 1;
     min-height: 0;
-    padding: 32px;
+    padding: 16px;
     overflow-y: auto;
     overflow-x: hidden;
     display: flex;
     flex-direction: column;
+    gap: 12px;
+    background: var(--bg-secondary);
 }
 
 .view {
@@ -709,245 +535,56 @@ body:has(#orderFulfillmentView.active) .header-actions {
     to { opacity: 1; transform: translateY(0); }
 }
 
-/* Stats Grid */
-.stats-grid {
-    display: grid;
-    width: 100%;
-    min-width: 0;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 20px;
-    margin-bottom: 32px;
-    align-items: stretch;
-}
-
-/* Courier Payment Report has 3 cards, not the dashboard's 5. Content-area padding is
-   zeroed for this view (see the table-views override below) so the cards and the grid
-   below read as one continuous surface - no outer margin, no gap between the two, and
-   the cards themselves sit flush against each other and the table with no rounding. */
-#courierPaymentReportView .stats-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 0;
-    margin-bottom: 0;
-}
-
-#courierPaymentReportView .stat-card {
-    border-radius: 0;
-    border-width: 1px 1px 1px 0;
-}
-
-#courierPaymentReportView .stat-card:first-child {
-    border-left-width: 1px;
-}
-
-#courierPerformanceView {
-    overflow-y: auto;
-}
-
-.courier-performance-stats-grid {
-    grid-template-columns: repeat(6, minmax(0, 1fr));
-}
-
-.courier-performance-table-card {
-    flex: 1;
-}
-
-.courier-performance-empty {
-    color: var(--text-muted);
-    font-size: 13px;
-    text-align: center;
-    padding: 24px 0 4px;
-}
-
-.dashboard-collections-section {
-    margin-bottom: 32px;
-    width: 100%;
-}
-
-.dashboard-collections-grid {
-    display: grid;
-    width: 100%;
-    min-width: 0;
-    grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
-    gap: 20px;
-    align-items: stretch;
-}
-
-.dashboard-collections-empty {
-    margin: 0;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-/* Transactions */
-.cash-in-hand-display {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 8px 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    margin-right: 8px;
-    position: relative;
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.cash-in-hand-display:hover {
-    border-color: var(--accent-primary);
-    background: var(--bg-secondary);
-}
-
-.cash-in-hand-label {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-
-.cash-in-hand-amount {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--accent-primary);
-    font-family: var(--font-mono);
-    min-width: 80px;
-    text-align: right;
-}
-
-.cash-in-hand-tooltip {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 8px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    padding: 12px;
-    min-width: 280px;
-    max-width: 400px;
-    z-index: 10000;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-4px);
-    transition: opacity 0.2s ease, transform 0.2s ease;
-}
-
-.cash-in-hand-display:hover .cash-in-hand-tooltip,
-.cash-in-hand-display.cash-in-hand-tooltip-open .cash-in-hand-tooltip {
-    opacity: 1;
-    pointer-events: auto;
-    transform: translateY(0);
-}
-
-.cash-in-hand-tooltip-section + .cash-in-hand-tooltip-section {
-    margin-top: 14px;
-}
-
-.cash-in-hand-tooltip-header {
-    font-size: 12px;
-    font-weight: 700;
-    color: var(--text-secondary);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 10px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.cash-in-hand-tooltip-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 6px 0;
-    gap: 16px;
-}
-
-.cash-in-hand-tooltip-name {
-    font-size: 13px;
-    color: var(--text-primary);
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.cash-in-hand-tooltip-balance {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-    font-family: var(--font-mono);
-    flex-shrink: 0;
-}
-
-.cash-in-hand-tooltip-footer {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-top: 10px;
-    padding-top: 10px;
-    border-top: 2px solid var(--border-color);
-    gap: 16px;
-}
-
-.cash-in-hand-tooltip-total-label {
-    font-size: 13px;
-    font-weight: 700;
-    color: var(--text-secondary);
-}
-
-.cash-in-hand-tooltip-total {
-    font-size: 14px;
-    font-weight: 700;
-    color: var(--accent-primary);
-    font-family: var(--font-mono);
-}
-
-.cash-in-hand-tooltip-empty {
-    font-size: 13px;
-    color: var(--text-muted);
-    text-align: center;
-    padding: 8px 0;
-}
-
-.transaction-date-filter {
-    padding: 10px 12px;
-    min-width: 100px;
-    width: 110px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    transition: var(--transition);
-}
-
-.transaction-date-filter:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
 .header-search {
-    flex: 1 1 auto;
-    max-width: 480px;
+    flex: 0 10 480px;
     min-width: 160px;
-    margin: 0 auto;
+}
+/* Polaris draws inputs with a solid (darker-topped) border but buttons with an inset
+   shadow - sitting between the header's buttons/dropdowns that made the search box look
+   like a stranger, so give its backdrop the button treatment. Focus keeps Polaris's ring. */
+.header-search .Polaris-TextField__Backdrop {
+    border: none;
+    background-color: var(--p-color-bg-fill);
+    box-shadow: var(--p-shadow-button);
+}
+.header-search .Polaris-TextField__Input:hover:not(:focus-visible) ~ .Polaris-TextField__Backdrop {
+    background-color: var(--p-color-bg-fill-hover);
 }
 
 .dropdown--multi {
     min-width: 120px;
 }
 
-/* Polaris's own reset (`:where([class*="Polaris-"]) { color: var(--p-color-text) }`) also
-   matches the tick's <path class="Polaris-Checkbox--checked">, so its stroke: currentColor
-   paints dark-on-dark and every checked box looks like a solid square. */
+/* The :where([class*="Polaris-"]) inheritance-gap rule (further down) also matches the tick's
+   <path class="Polaris-Checkbox--checked">, so its stroke: currentColor paints dark-on-dark
+   and every checked box looks like a solid square. */
 .Polaris-Checkbox__Icon svg path {
     color: inherit;
 }
 
 /* Polaris's 20px option checkboxes read oversized in a filter popover; shrink to 16px. */
+/* DateRangePopover's preset column, next to the calendar. */
+.date-range-presets {
+    min-width: 140px;
+    border-right: 1px solid var(--border-color);
+}
+
+/* Polaris popover rows (32px min-height + 4px gap) read airy in long lists; tighten every menu. */
+.Polaris-OptionList-Option {
+    min-height: 28px;
+    margin-top: 2px;
+}
+
+.Polaris-OptionList-Option__Label,
+.Polaris-OptionList-Option__SingleSelectOption,
+.Polaris-OptionList-Option__MultiSelectOption {
+    padding: var(--p-space-100) var(--p-space-150);
+}
+
+.Polaris-ActionList__Item {
+    --pc-action-list-item-min-height: 28px;
+}
+
 .dropdown-options .Polaris-OptionList-Option__Checkbox {
     width: 16px;
     height: 16px;
@@ -961,553 +598,97 @@ body:has(#orderFulfillmentView.active) .header-actions {
     width: 240px;
 }
 
-#transactionsView,
-#billsView,
-#trialBalanceView,
-#courierPaymentReportView {
-    overflow: hidden;
-    gap: 0;
-    min-height: 0;
-    padding: 0;
+.header-date {
+    width: 200px;
 }
 
-#transactionsView.active,
-#billsView.active,
-#trialBalanceView.active,
-#courierPaymentReportView.active {
-    height: 100%;
-    width: 100%;
-}
+.table-cell--end { text-align: right; }
+.table-cell--wrap { white-space: normal; min-width: 260px; }
 
-#transactionsGrid,
-#transactionsGrid.grid-container,
-#billsGrid,
-#billsGrid.grid-container,
-#trialBalanceGrid,
-#trialBalanceGrid.grid-container,
-#courierPaymentReportGrid,
-#courierPaymentReportGrid.grid-container {
-    flex: 1;
-    min-height: 0;
-    height: 100%;
-    width: 100%;
-    border-radius: 0;
-    border: none;
-}
-
-/* Override content-area padding for table views */
-.content-area:has(#transactionsView.active),
-.content-area:has(#ordersView.active),
-.content-area:has(#orderFulfillmentView.active),
-.content-area:has(#ledgerDetailView.active),
-.content-area:has(#ledgersView.active),
-.content-area:has(#billsView.active),
-.content-area:has(#trialBalanceView.active),
-.content-area:has(#courierPaymentReportView.active),
-.content-area:has(#courierPaymentReportDetailView.active),
-body:has(#transactionsView.active) .content-area,
-body:has(#ordersView.active) .content-area,
-body:has(#orderFulfillmentView.active) .content-area,
-body:has(#ledgerDetailView.active) .content-area,
-body:has(#ledgersView.active) .content-area,
-body:has(#billsView.active) .content-area,
-body:has(#trialBalanceView.active) .content-area,
-body:has(#courierPaymentReportView.active) .content-area,
-body:has(#courierPaymentReportDetailView.active) .content-area {
-    padding: 0;
-}
-
-.stat-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 20px 22px;
-    box-sizing: border-box;
-    min-height: 128px;
-    height: 100%;
+.pa-table-card {
     display: flex;
     flex-direction: column;
-    align-items: stretch;
-    transition: var(--transition);
+    min-height: 320px;
+    max-height: 70vh;
 }
 
-.stat-card:hover {
-    box-shadow: var(--shadow);
-    border-color: var(--accent-primary);
+.pa-table-card .table-card {
+    flex: 1 1 auto;
+    min-height: 0;
 }
 
-.stat-info {
+.page-loading {
     display: flex;
-    flex-direction: column;
-    flex: 1;
-    gap: 6px;
-    min-width: 0;
-    justify-content: flex-start;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    padding: 48px 0;
 }
 
-.stat-value {
-    display: block;
-    font-size: 24px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: var(--text-primary);
-    line-height: 1.2;
-    margin-top: auto;
+.card-link {
+    cursor: pointer;
+    border-radius: var(--p-border-radius-300);
 }
 
-.stat-label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-muted);
-    line-height: 1.35;
+.card-link:hover .Polaris-Box {
+    background: var(--p-color-bg-surface-hover);
 }
 
-.stat-detail {
-    font-size: 13px;
-    color: var(--text-muted);
-    line-height: 1.35;
+.dropzone-selected {
+    padding: 12px 16px;
+}
+
+.row-actions-spacer {
+    display: inline-block;
+    width: 28px;
+}
+
+/* Popover wraps its activator in a plain block <div>; the inline-block button inside sits on
+   that div's text baseline, making the div ~5px taller than the button and dropping the kebab
+   a few px below sibling buttons in action cells (Products, Bills). */
+.row-actions > div {
+    display: flex;
+}
+
+.transaction-folio {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.table-card-toolbar {
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 6px 8px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.table-status-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px;
+    border-top: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    flex-shrink: 0;
+}
+.table-cell--center { text-align: center; }
+
+.table-row-flash > * {
+    animation: table-row-flash 1.2s ease-out 2;
+}
+
+@keyframes table-row-flash {
+    from { background: var(--p-color-bg-surface-caution); }
+    to { background: transparent; }
 }
 
 /* ============================================
    Inventory view
    ============================================ */
 
-/* Stat-card accents. Same hues as the Product Analytics palette, which scopes
-   its own copy to .pa-scroll - so the two pages read as one system without
-   either owning the other's tokens. */
-#productsView {
-    min-height: 0;
-    gap: 20px;
-    --inv-accent-products: var(--accent-primary);
-    --inv-accent-stock: #3f7fb8;
-    --inv-accent-low: #b8862b;
-    --inv-accent-out: #cf5a4f;
-    --inv-accent-value: #12855a;
-}
-
-/* Cards keep their height; the table card below takes the rest and scrolls
-   internally, so the page itself never scrolls. */
-.inventory-stats {
-    flex-shrink: 0;
-    margin-bottom: 0;
-}
-
-/* Same treatment as the Product Analytics KPIs (.pa-kpi): a left accent rule and
-   a tint that washes out into the card, each card carrying its own accent. */
-.inventory-stat {
-    min-height: 0;
-    padding: 16px 18px;
-    gap: 6px;
-    border-left: 3px solid var(--inventory-stat-accent, var(--accent-primary));
-    background: linear-gradient(
-        120deg,
-        color-mix(in srgb, var(--inventory-stat-accent, var(--accent-primary)) 12%, transparent),
-        var(--bg-card) 60%
-    );
-}
-
-/* .stat-card:hover recolours all four borders, which would drop the accent rule. */
-.inventory-stat:hover {
-    border-color: var(--accent-primary);
-    border-left-color: var(--inventory-stat-accent, var(--accent-primary));
-}
-
-.inventory-stat-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 8px;
-}
-
-.inventory-stat .stat-value {
-    margin-top: 6px;
-    font-size: 26px;
-}
-
-.inventory-stat-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
-    border-radius: var(--radius-sm);
-    color: var(--inventory-stat-accent, var(--accent-primary));
-    background: color-mix(in srgb, var(--inventory-stat-accent, var(--accent-primary)) 16%, transparent);
-}
-
-.inventory-stat-icon svg {
-    width: 17px;
-    height: 17px;
-}
-
-.inventory-stat--products { --inventory-stat-accent: var(--inv-accent-products); }
-.inventory-stat--stock    { --inventory-stat-accent: var(--inv-accent-stock); }
-.inventory-stat--low      { --inventory-stat-accent: var(--inv-accent-low); }
-.inventory-stat--out      { --inventory-stat-accent: var(--inv-accent-out); }
-.inventory-stat--value    { --inventory-stat-accent: var(--inv-accent-value); }
-
-.inventory-stat-delta {
-    font-size: 12px;
-    color: var(--text-muted);
-    min-height: 18px;
-}
-
-.inventory-delta-up   { color: #16a34a; }
-.inventory-delta-down { color: #dc2626; }
-.inventory-delta-flat { color: var(--text-muted); }
-
-.inventory-panel {
-    display: flex;
-    flex-direction: column;
-    flex: 1;
-    min-height: 0;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-}
-
-.inventory-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-shrink: 0;
-    padding: 16px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.inventory-search-wrap {
-    position: relative;
-    flex: 1;
-    max-width: 320px;
-}
-
-.inventory-search-icon {
-    position: absolute;
-    left: 12px;
-    top: 50%;
-    transform: translateY(-50%);
-    width: 15px;
-    height: 15px;
-    color: var(--text-muted);
-    pointer-events: none;
-}
-
-.inventory-search-input,
-
-.inventory-search-input {
-    width: 100%;
-    padding-left: 34px;
-}
-
-.inventory-search-input:focus,
-
-.inventory-filters-toggle {
-    height: 38px;
-    gap: 6px;
-}
-
-.inventory-filters-toggle svg {
-    width: 15px;
-    height: 15px;
-}
-
-.inventory-filters-toggle[aria-pressed="true"] {
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-}
-
-#productsView #productsGrid.grid-container {
-    border: none;
-    border-radius: 0;
-    min-height: 0;
-}
-
-/* Grid cells specific to the inventory columns */
-.grid-product-cell {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    height: 100%;
-    min-width: 0;
-}
-
-.grid-product-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    /* Flex items default to min-width: auto, which stops them from ever shrinking
-       below their content's natural width - without this, the ellipsis above never
-       engages and a long name just hard-clips at the cell's own edge instead. */
-    min-width: 0;
-}
-
-/* AG Grid wraps a plain-HTML cellRenderer's output in an unclassed <span> that also
-   defaults to min-width: auto, one level above .grid-product-cell - without overriding
-   it too, that wrapper never shrinks to the cell's width and .grid-product-name's own
-   ellipsis (above) never gets a narrow enough box to actually engage on a long name. */
-.ag-cell > span:has(> .grid-product-cell) {
-    min-width: 0;
-}
-
-.grid-stock-variants {
-    margin-left: 8px;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.grid-status-badge.in,
-.grid-status-badge.low,
-.grid-status-badge.out {
-    text-transform: none;
-    /* Same row-height line-height inheritance as .grid-quantity-badge above. Scoped
-       to the inventory statuses so the order/courier grids' badges are untouched. */
-    line-height: 1.5;
-}
-
-.grid-status-badge.in {
-    background: rgba(34, 197, 94, 0.15);
-    color: #16a34a;
-}
-
-.grid-status-badge.low {
-    background: rgba(245, 158, 11, 0.15);
-    color: #d97706;
-}
-
-.grid-status-badge.out {
-    background: rgba(220, 38, 38, 0.12);
-    color: #dc2626;
-}
-
 /* ---- Product details / adjust stock / cost history modals ---- */
-
-.product-details-modal-content,
-.cost-history-modal-content {
-    max-width: 720px;
-}
-
-.product-details-identity {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: 20px;
-}
-
-.product-details-thumb img,
-.product-details-thumb .grid-image-placeholder {
-    width: 56px;
-    height: 56px;
-    border-radius: var(--radius-md);
-    object-fit: cover;
-}
-
-.product-details-identity-text {
-    min-width: 0;
-}
-
-.product-details-name-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.product-details-name-row h3 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.product-details-sub {
-    margin: 2px 0 0;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.product-details-stock {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-/* auto-fit (not auto-fill) so a row of 3 or 4 cells stretches to fill the width
-   instead of leaving an empty divider-coloured track at the end. */
-.product-details-stock-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-    gap: 1px;
-    background: var(--border-color);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-}
-
-.product-details-stock-cell {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 12px 14px;
-    background: var(--bg-primary);
-}
-
-.product-details-stock-label {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.product-details-stock-value {
-    font-family: var(--font-mono);
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.product-details-meta {
-    margin: 20px 0 0;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    overflow: hidden;
-}
-
-.product-details-meta-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 11px 14px;
-    font-size: 13px;
-}
-
-.product-details-meta-row + .product-details-meta-row {
-    border-top: 1px solid var(--border-color);
-}
-
-.product-details-meta-row dt { color: var(--text-muted); }
-.product-details-meta-row dd { margin: 0; font-weight: 500; }
-
-.product-details-actions .btn {
-    white-space: nowrap;
-}
-
-.product-details-actions svg {
-    width: 15px;
-    height: 15px;
-}
-
-.adjust-stock-type {
-    display: flex;
-    gap: 20px;
-}
-
-.adjust-stock-radio {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    font-size: 14px;
-    cursor: pointer;
-}
-
-.adjust-stock-variants {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 12px;
-    margin: 16px 0;
-}
-
-.adjust-stock-row {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.adjust-stock-row-title {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    font-size: 13px;
-    font-weight: 500;
-}
-
-.adjust-stock-row-current {
-    font-size: 12px;
-    font-weight: 400;
-    color: var(--text-muted);
-}
-
-.adjust-stock-meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-}
-
-.adjust-stock-notes {
-    resize: vertical;
-    padding: 10px 12px;
-    font-family: inherit;
-}
-
-.cost-history-table-wrap {
-    overflow-x: auto;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.cost-history-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 13px;
-}
-
-.cost-history-table th {
-    text-align: left;
-    padding: 10px 14px;
-    font-weight: 500;
-    color: var(--text-muted);
-    background: var(--bg-secondary);
-    white-space: nowrap;
-}
-
-.cost-history-table td {
-    padding: 11px 14px;
-    border-top: 1px solid var(--border-color);
-    white-space: nowrap;
-}
-
-.cost-history-empty {
-    text-align: center;
-    color: var(--text-muted);
-    white-space: normal;
-}
-
-/* Applicable-from + reason, side by side under the cost input */
-.edit-variant-costs-meta {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-top: 12px;
-}
-
-.edit-variant-costs-current {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 11px 14px;
-    margin-bottom: 14px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-secondary);
-}
-
-.edit-variant-costs-current-label {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.edit-variant-costs-current-value {
-    font-family: var(--font-mono);
-    font-weight: 600;
-}
 
 .header-subtitle {
     margin: 1px 0 0;
@@ -1527,124 +708,6 @@ body:has(#courierPaymentReportDetailView.active) .content-area {
     padding: 48px 20px !important;
 }
 
-/* Buttons */
-.btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 12px 24px;
-    font-family: var(--font-primary);
-    font-size: 14px;
-    font-weight: 500;
-    border-radius: var(--radius-md);
-    border: none;
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.btn-primary {
-    background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
-    color: white;
-    box-shadow: 0 4px 16px var(--accent-glow);
-}
-
-.btn-primary:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 24px var(--accent-glow);
-}
-
-.btn-secondary {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border: 1px solid var(--border-color);
-}
-
-.btn-secondary:hover {
-    background: var(--border-color);
-}
-
-.btn-sm {
-    padding: 8px 14px;
-    font-size: 12px;
-}
-
-.btn-icon-sm {
-    padding: 8px 10px;
-    font-size: 10px;
-    min-width: 32px;
-}
-
-.btn-icon-sm .lucide {
-    width: 14px;
-    height: 14px;
-    stroke: currentColor;
-    stroke-width: 2;
-}
-
-.btn-success {
-    background: linear-gradient(135deg, #4ade80, #22c55e);
-    color: white;
-    box-shadow: 0 4px 16px rgba(74, 222, 128, 0.3);
-}
-
-.btn-success:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 6px 24px rgba(74, 222, 128, 0.4);
-}
-
-/* Forms */
-.form-group {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.form-group label {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-
-.form-group input,
-.form-group select,
-.form-group textarea {
-    padding: 12px 16px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 14px;
-    transition: var(--transition);
-}
-
-.form-group input::placeholder,
-.form-group textarea::placeholder {
-    color: var(--text-muted);
-}
-
-.form-group input:focus,
-.form-group select:focus,
-.form-group textarea:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-/* The native arrow is drawn by the OS and ignores the field's dark background,
-   so swap it for a themed chevron that reads correctly in both themes. */
-.form-group select {
-    cursor: pointer;
-    appearance: none;
-    -webkit-appearance: none;
-    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8' fill='none' stroke='%234a4a4f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
-    background-repeat: no-repeat;
-    background-position: right 16px center;
-    background-size: 12px 8px;
-    padding-right: 40px;
-}
-
 /* No spinner arrows on number inputs. Every numeric field in this app is money
    or a quantity that gets typed, never nudged one unit at a time, and the
    arrows also swallow horizontal space in the bill line grid. Applied globally
@@ -1660,361 +723,6 @@ input[type="number"]::-webkit-inner-spin-button {
 input[type="number"] {
     -moz-appearance: textfield;
     appearance: textfield;
-}
-
-.form-group textarea {
-    resize: vertical;
-    min-height: 80px;
-}
-
-.form-actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
-
-/* Modal */
-/* Every modal opens by toggling `.active` - never by setting style.display. */
-.modal {
-    display: none;
-    position: fixed;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 10000;
-    align-items: center;
-    justify-content: center;
-}
-
-/* Blur lives on a pseudo-element, not `.modal` itself: Safari has a WebKit bug where
-   backdrop-filter on an ancestor of <input type="file"> silently blocks the native
-   file picker from opening on click (drag-drop still works). */
-.modal::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.5);
-    backdrop-filter: blur(4px);
-}
-
-.modal.active {
-    display: flex;
-}
-
-#createLedgerModal.active {
-    z-index: 10011;
-}
-
-/* Column layout so .modal-header stays put and only .modal-body scrolls. */
-.modal-content {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    width: 90%;
-    max-width: 600px;
-    max-height: 80vh;
-    overflow: hidden;
-    box-shadow: var(--shadow-lg);
-    animation: modalIn 0.3s ease;
-}
-
-@keyframes modalIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
-}
-
-.modal-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 20px 24px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.modal-header h2 {
-    margin: 0;
-    font-size: 20px;
-    font-weight: 600;
-}
-
-.modal-close {
-    background: none;
-    border: none;
-    font-size: 28px;
-    color: var(--text-muted);
-    cursor: pointer;
-    padding: 0;
-    width: 32px;
-    height: 32px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    border-radius: var(--radius-sm);
-    transition: var(--transition);
-}
-
-.modal-close:hover {
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.modal-body {
-    padding: 24px;
-    overflow-y: auto;
-    flex: 1;
-}
-
-.modal-description {
-    margin: 0 0 10px;
-    color: var(--text-secondary);
-    font-size: 14px;
-}
-
-/* Create Transaction Entry modal */
-/* Fixed box so switching between single and bulk mode doesn't resize the modal. */
-.modal-content.transaction-entry-modal-content {
-    width: 80vw;
-    max-width: 80vw;
-    height: 80vh;
-    max-height: 80vh;
-}
-
-/* A modal's action row pinned outside its scrolling .modal-body (a sibling of
-   it, inside .modal-content's flex column) instead of scrolling away with
-   long content. Composes with a modal's own action-row class (e.g.
-   .bulk-update-actions, .edit-ledger-actions) where one already supplies
-   button layout - this only adds the pinning/spacing. The bill and
-   transaction-entry modals' Save buttons submit their form via a form=""
-   attribute since the button is no longer a descendant of it. */
-.modal-pinned-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    flex-shrink: 0;
-    padding: 16px 24px;
-    border-top: 1px solid var(--border-color);
-}
-
-.transaction-entry-mode {
-    display: flex;
-    gap: 4px;
-    padding: 4px;
-    margin-bottom: 16px;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
-}
-
-.transaction-entry-mode-btn {
-    flex: 1;
-    padding: 8px 12px;
-    border: none;
-    border-radius: var(--radius-sm);
-    background: transparent;
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 500;
-    font-family: inherit;
-    cursor: pointer;
-    transition: background 0.15s, color 0.15s;
-}
-
-.transaction-entry-mode-btn:hover {
-    color: var(--text-primary);
-}
-
-.transaction-entry-mode-btn.active {
-    background: var(--bg-primary);
-    color: var(--text-primary);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12);
-}
-
-.transaction-entry-sides {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-}
-
-.transaction-entry-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin-bottom: 16px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    user-select: none;
-}
-
-.transaction-entry-toggle input {
-    cursor: pointer;
-}
-
-#createLedgerModal .form-group,
-#editLedgerModal .form-group {
-    margin-bottom: 20px;
-}
-
-.form-hint {
-    display: block;
-    margin-top: 4px;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.ledger-form-toggle {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    margin: 0 0 20px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    user-select: none;
-}
-
-.ledger-form-toggle input {
-    cursor: pointer;
-}
-
-.upload-postex-file-row {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    flex-wrap: wrap;
-}
-
-.upload-postex-file-row input[type="file"] {
-    max-width: 100%;
-}
-
-.upload-postex-filename {
-    color: var(--text-muted);
-    font-size: 13px;
-}
-
-.bulk-update-order-count {
-    margin: 0 0 8px;
-    color: var(--text-secondary);
-    font-size: 13px;
-    font-weight: 500;
-}
-
-.bulk-update-textarea {
-    width: 100%;
-    min-height: 160px;
-    padding: 12px;
-    font-family: inherit;
-    font-size: 14px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius);
-    resize: vertical;
-    box-sizing: border-box;
-}
-
-.bulk-update-textarea:focus {
-    outline: none;
-    border-color: var(--primary);
-}
-
-.bulk-update-actions {
-    display: flex;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-/* Buttons size to their label and wrap onto new lines as the modal narrows, instead of
-   the old fixed 200px chips (which overflowed once the courier-paid actions were added). */
-#bulkUpdateOrderForm .bulk-update-actions .btn {
-    flex: 1 1 auto;
-    min-width: 130px;
-    white-space: nowrap;
-}
-
-.bulk-update-action-group {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
-
-.bulk-update-action-group-label {
-    display: block;
-    margin-bottom: 10px;
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
-}
-
-.bulk-update-results .bulk-update-results-title {
-    margin: 0 0 12px;
-    font-size: 16px;
-    font-weight: 600;
-}
-
-.bulk-update-result-section {
-    margin-bottom: 16px;
-}
-
-.bulk-update-result-section strong {
-    display: block;
-    margin-bottom: 6px;
-    font-size: 14px;
-}
-
-.bulk-update-list {
-    margin: 0;
-    padding-left: 20px;
-    max-height: 120px;
-    overflow-y: auto;
-}
-
-.bulk-update-empty {
-    margin: 0 0 0 20px;
-    color: var(--text-muted);
-    font-size: 14px;
-}
-
-/* Toast */
-.toast {
-    position: fixed;
-    bottom: 32px;
-    right: 32px;
-    padding: 16px 24px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    color: var(--text-primary);
-    font-size: 14px;
-    /* Above every modal/dropdown/tooltip layer (highest in use: #deliveryStatusModal.active
-       at 10020) so a toast fired while a popup is open is never hidden behind it. */
-    z-index: 20000;
-    transform: translateY(100px);
-    opacity: 0;
-    transition: var(--transition);
-}
-
-.toast.show {
-    transform: translateY(0);
-    opacity: 1;
-}
-
-.toast.success {
-    border-color: var(--success);
-    background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), var(--bg-card));
-}
-
-.toast.error {
-    border-color: var(--danger);
-    background: linear-gradient(135deg, rgba(196, 92, 92, 0.2), var(--bg-card));
 }
 
 /* Notifications - history of every toast fired this session (see notifications.js) */
@@ -2161,334 +869,6 @@ input[type="number"] {
 }
 
 /* Responsive */
-@media (max-width: 1200px) {
-    .stats-grid {
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-    }
-
-    /* Single card on last row spans full width so the row uses all space */
-    .stats-grid > .stat-card:nth-last-child(1):nth-child(odd) {
-        grid-column: 1 / -1;
-    }
-
-}
-
-.postex-mismatches-table-wrap {
-    overflow-x: auto;
-    margin: 1rem 0;
-}
-.postex-mismatches-table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 14px;
-}
-.postex-mismatches-table th,
-.postex-mismatches-table td {
-    padding: 8px 12px;
-    text-align: left;
-    border-bottom: 1px solid var(--border-color);
-}
-.postex-mismatches-table th {
-    font-weight: 600;
-    color: var(--text-secondary);
-}
-.postex-mismatches-table tbody tr:hover {
-    background: var(--bg-tertiary);
-}
-
-#bulkUpdateOrderModal .modal-content {
-    max-width: 760px;
-}
-
-/* Fixed-size report box: header/cards stay put, only the order list scrolls. */
-#deliveryStatusReportModal .modal-content {
-    width: 80vw;
-    max-width: 80vw;
-    height: 80vh;
-    max-height: 80vh;
-}
-
-#postExUploadReportModal .modal-content {
-    width: 80vw;
-    max-width: 80vw;
-    height: 80vh;
-    max-height: 80vh;
-}
-
-/* 8-column table needs more than the default 600px modal width. */
-#postExSettlementsModal .modal-content {
-    max-width: 80vw;
-}
-
-#deliveryStatusReportModal .modal-body,
-#postExUploadReportModal .modal-body {
-    display: flex;
-    flex-direction: column;
-    min-height: 0;
-    flex: 1;
-    overflow: hidden;
-}
-
-#postExUploadReportModal .stats-grid {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 12px;
-    margin-bottom: 16px;
-    flex-shrink: 0;
-}
-
-#postExUploadReportModal .stat-card {
-    padding: 12px 14px;
-    min-height: 76px;
-}
-
-#postExUploadReportModal .stat-value {
-    font-size: 18px;
-}
-
-#postExUploadReportModal .postex-mismatches-table-wrap {
-    margin: 0;
-    flex: 1;
-    overflow: auto;
-    min-height: 0;
-}
-
-#postExUploadReportModal .postex-mismatches-table thead th {
-    position: sticky;
-    top: 0;
-    background: var(--bg-card);
-    z-index: 1;
-}
-
-.postex-report-row--mismatch td {
-    background: color-mix(in srgb, var(--danger) 10%, transparent);
-}
-
-#deliveryStatusReportModal .postex-mismatches-table-wrap {
-    margin: 0;
-}
-
-#deliveryStatusReportModal .postex-mismatches-table thead th {
-    position: sticky;
-    top: 0;
-    background: var(--bg-card);
-    z-index: 1;
-}
-
-#deliveryStatusReportModal .modal-description {
-    flex-shrink: 0;
-}
-
-.status-report-view-btn {
-    padding: 4px 10px;
-    font-size: 12px;
-    font-family: inherit;
-    color: var(--accent-primary);
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    white-space: nowrap;
-    transition: var(--transition);
-}
-
-.status-report-view-btn:hover:not(:disabled) {
-    border-color: var(--accent-primary);
-    background: var(--accent-glow);
-}
-
-.status-report-view-btn:disabled {
-    color: var(--text-muted);
-    cursor: default;
-}
-
-.status-report-actions {
-    display: flex;
-    gap: 6px;
-    justify-content: flex-end;
-}
-
-.status-report-select {
-    width: 28px;
-}
-
-.status-report-bulk-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin: 8px 0;
-    padding: 8px 10px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-}
-
-.status-report-bulk-select-all {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-}
-
-#shipperAdviceModal .modal-content {
-    max-width: 520px;
-}
-
-#shipperAdviceModal textarea {
-    width: 100%;
-    resize: vertical;
-}
-
-/* .form-group carries no outer margin, so sibling groups in this modal would sit flush. */
-#shipperAdviceModal .form-group + .form-group {
-    margin-top: 16px;
-}
-
-.shipper-advice-options {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-}
-
-.shipper-advice-option {
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-}
-
-.shipper-advice-option input {
-    margin-top: 2px;
-}
-
-/* Opened from within the report modal while that stays open. Both get the same
-   z-index from .modal.active, and this one is earlier in the DOM, so it needs an
-   explicit bump to land on top instead of behind. */
-#deliveryStatusModal.active {
-    z-index: 10020;
-}
-
-.status-report-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-    gap: 10px;
-    margin: 1rem 0;
-    flex-shrink: 0;
-}
-
-.status-report-detail {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-}
-
-.status-report-card {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 4px;
-    padding: 12px 8px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    cursor: pointer;
-    font-family: inherit;
-    transition: var(--transition);
-}
-
-.status-report-card:hover {
-    border-color: var(--accent-primary);
-}
-
-.status-report-card.active {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-.status-report-card__count {
-    display: flex;
-    align-items: baseline;
-    gap: 4px;
-    font-size: 22px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.status-report-card__pct {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-secondary);
-}
-
-.status-report-card__label {
-    font-size: 12px;
-    color: var(--text-secondary);
-    text-align: center;
-}
-
-.status-report-card--all .status-report-card__count { color: var(--accent-primary); }
-.status-report-card--delivered .status-report-card__count { color: var(--status-delivered); }
-.status-report-card--returned .status-report-card__count,
-.status-report-card--failed .status-report-card__count { color: var(--danger); }
-.status-report-card--issues .status-report-card__count { color: var(--warning); }
-.status-report-card--review .status-report-card__count { color: var(--accent-primary); }
-.status-report-card--unfulfilled .status-report-card__count { color: var(--text-muted); }
-
-.status-report-detail__title {
-    margin-top: 8px;
-    font-size: 15px;
-    color: var(--text-secondary);
-}
-
-#deliveryStatusModal .modal-content {
-    max-width: 760px;
-}
-
-.delivery-status-info {
-    margin-bottom: 24px;
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 4px 24px;
-}
-
-.info-row {
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.whatsapp-chat-link {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 22px;
-    height: 22px;
-    margin-left: 6px;
-    border-radius: 50%;
-    color: #fff;
-    background: #25D366;
-    font-size: 12px;
-    vertical-align: middle;
-    transition: var(--transition);
-}
-
-.whatsapp-chat-link:hover {
-    filter: brightness(1.1);
-}
-
-.info-row:last-child {
-    border-bottom: none;
-}
-
-.info-row strong {
-    display: inline-block;
-    min-width: 140px;
-    color: var(--text-secondary);
-    font-size: 13px;
-}
 
 .status-timeline {
     position: relative;
@@ -2541,47 +921,6 @@ input[type="number"] {
     position: relative;
 }
 
-.timeline-date {
-    font-size: 12px;
-    color: var(--text-muted);
-    margin-bottom: 4px;
-}
-
-.timeline-status {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.timeline-item.active .timeline-status {
-    color: var(--accent-primary);
-    font-weight: 600;
-}
-
-.delivery-status-btn {
-    transition: var(--transition);
-}
-
-.delivery-status-btn:hover {
-    opacity: 0.8;
-    transform: scale(1.05);
-}
-
-.error-message {
-    color: var(--danger);
-    padding: 16px;
-    background: rgba(196, 92, 92, 0.1);
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--danger);
-}
-
-.no-status {
-    text-align: center;
-    padding: 20px;
-    color: var(--text-muted);
-    font-style: italic;
-}
-
 /* Loading Screen */
 .loading-screen {
     position: fixed;
@@ -2617,7 +956,7 @@ input[type="number"] {
     width: 60px;
     height: 60px;
     border: 4px solid var(--bg-tertiary);
-    border-top-color: var(--accent-primary);
+    border-top-color: var(--p-color-bg-fill-brand);
     border-radius: 50%;
     animation: spin 1s linear infinite;
 }
@@ -2632,32 +971,6 @@ input[type="number"] {
     to {
         transform: rotate(360deg);
     }
-}
-
-/* Inline content loading state (dashboard, month detail, etc.) */
-.content-loading {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 20px;
-    min-height: 200px;
-    padding: 40px;
-}
-
-.content-loading-spinner {
-    width: 48px;
-    height: 48px;
-    border: 4px solid var(--bg-tertiary);
-    border-top-color: var(--accent-primary);
-    border-radius: 50%;
-    animation: spin 1s linear infinite;
-}
-
-.content-loading-text {
-    margin: 0;
-    font-size: 15px;
-    color: var(--text-muted);
 }
 
 /* Install-as-desktop-app banner */
@@ -2702,21 +1015,6 @@ input[type="number"] {
     color: var(--text-muted);
 }
 
-.install-app-banner-dismiss {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 20px;
-    line-height: 1;
-    cursor: pointer;
-    padding: 4px;
-    flex-shrink: 0;
-}
-
-.install-app-banner-dismiss:hover {
-    color: var(--text-primary);
-}
-
 @media (max-width: 820px) {
     .install-app-banner {
         left: 16px;
@@ -2725,41 +1023,11 @@ input[type="number"] {
     }
 }
 
-/* Button loading spinner */
-.btn-loading-spinner {
-    display: inline-block;
-    width: 14px;
-    height: 14px;
-    border: 2px solid transparent;
-    border-top-color: currentColor;
-    border-radius: 50%;
-    animation: spin 0.8s linear infinite;
-    margin-right: 8px;
-    vertical-align: middle;
-    flex-shrink: 0;
-}
-
-.btn-primary .btn-loading-spinner {
-    border-color: rgba(255, 255, 255, 0.3);
-    border-top-color: white;
-}
-
-.btn-secondary .btn-loading-spinner {
-    border-color: rgba(0, 0, 0, 0.2);
-    border-top-color: currentColor;
-}
-
-.btn:disabled {
-    opacity: 0.7;
-    cursor: not-allowed;
-}
-
 /* Orders period filter (month 22 – next 21) */
 .orders-period-filter-wrap {
     display: flex;
     align-items: center;
     gap: 8px;
-    margin-right: 8px;
     flex-shrink: 0;
 }
 .header-inline {
@@ -2767,11 +1035,6 @@ input[type="number"] {
     align-items: center;
     gap: 8px;
 }
-.orders-date-range-wrap {
-    flex-shrink: 0;
-}
-/* Small "x" createDateRangePicker (utils.js) inserts right after every date-range trigger
-   button in the app, to clear that filter. */
 .date-range-picker-clear {
     display: inline-flex;
     align-items: center;
@@ -2794,519 +1057,6 @@ input[type="number"] {
     border-color: var(--text-muted);
 }
 
-/* Orders grid: clear filters button (icon) in filter row */
-.orders-clear-filters-btn {
-    padding: 4px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-.orders-clear-filters-icon {
-    width: 18px;
-    height: 18px;
-    display: block;
-}
-
-/* AG Grid Container */
-.grid-container {
-    width: 100%;
-    height: 100%;
-    flex: 1;
-    min-height: 400px;
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-    border: 1px solid var(--border-color);
-}
-
-/* AG Grid Light Theme Customization */
-.ag-theme-alpine {
-    --ag-selected-row-background-color: color-mix(in srgb, var(--accent-primary) 12%, transparent);
-    --ag-input-focus-border-color: var(--accent-primary);
-    --ag-range-selection-border-color: var(--accent-primary);
-    --ag-checkbox-checked-color: var(--accent-primary);
-    /* Row flash (flashCells, e.g. jumping to a ledger entry's source row) - AG
-       Grid's default is a teal/cyan that clashes with the app's accent.
-       Literal rgba, not color-mix(): if color-mix() isn't supported the whole
-       declaration is invalid and silently dropped, falling back to the
-       original teal with no visible error. */
-    --ag-value-change-value-highlight-background-color: rgba(37, 99, 235, 0.45);
-    --ag-font-family: var(--font-primary);
-    --ag-font-size: 14px;
-    --ag-cell-horizontal-padding: 16px;
-    --ag-row-height: 48px;
-    --ag-header-height: 48px;
-    --ag-alpine-active-color: var(--accent-primary);
-}
-
-/* Belt-and-braces over the variable above: ag-grid.css's own
-   .ag-cell-data-changed rule already carries !important, so only a more
-   specific selector (not just a later one) is guaranteed to win. */
-.ag-theme-alpine .ag-cell-data-changed {
-    background-color: rgba(37, 99, 235, 0.45) !important;
-}
-
-.ag-theme-alpine {
-    --ag-background-color: var(--grid-bg);
-    --ag-header-background-color: var(--grid-header-bg);
-    --ag-odd-row-background-color: var(--grid-bg);
-    --ag-row-hover-color: var(--grid-row-hover);
-    --ag-border-color: var(--grid-border);
-    --ag-header-foreground-color: var(--grid-header-foreground);
-    --ag-foreground-color: var(--grid-foreground);
-    --ag-secondary-foreground-color: var(--text-secondary);
-    --ag-filter-tool-panel-background-color: var(--grid-header-bg);
-    --ag-control-panel-background-color: var(--grid-header-bg);
-}
-
-/* Orders grid: row highlight that follows the focused cell (click or arrow
-   keys) via orders-row-focused (see initOrdersGrid) - kept visually distinct
-   from hover (tint + left accent bar). */
-.ag-theme-alpine .ag-row.orders-row-focused {
-    background-color: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    box-shadow: inset 3px 0 0 0 var(--accent-primary);
-}
-
-.ag-theme-alpine .ag-header {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.ag-theme-alpine .ag-header-cell {
-    padding-left: 12px;
-    padding-right: 8px;
-}
-
-.ag-theme-alpine .ag-header-cell-comp-wrapper {
-    gap: 2px;
-}
-
-/* Keep the header label and its sort arrow on one baseline - without this the
-   indicator container aligns to the top of the cell instead of the text. */
-.ag-theme-alpine .ag-header-cell-label {
-    display: flex;
-    align-items: center;
-    height: 100%;
-}
-
-/* body's line-height: 1.6 makes a ~19px line box around 12px text, which throws
-   the text off-centre against the 12px sort icon. */
-.ag-theme-alpine .ag-header-cell-text {
-    line-height: 1.2;
-}
-
-.ag-theme-alpine .ag-sort-indicator-container {
-    display: flex;
-    align-items: center;
-    line-height: 1;
-}
-
-.ag-theme-alpine .ag-cell {
-    display: flex;
-    align-items: center;
-}
-
-.ag-theme-alpine .ag-paging-panel {
-    background: var(--grid-header-bg);
-    border-top: 1px solid var(--grid-border);
-    padding: 12px 16px;
-}
-
-.ag-theme-alpine .ag-paging-button {
-    cursor: pointer;
-    padding: 6px 12px;
-    border-radius: var(--radius-sm);
-    transition: var(--transition);
-}
-
-.ag-theme-alpine .ag-paging-button:hover {
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-}
-
-.ag-theme-alpine input[class^="ag-"]:focus {
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
-}
-
-.ag-theme-alpine .ag-filter-toolpanel-header,
-.ag-theme-alpine .ag-filter-toolpanel-search,
-.ag-theme-alpine .ag-filter-body-wrapper {
-    background: var(--grid-header-bg);
-}
-
-.ag-theme-alpine .ag-popup {
-    background: var(--grid-header-bg);
-    border: 1px solid var(--grid-border);
-    border-radius: 8px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.12);
-}
-
-.ag-theme-alpine .ag-menu {
-    background: var(--grid-header-bg);
-    border: 1px solid var(--grid-border);
-    border-radius: 8px;
-}
-
-.ag-theme-alpine .ag-menu-option-active {
-    background: color-mix(in srgb, var(--accent-primary) 10%, transparent);
-}
-
-.ag-theme-alpine .ag-floating-filter-input {
-    border-radius: 4px;
-}
-
-/* Vertically center content in floating filter row */
-.ag-theme-alpine .ag-floating-filter-body {
-    display: flex;
-    align-items: center;
-}
-
-.grid-floating-filter-wrap {
-    display: flex;
-    align-items: center;
-    width: 100%;
-    min-height: 100%;
-}
-
-/* Custom floating filter dropdown (Order Status, Collection, Piece Received, etc.) */
-.grid-floating-filter-select {
-    width: 100%;
-    padding: 6px 10px;
-    font-size: 13px;
-    font-family: var(--font-primary);
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.grid-floating-filter-select:hover {
-    border-color: var(--accent-primary);
-}
-
-.grid-floating-filter-select:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 2px var(--accent-glow);
-}
-
-/* Date range context menu (popup) - base panel only; the from/to fields + Apply/Clear
-   footer this used to have for the old flatpickr-based date-range filters are gone now
-   that those all go through createDateRangePicker (utils.js) instead. Still reused as-is
-   by the order-status checkbox filter popup (grid-filters.js). */
-.date-range-menu {
-    position: absolute;
-    z-index: 9999;
-    display: none;
-    min-width: 220px;
-    padding: 12px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    font-family: var(--font-primary);
-}
-
-/* Order Status checkbox filter popup (reuses .date-range-menu for the panel) */
-.order-status-filter-menu {
-    width: max-content;
-    min-width: 0;
-}
-.order-status-filter-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 4px 2px;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-size: 13px;
-}
-.order-status-filter-option:hover {
-    background: var(--bg-secondary);
-}
-.order-status-filter-option input[type="checkbox"] {
-    cursor: pointer;
-}
-.order-status-filter-option--all {
-    padding-bottom: 8px;
-    margin-bottom: 4px;
-    border-bottom: 1px solid var(--border-color);
-    font-weight: 600;
-}
-
-/* Editable cells highlight */
-.ag-theme-alpine .ag-cell-inline-editing {
-    background: var(--grid-header-bg);
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-primary) 15%, transparent);
-}
-
-/* Filtering is already visible in the floating filter row, so the header funnel is
-   redundant - the only header indicator is the sort arrow below. */
-.ag-theme-alpine .ag-icon-filter,
-.ag-theme-alpine .ag-filter-icon {
-    display: none !important;
-}
-
-/* Sort icons - flex-centred rather than line-height aligned, so the glyph sits on
-   the header text's optical centre instead of its baseline. */
-.ag-theme-alpine .ag-icon-asc,
-.ag-theme-alpine .ag-icon-desc {
-    display: inline-flex !important;
-    align-items: center;
-    justify-content: center;
-    width: 12px !important;
-    height: 12px !important;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-sort-indicator-icon {
-    display: flex;
-    align-items: center;
-    margin-left: 3px;
-}
-
-.ag-theme-alpine .ag-icon-asc::before,
-.ag-theme-alpine .ag-icon-desc::before {
-    font-family: inherit;
-    font-size: 9px;
-    line-height: 1;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-asc::before {
-    content: "▲";
-}
-
-.ag-theme-alpine .ag-icon-desc::before {
-    content: "▼";
-}
-
-.ag-theme-alpine .ag-icon-menu::before {
-    content: "▼";
-    font-family: inherit;
-    font-size: 6px;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-menu {
-    width: 10px !important;
-    height: 10px !important;
-    line-height: 10px;
-}
-
-/* Hide dropdown/menu beside column name */
-.ag-theme-alpine .ag-header-cell-menu-button {
-    display: none !important;
-}
-
-/* Hide dropdown/button beside search bar in floating filter */
-.ag-theme-alpine .ag-floating-filter-button {
-    display: none !important;
-}
-
-.ag-theme-alpine .ag-header-cell-filter-button {
-    display: none !important;
-}
-
-.ag-theme-alpine .ag-picker-field-icon {
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-.ag-theme-alpine .ag-icon-columns::before {
-    content: "⊞";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-pin::before {
-    content: "📌";
-    font-family: inherit;
-    font-size: 12px;
-}
-
-.ag-theme-alpine .ag-icon-first::before {
-    content: "⏮";
-    font-family: inherit;
-    font-size: 14px;
-}
-
-.ag-theme-alpine .ag-icon-previous::before {
-    content: "◀";
-    font-family: inherit;
-    font-size: 14px;
-}
-
-.ag-theme-alpine .ag-icon-next::before {
-    content: "▶";
-    font-family: inherit;
-    font-size: 14px;
-}
-
-.ag-theme-alpine .ag-icon-last::before {
-    content: "⏭";
-    font-family: inherit;
-    font-size: 14px;
-}
-
-.ag-theme-alpine .ag-icon-checkbox-checked::before {
-    content: "☑";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-checkbox-unchecked::before {
-    content: "☐";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-checkbox-indeterminate::before {
-    content: "▣";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-none::before {
-    content: "";
-}
-
-.ag-theme-alpine .ag-icon-loading::before {
-    content: "⟳";
-    font-family: inherit;
-    animation: spin 1s linear infinite;
-}
-
-/* Dropdown arrow (page size, filters, menus) – single rule to avoid double triangle */
-.ag-theme-alpine .ag-icon-small-down::before,
-.ag-theme-alpine .ag-icon-tree-closed::before {
-    content: "▼";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-    line-height: 1;
-}
-
-.ag-theme-alpine .ag-icon-small-up::before,
-.ag-theme-alpine .ag-icon-tree-open::before {
-    content: "▲";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-small-left::before {
-    content: "◀";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-small-right::before {
-    content: "▶";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-cross::before {
-    content: "✕";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-cancel::before {
-    content: "✕";
-    font-family: inherit;
-}
-
-.ag-theme-alpine .ag-icon-tick::before {
-    content: "✓";
-    font-family: inherit;
-}
-
-/* Hide original icon font glyph (we use ::before for our icons) */
-.ag-theme-alpine .ag-icon {
-    font-family: inherit !important;
-    font-size: 0;
-    line-height: 1;
-    display: inline-flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-.ag-theme-alpine .ag-icon-expanded::before {
-    content: "▼";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .ag-icon-contracted::before {
-    content: "▶";
-    font-family: inherit;
-    font-size: 8px;
-    color: var(--text-primary);
-}
-
-/* Grid cell renderers */
-.grid-image-cell {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.grid-image-cell img {
-    width: 40px;
-    height: 40px;
-    object-fit: cover;
-    border-radius: 4px;
-}
-
-.grid-image-placeholder {
-    width: 40px;
-    height: 40px;
-    background: var(--grid-row-hover);
-    border-radius: 4px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 10px;
-    color: #9ca3af;
-}
-
-.grid-status-badge {
-    padding: 4px 10px;
-    border-radius: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    text-transform: capitalize;
-}
-
-.grid-courier-logo-wrap {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    padding: 3px 6px;
-}
-
-.grid-courier-logo {
-    height: 14px;
-    width: auto;
-    display: block;
-}
-
-/* Couriers Next's logo stacks a circular icon above/beside the wordmark (near-square
- * aspect ratio) rather than PostEx's wide wordmark, so it needs more height to stay
- * legible at a comparable rendered width. */
-.grid-courier-logo--couriersnext {
-    height: 32px;
-}
-
 .grid-status-fulfilled {
     background: rgba(234, 179, 8, 0.15);
     color: #ca8a04;
@@ -3327,20 +1077,6 @@ input[type="number"] {
     color: #dc2626;
 }
 
-/* Piece With column: Pending (Yellow), Done (Green), Received */
-.grid-piece-pending {
-    background: rgba(234, 179, 8, 0.2);
-    color: #ca8a04;
-}
-.grid-piece-done {
-    background: rgba(34, 197, 94, 0.2);
-    color: #16a34a;
-}
-.grid-piece-received {
-    background: rgba(139, 92, 246, 0.15);
-    color: #7c3aed;
-}
-
 .grid-status-cancelled {
     background: rgba(107, 114, 128, 0.15);
     color: #6b7280;
@@ -3352,15 +1088,6 @@ input[type="number"] {
 }
 
 /* Courier Payment Report: settled-orders progress bar (Settled Orders column). */
-
-/* Real element wrapper (createSettledOrdersCellElement), not innerHTML on ag-grid's
-   own cell-value span - that span isn't a reliable block container to size against, so
-   the bar and its 100% widths below never actually filled the column. */
-.payment-progress-cell-wrap {
-    display: flex;
-    align-items: center;
-    width: 100%;
-}
 
 .payment-progress {
     display: flex;
@@ -3384,204 +1111,11 @@ input[type="number"] {
     line-height: 1.2;
 }
 
-.payment-progress__pct {
-    font-size: 12px;
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.payment-progress__bar {
-    height: 10px;
-    border-radius: 5px;
-    background: var(--bg-tertiary);
-    overflow: hidden;
-}
-
-.payment-progress__segment {
-    height: 100%;
-}
-
-.payment-progress__segment--received {
-    background: #16a34a;
-}
-
-.payment-progress__waiting {
-    font-size: 13px;
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-.edit-variant-costs-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    margin-top: 12px;
-}
-
-.edit-variant-costs-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.edit-variant-costs-title {
-    color: var(--text-primary);
-    font-size: 14px;
-}
-
-.edit-variant-costs-qty {
-    color: var(--text-muted);
-    font-size: 12px;
-}
-
-/* Not inside a .form-group, so it needs its own field styling - .form-input
-   is only a marker class, all its usual styling comes from ".form-group
-   input/select" (see the note by .bill-line .form-input, same situation). */
-.edit-variant-costs-input {
-    width: 120px;
-    flex-shrink: 0;
-    text-align: right;
-    padding: 8px 10px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 14px;
-}
-
-.edit-variant-costs-input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-/* Secondary action within editVariantCostsModal, below the cost rows - set off
-   with its own heading/divider since it's a separate action (recalculating
-   historical orders) from saving the costs above. */
-.edit-variant-costs-recalc {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
-
-.edit-variant-costs-recalc h3 {
-    margin: 0 0 4px;
-    font-size: 15px;
-    color: var(--text-primary);
-}
-
-.edit-variant-costs-recalc .form-group {
-    margin-top: 12px;
-}
-
-.grid-quantity-badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 3px 12px;
-    border-radius: 20px;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 13px;
-    font-weight: 500;
-    /* .ag-cell sets line-height to the full row height so plain text centres in it.
-       Inheriting that makes the pill taller than its own row - size it off the font. */
-    line-height: 1.5;
-}
-
-.grid-quantity-badge.in {
-    background: rgba(139, 92, 246, 0.12);
-    color: #7c3aed;
-}
-
-.grid-quantity-badge.low {
-    background: rgba(245, 158, 11, 0.15);
-    color: #d97706;
-}
-
-.grid-quantity-badge.out {
-    background: rgba(220, 38, 38, 0.12);
-    color: #dc2626;
-}
-
-.grid-profit-positive {
-    color: #16a34a;
-    font-weight: 500;
-}
-
-.grid-profit-negative {
-    color: #dc2626;
-    font-weight: 500;
-}
-
-.grid-items-cell {
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 200px;
-}
-
-.delivery-cell-with-status {
-    display: flex;
-    flex-direction: row;
-    align-items: center;
-    gap: 6px;
-    font-size: 11px;
-    min-height: 0;
-    height: 100%;
-    overflow: hidden;
-}
-
-.delivery-cell-with-status .delivery-status-preview {
-    flex: 1;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--text-primary);
-    font-weight: 500;
-}
-
-.delivery-cell-with-status .delivery-fetched-at {
-    flex-shrink: 0;
-    font-size: 10px;
-    color: var(--text-muted);
-}
-
-.delivery-cell-with-status .grid-delivery-refresh-btn {
-    flex-shrink: 0;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    padding: 0;
-    font-size: 12px;
-    line-height: 1;
-    border-radius: 4px;
-    border: 1px solid rgba(59, 130, 246, 0.4);
-    cursor: pointer;
-    background: rgba(59, 130, 246, 0.2);
-    color: #2563eb;
-}
-
-.delivery-cell-with-status .grid-delivery-refresh-btn:hover {
-    background: rgba(59, 130, 246, 0.35);
-}
-
-.delivery-status-modal-actions {
-    margin-top: 20px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border-color);
-}
-
 #ordersView,
 #orderFulfillmentView {
     position: relative;
     overflow: hidden;
-    gap: 0;
+    gap: 12px;
     min-height: 0;
     padding: 0;
 }
@@ -3615,123 +1149,12 @@ body.orders-table-fullscreen #ordersView {
     flex-direction: column;
 }
 
-body.orders-table-fullscreen #ordersView .orders-table-card {
+body.orders-table-fullscreen #ordersView .table-card {
     flex: 1;
     min-height: 0;
 }
 
-/* AG Grid Footer Row Styles */
-.ag-theme-alpine .ag-pinned-bottom-row {
-    background-color: var(--bg-secondary) !important;
-    border-top: 2px solid var(--accent-primary) !important;
-    font-weight: bold;
-}
-
-.ag-theme-alpine .ag-pinned-bottom-row .ag-cell {
-    background-color: var(--bg-secondary) !important;
-    border-top: none !important;
-}
-
 /* ==================== Ledger Styles ==================== */
-
-#ledgersView {
-    overflow: hidden;
-    gap: 0;
-    min-height: 0;
-    padding: 0;
-}
-
-#ledgersView.active {
-    height: 100%;
-    width: 100%;
-}
-
-.ledger-list-container {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    height: 100%;
-    overflow-y: auto;
-    padding: 4px;
-}
-
-/* Fields that sit outside a .form-group.
-   `.form-input` is only a marker class and carries no rules of its own — all
-   field styling comes from `.form-group input/select`. These controls live in
-   filter bars and in the bill line grid, where a .form-group wrapper would
-   break the layout, so they need the same treatment applied directly. */
-.trial-balance-date,
-.bill-line .form-input,
-.bill-tax-input {
-    padding: 10px 12px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 14px;
-    transition: var(--transition);
-    /* Grid tracks would otherwise be forced wider than their column by the
-       input's default intrinsic width. */
-    min-width: 0;
-}
-
-.trial-balance-date::placeholder,
-.bill-line .form-input::placeholder {
-    color: var(--text-muted);
-}
-
-.trial-balance-date:focus,
-.bill-line .form-input:focus,
-.bill-tax-input:focus {
-    outline: none;
-    border-color: var(--accent-primary);
-    box-shadow: 0 0 0 3px var(--accent-glow);
-}
-
-/* Trial Balance */
-.trial-balance-date {
-    width: auto;
-    min-width: 160px;
-}
-
-.trial-balance-status {
-    font-weight: 600;
-    font-size: 0.9rem;
-    padding: 4px 10px;
-    border-radius: 6px;
-}
-
-.trial-balance-status-ok {
-    color: var(--success);
-    background: color-mix(in srgb, var(--success) 12%, transparent);
-}
-
-/* Out of balance means something wrote around the deferred debits=credits
-   constraint — it should be impossible to miss, not a subtle mismatch. */
-.trial-balance-status-bad {
-    color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-/* Purchase bills */
-.bill-modal-content {
-    width: 80vw;
-    height: 80vh;
-    max-width: 80vw;
-    max-height: 80vh;
-}
-
-.bill-form-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-}
-
-/* Bill date sits alongside supplier + supplier ref rather than on its own row. */
-.bill-form-row-3col {
-    grid-template-columns: 1fr 1fr 1fr;
-}
 
 .bill-lines-wrap {
     display: flex;
@@ -3802,13 +1225,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     font-variant-numeric: tabular-nums;
 }
 
-.bill-line-quantity,
-.bill-line-cost,
-.bill-line-variant-qty-input,
-.bill-line-variant-cost-input {
-    text-align: right;
-}
-
 /* Alone in its own column, and stretched (.bill-line's flex row default) to
    the full height of the product row plus every variant row under it, rather
    than capped to a small square pinned at the top - a product with several
@@ -3817,27 +1233,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
 .bill-line-image-cell {
     flex: 0 0 140px;
     display: flex;
-}
-
-.bill-line-product-thumb {
-    width: 100%;
-    height: 100%;
-    min-height: 48px;
-    object-fit: cover;
-    border-radius: var(--radius-sm);
-}
-
-.bill-line-product-thumb-empty {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 100%;
-    min-height: 48px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    font-size: 10px;
-    color: var(--text-muted);
-    text-align: center;
 }
 
 /* Sits below .bill-line-main in .bill-line-content's own column (see above),
@@ -3869,16 +1264,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     border-top: 1px solid var(--border-color);
 }
 
-/* Variant's own qty/cost inputs pick up .bill-line .form-input's colors and
-   border, but shrink the padding/font that rule sets - a product can have
-   many variants, so the row list needs to stay compact and scannable rather
-   than matching the line's own (larger) Qty/Cost inputs size for size. Same
-   specificity as .bill-line .form-input; wins on being declared after it. */
-.bill-line-variant-row .form-input {
-    padding: 5px 8px;
-    font-size: 12px;
-}
-
 .bill-line-variant-qty-label {
     font-size: 0.78rem;
     color: var(--text-secondary);
@@ -3908,43 +1293,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
 .bill-line-cost-effect-up { color: var(--danger); }
 .bill-line-cost-effect-down { color: var(--success); }
 
-.bill-line-mode-toggle {
-    width: 100%;
-    /* .bill-line-main's align-items:center would otherwise only center this at
-       its own (icon-sized) height - stretch it to match the product name
-       field/button beside it instead. */
-    align-self: stretch;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    color: var(--text-muted);
-    font-size: 14px;
-    cursor: pointer;
-    transition: var(--transition);
-}
-
-.bill-line-mode-toggle:hover {
-    color: var(--text-primary);
-    border-color: var(--accent-primary);
-}
-
-.bill-line-remove {
-    background: none;
-    border: none;
-    color: var(--text-muted);
-    font-size: 1.3rem;
-    line-height: 1;
-    cursor: pointer;
-    padding: 0;
-}
-
-.bill-line-remove:hover {
-    color: var(--danger);
-}
-
 .bill-totals {
     display: flex;
     flex-direction: column;
@@ -3965,10 +1313,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     font-variant-numeric: tabular-nums;
 }
 
-.bill-tax-input {
-    text-align: right;
-}
-
 .bill-total-grand {
     font-weight: 700;
     font-size: 1.05rem;
@@ -3976,334 +1320,11 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     padding-top: 6px;
 }
 
-.ledger-system-notice {
-    color: var(--text-muted);
-    font-size: 0.85rem;
-    padding: 8px 12px;
-    border-radius: var(--radius-sm);
-    background: var(--bg-tertiary);
-    margin-bottom: 4px;
-}
-
-.bill-status {
-    font-weight: 600;
-}
-
-.bill-status-paid {
-    color: var(--success);
-}
-
-.bill-status-partially_paid,
-.bill-status-unpaid {
-    color: var(--warning);
-}
-
-.bill-status-cancelled {
-    color: var(--text-muted);
-    text-decoration: line-through;
-}
-
-.ledger-cards {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
-}
-
-.ledger-section {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.ledger-section-header {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-secondary);
-    margin: 0;
-    padding: 6px 12px;
-    background: var(--bg-tertiary);
-    border-left: 3px solid var(--accent-primary);
-    border-radius: var(--radius-sm);
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.ledger-section-header::before {
-    content: '';
-    width: 4px;
-    height: 4px;
-    background: var(--accent-primary);
-    border-radius: 50%;
-    display: inline-block;
-    flex-shrink: 0;
-}
-
-.ledger-section-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 10px;
-    padding-left: 8px;
-}
-
-.ledger-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    padding: 10px 12px;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-}
-
-.ledger-card:hover {
-    border-color: var(--accent-primary);
-    box-shadow: 0 2px 8px var(--accent-glow);
-    transform: translateY(-1px);
-}
-
-.ledger-card-info {
-    flex: 1;
-    min-width: 0;
-}
-
-.ledger-card-name {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.ledger-card-actions {
-    display: flex;
-    gap: 4px;
-    flex-shrink: 0;
-}
-
-.ledger-card-actions .btn {
-    padding: 2px 6px;
-    font-size: 10px;
-}
-
-.ledger-edit-btn {
-    padding: 4px;
-    border: none;
-    background: transparent;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.ledger-edit-btn:hover {
-    background: var(--bg-tertiary);
-}
-
-.ledger-edit-icon {
-    width: 16px;
-    height: 16px;
-    display: block;
-}
-
-.edit-ledger-actions {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 12px;
-}
-
-.edit-ledger-actions-right {
-    display: flex;
-    gap: 8px;
-}
-
-.ledger-edit-delete-wrap {
-    display: inline-block;
-}
-
-.ledger-edit-delete-btn {
-    background: var(--danger);
-    color: white;
-}
-
-.ledger-edit-delete-btn:hover:not(:disabled) {
-    background: #b91c1c;
-}
-
-.ledger-edit-delete-btn:disabled,
-.ledger-edit-delete-btn.ledger-edit-delete-btn-has-entries {
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-    cursor: not-allowed;
-    opacity: 0.8;
-}
-
-/* Ledger Detail */
-.ledger-detail-header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 16px;
-    flex-shrink: 0;
-}
-
-.ledger-detail-title {
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-#ledgerDetailView {
-    overflow: hidden;
-    gap: 0;
-    min-height: 0;
-    padding: 0;
-}
-
-#ledgerDetailView.active {
-    height: 100%;
-    width: 100%;
-}
-
-#ledgerDetailView.active {
-    flex-direction: column;
-    min-height: 0;
-}
-
-#ledgerDetailView .ledger-detail-header {
-    flex-shrink: 0;
-    padding: 8px 12px;
-    margin-bottom: 4px;
-}
-
-/* Courier Payment Report: Bill Detail (drill-down from "View Details", same full-bleed
-   shell as Ledger Detail above, but the content is cards/tables rather than one grid, so
-   it needs its own scroll container instead of a single flex:1 grid). */
-#courierPaymentReportDetailView {
-    overflow: hidden;
-    gap: 0;
-    min-height: 0;
-    padding: 0;
-}
-
-#courierPaymentReportDetailView.active {
-    height: 100%;
-    width: 100%;
-    flex-direction: column;
-}
-
 .bill-detail-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     padding: 20px 32px 32px;
-}
-
-.bill-detail-header {
-    margin-bottom: 24px;
-}
-
-.bill-detail-header-top {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-}
-
-.bill-detail-title-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-}
-
-.bill-detail-title {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.bill-detail-subtitle {
-    margin-top: 4px;
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.bill-detail-stats-grid {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    margin-bottom: 24px;
-}
-
-/* This page packs more cards into the row than .stat-value's default 24px was sized
-   for (money strings like "Rs 312,450.00" plus the order-count card), so scale both
-   down here rather than shrinking .stat-value everywhere it's used (Dashboard etc.). */
-.bill-detail-stats-grid .stat-value {
-    font-size: 18px;
-}
-
-.bill-detail-stats-grid .stat-detail {
-    font-size: 12px;
-}
-
-.bill-detail-summary-grid {
-    display: grid;
-    grid-template-columns: minmax(0, 3fr) minmax(0, 3fr) minmax(0, 4fr);
-    gap: 20px;
-    margin-bottom: 24px;
-}
-
-/* Grid default align-items: stretch keeps the three cards the same height however
-   uneven their content is; the column flex lets the body take the slack below the
-   heading so the shorter cards fill rather than leaving the border floating. */
-.bill-detail-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 20px 22px;
-    display: flex;
-    flex-direction: column;
-}
-
-.bill-detail-card > *:last-child {
-    flex: 1;
-}
-
-.bill-detail-card h3 {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 14px;
-}
-
-.bill-detail-summary-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 0;
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.bill-detail-summary-row--total {
-    margin-top: 6px;
-    padding-top: 12px;
-    border-top: 1px solid var(--border-color);
-    font-weight: 700;
-    color: var(--text-primary);
-    font-size: 14px;
-}
-
-.bill-detail-progress-ring-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 20px;
-    height: 100%;
-    flex-wrap: wrap;
 }
 
 /* background (the 4-slice conic-gradient pie) is set inline per bill in
@@ -4340,31 +1361,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     color: var(--text-muted);
 }
 
-/* Legend rows are space-between label/value pairs, so they turn unreadable long before
-   they run out of box; the floor makes the row wrap the legend under the pie instead. */
-.progress-ring-legend {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    font-size: 13px;
-    min-width: 0;
-    flex: 1 1 200px;
-}
-
-.progress-ring-legend__item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.progress-ring-legend__label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    color: var(--text-secondary);
-}
-
 .progress-ring-legend__dot {
     width: 8px;
     height: 8px;
@@ -4372,1147 +1368,16 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     flex-shrink: 0;
 }
 
-.progress-ring-legend__value {
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.bill-detail-orders-section h3 {
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin-bottom: 12px;
-}
-
-/* display stays table-cell (not flex) so colspan still spans the full row width
-   instead of shrink-wrapping to content; centering is done via text-align/vertical-align
-   plus an inline-flex inner wrapper. */
-.table-loading-cell {
-    text-align: center;
-    vertical-align: middle;
-    min-height: 160px;
-    padding: 40px 20px !important;
-    color: var(--text-muted);
-}
-
-.table-loading-cell-inner {
-    display: inline-flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.table-loading-cell .content-loading-spinner {
-    width: 24px;
-    height: 24px;
-    border-width: 3px;
-    flex-shrink: 0;
-}
-
-#ledgerDetailGrid {
-    flex: 1;
-    min-height: 0;
-    height: 100%;
-}
-
-#ledgerDetailGrid.grid-container {
-    border-radius: 0;
-    border: none;
-    min-height: 0;
-}
-
-/* Folio dropdown in transactions */
-.folio-dropdown {
-    display: flex;
-    align-items: center;
-    height: 100%;
-    width: 100%;
-    gap: 4px;
-}
-
-.folio-display-text {
-    flex: 1;
-    min-width: 0;
-    padding: 4px 8px;
-    cursor: pointer;
-    border-radius: var(--radius-sm);
-    transition: var(--transition);
-    font-size: 14px;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-weight: 700;
-}
-
-.folio-display-text:hover {
-    background: var(--bg-tertiary);
-}
-
-.folio-goto-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 24px;
-    height: 24px;
-    min-width: 24px;
-    padding: 0;
-    line-height: 1;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    font-family: var(--font-primary);
-    font-size: 14px;
-    color: var(--text-secondary);
-    cursor: pointer;
-    transition: var(--transition);
-    flex-shrink: 0;
-}
-
-.folio-goto-btn:hover {
-    background: var(--accent-primary);
-    border-color: var(--accent-primary);
-    color: white;
-}
-
-.folio-dropdown-panel {
-    position: fixed;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-    z-index: 10000;
-    max-height: 280px;
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-}
-
-.folio-dropdown-option {
-    padding: 10px 12px;
-    font-size: 13px;
-    color: var(--text-primary);
-    cursor: pointer;
-    transition: background 0.15s ease;
-}
-
-.folio-dropdown-option:hover {
-    background: var(--bg-tertiary);
-}
-
-.folio-dropdown-option.selected {
-    background: var(--accent-glow);
-    color: var(--accent-primary);
-    font-weight: 600;
-    border-left: 3px solid var(--accent-primary);
-    padding-left: 9px;
-}
-
-/* Transaction required field highlighting */
-.ag-theme-alpine .transaction-required-field {
-    background-color: rgba(245, 158, 11, 0.15) !important;
-    border: 1px solid rgba(245, 158, 11, 0.5) !important;
-}
-
-/* The blank row at the foot of the transactions grid is where a new entry is typed.
-   Tinted and accented so it reads as the place to start, not as a saved entry
-   somebody left empty. Translucent so it sits on either theme's row colour. */
-.ag-theme-alpine .ag-row.transaction-new-row {
-    background-color: color-mix(in srgb, var(--accent-primary) 8%, transparent) !important;
-    box-shadow: inset 3px 0 0 var(--accent-primary);
-}
-
-/* Full-width divider rows (see withLedgerMonthRows) heading each calendar month's
-   entries so a long statement reads as month-by-month blocks. */
-.ag-theme-alpine .ledger-month-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    height: 100%;
-    padding: 0 16px;
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-secondary);
-    background: var(--grid-header-bg);
-    cursor: pointer;
-}
-
-.ag-theme-alpine .ledger-month-row-label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.ag-theme-alpine .ledger-month-row-label i {
-    font-size: 10px;
-    width: 10px;
-}
-
-.ag-theme-alpine .ledger-month-row-balance {
-    color: var(--text-primary);
-}
-
-.ag-theme-alpine .transaction-amount-cell,
-.ag-theme-alpine .bill-amount-cell {
-    color: var(--accent-primary);
-    font-weight: 600;
-    justify-content: flex-end;
-    text-align: right;
-}
-
-.ag-theme-alpine .transaction-row-num-header .ag-header-cell-label {
-    justify-content: center;
-}
-
-.ag-theme-alpine .transaction-row-num-cell {
-    color: var(--text-primary);
-    text-align: center;
-    justify-content: center;
-}
-
-.transaction-placeholder {
-    color: var(--text-muted);
-    font-style: italic;
-}
-
-.bill-cell-center {
-    display: flex;
-    justify-content: center;
-    width: 100%;
-}
-
-.bill-view-btn,
-.product-view-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: 13px;
-    color: var(--text-primary);
-    opacity: 0.85;
-    transition: var(--transition);
-}
-
-.bill-view-btn:hover,
-.product-view-btn:hover {
-    opacity: 1;
-    background: var(--bg-tertiary);
-}
-
-/* Row actions menu (triple dot) - shared by the transactions, bills and products grids */
-.transaction-menu-btn,
-.bill-menu-btn,
-.product-menu-btn {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    padding: 0;
-    background: transparent;
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    font-size: 14px;
-    color: var(--text-primary);
-    opacity: 0.85;
-    transition: var(--transition);
-}
-
-.transaction-menu-btn:hover,
-.transaction-menu-btn.open,
-.bill-menu-btn:hover,
-.bill-menu-btn.open,
-.product-menu-btn:hover,
-.product-menu-btn.open {
-    opacity: 1;
-    background: var(--bg-tertiary);
-    color: var(--text-primary);
-}
-
-.transaction-menu-panel,
-.bill-menu-panel,
-.product-menu-panel {
-    min-width: 160px;
-    padding: 4px;
-}
-
-.transaction-menu-panel .folio-dropdown-option,
-.bill-menu-panel .folio-dropdown-option,
-.product-menu-panel .folio-dropdown-option {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.transaction-menu-option-danger,
-.bill-menu-option-danger {
-    color: #dc2626;
-    border-radius: var(--radius-sm);
-}
-
-.transaction-menu-option-danger:hover,
-.bill-menu-option-danger:hover {
-    background: rgba(220, 38, 38, 0.1) !important;
-}
-
-/* Delete Confirmation Modal */
-.app-confirm-message {
-    margin: 0 0 20px;
-    font-size: 15px;
-    color: var(--text-primary);
-    line-height: 1.5;
-    white-space: pre-line;
-}
-
-.delete-confirm-modal-content {
-    max-width: 480px;
-}
-
-.btn-danger {
-    background: #dc2626;
-    color: white;
-    border: 1px solid #dc2626;
-    font-weight: 600;
-    transition: all 0.2s ease;
-}
-
-.btn-danger:hover {
-    background: #b91c1c;
-    border-color: #b91c1c;
-    transform: translateY(-1px);
-    box-shadow: 0 4px 12px rgba(220, 38, 38, 0.3);
-}
-
-.btn-danger:active {
-    background: #991b1b;
-    border-color: #991b1b;
-    transform: translateY(0);
-}
-
-.btn-danger:disabled {
-    opacity: 0.6;
-    cursor: not-allowed;
-    transform: none;
-}
-
-/* Delete confirmation modal buttons */
-.delete-confirm-modal-content .form-actions {
-    gap: 12px;
-    padding-top: 0;
-    border-top: none;
-    margin-top: 8px;
-}
-
-/* Month Summary Styles */
-.month-summary-container {
-    padding: 20px;
-    height: 100%;
-    overflow-y: auto;
-}
-
-#monthSummaryCards {
-    display: flex;
-    flex-direction: column;
-    gap: 32px;
-}
-
-.month-summary-year-section {
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.month-summary-year-heading {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0;
-    padding-bottom: 8px;
-    border-bottom: 2px solid var(--border-color);
-}
-
-.month-summary-cards-in-section {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
-}
-
-.month-summary-cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-    gap: 20px;
-}
-
-.month-summary-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 24px;
-    cursor: pointer;
-    transition: var(--transition);
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
-}
-
-.month-summary-card:hover {
-    border-color: var(--accent-primary);
-    box-shadow: 0 4px 16px var(--accent-glow);
-    transform: translateY(-2px);
-}
-
-.month-summary-card-header {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.month-summary-card-title {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.month-summary-card-period {
-    font-size: 13px;
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.month-summary-card-body {
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-}
-
-.month-summary-card-completed,
-.month-summary-card-warning {
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
-
-.month-summary-card-completed i {
-    color: var(--success);
-}
-
 /* Month Detail Styles */
-
-.month-detail-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 24px;
-    padding: 0 4px;
-    flex-shrink: 0;
-    flex-wrap: wrap;
-}
-
-.month-detail-header-left {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.month-detail-hero {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    padding: 10px 18px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-}
-
-.month-detail-hero-icon {
-    width: 40px;
-    height: 40px;
-    border-radius: var(--radius-md);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    color: var(--success);
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-    flex-shrink: 0;
-}
-
-.month-detail-hero-info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
-.month-detail-hero-label {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--text-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.03em;
-}
-
-.month-detail-hero-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--success);
-    font-family: var(--font-mono);
-}
-
-.month-detail-hero--negative .month-detail-hero-icon {
-    color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.month-detail-hero--negative .month-detail-hero-value {
-    color: var(--danger);
-}
-
-.month-detail-header h2 {
-    font-size: 20px;
-    font-weight: 600;
-    color: var(--text-primary);
-    margin: 0;
-}
-
-.month-detail-content {
-    padding: 0 4px;
-    height: 100%;
-    overflow-y: auto;
-}
-
-.month-detail-sections {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px 32px;
-    align-content: start;
-    max-width: 100%;
-}
-
-.month-detail-column {
-    display: flex;
-    flex-direction: column;
-    gap: 24px;
-    min-width: 0;
-}
-
-.month-detail-section {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    padding: 20px;
-    break-inside: avoid;
-    page-break-inside: avoid;
-    min-width: 0;
-}
-
-.month-detail-section-heading {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
-    margin: 0 0 14px 0;
-}
-
-.month-detail-section-icon {
-    width: 34px;
-    height: 34px;
-    border-radius: 50%;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 14px;
-    flex-shrink: 0;
-}
-
-.month-detail-section-icon--success {
-    color: var(--success);
-    background: color-mix(in srgb, var(--success) 16%, transparent);
-}
-
-.month-detail-section-icon--accent {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 16%, transparent);
-}
-
-.month-detail-section-icon--info {
-    color: var(--accent-secondary);
-    background: color-mix(in srgb, var(--accent-secondary) 16%, transparent);
-}
-
-.month-detail-section-icon--warning {
-    color: var(--warning);
-    background: color-mix(in srgb, var(--warning) 16%, transparent);
-}
-
-.month-detail-lines {
-    display: flex;
-    flex-direction: column;
-    gap: 0;
-    max-width: 100%;
-}
-
-.month-detail-line {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    gap: 16px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--border-color);
-    font-size: 14px;
-}
-
-@media (max-width: 720px) {
-    .month-detail-sections {
-        grid-template-columns: 1fr;
-    }
-}
-
-.month-detail-line:last-child {
-    border-bottom: none;
-}
-
-.month-detail-line-label {
-    color: var(--text-secondary);
-    font-weight: 500;
-}
-
-.month-detail-line-value {
-    color: var(--accent-primary);
-    font-weight: 600;
-    text-align: right;
-}
-
-.month-detail-line--head {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    border-bottom: 2px solid var(--border-color);
-    padding-bottom: 10px;
-}
-
-.month-detail-line--head .month-detail-line-label,
-.month-detail-line--head .month-detail-line-value {
-    color: var(--text-muted);
-}
-
-.month-detail-line--deduction .month-detail-line-value {
-    color: var(--danger);
-}
-
-.month-detail-line--subtotal {
-    margin: 0 -20px;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--border-color);
-    background: color-mix(in srgb, var(--success) 8%, transparent);
-    font-weight: 700;
-}
-
-.month-detail-line--subtotal .month-detail-line-label,
-.month-detail-line--subtotal .month-detail-line-value {
-    color: var(--text-primary);
-}
-
-.month-detail-line--final {
-    margin: 6px -20px -20px;
-    padding: 14px 20px;
-    border-bottom: none;
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-    background: var(--success);
-    font-weight: 700;
-    font-size: 15px;
-}
-
-.month-detail-line--final .month-detail-line-label,
-.month-detail-line--final .month-detail-line-value {
-    color: white;
-}
-
-.month-detail-line--final .month-detail-line-value {
-    font-size: 18px;
-}
-
-.month-detail-line--final.month-detail-line--negative {
-    background: var(--danger);
-}
-
-.collection-breakdown-product .month-detail-line-value {
-    color: var(--text-primary);
-}
-
-.collection-breakdown-toggle {
-    width: 100%;
-    background: none;
-    border: none;
-    border-bottom: 1px solid var(--border-color);
-    border-radius: 0;
-    font-family: inherit;
-    color: inherit;
-    text-align: inherit;
-    cursor: pointer;
-}
-
-.collection-breakdown-toggle:disabled {
-    cursor: default;
-}
-
-.collection-breakdown-group:last-of-type:not(.expanded) .collection-breakdown-toggle {
-    border-bottom: none;
-}
-
-.collection-breakdown-chevron {
-    display: inline-block;
-    margin-right: 6px;
-    transition: transform 0.15s ease;
-}
-
-.collection-breakdown-group.expanded .collection-breakdown-chevron {
-    transform: rotate(90deg);
-}
-
-.collection-breakdown-products {
-    display: none;
-    flex-direction: column;
-    padding-left: 18px;
-}
-
-.collection-breakdown-group.expanded .collection-breakdown-products {
-    display: flex;
-}
-
-.collection-breakdown-product {
-    font-size: 12px;
-    color: var(--text-secondary);
-}
-
-.collection-breakdown-product:last-child {
-    border-bottom: none;
-}
-
-.month-detail-stats {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-    gap: 20px;
-    margin-top: 24px;
-}
-
-.month-detail-sections + .month-detail-stats {
-    margin-top: 32px;
-}
-
-.month-detail-stats--compact {
-    margin: 0 0 16px;
-}
-
-.month-detail-stats--single {
-    grid-template-columns: 1fr;
-}
-
-.month-detail-dc-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 12px;
-    margin-bottom: 12px;
-}
-
-.month-detail-dc-box {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 14px 16px;
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    min-width: 0;
-}
-
-.month-detail-dc-label {
-    font-size: 12px;
-    font-weight: 500;
-    color: var(--text-muted);
-}
-
-.month-detail-dc-value {
-    font-size: 16px;
-    font-weight: 700;
-    color: var(--text-primary);
-    font-family: var(--font-mono);
-}
-
-.month-detail-stat-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 24px;
-    display: flex;
-    align-items: center;
-    gap: 20px;
-    transition: var(--transition);
-}
-
-.month-detail-stat-card:hover {
-    border-color: var(--accent-primary);
-    box-shadow: 0 4px 16px var(--accent-glow);
-    transform: translateY(-2px);
-}
-
-.month-detail-stat-icon {
-    font-size: 32px;
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: var(--bg-tertiary);
-    border-radius: var(--radius-md);
-    flex-shrink: 0;
-}
-
-.month-detail-stat-icon--accent {
-    color: var(--accent-primary);
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-}
-
-.month-detail-stat-icon--success {
-    color: var(--success);
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-}
-
-.month-detail-stat-icon--danger {
-    color: var(--danger);
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-}
-
-.month-detail-stat-icon--warning {
-    color: var(--warning);
-    background: color-mix(in srgb, var(--warning) 14%, transparent);
-}
-
-.month-detail-stats--compact .month-detail-stat-card {
-    padding: 16px 20px;
-}
-
-.month-detail-stats--compact .month-detail-stat-icon {
-    width: 46px;
-    height: 46px;
-    font-size: 22px;
-}
-
-.month-detail-stats--compact .month-detail-stat-value {
-    font-size: 19px;
-}
-
-.month-detail-stat-info {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    flex: 1;
-    min-width: 0;
-}
-
-.month-detail-stat-value {
-    font-size: 24px;
-    font-weight: 700;
-    color: var(--text-primary);
-    line-height: 1.2;
-}
-
-.month-detail-stat-label {
-    font-size: 14px;
-    color: var(--text-muted);
-    font-weight: 500;
-}
-
-.no-data-message {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--text-muted);
-    font-size: 16px;
-}
 
 /* ============================ Product Analytics ============================ */
 .pa-scroll {
     height: 100%;
     overflow-y: auto;
-    --pa-hero: #12855a;
-    --pa-hero-bg: rgba(18, 133, 90, 0.12);
-    --pa-zero: #cf5a4f;
-    --pa-zero-bg: rgba(207, 90, 79, 0.12);
-    --pa-avg: #5872bd;
-    --pa-avg-bg: rgba(88, 114, 189, 0.12);
-    --pa-info: #3f7fb8;
-    --pa-info-bg: rgba(63, 127, 184, 0.12);
-    --pa-amber: #b8862b;
-    --pa-amber-bg: rgba(184, 134, 43, 0.12);
-    --pa-gold: #d9a520;
-    --pa-silver: #9aa3ad;
-    --pa-bronze: #bd7a41;
-}
-
-/* --- header controls (Customize, Hero/Zero info) --- */
-.pa-customize,
-.pa-info {
-    position: relative;
-}
-
-/* Matches .orders-more-actions__menu (padding/shadow) so every dropdown menu in the app
-   reads as the same component. */
-.pa-pop {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 6px);
-    z-index: 45;
-    min-width: 200px;
-    padding: 6px;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    box-shadow: var(--shadow-lg);
-}
-
-.pa-pop[hidden] { display: none; }
-
-.pa-hero-def-pop {
-    width: 260px;
-    padding: 12px;
-    font-size: 12px;
-    line-height: 1.6;
-    color: var(--text-secondary);
-}
-
-.pa-pop-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    padding: 4px 8px;
-}
-
-.pa-pop label {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 12px;
-    font-size: 13px;
-    color: var(--text-primary);
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-}
-
-.pa-pop label input[type="checkbox"] {
-    accent-color: var(--accent-primary);
-}
-
-.pa-pop label:hover {
-    background: var(--bg-tertiary);
-}
-
-.pa-pop button {
-    padding: 8px 12px;
-    font: inherit;
-    font-size: 13px;
-    text-align: left;
-    color: var(--text-primary);
-    background: none;
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-}
-
-.pa-pop button:hover {
-    background: var(--bg-tertiary);
 }
 
 /* Time range control now lives in the app header row (see .header-actions
    pinned-height rules) — sized to match the other header controls there. */
-.pa-time { position: relative; }
-
-/* --- KPI cards --- */
-.pa-kpis {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 16px;
-    margin-bottom: 16px;
-}
-
-.pa-kpi {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    padding: 16px 18px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-left: 3px solid var(--pa-kpi-accent, var(--accent-primary));
-    border-radius: var(--radius-lg);
-}
-
-.pa-kpi--units { --pa-kpi-accent: var(--pa-hero); background: linear-gradient(120deg, var(--pa-hero-bg), var(--bg-card) 60%); }
-.pa-kpi--revenue { --pa-kpi-accent: var(--pa-info); background: linear-gradient(120deg, var(--pa-info-bg), var(--bg-card) 60%); }
-.pa-kpi--orders { --pa-kpi-accent: var(--accent-primary); background: linear-gradient(120deg, color-mix(in srgb, var(--accent-primary) 12%, transparent), var(--bg-card) 60%); }
-.pa-kpi--aov { --pa-kpi-accent: var(--pa-amber); background: linear-gradient(120deg, var(--pa-amber-bg), var(--bg-card) 60%); }
-
-.pa-kpi-top {
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 10px;
-}
-
-.pa-kpi-label { font-size: 13px; font-weight: 500; color: var(--text-secondary); }
-
-.pa-kpi-icon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    font-size: 13px;
-    color: var(--pa-kpi-accent, var(--accent-primary));
-    background: color-mix(in srgb, var(--pa-kpi-accent, var(--accent-primary)) 16%, transparent);
-    flex-shrink: 0;
-}
-
-.pa-kpi-value {
-    font-size: 26px;
-    font-weight: 700;
-    font-family: var(--font-mono);
-    color: var(--text-primary);
-    line-height: 1.1;
-}
-
-.pa-kpi-foot {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-}
-
-.pa-kpi-prev { font-size: 12px; color: var(--text-muted); }
-
-.pa-delta {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-}
-
-.pa-delta i { font-size: 9px; }
-.pa-delta--up { color: var(--pa-hero); }
-.pa-delta--down { color: var(--pa-zero); }
-.pa-delta--flat { color: var(--text-muted); }
-
-/* --- table --- */
-.pa-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
-}
-
-.pa-table-wrap { overflow-x: auto; }
-
-.pa-table {
-    width: 100%;
-    min-width: 860px;
-    border-collapse: collapse;
-}
-
-.pa-table th,
-.pa-table td {
-    padding: 13px 16px;
-    text-align: left;
-    vertical-align: middle;
-}
-
-.pa-thead-group th {
-    padding: 8px 16px 4px;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.pa-thead-group th:empty { border-bottom: none; }
-
-.pa-group-variants {
-    text-align: center !important;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-}
-
-.pa-thead-cols th {
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    border-bottom: 2px solid var(--border-color);
-    white-space: nowrap;
-}
-
-.pa-thead-cols th span {
-    display: block;
-    margin-top: 2px;
-    font-weight: 500;
-    text-transform: none;
-    letter-spacing: 0;
-    color: var(--text-muted);
-}
-
-.pa-col-size { text-align: center !important; white-space: nowrap; }
-.pa-col-rev, .pa-col-delta { white-space: nowrap; }
-
-.pa-table tbody tr {
-    border-bottom: 1px solid var(--border-color);
-    transition: background 0.12s ease;
-}
-
-.pa-table tbody tr:last-child { border-bottom: none; }
-.pa-table tbody tr:hover { background: color-mix(in srgb, var(--accent-primary) 5%, transparent); }
-
-.pa-col-rank { width: 52px; text-align: center !important; }
-.pa-rank { font-size: 13px; font-weight: 600; color: var(--text-muted); }
-
-.pa-medal {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 50%;
-    font-size: 12px;
-    font-weight: 700;
-    color: #fff;
-}
-
-.pa-medal--1 { background: var(--pa-gold); }
-.pa-medal--2 { background: var(--pa-silver); }
-.pa-medal--3 { background: var(--pa-bronze); }
-
 .pa-product { display: flex; align-items: center; gap: 12px; min-width: 220px; }
 
 .pa-thumb {
@@ -5536,87 +1401,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
 }
 
 .pa-product-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.pa-product-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.pa-product-sub { font-size: 12px; color: var(--text-muted); }
-
-.pa-col-total { width: 116px; }
-.pa-total-q { display: block; font-size: 18px; font-weight: 700; font-family: var(--font-mono); color: var(--text-primary); line-height: 1.1; }
-.pa-total-sub { display: block; margin-top: 3px; font-size: 11px; color: var(--text-muted); }
-
-.pa-col-rev { font-size: 14px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-
-.pa-col-delta .pa-delta-prev { display: block; font-size: 14px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.pa-col-delta .pa-delta { margin-top: 2px; }
-
-.pa-size-q { display: block; font-size: 14px; font-weight: 600; color: var(--text-primary); line-height: 1.1; }
-.pa-size-pct { display: block; margin-top: 2px; font-size: 11px; color: var(--text-muted); }
-.pa-size-empty { color: var(--text-muted); opacity: 0.5; }
-
-.pa-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 11px;
-    font-size: 12px;
-    font-weight: 600;
-    border-radius: 999px;
-    white-space: nowrap;
-}
-
-.pa-badge i { font-size: 10px; }
-.pa-badge--hero { color: var(--pa-hero); background: var(--pa-hero-bg); }
-.pa-badge--zero { color: var(--pa-zero); background: var(--pa-zero-bg); }
-.pa-badge--average { color: var(--pa-avg); background: var(--pa-avg-bg); }
-
-.pa-col-kebab { width: 40px; text-align: center !important; position: relative; }
-
-.pa-kebab {
-    width: 28px;
-    height: 28px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-    background: none;
-    border: none;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-}
-
-.pa-kebab:hover { background: color-mix(in srgb, var(--text-muted) 14%, transparent); color: var(--text-primary); }
-
-.pa-kebab-pop {
-    min-width: 160px;
-    z-index: 60;
-}
-
-.pa-empty {
-    text-align: center !important;
-    padding: 44px 16px !important;
-    color: var(--text-muted);
-}
-
-/* --- widgets --- */
-.pa-widgets {
-    display: grid;
-    grid-template-columns: 1.6fr 1fr 1fr 1fr;
-    gap: 16px;
-    margin-top: 20px;
-}
-
-.pa-widget {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    padding: 18px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    min-width: 0;
-}
-
-.pa-widget-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-.pa-widget-head h3 { margin: 0; font-size: 14px; font-weight: 700; color: var(--text-primary); }
 
 .pa-muted { color: var(--text-muted); font-size: 13px; }
 
@@ -5633,7 +1417,9 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
 .pa-chart-area { fill: color-mix(in srgb, var(--accent-primary) 14%, transparent); stroke: none; }
 .pa-chart-cur { fill: none; stroke: var(--accent-primary); stroke-width: 2; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .pa-chart-prev { fill: none; stroke: var(--text-muted); stroke-width: 1.5; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
-.pa-chart-dot { fill: var(--accent-primary); }
+.pa-chart-dot { fill: var(--accent-primary); stroke: var(--bg-card); stroke-width: 2; }
+.pa-chart-hit { fill: transparent; cursor: pointer; }
+.pa-chart-hit:hover { fill: color-mix(in srgb, var(--accent-primary) 25%, transparent); }
 .pa-chart-axis { fill: var(--text-muted); font-size: 10px; font-family: var(--font-mono); }
 
 .pa-trend-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
@@ -5650,192 +1436,16 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
 .pa-legend-val { color: var(--text-muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
 
 .pa-legend-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
-.pa-legend-dot--0 { background: var(--accent-primary); }
-.pa-legend-dot--1 { background: var(--accent-secondary); }
-.pa-legend-dot--2 { background: #a78bfa; }
-.pa-legend-dot--3 { background: #c4b5fd; }
-.pa-legend-dot--4 { background: var(--text-muted); }
-.pa-legend-dot--5 { background: color-mix(in srgb, var(--text-muted) 55%, transparent); }
-
-/* size table */
-.pa-size-table { width: 100%; border-collapse: collapse; }
-.pa-size-table th {
-    text-align: left;
-    padding: 6px 8px;
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.04em;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--border-color);
-}
-.pa-size-table td {
-    padding: 8px;
-    font-size: 13px;
-    color: var(--text-primary);
-    border-bottom: 1px solid var(--border-color);
-    font-variant-numeric: tabular-nums;
-}
-.pa-size-table tr:last-child td { border-bottom: none; }
-
-/* key insights */
-.pa-insight-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
-.pa-insight-list li { display: flex; align-items: flex-start; gap: 10px; }
-.pa-insight-list strong { display: block; font-size: 13px; color: var(--text-primary); }
-.pa-insight-list span { font-size: 12px; color: var(--text-muted); }
-
-.pa-insight-ic {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: 30px;
-    height: 30px;
-    border-radius: var(--radius-md);
-    font-size: 12px;
-    flex-shrink: 0;
-}
-
-.pa-insight-ic--hero { color: var(--pa-hero); background: var(--pa-hero-bg); }
-.pa-insight-ic--zero { color: var(--pa-zero); background: var(--pa-zero-bg); }
-.pa-insight-ic--info { color: var(--pa-info); background: var(--pa-info-bg); }
+.pa-legend-dot--0 { background: #2a78d6; }
+.pa-legend-dot--1 { background: #eb6834; }
+.pa-legend-dot--2 { background: #1baf7a; }
+.pa-legend-dot--3 { background: #eda100; }
+.pa-legend-dot--4 { background: #e87ba4; }
+.pa-legend-dot--5 { background: var(--text-muted); }
 
 /* --- responsive --- */
-@media (max-width: 1280px) {
-    .pa-widgets { grid-template-columns: 1fr 1fr; }
-}
-
-@media (max-width: 1080px) {
-    .pa-kpis { grid-template-columns: 1fr 1fr; }
-}
-
-@media (max-width: 680px) {
-    .pa-widgets { grid-template-columns: 1fr; }
-    .pa-kpis { grid-template-columns: 1fr; }
-}
 
 /* City Analytics - reuses .pa-card/.pa-table/.pa-widget-head/.pa-donut-wrap */
-
-.ca-main-grid { display: grid; grid-template-columns: 1.3fr 1fr; gap: 16px; margin: 16px 0; align-items: start; }
-
-.ca-city-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
-.ca-city-row { display: grid; grid-template-columns: 20px 1fr 3fr auto auto; align-items: center; gap: 10px; font-size: 13px; }
-.ca-city-rank { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.ca-city-name { color: var(--text-primary); font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ca-city-bar-track { height: 8px; border-radius: 4px; background: var(--border-color); overflow: hidden; }
-.ca-city-bar-fill { display: block; height: 100%; border-radius: 4px; background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary)); }
-.ca-city-pct { color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.ca-city-val { color: var(--text-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
-.ca-city-more { margin: 10px 0 0; font-size: 12px; color: var(--text-muted); }
-
-.ca-matrix-head { margin: 4px 0 10px; }
-.ca-matrix-table th, .ca-matrix-table td { text-align: right; white-space: nowrap; }
-.ca-matrix-table th:first-child, .ca-matrix-table td:first-child { text-align: left; white-space: normal; }
-.ca-matrix-product { display: flex; flex-direction: column; gap: 2px; }
-.ca-matrix-name { color: var(--text-primary); font-weight: 500; }
-.ca-matrix-sub { color: var(--text-muted); font-size: 11px; }
-.ca-matrix-empty { color: var(--text-muted); }
-.ca-matrix-total { font-weight: 700; color: var(--text-primary); }
-
-@media (max-width: 1080px) {
-    .ca-main-grid { grid-template-columns: 1fr; }
-}
-
-.delete-confirm-modal-content .btn-secondary {
-    min-width: 100px;
-}
-
-.delete-confirm-modal-content .btn-danger {
-    min-width: 100px;
-}
-
-/* Load Sheet Logs view */
-.load-sheet-logs-container {
-    display: flex;
-    flex-direction: column;
-    height: 100%;
-    overflow: hidden;
-}
-
-.load-sheet-logs-toolbar {
-    padding: 12px 0;
-    flex-shrink: 0;
-}
-
-.load-sheet-logs-table-wrap {
-    flex: 1;
-    overflow: auto;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background: var(--bg-card);
-}
-
-.load-sheet-logs-table {
-    width: 100%;
-    table-layout: fixed;
-    border-collapse: collapse;
-    font-size: 14px;
-}
-
-.load-sheet-logs-table th,
-.load-sheet-logs-table td {
-    width: 16.66%;
-    padding: 12px 16px;
-    text-align: left;
-    border-bottom: 1px solid var(--border-color);
-}
-
-.load-sheet-logs-table .load-sheet-order-numbers-cell {
-    max-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    cursor: default;
-}
-
-.load-sheet-logs-table th {
-    background: var(--bg-secondary);
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.load-sheet-logs-table tbody tr:hover {
-    background: var(--bg-tertiary);
-}
-
-.load-sheet-actions-cell {
-    white-space: nowrap;
-}
-
-.load-sheet-actions-cell .btn {
-    padding: 6px 10px;
-    margin-right: 6px;
-}
-
-.load-sheet-actions-cell .btn:last-child {
-    margin-right: 0;
-}
-
-.load-sheet-actions-cell .btn i {
-    font-size: 1em;
-}
-
-.load-sheet-logs-toolbar .btn + .btn {
-    margin-left: 8px;
-}
-
-.load-sheet-logs-empty {
-    padding: 32px 16px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 14px;
-}
-
-/* Advance amount cell: amount with a status indicator dot */
-.advance-cell {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-}
 
 .advance-dot {
     display: inline-block;
@@ -5845,85 +1455,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     flex-shrink: 0;
     box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.12);
     cursor: help;
-}
-
-/* Bulk Text Entry */
-.bulk-entry-help {
-    background: var(--bg-secondary, #f7f8fa);
-    border: 1px solid var(--border-color, #e5e7eb);
-    border-radius: 6px;
-    padding: 10px 12px;
-    margin-bottom: 12px;
-    font-size: 12.5px;
-    color: var(--text-muted, #555);
-}
-
-.bulk-entry-help p { margin: 0 0 6px; }
-
-.bulk-entry-help ul {
-    margin: 6px 0 0;
-    padding-left: 18px;
-}
-
-.bulk-entry-help li { margin: 3px 0; }
-
-.bulk-entry-help code {
-    background: rgba(0, 0, 0, 0.06);
-    border-radius: 3px;
-    padding: 1px 5px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 12px;
-}
-
-.bulk-entry-label-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin-bottom: 6px;
-}
-
-.bulk-entry-info-wrap {
-    position: relative;
-}
-
-.bulk-entry-info-btn {
-    background: none;
-    border: 1px solid var(--border-color, #e5e7eb);
-    border-radius: 999px;
-    padding: 2px 10px;
-    font-size: 12px;
-    color: var(--text-muted, #555);
-    cursor: pointer;
-}
-
-.bulk-entry-info-btn:hover {
-    background: var(--bg-secondary, #f7f8fa);
-}
-
-.bulk-entry-info-card {
-    display: none;
-    position: absolute;
-    top: 100%;
-    right: 0;
-    margin-top: 6px;
-    z-index: 20;
-    width: 380px;
-    max-width: min(380px, 90vw);
-    box-shadow: var(--shadow-lg);
-}
-
-.bulk-entry-info-card.open {
-    display: block;
-}
-
-.bulk-entry-textarea {
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    font-size: 13px;
-    line-height: 1.5;
-    resize: none;
-    overflow: hidden;
-    width: 100%;
 }
 
 .bulk-entry-validation {
@@ -5955,467 +1486,9 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
    Order Fulfillment view
    ============================================ */
 
-/* Lives in the header row, left of Export/Refresh - so it lays out inline and pins its
-   controls to the same 36px as the rest of the header toolbar, rather than the stacked-label
-   card it used to be above the table. */
-.fulfillment-filters-bar {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-}
-
-.fulfillment-body {
-    display: flex;
-    align-items: stretch;
-    gap: 20px;
-    flex: 1;
-    min-height: 0;
-}
-
-.fulfillment-table-panel {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-lg);
-    display: flex;
-    flex-direction: column;
-    /* Not clipped: the courier dropdown in the toolbar has to be able to overflow the panel.
-       The table's own rounded bottom corners are handled on .fulfillment-table-wrap. */
-    overflow: visible;
-}
-
-.fulfillment-table-toolbar {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    padding: 14px 18px;
-    border-bottom: 1px solid var(--border-color);
-    flex-wrap: wrap;
-}
-
-.fulfillment-select-all {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: var(--text-secondary);
-    cursor: pointer;
-}
-
-.fulfillment-link-btn {
-    background: none;
-    border: none;
-    color: var(--accent-primary);
-    font-size: 13px;
-    font-weight: 600;
-    cursor: pointer;
-    padding: 0;
-}
-
-.fulfillment-table-toolbar-spacer {
-    flex: 1;
-}
-
-.fulfillment-toolbar-stat {
-    font-size: 13px;
-    color: var(--text-secondary);
-    white-space: nowrap;
-}
-
-.fulfillment-toolbar-badge {
-    background: var(--accent-glow);
-    color: var(--accent-primary);
-    font-size: 12px;
-    font-weight: 600;
-    padding: 4px 10px;
-    border-radius: 999px;
-    white-space: nowrap;
-}
-
-.fulfillment-table-wrap {
-    flex: 1;
-    min-height: 0;
-    overflow: auto;
-    border-radius: 0 0 var(--radius-lg) var(--radius-lg);
-}
-
-.fulfillment-table {
-    width: 100%;
-    border-collapse: collapse;
-    /* Wide enough for all 10 columns (Courier City + Risk/Customer Status added since this
-       was first set) to sit at their natural width - below this, the browser was shrinking
-       Order ID/Name under their content width and wrapping them mid-word instead. */
-    min-width: 1360px;
-}
-
-.fulfillment-table th {
-    text-align: left;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: .5px;
-    color: var(--text-muted);
-    font-weight: 600;
-    padding: 10px 14px;
-    border-bottom: 1px solid var(--border-color);
-    background: var(--bg-tertiary);
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    white-space: nowrap;
-}
-
-.fulfillment-table td {
-    padding: 12px 14px;
-    font-size: 13px;
-    color: var(--text-primary);
-    border-bottom: 1px solid var(--border-color);
-    vertical-align: middle;
-}
-
-.fulfillment-table tbody tr:hover {
-    background: var(--bg-tertiary);
-}
-
-.fulfillment-table tbody tr.fulfillment-row--selected {
-    background: rgba(37, 99, 235, .08);
-}
-
-.fulfillment-col-check {
-    width: 44px;
-}
-
-.fulfillment-col-actions {
-    width: 60px;
-    text-align: center;
-}
-
-.fulfillment-col-orderid {
-    white-space: nowrap;
-}
-
-.fulfillment-col-name {
-    max-width: 160px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.fulfillment-order-id {
-    font-weight: 700;
-    color: var(--accent-primary);
-    font-family: var(--font-mono);
-}
-
-.fulfillment-th-risk .lucide,
-.fulfillment-th-order-type .lucide,
-.fulfillment-th-cod .lucide,
-.fulfillment-th-courier-city .lucide {
-    width: 12px;
-    height: 12px;
-    vertical-align: -2px;
-    margin-left: 2px;
-    cursor: help;
-}
-
-.fulfillment-actions-cell {
-    position: relative;
-    text-align: center;
-}
-
-.fulfillment-col-cod {
-    white-space: nowrap;
-}
-
-/* Print Airway Bill: per-row Print button */
-.print-awb-print-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    white-space: nowrap;
-}
-
-.print-awb-print-btn .lucide {
-    width: 14px;
-    height: 14px;
-}
-
-/* Order Fulfillment: live booking progress screen (#orderFulfillmentProgressView) */
-.fulfillment-progress-head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    margin-bottom: 18px;
-}
-
-.fulfillment-progress-head-titles {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.fulfillment-progress-title {
-    margin: 0;
-    font-size: 18px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.fulfillment-progress-pill {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 4px 12px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 600;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-}
-
-.fulfillment-progress-pill::before {
-    content: "";
-    width: 7px;
-    height: 7px;
-    border-radius: 50%;
-    background: currentColor;
-}
-
-.fulfillment-progress-pill--live {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    color: var(--accent-primary);
-}
-
-.fulfillment-progress-pill--live::before {
-    animation: pulse-dot 1.4s ease-in-out infinite;
-}
-
-.fulfillment-progress-pill--done {
-    background: color-mix(in srgb, var(--success) 16%, transparent);
-    color: var(--success);
-}
-
-.fulfillment-progress-pill--warn {
-    background: color-mix(in srgb, var(--warning) 18%, transparent);
-    color: var(--warning);
-}
-
 @keyframes pulse-dot {
     0%, 100% { opacity: 1; }
     50% { opacity: 0.3; }
-}
-
-.fulfillment-progress-courier {
-    font-size: 13px;
-    color: var(--text-muted);
-}
-
-.fulfillment-progress-summary {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-    gap: 14px;
-    margin-bottom: 12px;
-}
-
-.fulfillment-progress-stat {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px 16px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.fulfillment-progress-stat-label {
-    font-size: 11px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: .4px;
-    color: var(--text-muted);
-}
-
-.fulfillment-progress-stat-value {
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-primary);
-}
-
-.fulfillment-progress-stat-value--ok { color: var(--success); }
-.fulfillment-progress-stat-value--fail { color: var(--danger); }
-
-.fulfillment-progress-bar {
-    height: 6px;
-    border-radius: 999px;
-    background: var(--bg-tertiary);
-    overflow: hidden;
-    margin-bottom: 18px;
-}
-
-.fulfillment-progress-bar-fill {
-    height: 100%;
-    width: 0;
-    border-radius: 999px;
-    background: var(--accent-primary);
-    transition: width .35s ease;
-}
-
-.fulfillment-progress-list {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding-right: 4px;
-}
-
-.fulfillment-progress-row {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 10px 14px;
-    padding: 12px 16px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.fulfillment-progress-row[data-state="booking"] {
-    border-color: color-mix(in srgb, var(--accent-primary) 45%, var(--border-color));
-    background: color-mix(in srgb, var(--accent-primary) 5%, var(--bg-card));
-}
-
-.fulfillment-progress-row[data-state="fail"] {
-    border-color: color-mix(in srgb, var(--danger) 40%, var(--border-color));
-}
-
-.fulfillment-progress-row-icon {
-    display: flex;
-    width: 22px;
-    height: 22px;
-    flex-shrink: 0;
-    align-items: center;
-    justify-content: center;
-    color: var(--text-muted);
-}
-
-.fulfillment-progress-row-icon .lucide {
-    width: 20px;
-    height: 20px;
-}
-
-.fulfillment-progress-row[data-state="ok"] .fulfillment-progress-row-icon { color: var(--success); }
-.fulfillment-progress-row[data-state="fail"] .fulfillment-progress-row-icon { color: var(--danger); }
-.fulfillment-progress-row[data-state="booking"] .fulfillment-progress-row-icon {
-    color: var(--accent-primary);
-    animation: spin 0.8s linear infinite;
-}
-
-.fulfillment-progress-row-main {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-    flex: 1;
-}
-
-.fulfillment-progress-row-order {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.fulfillment-progress-row-sub {
-    font-size: 12px;
-    color: var(--text-muted);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.fulfillment-progress-row-status {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-shrink: 0;
-}
-
-.fulfillment-progress-badge {
-    padding: 3px 10px;
-    border-radius: 999px;
-    font-size: 11px;
-    font-weight: 600;
-    background: var(--bg-tertiary);
-    color: var(--text-muted);
-}
-
-.fulfillment-progress-badge--ok {
-    background: color-mix(in srgb, var(--success) 14%, transparent);
-    color: var(--success);
-}
-
-.fulfillment-progress-badge--fail {
-    background: color-mix(in srgb, var(--danger) 14%, transparent);
-    color: var(--danger);
-}
-
-.fulfillment-progress-badge--booking {
-    background: color-mix(in srgb, var(--accent-primary) 14%, transparent);
-    color: var(--accent-primary);
-}
-
-.fulfillment-progress-row-tracking {
-    font-size: 12px;
-    font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
-    color: var(--text-primary);
-}
-
-.fulfillment-progress-row-error {
-    font-size: 12px;
-    color: var(--danger);
-    max-width: 320px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.fulfillment-progress-awb-btn {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex-shrink: 0;
-    padding: 6px 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-sm);
-    background: var(--bg-secondary);
-    color: var(--text-primary);
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-}
-
-.fulfillment-progress-awb-btn:hover {
-    border-color: var(--accent-primary);
-    color: var(--accent-primary);
-}
-
-.fulfillment-progress-awb-btn .lucide {
-    width: 14px;
-    height: 14px;
-}
-
-.fulfillment-progress-footer {
-    display: flex;
-    justify-content: flex-end;
-    gap: 12px;
-    padding-top: 16px;
-    margin-top: 16px;
-    border-top: 1px solid var(--border-color);
 }
 
 /* A full street address in fulfillmentPickupAddressLabel routinely outruns this inline
@@ -6424,23 +1497,6 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
    text-overflow below never got the chance to engage; min-width: 0 is what actually lets
    it shrink and clip. Full text stays reachable via the select's own title (see
    renderFulfillmentPickupAddresses). */
-/* Matches .fulfillment-filter-group select's height/border/background exactly - both sit
-   in the same filters bar and read as one row of controls. */
-#fulfillmentPickupSelect {
-    min-width: 0;
-    width: 180px;
-    height: 40px;
-    padding: 0 12px;
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    background-color: var(--bg-secondary);
-    color: var(--text-primary);
-    font-family: var(--font-primary);
-    font-size: 13px;
-    overflow: hidden;
-    white-space: nowrap;
-    text-overflow: ellipsis;
-}
 
 .fulfillment-courier-logo-chip {
     width: 30px;
@@ -6471,20 +1527,9 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     flex-shrink: 0;
 }
 
-/* Courier / pickup / Fulfill controls, shown between the filter strip and the table while
-   rows are selected - the bulk-actions bar Polaris would otherwise overlay the header with is
-   hidden for every .orders-table-card (see .Polaris-IndexTable__BulkActionsWrapper). */
-.fulfillment-selection-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 8px 12px;
-    border-top: 1px solid var(--p-color-border-secondary);
-    flex-wrap: wrap;
-}
-
-.fulfillment-pickup-group {
-    min-width: 220px;
+.fulfillment-panel {
+    width: 320px;
+    padding: 12px;
 }
 
 .bulk-entry-line-text {
@@ -6518,223 +1563,10 @@ body.orders-table-fullscreen #ordersView .orders-table-card {
     font-weight: 500;
 }
 
-.bulk-entry-msg {
-    padding: 10px 12px;
-    font-size: 13px;
-}
-
-.bulk-entry-msg-error { color: #ef4444; }
-
-.bulk-entry-progress {
-    margin-top: 10px;
-    padding: 8px 12px;
-    border-radius: 6px;
-    font-size: 13px;
-    font-weight: 500;
-    background: var(--bg-secondary, #f1f5f9);
-    color: var(--text-muted, #475569);
-}
-
-.bulk-entry-progress-ok {
-    background: rgba(34, 197, 94, 0.12);
-    color: #16a34a;
-}
-
-.bulk-entry-progress-error {
-    background: rgba(239, 68, 68, 0.12);
-    color: #dc2626;
-}
-
-/* Settings */
-#settingsView {
-    overflow-y: auto;
-}
-
 .settings-container {
     max-width: 720px;
     margin: 0 auto;
     padding: 8px 4px;
-}
-
-.settings-section {
-    margin-bottom: 28px;
-}
-
-.settings-section__title {
-    font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-    color: var(--text-muted);
-    margin-bottom: 10px;
-}
-
-.settings-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 16px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.settings-section__desc {
-    margin: 0 0 10px;
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.settings-couriers-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.settings-couriers-row {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 14px 16px;
-}
-
-.settings-couriers-row__head {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-}
-
-.settings-couriers-row__toggle {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary);
-    cursor: pointer;
-    user-select: none;
-}
-
-.settings-couriers-row__toggle input {
-    cursor: pointer;
-}
-
-.settings-couriers-row__ledger {
-    font-size: 12px;
-    color: var(--text-muted);
-    flex-shrink: 0;
-}
-
-.settings-couriers-row__body {
-    margin-top: 14px;
-    padding-top: 14px;
-    border-top: 1px solid var(--border-color);
-}
-
-.settings-couriers-row__body .form-group {
-    margin-bottom: 12px;
-}
-
-.settings-couriers-row__actions {
-    display: flex;
-    justify-content: flex-end;
-}
-
-.settings-row + .settings-row {
-    margin-top: 8px;
-}
-
-.settings-row__text {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.settings-row__label {
-    font-size: 14px;
-    font-weight: 500;
-    color: var(--text-primary);
-}
-
-.settings-row__hint {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.settings-inline-actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-top: 8px;
-}
-
-.settings-fiscal-preview {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    padding: 12px 14px;
-    background: var(--bg-tertiary);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    font-size: 13px;
-    color: var(--text-secondary);
-}
-
-.settings-fiscal-preview strong {
-    color: var(--text-primary);
-}
-
-.settings-users-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.settings-user-row {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 12px 16px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.settings-user-row__email {
-    font-size: 14px;
-    color: var(--text-primary);
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.settings-user-row__controls {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    flex-shrink: 0;
-}
-
-.settings-user-row--inactive .settings-user-row__email {
-    color: var(--text-muted);
-    text-decoration: line-through;
-}
-
-.settings-add-user-form,
-#settingsFiscalForm,
-#settingsIntegrationsForm {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    padding: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 16px;
 }
 
 /* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
@@ -6760,18 +1592,6 @@ body.admin-portal-page {
     border-bottom: 1px solid var(--border-color);
 }
 
-.admin-portal-header__actions {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
-.admin-portal-header__brand {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-}
-
 .admin-portal-header__logo {
     width: 36px;
     height: 36px;
@@ -6786,84 +1606,6 @@ body.admin-portal-page {
 
 .admin-portal-section {
     margin-bottom: 32px;
-}
-
-.admin-portal-section__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-}
-
-.admin-portal-section__header .settings-section__title {
-    margin: 0;
-}
-
-.admin-portal-empty {
-    padding: 24px;
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 14px;
-    background: var(--bg-card);
-    border: 1px dashed var(--border-color);
-    border-radius: var(--radius-md);
-}
-
-.admin-org-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-}
-
-.admin-org-card {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    padding: 14px 18px;
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md);
-    transition: var(--transition);
-    cursor: pointer;
-}
-
-.admin-org-detail-heading {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-}
-
-.admin-org-detail-heading .settings-section__title {
-    margin: 0;
-}
-
-.admin-org-card:hover {
-    border-color: var(--accent-primary);
-}
-
-.admin-org-card__info {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    min-width: 0;
-}
-
-.admin-org-card__name {
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--text-primary);
-}
-
-.admin-org-card__meta {
-    font-size: 12px;
-    color: var(--text-muted);
-}
-
-.admin-org-card__actions {
-    display: flex;
-    gap: 8px;
-    flex-shrink: 0;
 }
 
 /* Sidebar user menu (frontend/js/app-core.js's initUserMenu) - who's logged
@@ -6994,64 +1736,15 @@ body.admin-portal-page {
     justify-content: center;
 }
 
-.mobile-nav-toggle__bars,
-.mobile-nav-toggle__bars::before,
-.mobile-nav-toggle__bars::after {
-    display: block;
-    width: 18px;
-    height: 2px;
-    background: var(--text-primary);
-    border-radius: 2px;
-}
-
-.mobile-nav-toggle__bars {
-    position: relative;
-}
-
-.mobile-nav-toggle__bars::before,
-.mobile-nav-toggle__bars::after {
-    content: '';
-    position: absolute;
-    left: 0;
-}
-
-.mobile-nav-toggle__bars::before { top: -6px; }
-.mobile-nav-toggle__bars::after { top: 6px; }
-
-@media (max-width: 1280px) {
-    /* Toolbar buttons drop their shared fixed width and shrink to their labels. */
-    .header-actions #ordersDateRangeBtn,
-    .header-actions #ordersMoreActionsBtn {
-        width: auto;
-    }
-
-}
-
 @media (max-width: 1024px) {
-    .content-area {
-        padding: 20px;
-    }
-
     .header {
         padding: 10px 14px;
         gap: 10px;
     }
 
-    .header-actions #ordersDateRangeBtn,
-    .header-actions #ordersMoreActionsBtn {
-        max-width: 8.5em;
-        padding-left: 10px;
-        padding-right: 10px;
-    }
+    
 
-    /* Two-column modal forms are cramped well before the modal itself shrinks. */
-    .transaction-entry-sides {
-        grid-template-columns: 1fr;
-    }
-
-    .modal-content.transaction-entry-modal-content {
-        width: 600px;
-    }
+    
 }
 
 /* ---- Mobile ---- */
@@ -7068,6 +1761,10 @@ body.admin-portal-page {
         padding-right: max(12px, env(safe-area-inset-right));
     }
 
+    .header-title {
+        min-width: 0;
+    }
+
     .header-title h1 {
         font-size: 16px;
     }
@@ -7081,10 +1778,7 @@ body.admin-portal-page {
         padding-bottom: 2px;
     }
 
-    .header-actions #ordersDateRangeBtn,
-    .header-actions #ordersMoreActionsBtn {
-        max-width: none;
-    }
+    
 
     .content-area {
         padding: 12px;
@@ -7093,47 +1787,17 @@ body.admin-portal-page {
         padding-bottom: max(12px, env(safe-area-inset-bottom));
     }
 
-    .stats-grid {
-        grid-template-columns: 1fr;
-        gap: 12px;
-    }
-
-    /* Grids keep full-size columns and scroll; just give them usable height. */
-    .grid-container {
-        min-height: 60vh;
-    }
-
-    /* Near-full-bleed modals - a centred 90% box wastes edge space on a phone. */
-    .modal-content,
-    #deliveryStatusReportModal .modal-content,
-    .modal-content.transaction-entry-modal-content {
-        width: 100%;
-        max-width: none;
-        height: auto;
-        max-height: 92vh;
-        border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-        margin-top: auto;
-    }
+    
 
     .modal {
         align-items: flex-end;
     }
 
-    .modal-header,
-    .modal-body {
-        padding-left: 16px;
-        padding-right: 16px;
-    }
+    
 
-    .modal-header h2 {
-        font-size: 17px;
-    }
+    
 
-    .settings-row {
-        flex-direction: column;
-        align-items: flex-start;
-        gap: 12px;
-    }
+    
 
     .settings-container {
         padding: 0;
@@ -7146,23 +1810,12 @@ body.admin-portal-page {
         min-height: 40px;
     }
 
-    /* iOS Safari auto-zooms on focus for inputs under 16px; 16 keeps the page put. */
-    .form-group input,
-    .form-group select,
-    .form-group textarea,
-    .transaction-date-filter,
-    .search-box input {
-        font-size: 16px;
-    }
-
     .orders-more-actions__menu {
         min-width: 220px;
         max-width: calc(100vw - 24px);
     }
 
-    .date-range-menu {
-        max-width: calc(100vw - 24px);
-    }
+    
 }
 
 /* =====================================================================
@@ -7170,18 +1823,6 @@ body.admin-portal-page {
    Metrics strip + status view-tabs + a framed table card wrapping the
    existing AG Grid.
    ===================================================================== */
-
-body:has(#ordersView.active) .content-area,
-body:has(#orderFulfillmentView.active) .content-area {
-    background: var(--bg-secondary);
-}
-
-#ordersView.active,
-#orderFulfillmentView.active {
-    padding: 16px;
-    gap: 12px;
-    background: transparent;
-}
 
 .metrics-strip {
     display: flex;
@@ -7222,7 +1863,32 @@ body:has(#orderFulfillmentView.active) .content-area {
     color: var(--danger);
 }
 
-.orders-table-card {
+.metrics-strip--wrap {
+    flex-wrap: wrap;
+    overflow: visible;
+}
+
+.metrics-strip--wrap .metric {
+    flex: 1 1 160px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.report-table {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    overflow: auto;
+}
+
+.report-table .Polaris-DataTable__Cell--flagged {
+    background: var(--p-color-bg-surface-critical);
+}
+
+.metric__detail {
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.table-card {
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -7258,7 +1924,7 @@ body:has(#orderFulfillmentView.active) .content-area {
     width: fit-content;
 }
 
-.orders-table-empty {
+.table-empty {
     padding: 40px 0;
     text-align: center;
     color: var(--text-muted);
@@ -7270,22 +1936,22 @@ body:has(#orderFulfillmentView.active) .content-area {
    carries a -4px top/bottom margin (a hit-area compaction trick), which throws off
    translateY(-50%) math against the row's height but is symmetric and so a no-op for
    flex centering (which centers on the margin box). */
-.orders-index-filters-wrap {
+.table-index-filters {
     display: flex;
     align-items: center;
 }
-.orders-index-filters-wrap .Polaris-IndexFilters__IndexFiltersWrapper {
+.table-index-filters .Polaris-IndexFilters__IndexFiltersWrapper {
     flex: 1;
     min-width: 0;
 }
-.orders-index-filters-wrap .Polaris-Button {
+.table-index-filters .Polaris-Button {
     margin-right: 12px;
 }
 
 /* IndexTable sizes each column from its header text width, which is often narrower than
    an editable amount cell's content (e.g. "Total" vs "12,146.00") - widen those inputs so
    the column grows to fit instead of clipping the value. */
-.orders-table-card .Polaris-TextField--borderless {
+.table-card .Polaris-TextField--borderless {
     min-width: 90px;
 }
 
@@ -7294,20 +1960,20 @@ body:has(#orderFulfillmentView.active) .content-area {
 }
 
 /* IndexTable's own scroll container (.Polaris-IndexTable-ScrollContainer) already has
-   overflow-y:auto, but none of the three wrapper divs between it and .orders-table-card
+   overflow-y:auto, but none of the three wrapper divs between it and .table-card
    opt into the flex layout - they just size to their content (all rows, unclamped), which
-   then gets clipped by .orders-table-card's overflow:hidden with no way to scroll to the
+   then gets clipped by .table-card's overflow:hidden with no way to scroll to the
    rest. Make each level flex so the scroll container actually gets a bounded height and
    becomes the one thing that scrolls, same as the old AG Grid body did. */
-.orders-table-card .Polaris-IndexTable,
-.orders-table-card .Polaris-IndexTable__IndexTableWrapper {
+.table-card .Polaris-IndexTable,
+.table-card .Polaris-IndexTable__IndexTableWrapper {
     display: flex;
     flex-direction: column;
     flex: 1 1 auto;
     min-height: 0;
 }
 
-.orders-table-card .Polaris-IndexTable-ScrollContainer {
+.table-card .Polaris-IndexTable-ScrollContainer {
     flex: 1 1 auto;
     min-height: 0;
     position: relative;
@@ -7322,7 +1988,7 @@ body:has(#orderFulfillmentView.active) .content-area {
    height, so there's nothing but this row's own background for either row's edge to be a hair
    off from. Sits behind both (z-index below their 45/50) and takes 0 layout space via the
    negative margin, so it never pushes the real table content down. */
-.orders-table-card .Polaris-IndexTable-ScrollContainer::before {
+.table-card .Polaris-IndexTable-ScrollContainer::before {
     content: '';
     position: sticky;
     top: 0;
@@ -7352,9 +2018,20 @@ body:has(#orderFulfillmentView.active) .content-area {
    at the backdrop's bottom edge instead (same height formula as ::before above), and stack it
    below the backdrop (40) so its slide-in emerges from under the pinned rows rather than
    crossing over them - Polaris's own z-index is 400, well above everything here. */
-.orders-table-card .Polaris-IndexTable__LoadingPanel {
+.table-card .Polaris-IndexTable__LoadingPanel {
     top: calc(var(--orders-sticky-top, 0px) + var(--orders-sticky-filters-height, 0px) + 4px);
     z-index: 35;
+}
+
+/* Tables without a filter row never get --orders-sticky-top set, so let the panel sit over
+   the header the way Polaris intends instead of hiding under it. */
+.table-card .Polaris-IndexTable:not(:has(#__filters__)) .Polaris-IndexTable__LoadingPanel {
+    top: 0;
+    z-index: 60;
+}
+
+.table-card .Polaris-IndexTable__LoadingPanelRow {
+    background: var(--p-color-bg-surface-secondary);
 }
 
 /* Pin the column-name row and the filter row (both real rows inside that same scrolling
@@ -7366,7 +2043,7 @@ body:has(#orderFulfillmentView.active) .content-area {
    backdrop/input (10-30, --pc-text-field-backdrop/--pc-select-input etc.) escapes straight up
    to this shared stacking context instead of stopping at the cell, and would otherwise paint
    over these sticky rows while scrolling. */
-.orders-table-card .Polaris-IndexTable thead th {
+.table-card .Polaris-IndexTable thead th {
     position: sticky;
     top: 0;
     z-index: 50;
@@ -7381,6 +2058,11 @@ body:has(#orderFulfillmentView.active) .content-area {
        physical pixels on a given scroll frame and flash a hairline gap between them mid-scroll,
        though they land back flush at rest. Forcing both onto the GPU with a stable transform
        layer keeps their rounding in sync instead of drifting independently frame to frame. */
+}
+
+/* Only tables with a filter row need the compositing trick above - on their own, the
+   per-th layers show a hairline seam at fractional column boundaries. */
+.table-card .Polaris-IndexTable:has(#__filters__) thead th {
     will-change: transform;
 }
 
@@ -7388,7 +2070,7 @@ body:has(#orderFulfillmentView.active) .content-area {
    moment a row is selected, hiding the column names and duplicating the selection count this
    app already shows in the .orders-aggregate-row bar - all our bulk actions live in the "More
    actions" menu instead, so the bar has nothing left to show. */
-.orders-table-card .Polaris-IndexTable__BulkActionsWrapper {
+.table-card .Polaris-IndexTable__BulkActionsWrapper {
     display: none;
 }
 
@@ -7398,13 +2080,16 @@ body:has(#orderFulfillmentView.active) .content-area {
    should look clickable. */
 /* Polaris's own IndexTable cell padding (~6px top/bottom) is too tall for this dense
    table - shrink it directly instead of fighting it via row height. */
-.orders-table-card .Polaris-IndexTable__TableCell {
+.table-card .Polaris-IndexTable__TableCell {
     padding-top: 3px;
     padding-bottom: 3px;
 }
 
-.orders-table-card .Polaris-IndexTable__TableRow {
+/* Orders rows land at 35px because of the checkbox column; tables without one (Ledgers,
+   Transactions) would otherwise shrink to fit their text - pin every row to the same height. */
+.table-card .Polaris-IndexTable__TableRow {
     cursor: default;
+    height: 35px;
 }
 
 /* Polaris freezes the checkbox column and the Order # column next to it during horizontal
@@ -7415,8 +2100,8 @@ body:has(#orderFulfillmentView.active) .content-area {
    property. Body cells have no such vertical pin, so those go fully static; keep
    position:relative on the checkbox td rather than static, since its .Checkbox__Wrapper is
    absolutely positioned against it (see below) to fill the cell. */
-.orders-table-card .Polaris-IndexTable__TableHeading--first,
-.orders-table-card .Polaris-IndexTable__TableHeading--second {
+.table-card .Polaris-IndexTable__TableHeading--first,
+.table-card .Polaris-IndexTable__TableHeading--second {
     left: auto !important;
 }
 /* Polaris's own selector for this cell (".Table--sticky .TableHeading--second:not(...)")
@@ -7424,14 +2109,14 @@ body:has(#orderFulfillmentView.active) .content-area {
    the left override - which sat below the sticky header/filter backdrop panel
    (.Polaris-IndexTable-ScrollContainer::before, z-index 40) and let it paint over the "Order #"
    label, hiding it outright even at rest. */
-.orders-table-card .Polaris-IndexTable thead th.Polaris-IndexTable__TableHeading--second {
+.table-card .Polaris-IndexTable thead th.Polaris-IndexTable__TableHeading--second {
     z-index: 50 !important;
 }
-.orders-table-card .Polaris-IndexTable__TableCell--first + .Polaris-IndexTable__TableCell {
+.table-card .Polaris-IndexTable__TableCell--first + .Polaris-IndexTable__TableCell {
     position: static !important;
     left: auto !important;
 }
-.orders-table-card .Polaris-IndexTable__TableCell--first {
+.table-card .Polaris-IndexTable__TableCell--first {
     position: relative !important;
     left: auto !important;
 }
@@ -7440,8 +2125,8 @@ body:has(#orderFulfillmentView.active) .content-area {
    <input type="checkbox"> stacked over the visible backdrop (Polaris's accessible-checkbox
    pattern) - browsers apply their own cursor:default straight to checkbox inputs, which wins
    over inheriting pointer from the td, so the input needs its own explicit override. */
-.orders-table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first,
-.orders-table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first .Polaris-Checkbox__Input {
+.table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first,
+.table-card .Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell--first .Polaris-Checkbox__Input {
     cursor: pointer;
 }
 /* The click handler (onInteraction) lives on .Polaris-IndexTable-Checkbox__Wrapper, but that
@@ -7451,12 +2136,12 @@ body:has(#orderFulfillmentView.active) .content-area {
    position it to fill the cell instead - .TableCell--first is already position:relative
    (see the column-sticky override above), a valid containing block for an absolutely
    positioned descendant. */
-.orders-table-card .Polaris-IndexTable__TableCell--first .Polaris-IndexTable-Checkbox__Wrapper {
+.table-card .Polaris-IndexTable__TableCell--first .Polaris-IndexTable-Checkbox__Wrapper {
     position: absolute;
     inset: 0;
 }
 
-.orders-table-card .Polaris-IndexTable__TableRow--subheader .Polaris-IndexTable__TableCell {
+.table-card .Polaris-IndexTable__TableRow--subheader .Polaris-IndexTable__TableCell {
     position: sticky;
     top: var(--orders-sticky-top, 0px);
     z-index: 45;
@@ -7485,7 +2170,7 @@ body:has(#orderFulfillmentView.active) .content-area {
    to the bottom of the card, below the now-scrollable table. Polaris's own IndexTable
    `pagination` prop renders its Pagination control *inside* the table, after the rows -
    rendering it ourselves as a sibling keeps it in the same visual spot instead. */
-.orders-pagination-wrapper {
+.table-pagination {
     flex-shrink: 0;
 }
 
@@ -7495,7 +2180,7 @@ body:has(#orderFulfillmentView.active) .content-area {
    (Inter, 13px), since Polaris's html/body rule in main.tsx loses that cascade fight.
    :where() keeps this at zero specificity so it only fills the inheritance gap and never
    outranks Polaris's own explicit classes (e.g. .Polaris-Text--headingMd) - and matching
-   on the class prefix (rather than an .orders-table-card ancestor scope) also reaches
+   on the class prefix (rather than an .table-card ancestor scope) also reaches
    popovers/selects that Polaris portals out to document.body. */
 :where([class*="Polaris-"]) {
     font-family: var(--p-font-family-sans);
@@ -7510,7 +2195,10 @@ body:has(#orderFulfillmentView.active) .content-area {
    same dark text color as its own black background, making the label invisible. Restore
    inheritance from the button just for these two children. */
 .Polaris-Button--variantPrimary .Polaris-Text--root,
-.Polaris-Button--variantPrimary .Polaris-Button__Icon {
+.Polaris-Button--variantPrimary .Polaris-Button__Icon,
+.Polaris-Frame-Toast :is(.Polaris-InlineStack, .Polaris-Text--root, .Polaris-Icon),
+.Polaris-DatePicker__Day--selected .Polaris-Text--root,
+.Polaris-DatePicker__Day:hover .Polaris-Text--root {
     color: inherit;
 }
 
@@ -7520,11 +2208,11 @@ body.orders-table-fullscreen #ordersView {
     gap: 0;
 }
 
-body.orders-table-fullscreen #ordersMetricsStrip {
+body.orders-table-fullscreen #ordersView .metrics-strip {
     display: none;
 }
 
-body.orders-table-fullscreen .orders-table-card {
+body.orders-table-fullscreen .table-card {
     border: 0;
     border-radius: 0;
 }
@@ -7539,4 +2227,62 @@ body.orders-table-fullscreen .orders-table-card {
         min-width: 128px;
         padding: 10px 14px;
     }
+}
+
+/* Auto table layout sizes a column from its widest content, and a bare <input> reports a
+   ~20ch intrinsic width - zero what the filter box asks for so the column stays sized by the
+   heading/data alone, while min-width:100% still stretches it to fill the cell. */
+#__filters__ .Polaris-TextField {
+    width: 0;
+    min-width: 100%;
+}
+
+/* Single/Bulk mode toggle in the transaction entry modal: grey track with a black
+   pill (same 28px/8px as Polaris buttons) that slides under the selected option. */
+.entry-mode-toggle {
+    position: relative;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    padding: 3px;
+    border-radius: 11px;
+    background: var(--bg-secondary);
+}
+.entry-mode-toggle::before {
+    content: '';
+    position: absolute;
+    top: 3px;
+    bottom: 3px;
+    left: 3px;
+    width: calc(50% - 3px);
+    border-radius: var(--p-border-radius-200);
+    background: var(--p-color-bg-fill-inverse);
+    transition: var(--transition);
+}
+.entry-mode-toggle[data-mode="bulk"]::before {
+    transform: translateX(100%);
+}
+.entry-mode-toggle button {
+    position: relative;
+    height: 28px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: var(--p-border-radius-200);
+    background: none;
+    font: inherit;
+    font-size: 13px;
+    font-weight: 550;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: var(--transition);
+}
+.entry-mode-toggle button[aria-selected="true"] {
+    color: #fff;
+}
+.entry-mode-toggle button:disabled {
+    cursor: default;
+}
+/* Single mode is the taller of the two; hold that height so the modal doesn't
+   jump when switching to bulk. */
+.entry-mode-body {
+    min-height: 290px;
 }

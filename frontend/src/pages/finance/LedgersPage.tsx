@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { SearchField } from '../../components/SearchField';
+import { BlockStack, Button, Card, InlineGrid, InlineStack, Text } from '@shopify/polaris';
+import { EditIcon, PlusIcon } from '@shopify/polaris-icons';
 import { HeaderButton } from '../../components/HeaderButton';
 import { SECTIONED_SYSTEM_KEYS, type Ledger } from '../../logic/ledgers';
 import { useLedgersData } from './useLedgersData';
@@ -30,12 +31,8 @@ export function LedgersPage() {
 
   usePageHeader({
     title: 'Ledgers',
-    actions: (
-      <>
-        <div className="toolbar-search"><SearchField placeholder="Search ledgers..." value={search} onChange={setSearch} /></div>
-        <HeaderButton variant="primary" icon={<i className="fa-solid fa-plus" />} onClick={() => setCreateOpen(true)}>New Ledger</HeaderButton>
-      </>
-    ),
+    search: { value: search, onChange: setSearch },
+    actions: <HeaderButton variant="primary" icon={PlusIcon} onClick={() => setCreateOpen(true)}>New Ledger</HeaderButton>,
   });
 
   const visible = useMemo(() => {
@@ -49,33 +46,30 @@ export function LedgersPage() {
   if (systemLedgers.length) groups.push(['System', systemLedgers]);
 
   return (
-    <div className="ledger-list-container">
-      <div className="ledger-cards">
-        {loading ? null : ledgers.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', padding: 20 }}>No ledgers yet. Click "New Ledger" to add one.</p>
-        ) : visible.length === 0 ? (
-          <p style={{ color: 'var(--text-muted)', padding: 20 }}>No ledgers match "{search.trim()}".</p>
-        ) : groups.map(([type, group]) => (
-          <div className="ledger-section" key={type}>
-            <h3 className="ledger-section-header">{type}</h3>
-            <div className="ledger-section-cards">
-              {group.map((l) => (
-                <div className="ledger-card" key={l.id} onClick={() => navigate(`/ledgers/${l.id}`)}>
-                  <div className="ledger-card-info"><span className="ledger-card-name">{l.name}</span></div>
-                  <div className="ledger-card-actions">
-                    <button
-                      type="button" className="ledger-edit-btn" title="Edit ledger" aria-label="Edit ledger"
-                      onClick={(e) => { e.stopPropagation(); setEditId(l.id); }}
-                    >
-                      <img src="/assets/edit.png" alt="Edit" className="ledger-edit-icon" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        ))}
-      </div>
+    <BlockStack gap="500">
+      {loading ? null : ledgers.length === 0 ? (
+        <Text as="p" tone="subdued">No ledgers yet. Click "New Ledger" to add one.</Text>
+      ) : visible.length === 0 ? (
+        <Text as="p" tone="subdued">No ledgers match "{search.trim()}".</Text>
+      ) : groups.map(([type, group]) => (
+        <BlockStack gap="300" key={type}>
+          <Text as="h3" variant="headingSm" tone="subdued">{type.toUpperCase()}</Text>
+          <InlineGrid columns={{ xs: 1, sm: 2, md: 3, lg: 4, xl: 6 }} gap="300">
+            {group.map((l) => (
+              <div className="card-link" key={l.id} role="link" tabIndex={0} onClick={() => navigate(`/ledgers/${l.id}`)} onKeyDown={(e) => { if (e.key === 'Enter') navigate(`/ledgers/${l.id}`); }}>
+                <Card padding="300">
+                  <InlineStack align="space-between" blockAlign="center" wrap={false}>
+                    <Text as="span" fontWeight="semibold" truncate>{l.name}</Text>
+                    <span onClick={(e) => e.stopPropagation()}>
+                      <Button icon={EditIcon} variant="tertiary" size="slim" accessibilityLabel="Edit ledger" onClick={() => setEditId(l.id)} />
+                    </span>
+                  </InlineStack>
+                </Card>
+              </div>
+            ))}
+          </InlineGrid>
+        </BlockStack>
+      ))}
 
       {createOpen && (
         <CreateLedgerModal
@@ -93,6 +87,6 @@ export function LedgersPage() {
           onDeleted={() => { setEditId(null); loadLedgersList(); }}
         />
       )}
-    </div>
+    </BlockStack>
   );
 }

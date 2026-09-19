@@ -1,5 +1,7 @@
 // Desktop "Install app" (PWA) banner - registers the service worker and prompts to
 // add a desktop shortcut. Ported 1:1 from app-core.js's initInstallPrompt/showInstallBanner.
+import { Button } from '@shopify/polaris';
+import { XIcon } from '@shopify/polaris-icons';
 import { useEffect, useState } from 'react';
 
 const INSTALL_PROMPT_DISMISSED_KEY = 'lushwear_install_prompt_dismissed';
@@ -54,13 +56,13 @@ export function InstallAppBanner() {
     <div className="install-app-banner">
       <img src="/assets/Logo.png" alt="" className="install-app-banner-icon" />
       <div className="install-app-banner-text">
-        <p className="install-app-banner-title">Install SoftLush IMS</p>
+        <p className="install-app-banner-title">Install QuikMerchant</p>
         <p className="install-app-banner-subtitle">
           {macSafari ? 'In the Safari menu bar: File → Add to Dock' : 'Add a desktop shortcut for quicker access'}
         </p>
       </div>
-      {!macSafari && <button type="button" className="btn btn-primary" onClick={install}>Install</button>}
-      <button type="button" className="install-app-banner-dismiss" aria-label="Dismiss" onClick={dismiss}>&times;</button>
+      {!macSafari && <Button variant="primary" size="slim" onClick={install}>Install</Button>}
+      <Button icon={XIcon} variant="tertiary" size="slim" accessibilityLabel="Dismiss" onClick={dismiss} />
     </div>
   );
 }

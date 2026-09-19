@@ -1,14 +1,15 @@
 // Courier Performance: delivery/return/failed rates per city per courier. Ported
 // from courier-performance.js.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { HeaderRefButton } from '../../components/HeaderButton';
-import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { formatDateDDMMYYYY } from '../../logic/shared';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import { formatMoney } from '../../logic/ledgers';
+import { Badge } from '@shopify/polaris';
 import { Dropdown } from '../../components/Dropdown';
+import { DataTable, type DataColumn } from '../../components/DataTable';
+import { MetricsStrip } from '../../components/MetricsStrip';
 
 interface PerfRow {
   city: string; courier: string; orders: number; delivered: number; returned: number; failed: number;
@@ -18,46 +19,27 @@ interface PerfRow {
 export function CourierPerformancePage() {
   const { showToast } = useToast();
   const [rows, setRows] = useState<PerfRow[]>([]);
+  const [loading, setLoading] = useState(true);
   const [city, setCity] = useState('');
   const [courier, setCourier] = useState('');
-  const [dateRange, setDateRange] = useState<{ from: string | null; to: string | null }>({ from: null, to: null });
-  const [dateLabel, setDateLabel] = useState('Date range');
-  const [dateBtnNode, setDateBtnNode] = useState<HTMLButtonElement | null>(null);
-  const pickerRef = useRef<DateRangePickerHandle | null>(null);
+  const [dateRange, setDateRange] = useState<DateRange | null>(null);
 
   async function load() {
     const params = new URLSearchParams();
-    if (dateRange.from) params.append('date_from', dateRange.from);
-    if (dateRange.to) params.append('date_to', dateRange.to);
+    if (dateRange) { params.append('date_from', dateRange.from); params.append('date_to', dateRange.to); }
+    setLoading(true);
     try {
       const { rows: res } = await apiJson<{ rows: PerfRow[] }>(`/orders/courier-performance-by-city?${params}`, { fallback: 'Failed to load courier performance data' });
       setRows(res);
     } catch (error: any) {
       console.error('Error loading courier performance:', error);
       showToast('Failed to load courier performance data', 'error');
+    } finally {
+      setLoading(false);
     }
   }
 
   useEffect(() => { load(); }, [dateRange]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!dateBtnNode) return;
-    const handle = createDateRangePicker(dateBtnNode, {
-      onSelect: (from, to) => {
-        setDateRange({ from, to });
-        setDateLabel(`${formatDateDDMMYYYY(from)} – ${formatDateDDMMYYYY(to)}`);
-        handle?.setClearable(true);
-      },
-      onClear: () => {
-        setDateRange({ from: null, to: null });
-        setDateLabel('Date range');
-        handle?.picker.clear();
-        handle?.setClearable(false);
-      },
-    });
-    pickerRef.current = handle;
-    return () => handle?.destroy();
-  }, [dateBtnNode]);
 
   const cities = useMemo(() => [...new Set(rows.map((r) => r.city))].sort(), [rows]);
   const couriers = useMemo(() => [...new Set(rows.map((r) => r.courier))].sort(), [rows]);
@@ -72,50 +54,44 @@ export function CourierPerformancePage() {
     title: 'Courier Performance',
     actions: (
       <>
-        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by fulfilled date range" />
+        <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by fulfilled date range" />
         <Dropdown searchable options={[{ value: '', label: 'All Cities' }, ...cities]} value={city} onChange={setCity} />
         <Dropdown options={[{ value: '', label: 'All Couriers' }, ...couriers]} value={courier} onChange={setCourier} />
       </>
     ),
   });
 
+  const pct = (n: number) => (totals.orders ? `${(n / totals.orders * 100).toFixed(1)}%` : '0%');
+  const columns: DataColumn<PerfRow>[] = [
+    { key: 'city', heading: 'City', render: (r) => r.city, sortValue: (r) => r.city },
+    { key: 'courier', heading: 'Courier', render: (r) => r.courier, sortValue: (r) => r.courier },
+    { key: 'orders', heading: 'Orders', alignment: 'end', render: (r) => r.orders.toLocaleString(), sortValue: (r) => r.orders },
+    { key: 'delivered', heading: 'Delivered', alignment: 'end', render: (r) => r.delivered.toLocaleString(), sortValue: (r) => r.delivered },
+    { key: 'delivery_pct', heading: 'Delivery %', render: (r) => <Badge tone="success">{`${r.delivery_pct}%`}</Badge>, sortValue: (r) => r.delivery_pct },
+    { key: 'returned', heading: 'Returned', alignment: 'end', render: (r) => r.returned.toLocaleString(), sortValue: (r) => r.returned },
+    { key: 'return_pct', heading: 'Return %', render: (r) => <Badge tone="warning">{`${r.return_pct}%`}</Badge>, sortValue: (r) => r.return_pct },
+    { key: 'failed_pct', heading: 'Failed %', render: (r) => <Badge tone="critical">{`${r.failed_pct}%`}</Badge>, sortValue: (r) => r.failed_pct },
+    { key: 'cod', heading: 'COD Collected', alignment: 'end', render: (r) => `Rs ${formatMoney(r.cod_collected)}`, sortValue: (r) => r.cod_collected },
+    { key: 'shipping', heading: 'Shipping Cost', alignment: 'end', render: (r) => `Rs ${formatMoney(r.shipping_cost)}`, sortValue: (r) => r.shipping_cost },
+  ];
+
   return (
     <>
-      <div className="stats-grid courier-performance-stats-grid">
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Shipments</span><span className="stat-value">{totals.orders.toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Delivered %</span><span className="stat-value">{totals.orders ? `${(totals.delivered / totals.orders * 100).toFixed(1)}%` : '0%'}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Return %</span><span className="stat-value">{totals.orders ? `${(totals.returned / totals.orders * 100).toFixed(1)}%` : '0%'}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Failed %</span><span className="stat-value">{totals.orders ? `${(totals.failed / totals.orders * 100).toFixed(1)}%` : '0%'}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">COD Collected</span><span className="stat-value">Rs {formatMoney(totals.cod)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Shipping Cost</span><span className="stat-value">Rs {formatMoney(totals.shipping)}</span></div></div>
-      </div>
-      <div className="bill-detail-card courier-performance-table-card">
-        <h3>City Wise Courier Performance</h3>
-        <div className="postex-mismatches-table-wrap">
-          <table className="postex-mismatches-table">
-            <thead>
-              <tr>
-                <th>City</th><th>Courier</th><th>Orders</th><th>Delivered</th><th>Delivery %</th>
-                <th>Returned</th><th>Return %</th><th>Failed %</th><th>COD Collected</th><th>Shipping Cost</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visible.map((r, i) => (
-                <tr key={i}>
-                  <td>{r.city}</td><td>{r.courier}</td><td>{r.orders.toLocaleString()}</td><td>{r.delivered.toLocaleString()}</td>
-                  <td><span className="grid-status-badge grid-status-delivered">{r.delivery_pct}%</span></td>
-                  <td>{r.returned.toLocaleString()}</td>
-                  <td><span className="grid-status-badge grid-status-returned">{r.return_pct}%</span></td>
-                  <td><span className="grid-status-badge grid-status-cancelled">{r.failed_pct}%</span></td>
-                  <td>Rs {formatMoney(r.cod_collected)}</td>
-                  <td>Rs {formatMoney(r.shipping_cost)}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-        {visible.length === 0 && <p className="courier-performance-empty">No fulfilled orders in this range.</p>}
-      </div>
+      <MetricsStrip
+        label="Courier performance summary"
+        tiles={[
+          { label: 'Total Shipments', value: totals.orders.toLocaleString() },
+          { label: 'Delivered %', value: pct(totals.delivered) },
+          { label: 'Return %', value: pct(totals.returned) },
+          { label: 'Failed %', value: pct(totals.failed) },
+          { label: 'COD Collected', value: `Rs ${formatMoney(totals.cod)}` },
+          { label: 'Shipping Cost', value: `Rs ${formatMoney(totals.shipping)}` },
+        ]}
+      />
+      <DataTable
+        columns={columns} rows={visible} rowId={(r) => `${r.city}|${r.courier}`} loading={loading} initialSort={{ key: 'orders', direction: 'descending' }}
+        resourceName={{ singular: 'city', plural: 'cities' }} emptyMessage="No fulfilled orders in this range."
+      />
     </>
   );
 }

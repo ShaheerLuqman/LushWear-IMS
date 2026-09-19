@@ -1,6 +1,10 @@
 // Generate Load Sheet modal - saves a load sheet log then downloads its PDF. Ported from
 // orders-actions.js's openGenerateLoadSheetModal/confirmGenerateLoadSheet.
 import { useState } from 'react';
+import { FormLayout, TextField } from '@shopify/polaris';
+import { FormModal } from '../../components/FormModal';
+import { OrderNumbersField } from '../../components/OrderNumbersField';
+import { SuggestField } from '../../components/SuggestField';
 import { apiJson, apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { loadSheetFilenameFromDateAndRider, parseOrderNumbersFromText, type LoadSheetLog } from '../../logic/loadSheets';
@@ -65,42 +69,16 @@ export function GenerateLoadSheetModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget && !saving) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Generate Load Sheet</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose} disabled={saving}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Enter order numbers (one per line):</p>
-          <p className="bulk-update-order-count">{orderNumbers.length === 1 ? '1 order' : `${orderNumbers.length} orders`}</p>
-          <textarea
-            className="bulk-update-textarea" rows={8} placeholder="e.g. 7848&#10;7871&#10;7887"
-            value={orderNumbersText} onChange={(e) => setOrderNumbersText(e.target.value)}
-          />
-          <div className="form-group">
-            <label htmlFor="loadSheetAssignmentNumber">Assignment number</label>
-            <input type="text" id="loadSheetAssignmentNumber" className="form-input" value={assignmentNumber} onChange={(e) => setAssignmentNumber(e.target.value)} />
-          </div>
-          <div className="form-group">
-            <label htmlFor="loadSheetRiderName">Rider name</label>
-            <input type="text" id="loadSheetRiderName" className="form-input" list="loadSheetRiderNameList" value={riderName} onChange={(e) => setRiderName(e.target.value)} />
-            <datalist id="loadSheetRiderNameList">
-              {riderNames.map((name) => <option key={name} value={name} />)}
-            </datalist>
-          </div>
-          <div className="form-group">
-            <label htmlFor="loadSheetDeliveryCharge">Delivery charges (Rs)</label>
-            <input type="number" id="loadSheetDeliveryCharge" className="form-input" min={0} step={0.01} placeholder="0.00" value={deliveryCharge} onChange={(e) => setDeliveryCharge(e.target.value)} />
-          </div>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose} disabled={saving}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving || orderNumbers.length === 0} onClick={confirm}>
-            {saving ? 'Saving & generating...' : 'Generate & Download PDF'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <FormModal
+      title="Generate Load Sheet" onClose={onClose} onSubmit={confirm} submitLabel="Generate & Download PDF"
+      saving={saving} disabled={orderNumbers.length === 0}
+    >
+      <FormLayout>
+        <OrderNumbersField value={orderNumbersText} onChange={setOrderNumbersText} />
+        <TextField label="Assignment number" autoComplete="off" value={assignmentNumber} onChange={setAssignmentNumber} />
+        <SuggestField label="Rider name" value={riderName} onChange={setRiderName} suggestions={riderNames} />
+        <TextField label="Delivery charges (Rs)" type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00" value={deliveryCharge} onChange={setDeliveryCharge} />
+      </FormLayout>
+    </FormModal>
   );
 }

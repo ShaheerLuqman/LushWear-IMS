@@ -1,7 +1,7 @@
 {
-  "name": "softlush-ims-frontend",
+  "name": "quikmerchant-frontend",
   "version": "2.0.0",
-  "description": "SoftLush IMS frontend - React/TypeScript SPA (replaces the old raw HTML/JS frontend/).",
+  "description": "QuikMerchant frontend - React/TypeScript SPA (replaces the old raw HTML/JS frontend/).",
   "private": true,
   "type": "module",
   "scripts": {
@@ -13,8 +13,6 @@
     "@fortawesome/fontawesome-free": "^6.6.0",
     "@shopify/polaris": "^13.9.5",
     "@shopify/polaris-icons": "^9.3.1",
-    "ag-grid-community": "^31.3.4",
-    "ag-grid-react": "^31.3.4",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -22,7 +20,6 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
-    "@easepick/bundle": "^1.2.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",

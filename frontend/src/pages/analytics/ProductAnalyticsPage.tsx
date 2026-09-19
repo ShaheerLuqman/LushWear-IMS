@@ -3,21 +3,27 @@
 // Data: GET /products/analytics (aggregates the picked range + the equal-length
 // window before it in one call) - this file only shapes filters, classifies, renders.
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import * as XLSX from 'xlsx';
-import { create as createEasepick, DateTime } from '@easepick/bundle';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { HeaderButton } from '../../components/HeaderButton';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import {
   analyticsComparisonWord, analyticsIsoDate, analyticsN, analyticsPct, analyticsRangeDates, analyticsRangeLabel,
   analyticsShortDate, analyticsToday, ANALYTICS_TIME_PRESETS, type CustomRange,
 } from '../../logic/analyticsShared';
 import { AnalyticsDeltaBadge, AnalyticsDonut, AnalyticsLineChart, legendList } from '../../logic/analyticsCharts';
+import { Badge, BlockStack, Box, Card, Checkbox, InlineGrid, InlineStack, Popover, Text } from '@shopify/polaris';
+import { ExportIcon, InfoIcon, SettingsIcon } from '@shopify/polaris-icons';
+import { DataTable, type DataColumn } from '../../components/DataTable';
+import { RowActions } from '../../components/RowActions';
+import { MetricsStrip } from '../../components/MetricsStrip';
 import { Dropdown } from '../../components/Dropdown';
-import { SearchField } from '../../components/SearchField';
+import { InfoModal } from '../../components/FormModal';
+import { ProductIdentity } from '../../components/ProductIdentity';
+import { StatGrid } from '../../components/StatGrid';
 
 const PA_BASE_SIZES = ['S', 'M', 'L', 'XL'];
 const PA_COLS_KEY = 'lushwear_pa_cols';
@@ -105,10 +111,12 @@ function trendSeries(data: RawData | null, phase: 'current' | 'previous', metric
     m.set(t.bucket, (m.get(t.bucket) || 0) + (metric === 'revenue' ? Number(t.revenue) || 0 : Number(t.units) || 0));
   }
   const buckets = [...m.keys()].sort();
+  const dates = buckets.map((b) => analyticsShortDate(new Date(`${b}T00:00:00`)));
   return {
     values: buckets.map((b) => m.get(b) as number),
-    first: buckets.length ? analyticsShortDate(new Date(`${buckets[0]}T00:00:00`)) : '',
-    last: buckets.length ? analyticsShortDate(new Date(`${buckets[buckets.length - 1]}T00:00:00`)) : '',
+    dates,
+    first: dates[0] || '',
+    last: dates[dates.length - 1] || '',
   };
 }
 
@@ -126,7 +134,7 @@ export function ProductAnalyticsPage() {
   const { showToast } = useToast();
   const navigate = useNavigate();
 
-  const [timeRange, setTimeRange] = useState('thisMonth');
+  const [timeRange, setTimeRange] = useState('last30');
   const [customRange, setCustomRange] = useState<CustomRange>({ start: '', end: '' });
   const [collection, setCollection] = useState('');
   const [search, setSearch] = useState('');
@@ -137,63 +145,22 @@ export function ProductAnalyticsPage() {
   const [data, setData] = useState<RawData | null>(null);
   const [loading, setLoading] = useState(true);
   const [detailsKey, setDetailsKey] = useState<string | null>(null);
-  const [kebabRow, setKebabRow] = useState<{ key: string; top: number; left: number } | null>(null);
 
-  // A plain useRef+useEffect(() => {...}, []) would fire before the button exists:
-  // this page's own effects run in the same commit as (and before) the setHeader
-  // effect from usePageHeader() below, which is what actually mounts this button
-  // into AppShell's header - so the ref would still be null. Tracking the node via
-  // state instead lets the effect wait for it to really exist, whichever commit that is.
-  const [timeBtnNode, setTimeBtnNode] = useState<HTMLButtonElement | null>(null);
   const reqId = useRef(0);
 
-  useEffect(() => {
-    if (!timeBtnNode) return;
-    const picker = new (createEasepick as any)({
-      element: timeBtnNode as any,
-      css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.1/dist/index.css'],
-      zIndex: 9999,
-      format: 'DD/MM/YYYY',
-      grid: 1,
-      calendars: 1,
-      autoApply: true,
-      plugins: ['RangePlugin', 'PresetPlugin'],
-      PresetPlugin: {
-        position: 'left',
-        customPreset: Object.fromEntries(ANALYTICS_TIME_PRESETS.map((p) => {
-          const [s, e] = analyticsRangeDates(p.key, { start: '', end: '' });
-          return [p.label, [new DateTime(s), new DateTime(e)]];
-        })),
-      },
+  function onRangeChange({ from, to }: DateRange) {
+    const matched = ANALYTICS_TIME_PRESETS.find((p) => {
+      const [s, e] = analyticsRangeDates(p.key, { start: '', end: '' });
+      return analyticsIsoDate(s) === from && analyticsIsoDate(e) === to;
     });
-    picker.on('select', (e: any) => {
-      const { start, end } = e.detail;
-      if (!start || !end) return;
-      const from = start.format('YYYY-MM-DD');
-      const to = end.format('YYYY-MM-DD');
-      const matched = ANALYTICS_TIME_PRESETS.find((p) => {
-        const [s, en] = analyticsRangeDates(p.key, { start: '', end: '' });
-        return analyticsIsoDate(s) === from && analyticsIsoDate(en) === to;
-      });
-      if (matched) setTimeRange(matched.key);
-      else { setTimeRange('custom'); setCustomRange({ start: from, end: to }); }
-      setCustomizeOpen(false);
-      setHeroDefOpen(false);
-    });
-    return () => picker.destroy();
-  }, [timeBtnNode]);
-
-  // Closes the Customize/Hero-Zero popovers on ANY outside click, including other header
-  // controls (search, collection select, time-range button) - not just clicks inside the
-  // results area below, since those popovers are rendered from the page header.
-  useEffect(() => {
-    if (!customizeOpen && !heroDefOpen) return;
-    const onDocClick = () => { setCustomizeOpen(false); setHeroDefOpen(false); };
-    document.addEventListener('click', onDocClick);
-    return () => document.removeEventListener('click', onDocClick);
-  }, [customizeOpen, heroDefOpen]);
+    if (matched) setTimeRange(matched.key);
+    else { setTimeRange('custom'); setCustomRange({ start: from, end: to }); }
+    setCustomizeOpen(false);
+    setHeroDefOpen(false);
+  }
 
   const rangeLabel = analyticsRangeLabel(timeRange, customRange);
+  const [rangeStart, rangeEnd] = analyticsRangeDates(timeRange, customRange);
   const comparisonWord = analyticsComparisonWord(timeRange);
 
   useEffect(() => {
@@ -270,7 +237,7 @@ export function ProductAnalyticsPage() {
   }
 
   const curTrend = trendSeries(data, 'current', trendMetric, collection);
-  const prevTrend = view.hasPrev ? trendSeries(data, 'previous', trendMetric, collection) : { values: [] as number[], first: '', last: '' };
+  const prevTrend = view.hasPrev ? trendSeries(data, 'previous', trendMetric, collection) : { values: [] as number[], dates: [] as string[], first: '', last: '' };
 
   const ranked = [...view.rows].filter((r) => r.units > 0).sort((a, b) => b.units - a.units);
   const top5 = ranked.slice(0, 5);
@@ -278,293 +245,147 @@ export function ProductAnalyticsPage() {
   const donutSlices = top5.map((r) => ({ name: r.name, value: r.units }));
   if (othersUnits) donutSlices.push({ name: 'Others', value: othersUnits });
 
-  const bySize: Record<string, number> = {};
-  for (const r of view.rows) for (const [s, q] of Object.entries(r.sizes)) bySize[s] = (bySize[s] || 0) + q;
-  const sizeRows = view.sizes.filter((s) => bySize[s]);
-  const topSizeEntry = Object.entries(bySize).sort((a, b) => b[1] - a[1])[0];
-
-  const dropRow = [...view.rows].filter((r) => r.prevUnits > 0 && r.units < r.prevUnits)
-    .sort((a, b) => a.units / a.prevUnits - b.units / b.prevUnits)[0];
-  const insights: Array<{ icon: string; tint: string; title: string; desc: string }> = [];
-  if (ranked[0]) insights.push({ icon: 'fa-arrow-trend-up', tint: 'hero', title: ranked[0].name, desc: `Your top seller — ${analyticsN(ranked[0].units)} units this period.` });
-  if (dropRow && view.hasPrev) {
-    const pct = ((dropRow.prevUnits - dropRow.units) / dropRow.prevUnits) * 100;
-    insights.push({ icon: 'fa-arrow-trend-down', tint: 'zero', title: dropRow.name, desc: `Sales dropped ${pct.toFixed(1)}% ${comparisonWord}.` });
-  }
-  if (topSizeEntry) insights.push({ icon: 'fa-shirt', tint: 'info', title: `Size ${topSizeEntry[0]}`, desc: `Most preferred size (${analyticsPct(topSizeEntry[1], view.totals.units).toFixed(1)}%).` });
 
   const detailsRow = detailsKey ? view.rows.find((r) => r.key === detailsKey) || null : null;
 
   usePageHeader({
     title: 'Product Analytics',
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        <div className="toolbar-search"><SearchField placeholder="Search products…" value={search} onChange={setSearch} /></div>
-        <div className="pa-time">
-          <HeaderRefButton ref={setTimeBtnNode} label={rangeLabel} />
-        </div>
+        <DateRangePopover
+          value={{ from: analyticsIsoDate(rangeStart), to: analyticsIsoDate(rangeEnd) }} onChange={(r) => r && onRangeChange(r)}
+          label={rangeLabel} clearable={false}
+          presets={Object.fromEntries(ANALYTICS_TIME_PRESETS.map((p) => [p.label, analyticsRangeDates(p.key, { start: '', end: '' })]))}
+        />
         <Dropdown searchable options={[{ value: '', label: 'All collections' }, ...collectionOptions]} value={collection} onChange={setCollection} />
-        <HeaderButton icon={<i className="fa-solid fa-arrow-up-from-bracket" />} onClick={exportExcel}>Export</HeaderButton>
-        <div className="pa-customize">
-          <HeaderButton icon={<i className="fa-solid fa-sliders" />} onClick={() => { setCustomizeOpen((v) => !v); setHeroDefOpen(false); }}>Customize</HeaderButton>
-          {customizeOpen && (
-            <div className="pa-pop" onClick={(e) => e.stopPropagation()}>
-              <span className="pa-pop-title">Columns</span>
-              <label><input type="checkbox" checked={cols.revenue} onChange={(e) => toggleCol('revenue', e.target.checked)} /> Revenue</label>
-              <label><input type="checkbox" checked={cols.delta} onChange={(e) => toggleCol('delta', e.target.checked)} /> vs Previous</label>
-              <label><input type="checkbox" checked={cols.sizes} onChange={(e) => toggleCol('sizes', e.target.checked)} /> Variant sizes</label>
-            </div>
-          )}
-        </div>
-        <div className="pa-info">
-          <HeaderButton icon={<i className="fa-solid fa-circle-info" />} accessibilityLabel="Performance definition" onClick={() => { setHeroDefOpen((v) => !v); setCustomizeOpen(false); }} />
-          {heroDefOpen && (
-            <div className="pa-pop pa-hero-def-pop" onClick={(e) => e.stopPropagation()}>
-              Products are ranked by units sold within the current collection and range.
-              <strong> Hero</strong> = the top ~20% (ties included); <strong>Zero</strong> = the bottom ~20%, including products with no sales; everything between is <strong>Average</strong>.
-            </div>
-          )}
-        </div>
+        <HeaderButton icon={ExportIcon} onClick={exportExcel}>Export</HeaderButton>
+        <Popover
+          active={customizeOpen} onClose={() => setCustomizeOpen(false)} preferredAlignment="right"
+          activator={<HeaderButton icon={SettingsIcon} disclosure onClick={() => setCustomizeOpen((v) => !v)}>Customize</HeaderButton>}
+        >
+          <Box padding="300">
+            <BlockStack gap="200">
+              <Text as="span" variant="headingSm">Columns</Text>
+              <Checkbox label="Revenue" checked={cols.revenue} onChange={(v) => toggleCol('revenue', v)} />
+              <Checkbox label="vs Previous" checked={cols.delta} onChange={(v) => toggleCol('delta', v)} />
+              <Checkbox label="Variant sizes" checked={cols.sizes} onChange={(v) => toggleCol('sizes', v)} />
+            </BlockStack>
+          </Box>
+        </Popover>
+        <Popover
+          active={heroDefOpen} onClose={() => setHeroDefOpen(false)} preferredAlignment="right"
+          activator={<HeaderButton icon={InfoIcon} accessibilityLabel="Performance definition" onClick={() => setHeroDefOpen((v) => !v)} />}
+        >
+          <Box padding="300" maxWidth="320px">
+            <Text as="p">Products are ranked by units sold within the current collection and range. <Text as="span" fontWeight="semibold">Hero</Text> = the top ~20% (ties included); <Text as="span" fontWeight="semibold">Zero</Text> = the bottom ~20%, including products with no sales; everything between is <Text as="span" fontWeight="semibold">Average</Text>.</Text>
+          </Box>
+        </Popover>
       </>
     ),
   });
 
   const showSizes = cols.sizes && view.sizes.length > 0;
-  const colCount = 5 + (cols.revenue ? 1 : 0) + (cols.delta ? 1 : 0) + (showSizes ? view.sizes.length : 0);
+  const kpi = (label: string, value: string, cur: number, prev: number, isMoney: boolean) => ({
+    label, value,
+    detail: (
+      <InlineStack gap="200" blockAlign="center">
+        <Text as="span" tone="subdued" variant="bodySm">{comparisonWord}: {view.hasPrev ? (isMoney ? `PKR ${analyticsN(prev)}` : analyticsN(prev)) : '—'}</Text>
+        <AnalyticsDeltaBadge cur={cur} prev={prev} hasPrev={view.hasPrev} />
+      </InlineStack>
+    ),
+  });
+  const PERF_TONE = { hero: 'success', average: undefined, zero: 'critical' } as const;
+  const columns: DataColumn<ViewRow>[] = [
+    { key: 'rank', heading: '#', render: (r) => (r.rank <= 3 ? <Badge tone={r.rank === 1 ? 'success' : r.rank === 2 ? 'info' : 'attention'}>{String(r.rank)}</Badge> : <Text as="span" tone="subdued">{r.rank}</Text>), sortValue: (r) => r.rank },
+    {
+      key: 'product', heading: 'Product', sortValue: (r) => r.name,
+      render: (r) => (
+        <div className="pa-product" onClick={() => setDetailsKey(r.key)} style={{ cursor: 'pointer' }}>
+          <ProductThumb imageUrl={r.imageUrl} name={r.name} />
+          <div className="pa-product-text">
+            <Text as="span" fontWeight="semibold">{r.name}</Text>
+            <Text as="span" tone="subdued" variant="bodySm">{r.collection} · {analyticsN(r.variantCount)} variants · {analyticsN(r.stock)} in stock</Text>
+          </div>
+        </div>
+      ),
+    },
+    { key: 'units', heading: 'Total Sold (Units)', alignment: 'end', sortValue: (r) => r.units, render: (r) => <BlockStack gap="0" inlineAlign="end"><Text as="span" fontWeight="semibold" numeric>{analyticsN(r.units)}</Text><Text as="span" tone="subdued" variant="bodySm">{Math.round(analyticsPct(r.units, view.totals.units))}% of shown</Text></BlockStack> },
+    ...(cols.revenue ? [{ key: 'revenue', heading: 'Revenue (PKR)', alignment: 'end' as const, sortValue: (r: ViewRow) => r.revenue, render: (r: ViewRow) => analyticsN(r.revenue) }] : []),
+    ...(cols.delta ? [{ key: 'delta', heading: 'vs Previous (Units)', alignment: 'end' as const, sortValue: (r: ViewRow) => r.units - r.prevUnits, render: (r: ViewRow) => <InlineStack gap="100" align="end" blockAlign="center"><Text as="span" tone="subdued">{analyticsN(r.prevUnits)}</Text><AnalyticsDeltaBadge cur={r.units} prev={r.prevUnits} hasPrev={view.hasPrev} /></InlineStack> }] : []),
+    ...(showSizes ? view.sizes.map((size) => ({
+      key: `size-${size}`, heading: size, alignment: 'end' as const, sortValue: (r: ViewRow) => r.sizes[size] || 0,
+      render: (r: ViewRow) => { const q = r.sizes[size] || 0; return q ? <BlockStack gap="0" inlineAlign="end"><Text as="span" numeric>{analyticsN(q)}</Text><Text as="span" tone="subdued" variant="bodySm">{((q / r.units) * 100).toFixed(1)}%</Text></BlockStack> : <Text as="span" tone="subdued">–</Text>; },
+    })) : []),
+    { key: 'perf', heading: 'Performance', sortValue: (r) => r.perf, render: (r) => <Badge tone={PERF_TONE[r.perf as keyof typeof PERF_TONE]}>{PERF_META[r.perf].label}</Badge> },
+    { key: 'actions', heading: '', alignment: 'end', render: (r) => <RowActions items={[{ content: 'View details', onAction: () => setDetailsKey(r.key) }, { content: 'Open in Products', onAction: () => navigate('/products') }]} /> },
+  ];
 
   return (
     <div className="pa-scroll">
-      <div className="pa-kpis">
-        <KpiCard mod="units" icon="fa-box" label="Total Units Sold" value={analyticsN(view.totals.units)} cur={view.totals.units} prev={view.prevTotals.units} hasPrev={view.hasPrev} comparisonWord={comparisonWord} isMoney={false} />
-        <KpiCard mod="revenue" icon="fa-sack-dollar" label="Total Revenue" value={`PKR ${analyticsN(view.totals.revenue)}`} cur={view.totals.revenue} prev={view.prevTotals.revenue} hasPrev={view.hasPrev} comparisonWord={comparisonWord} isMoney />
-        <KpiCard mod="orders" icon="fa-receipt" label="Orders" value={analyticsN(view.totals.orders)} cur={view.totals.orders} prev={view.prevTotals.orders} hasPrev={view.hasPrev} comparisonWord={comparisonWord} isMoney={false} />
-        <KpiCard mod="aov" icon="fa-tags" label="Avg. Order Value" value={`PKR ${analyticsN(view.totals.aov)}`} cur={view.totals.aov} prev={view.prevTotals.aov} hasPrev={view.hasPrev} comparisonWord={comparisonWord} isMoney />
-      </div>
+      <BlockStack gap="400">
+        <MetricsStrip label="Product analytics summary" tiles={[
+          kpi('Total Units Sold', analyticsN(view.totals.units), view.totals.units, view.prevTotals.units, false),
+          kpi('Total Revenue', `PKR ${analyticsN(view.totals.revenue)}`, view.totals.revenue, view.prevTotals.revenue, true),
+          kpi('Orders', analyticsN(view.totals.orders), view.totals.orders, view.prevTotals.orders, false),
+          kpi('Avg. Order Value', `PKR ${analyticsN(view.totals.aov)}`, view.totals.aov, view.prevTotals.aov, true),
+        ]} />
 
-      <div className="pa-card">
-        <div className="pa-table-wrap">
-          <table className="pa-table">
-            <thead>
-              {showSizes && (
-                <tr className="pa-thead-group">
-                  <th /><th /><th />
-                  {cols.revenue && <th />}{cols.delta && <th />}
-                  <th className="pa-group-variants" colSpan={view.sizes.length}>Variants Sold (Units)</th>
-                  <th /><th />
-                </tr>
-              )}
-              <tr className="pa-thead-cols">
-                <th className="pa-col-rank">#</th>
-                <th className="pa-col-product">Product</th>
-                <th className="pa-col-total">Total Sold<span>Units</span></th>
-                {cols.revenue && <th className="pa-col-rev">Revenue<span>PKR</span></th>}
-                {cols.delta && <th className="pa-col-delta">vs Previous<span>Units</span></th>}
-                {showSizes && view.sizes.map((s) => <th className="pa-col-size" key={s}>{s}</th>)}
-                <th className="pa-col-perf">Performance</th>
-                <th className="pa-col-kebab" />
-              </tr>
-            </thead>
-            <tbody>
-              {loading ? (
-                <tr><td colSpan={colCount} className="pa-empty">Crunching sales…</td></tr>
-              ) : view.segmentRows.length === 0 ? (
-                <tr><td colSpan={colCount} className="pa-empty">No products match these filters.</td></tr>
-              ) : view.segmentRows.map((r) => (
-                <tr key={r.key}>
-                  <td className="pa-col-rank">{r.rank <= 3 ? <span className={`pa-medal pa-medal--${r.rank}`}>{r.rank}</span> : <span className="pa-rank">{r.rank}</span>}</td>
-                  <td className="pa-col-product" onClick={() => setDetailsKey(r.key)} style={{ cursor: 'pointer' }}>
-                    <div className="pa-product">
-                      <ProductThumb imageUrl={r.imageUrl} name={r.name} />
-                      <div className="pa-product-text">
-                        <span className="pa-product-name">{r.name}</span>
-                        <span className="pa-product-sub">{r.collection} · {analyticsN(r.variantCount)} variants · {analyticsN(r.stock)} in stock</span>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="pa-col-total"><span className="pa-total-q">{analyticsN(r.units)}</span><span className="pa-total-sub">{Math.round(analyticsPct(r.units, view.totals.units))}% of shown</span></td>
-                  {cols.revenue && <td className="pa-col-rev">PKR {analyticsN(r.revenue)}</td>}
-                  {cols.delta && (
-                    <td className="pa-col-delta">
-                      <span className="pa-delta-prev">{analyticsN(r.prevUnits)}</span>
-                      <AnalyticsDeltaBadge cur={r.units} prev={r.prevUnits} hasPrev={view.hasPrev} />
-                    </td>
-                  )}
-                  {showSizes && view.sizes.map((s) => {
-                    const q = r.sizes[s] || 0;
-                    return (
-                      <td className={q ? 'pa-col-size' : 'pa-col-size pa-size-empty'} key={s}>
-                        {q ? <><span className="pa-size-q">{analyticsN(q)}</span><span className="pa-size-pct">{((q / r.units) * 100).toFixed(1)}%</span></> : '–'}
-                      </td>
-                    );
-                  })}
-                  <td className="pa-col-perf"><span className={`pa-badge pa-badge--${r.perf}`}><i className={`fa-solid ${PERF_META[r.perf].icon}`} />{PERF_META[r.perf].label}</span></td>
-                  <td className="pa-col-kebab">
-                    <button
-                      type="button" className="pa-kebab" aria-label="Product actions"
-                      onClick={(e) => {
-                        const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                        setKebabRow({ key: r.key, top: rect.bottom + 4, left: Math.max(8, rect.right - 170) });
-                      }}
-                    >
-                      <i className="fa-solid fa-ellipsis-vertical" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <InlineGrid columns={{ xs: 1, md: 2 }} gap="400">
+          <Card>
+            <BlockStack gap="300">
+              <InlineStack align="space-between" blockAlign="center">
+                <Text as="h3" variant="headingSm">Sales Trend</Text>
+                <Dropdown size="slim" options={[{ value: 'units', label: 'Units' }, { value: 'revenue', label: 'Revenue' }]} value={trendMetric} onChange={(v) => setTrendMetric(v as 'units' | 'revenue')} />
+              </InlineStack>
+              <div className="pa-trend-legend">
+                <span><i className="pa-swatch pa-swatch--cur" />This period</span>
+                {prevTrend.values.length > 0 && <span><i className="pa-swatch pa-swatch--prev" />Previous period</span>}
+              </div>
+              <AnalyticsLineChart cur={curTrend.values} prev={prevTrend.values} metric={trendMetric} curDates={curTrend.dates} prevDates={prevTrend.dates} />
+              <div className="pa-trend-axis"><span>{curTrend.first}</span><span>{curTrend.last}</span></div>
+            </BlockStack>
+          </Card>
+
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Top Products by Units</Text>
+              <div className="pa-donut-wrap">
+                <AnalyticsDonut slices={donutSlices} total={view.totals.units} metric="units" />
+                <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.units) : <li className="pa-muted">No sales</li>}</ul>
+              </div>
+            </BlockStack>
+          </Card>
+        </InlineGrid>
+
+        <div className="pa-table-card">
+          <DataTable
+            columns={columns} rows={view.segmentRows} rowId={(r) => r.key} loading={loading}
+            resourceName={{ singular: 'product', plural: 'products' }} emptyMessage="No products match these filters."
+          />
         </div>
-      </div>
-
-      <div className="pa-widgets">
-        <section className="pa-widget pa-widget--trend">
-          <div className="pa-widget-head">
-            <h3>Sales Trend</h3>
-            <div onClick={(e) => e.stopPropagation()}>
-              <Dropdown size="slim" options={[{ value: 'units', label: 'Units' }, { value: 'revenue', label: 'Revenue' }]} value={trendMetric} onChange={(v) => setTrendMetric(v as 'units' | 'revenue')} />
-            </div>
-          </div>
-          <div className="pa-trend-legend">
-            <span><i className="pa-swatch pa-swatch--cur" />This period</span>
-            {prevTrend.values.length > 0 && <span><i className="pa-swatch pa-swatch--prev" />Previous period</span>}
-          </div>
-          <AnalyticsLineChart cur={curTrend.values} prev={prevTrend.values} metric={trendMetric} />
-          <div className="pa-trend-axis"><span>{curTrend.first}</span><span>{curTrend.last}</span></div>
-        </section>
-
-        <section className="pa-widget">
-          <div className="pa-widget-head"><h3>Top Products by Units</h3></div>
-          <div className="pa-donut-wrap">
-            <AnalyticsDonut slices={donutSlices} total={view.totals.units} metric="units" />
-            <ul className="pa-legend-list">{donutSlices.length ? legendList(donutSlices, view.totals.units) : <li className="pa-muted">No sales</li>}</ul>
-          </div>
-        </section>
-
-        <section className="pa-widget">
-          <div className="pa-widget-head"><h3>Size Breakdown</h3></div>
-          <table className="pa-size-table">
-            <thead><tr><th>Size</th><th>Units</th><th>% of total</th></tr></thead>
-            <tbody>
-              {sizeRows.length === 0
-                ? <tr><td colSpan={3} className="pa-muted">No sales</td></tr>
-                : sizeRows.map((s) => <tr key={s}><td>{s}</td><td>{analyticsN(bySize[s])}</td><td>{analyticsPct(bySize[s], view.totals.units).toFixed(1)}%</td></tr>)}
-            </tbody>
-          </table>
-        </section>
-
-        <section className="pa-widget">
-          <div className="pa-widget-head"><h3>Key Insights</h3></div>
-          <ul className="pa-insight-list">
-            {insights.length === 0
-              ? <li className="pa-muted">Not enough data yet.</li>
-              : insights.map((i, idx) => (
-                <li key={idx}>
-                  <span className={`pa-insight-ic pa-insight-ic--${i.tint}`}><i className={`fa-solid ${i.icon}`} /></span>
-                  <div><strong>{i.title}</strong><span>{i.desc}</span></div>
-                </li>
-              ))}
-          </ul>
-        </section>
-      </div>
-
-      {kebabRow && createPortal(
-        <KebabPop
-          pos={kebabRow}
-          onClose={() => setKebabRow(null)}
-          onDetails={() => { setDetailsKey(kebabRow.key); setKebabRow(null); }}
-          onOpenProducts={() => { setKebabRow(null); navigate('/products'); }}
-        />,
-        document.body,
-      )}
+      </BlockStack>
 
       {detailsRow && (
-        <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) setDetailsKey(null); }}>
-          <div className="modal-content">
-            <div className="modal-header">
-              <h2>Product Details</h2>
-              <button type="button" className="modal-close" aria-label="Close" onClick={() => setDetailsKey(null)}>&times;</button>
-            </div>
-            <div className="modal-body">
-              <div className="product-details-identity">
-                <div className="product-details-thumb">
-                  {detailsRow.imageUrl ? <img src={detailsRow.imageUrl} alt="" /> : <div className="grid-image-placeholder">No Img</div>}
-                </div>
-                <div className="product-details-identity-text">
-                  <div className="product-details-name-row"><h3>{detailsRow.name}</h3></div>
-                  <p className="product-details-sub">
-                    {detailsRow.collection} · {analyticsN(detailsRow.variantCount)} variant{detailsRow.variantCount === 1 ? '' : 's'} · {analyticsN(detailsRow.stock)} in stock
-                  </p>
-                </div>
-              </div>
-              <div className="product-details-stock">
-                <div className="product-details-stock-grid">
-                  {([
-                    ['Rank', `#${detailsRow.rank}`],
-                    ['Performance', PERF_META[detailsRow.perf].label],
-                    ['Units Sold', analyticsN(detailsRow.units)],
-                    ['Revenue', `PKR ${analyticsN(detailsRow.revenue)}`],
-                    [comparisonWord, view.hasPrev ? `${analyticsN(detailsRow.prevUnits)} units` : '—'],
-                  ] as Array<[string, string]>).map(([label, value]) => (
-                    <div className="product-details-stock-cell" key={label}>
-                      <span className="product-details-stock-label">{label}</span>
-                      <span className="product-details-stock-value">{value}</span>
-                    </div>
-                  ))}
-                </div>
-                {view.sizes.filter((s) => detailsRow.sizes[s]).length > 0 && (
-                  <div className="product-details-stock-grid">
-                    {view.sizes.filter((s) => detailsRow.sizes[s]).map((s) => (
-                      <div className="product-details-stock-cell" key={s}>
-                        <span className="product-details-stock-label">{s}</span>
-                        <span className="product-details-stock-value">{analyticsN(detailsRow.sizes[s])}  ({((detailsRow.sizes[s] / detailsRow.units) * 100).toFixed(1)}%)</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="modal-pinned-footer">
-              <button type="button" className="btn btn-secondary" onClick={() => setDetailsKey(null)}>Close</button>
-              <button type="button" className="btn btn-primary" onClick={() => { setDetailsKey(null); navigate('/products'); }}>Open in Products</button>
-            </div>
-          </div>
-        </div>
+        <InfoModal title="Product Details" onClose={() => setDetailsKey(null)} actions={[{ content: 'Open in Products', onAction: () => { setDetailsKey(null); navigate('/products'); } }]}>
+          <BlockStack gap="400">
+            <ProductIdentity
+              name={detailsRow.name} imageUrl={detailsRow.imageUrl}
+              subtitle={`${detailsRow.collection} · ${analyticsN(detailsRow.variantCount)} variant${detailsRow.variantCount === 1 ? '' : 's'} · ${analyticsN(detailsRow.stock)} in stock`}
+            />
+            <StatGrid rows={[
+              ['Rank', `#${detailsRow.rank}`],
+              ['Performance', PERF_META[detailsRow.perf].label],
+              ['Units Sold', analyticsN(detailsRow.units)],
+              ['Revenue', `PKR ${analyticsN(detailsRow.revenue)}`],
+              [comparisonWord, view.hasPrev ? `${analyticsN(detailsRow.prevUnits)} units` : '—'],
+            ]} />
+            {view.sizes.filter((s) => detailsRow.sizes[s]).length > 0 && (
+              <StatGrid rows={view.sizes.filter((s) => detailsRow.sizes[s]).map((s) => [s, `${analyticsN(detailsRow.sizes[s])} (${((detailsRow.sizes[s] / detailsRow.units) * 100).toFixed(1)}%)`])} />
+            )}
+          </BlockStack>
+        </InfoModal>
       )}
-    </div>
-  );
-}
-
-function KpiCard({
-  mod, icon, label, value, cur, prev, hasPrev, comparisonWord, isMoney,
-}: {
-  mod: string; icon: string; label: string; value: string; cur: number; prev: number; hasPrev: boolean; comparisonWord: string; isMoney: boolean;
-}) {
-  return (
-    <div className={`pa-kpi pa-kpi--${mod}`}>
-      <div className="pa-kpi-top">
-        <span className="pa-kpi-label">{label}</span>
-        <span className="pa-kpi-icon"><i className={`fa-solid ${icon}`} /></span>
-      </div>
-      <span className="pa-kpi-value">{value}</span>
-      <div className="pa-kpi-foot">
-        <span className="pa-kpi-prev">{comparisonWord}: {hasPrev ? (isMoney ? `PKR ${analyticsN(prev)}` : analyticsN(prev)) : '—'}</span>
-        <AnalyticsDeltaBadge cur={cur} prev={prev} hasPrev={hasPrev} />
-      </div>
-    </div>
-  );
-}
-
-function KebabPop({ pos, onClose, onDetails, onOpenProducts }: { pos: { top: number; left: number }; onClose: () => void; onDetails: () => void; onOpenProducts: () => void }) {
-  useEffect(() => {
-    const close = () => onClose();
-    document.addEventListener('click', close);
-    return () => document.removeEventListener('click', close);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return (
-    <div className="pa-pop pa-kebab-pop" style={{ position: 'fixed', top: pos.top, left: pos.left }} onClick={(e) => e.stopPropagation()}>
-      <button type="button" onClick={onDetails}>View details</button>
-      <button type="button" onClick={onOpenProducts}>Open in Products</button>
     </div>
   );
 }

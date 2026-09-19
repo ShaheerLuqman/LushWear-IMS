@@ -1,6 +1,8 @@
 // Single-order delivery status popup, opened from a grid row's refresh button.
 // Ported from delivery-status.js's fetchDeliveryStatus/displayDeliveryStatus.
 import { useEffect, useState } from 'react';
+import { Banner, BlockStack, DescriptionList, InlineStack, Link, Spinner, Text } from '@shopify/polaris';
+import { InfoModal } from '../../components/FormModal';
 import { apiJson } from '../../api';
 import { formatCourierForDisplay, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../logic/shared';
 import { mergeDeliveryStatusData, normalizePakPhone, type DeliveryStatusData } from '../../logic/deliveryStatus';
@@ -63,57 +65,48 @@ export function DeliveryStatusModal({
   useEffect(() => { fetchStatus(false); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const history = [...(data?.status_history || [])].reverse();
+  const waNumber = customer.phone ? normalizePakPhone(customer.phone) : null;
+  const items = data ? [
+    { term: 'Courier', description: formatCourierForDisplay(data.courier) || '' },
+    { term: 'Tracking Number', description: data.tracking_number || '' },
+    ...(customer.name ? [{ term: 'Customer Name', description: customer.name }] : []),
+    ...(customer.phone ? [{
+      term: 'Phone',
+      description: (
+        <InlineStack gap="200" blockAlign="center">
+          <span>{waNumber ? `+${waNumber}` : customer.phone}</span>
+          {waNumber && <Link url={`https://web.whatsapp.com/send?phone=${waNumber}`} target="_blank">Chat on WhatsApp</Link>}
+        </InlineStack>
+      ),
+    }] : []),
+    ...(data.recipient_name ? [{ term: 'Recipient Name', description: data.recipient_name }] : []),
+    ...(data.recipient_contact ? [{ term: 'Recipient Contact', description: data.recipient_contact }] : []),
+    ...(data.order_pickup_date ? [{ term: 'Pickup Date', description: formatDateDDMMYYYY(data.order_pickup_date) }] : []),
+  ] : [];
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Delivery Status</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          {loading ? (
-            <div className="content-loading"><div className="content-loading-spinner" /><p className="content-loading-text">Fetching delivery status...</p></div>
-          ) : error && !data ? (
-            <div className="error-message">Error: {error}</div>
-          ) : data && (
-            <>
-              <div className="delivery-status-info">
-                <div className="info-row"><strong>Courier:</strong> {formatCourierForDisplay(data.courier) || ''}</div>
-                <div className="info-row"><strong>Tracking Number:</strong> {data.tracking_number || ''}</div>
-                {customer.name && <div className="info-row"><strong>Customer Name:</strong> {customer.name}</div>}
-                {customer.phone && (() => {
-                  const waNumber = normalizePakPhone(customer.phone);
-                  return (
-                    <div className="info-row">
-                      <strong>Phone:</strong> {waNumber ? `+${waNumber}` : customer.phone}{' '}
-                      {waNumber && <a href={`https://web.whatsapp.com/send?phone=${waNumber}`} target="_blank" rel="noopener noreferrer" className="whatsapp-chat-link" title="Chat on WhatsApp"><i className="fa-brands fa-whatsapp" /></a>}
-                    </div>
-                  );
-                })()}
-                {data.recipient_name && <div className="info-row"><strong>Recipient Name:</strong> {data.recipient_name}</div>}
-                {data.recipient_contact && <div className="info-row"><strong>Recipient Contact:</strong> {data.recipient_contact}</div>}
-                {data.order_pickup_date && <div className="info-row"><strong>Pickup Date:</strong> {formatDateDDMMYYYY(data.order_pickup_date)}</div>}
+    <InfoModal title="Delivery Status" onClose={onClose} actions={data ? [{ content: 'Refresh status', loading: refreshing, onAction: () => fetchStatus(true) }] : []}>
+      {loading ? (
+        <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Fetching delivery status...</Text></InlineStack>
+      ) : error && !data ? (
+        <Banner tone="critical">{error}</Banner>
+      ) : data && (
+        <BlockStack gap="400">
+          <DescriptionList items={items} gap="tight" />
+          <Text as="h3" variant="headingSm">Status History</Text>
+          <div className="status-timeline">
+            {history.length > 0 ? history.map((s, i) => (
+              <div className={'timeline-item' + (s.is_active || i === 0 ? ' active' : '')} key={i}>
+                <div className="timeline-dot" />
+                <div className="timeline-content">
+                  <Text as="p" tone="subdued" variant="bodySm">{s.datetime ? formatDateTimeDDMMYYYY(s.datetime) : ''}</Text>
+                  <Text as="p" fontWeight={i === 0 ? 'semibold' : 'regular'}>{s.status || ''}</Text>
+                </div>
               </div>
-              <h3 style={{ marginTop: 20, marginBottom: 10 }}>Status History</h3>
-              <div className="status-timeline">
-                {history.length > 0 ? history.map((s, i) => (
-                  <div className={'timeline-item' + (s.is_active || i === 0 ? ' active' : '')} key={i}>
-                    <div className="timeline-dot" />
-                    <div className="timeline-content">
-                      <div className="timeline-date">{s.datetime ? formatDateTimeDDMMYYYY(s.datetime) : ''}</div>
-                      <div className="timeline-status">{s.status || ''}</div>
-                    </div>
-                  </div>
-                )) : <div className="no-status">No status history available</div>}
-              </div>
-              <div className="delivery-status-modal-actions">
-                <button type="button" className="btn btn-primary delivery-status-btn" disabled={refreshing} onClick={() => fetchStatus(true)}>{refreshing ? 'Refreshing...' : 'Refresh status'}</button>
-              </div>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+            )) : <Text as="p" tone="subdued">No status history available</Text>}
+          </div>
+        </BlockStack>
+      )}
+    </InfoModal>
   );
 }

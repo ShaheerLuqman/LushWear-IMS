@@ -2,6 +2,9 @@
 // generates a packaging-list PDF. Ported from orders-actions.js's openPackagingListModal/
 // handlePackagingListPdfUpload/generatePackagingListFromNumbers.
 import { useRef, useState } from 'react';
+import { FormLayout, Text } from '@shopify/polaris';
+import { FormModal } from '../../components/FormModal';
+import { OrderNumbersField } from '../../components/OrderNumbersField';
 import { apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { parseOrderNumbersFromText } from '../../logic/loadSheets';
@@ -92,28 +95,15 @@ export function PackagingListModal({ initialOrderNumbers, onClose }: { initialOr
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Packaging List</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Enter order numbers (one per line), or upload a labels PDF to fill them automatically:</p>
-          <p className="bulk-update-order-count">{orderNumbers.length === 1 ? '1 order' : `${orderNumbers.length} orders`}</p>
-          <textarea
-            className="bulk-update-textarea" rows={10} placeholder="e.g. 7848&#10;7871&#10;7887"
-            value={orderNumbersText} onChange={(e) => setOrderNumbersText(e.target.value)}
-          />
-          <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={onPdfUpload} />
-        </div>
-        <div className="bulk-update-actions modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" disabled={uploading} onClick={() => fileInputRef.current?.click()}>
-            {uploading ? 'Reading PDF…' : 'Upload PDFs'}
-          </button>
-          <button type="button" className="btn btn-primary" disabled={generating} onClick={generate}>Generate packaging list</button>
-        </div>
-      </div>
-    </div>
+    <FormModal
+      title="Packaging List" onClose={onClose} onSubmit={generate} submitLabel="Generate packaging list" saving={generating}
+      extraActions={[{ content: 'Upload PDFs', loading: uploading, onAction: () => fileInputRef.current?.click() }]}
+    >
+      <FormLayout>
+        <Text as="p" tone="subdued">Enter order numbers (one per line), or upload a labels PDF to fill them automatically.</Text>
+        <OrderNumbersField value={orderNumbersText} onChange={setOrderNumbersText} rows={10} />
+      </FormLayout>
+      <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" multiple style={{ display: 'none' }} onChange={onPdfUpload} />
+    </FormModal>
   );
 }

@@ -1,7 +1,8 @@
 // Toast popups + the notification bell's history panel. React port of
 // delivery-status.js's showToast() + notifications.js - in-memory only,
 // resets on reload, same as before.
-import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { createContext, useCallback, useContext, useState, type ReactNode } from 'react';
+import { Toast } from '@shopify/polaris';
 
 export type ToastType = 'info' | 'success' | 'warning' | 'error';
 
@@ -15,6 +16,8 @@ export interface NotificationItem {
 
 interface ToastContextValue {
   showToast: (message: string, type?: ToastType, opts?: { silent?: boolean }) => void;
+  current: { id: number; message: string; type: ToastType } | null;
+  dismiss: () => void;
   notifications: NotificationItem[];
   unreadCount: number;
   markAllRead: () => void;
@@ -33,13 +36,10 @@ const NOTIFICATIONS_MAX = 50;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
-  const [current, setCurrent] = useState<{ message: string; type: ToastType; visible: boolean } | null>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [current, setCurrent] = useState<{ id: number; message: string; type: ToastType } | null>(null);
 
   const showToast = useCallback((message: string, type: ToastType = 'info', { silent = false }: { silent?: boolean } = {}) => {
-    if (hideTimer.current) clearTimeout(hideTimer.current);
-    setCurrent({ message, type, visible: true });
-    hideTimer.current = setTimeout(() => setCurrent((c) => (c ? { ...c, visible: false } : c)), 3000);
+    setCurrent({ id: Date.now(), message, type });
 
     if (!silent) {
       setNotifications((prev) => {
@@ -49,20 +49,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  useEffect(() => () => { if (hideTimer.current) clearTimeout(hideTimer.current); }, []);
-
   const markAllRead = useCallback(() => {
     setNotifications((prev) => (prev.some((n) => !n.read) ? prev.map((n) => ({ ...n, read: true })) : prev));
   }, []);
 
   const clearAll = useCallback(() => setNotifications([]), []);
+  const dismiss = useCallback(() => setCurrent(null), []);
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return (
-    <ToastContext.Provider value={{ showToast, notifications, unreadCount, markAllRead, clearAll }}>
+    <ToastContext.Provider value={{ showToast, current, dismiss, notifications, unreadCount, markAllRead, clearAll }}>
       {children}
-      {current && <div className={`toast ${current.type}${current.visible ? ' show' : ''}`}>{current.message}</div>}
     </ToastContext.Provider>
   );
+}
+
+/** Renders the active toast. Polaris Toast needs a Frame ancestor, so this is mounted
+ * inside each Frame (AppShell, AdminPortal) rather than by the provider itself. */
+export function ToastHost() {
+  const { current, dismiss } = useToast();
+  if (!current) return null;
+  return <Toast key={current.id} content={current.message} error={current.type === 'error'} duration={3000} onDismiss={dismiss} />;
 }

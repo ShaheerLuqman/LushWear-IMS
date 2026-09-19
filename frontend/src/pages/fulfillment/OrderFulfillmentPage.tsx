@@ -2,32 +2,32 @@
 // live booking-progress screen. Ported from order-fulfillment.js. The order list and
 // Fulfill are both live; editing a row's address/mobile/tags/city here is local-only
 // and is NOT sent to the courier, which books from what's stored on the order.
-// Same Polaris IndexTable/IndexFilters card as OrdersPage (shares its .orders-table-card CSS).
+// Same Polaris IndexTable/IndexFilters card as OrdersPage (shares its .table-card CSS).
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  ActionList, Badge, Button, IndexFilters, IndexTable, IndexTableSelectionType, Popover, Text, TextField, Tooltip,
+  Badge, BlockStack, Box, Button, Card, IndexFilters, IndexTable, IndexTableSelectionType, InlineStack, Popover, ProgressBar, Spinner, Text, TextField, Tooltip,
   useIndexResourceState, useSetIndexFiltersMode,
 } from '@shopify/polaris';
-import { MenuVerticalIcon } from '@shopify/polaris-icons';
-import { FilterX } from 'lucide-react';
+import { MenuHorizontalIcon, PrintIcon } from '@shopify/polaris-icons';
+import { MetricsStrip } from '../../components/MetricsStrip';
+import { Filter, FilterX } from 'lucide-react';
 import { apiJson, apiJsonStream } from '../../api';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
+import { HeaderButton } from '../../components/HeaderButton';
 import { Dropdown } from '../../components/Dropdown';
 import { useStickyIndexTableHeader } from '../../components/useStickyIndexTableHeader';
-import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
-import { formatDateDDMMYYYY, rowMatchesQuery } from '../../logic/shared';
+import { DateRangePopover, dateToIso, isoToDate } from '../../components/DateRangePopover';
 import { printAirwayBillsForOrders } from '../../logic/airwayBills';
 import { orderHasAirwayBill } from '../../logic/orders';
 import {
   FULFILLMENT_COURIERS, FULFILLMENT_DEFAULT_ORDER_TYPE, FULFILLMENT_DEFAULT_REMARK, FULFILLMENT_ORDER_TYPES,
-  FULFILLMENT_PROGRESS_STATE_META, fulfillmentFilteredOrders, fulfillmentLineItemCount,
+  FULFILLMENT_COLUMN_VALUE, FULFILLMENT_PROGRESS_STATE_META, fulfillmentFilteredOrders, fulfillmentLineItemCount, fulfillmentRowMatchesQuery,
   fulfillmentPickupAddressLabel, type CustomerStatus, type FulfillmentCourier, type FulfillmentFilters,
   type FulfillmentOrder, type FulfillmentProgressOrder, type PickupAddress,
 } from '../../logic/fulfillment';
-import { EditableAmount } from '../orders/ordersPolarisColumns';
+import { EditableAmount } from '../../components/EditableCell';
 import { FulfillmentDetailsModal } from './FulfillmentDetailsModal';
 
 const COLUMNS: Array<{ key: string; title: string; alignment?: 'end'; tooltipContent?: string }> = [
@@ -90,11 +90,12 @@ export function OrderFulfillmentPage() {
 
   const [orders, setOrders] = useState<FulfillmentOrder[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filters, setFilters] = useState<FulfillmentFilters>({ cities: null, tags: null, dateFrom: null, dateTo: null });
+  const [filters, setFilters] = useState<FulfillmentFilters>({ columns: {}, dateFrom: null, dateTo: null });
   const [search, setSearch] = useState('');
+  const [showFilterRow, setShowFilterRow] = useState(false);
   const [riskTab, setRiskTab] = useState(0);
   const [selectedCourier, setSelectedCourier] = useState<FulfillmentCourier | null>(null);
-  const [courierMenuOpen, setCourierMenuOpen] = useState(false);
+  const [fulfillPanelOpen, setFulfillPanelOpen] = useState(false);
   const { mode, setMode } = useSetIndexFiltersMode();
   const [pickupAddresses, setPickupAddresses] = useState<PickupAddress[]>([]);
   const [pickupCode, setPickupCode] = useState('');
@@ -103,9 +104,6 @@ export function OrderFulfillmentPage() {
   const [detailsForId, setDetailsForId] = useState<string | null>(null);
   const [fulfilling, setFulfilling] = useState(false);
   const [progress, setProgress] = useState<{ orders: FulfillmentProgressOrder[]; phase: 'booking' | 'shopify_sync' | 'done' } | null>(null);
-  const [dateRangeNode, setDateRangeNode] = useState<HTMLButtonElement | null>(null);
-  const dateRangePickerRef = useRef<DateRangePickerHandle | null>(null);
-  const [dateRangeLabel, setDateRangeLabel] = useState('Date range');
 
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
@@ -154,8 +152,9 @@ export function OrderFulfillmentPage() {
     return list.map((o) => (o.courierCity ? o : { ...o, courierCity: byNormalized.get((o.city || '').trim().toLowerCase()) || null }));
   }
 
-  const allCities = useMemo(() => [...new Set(orders.map((o) => o.city).filter(Boolean))].sort(), [orders]);
-  const allTags = useMemo(() => [...new Set(orders.flatMap((o) => o.tags))].sort(), [orders]);
+  const filterOptions = useMemo(() => Object.fromEntries(
+    ['tags', 'city', 'courier_city', 'order_type'].map((key) => [key, [...new Set(orders.flatMap(FULFILLMENT_COLUMN_VALUE[key]).filter(Boolean))].sort()]),
+  ), [orders]);
   const tierCounts = useMemo(() => {
     const counts: Record<string, number> = { all: orders.length };
     for (const o of orders) { const t = o.customer_status?.tier || 'new'; counts[t] = (counts[t] || 0) + 1; }
@@ -164,9 +163,9 @@ export function OrderFulfillmentPage() {
   const filtered = useMemo(() => {
     const tier = RISK_TABS[riskTab]?.tier;
     const rows = tier ? orders.filter((o) => (o.customer_status?.tier || 'new') === tier) : orders;
-    return fulfillmentFilteredOrders(rows, filters).filter((o) => rowMatchesQuery(o, search));
+    return fulfillmentFilteredOrders(rows, filters).filter((o) => fulfillmentRowMatchesQuery(o, search));
   }, [orders, filters, riskTab, search]);
-  const { selectedResources, allResourcesSelected, handleSelectionChange, clearSelection } = useIndexResourceState(
+  const { selectedResources, allResourcesSelected, handleSelectionChange } = useIndexResourceState(
     filtered as unknown as Array<FulfillmentOrder & { [key: string]: unknown }>, { resourceIDResolver: (o) => o.id },
   );
   const selectedOrders = useMemo(() => orders.filter((o) => selectedResources.includes(o.id)), [orders, selectedResources]);
@@ -178,7 +177,6 @@ export function OrderFulfillmentPage() {
 
   async function pickCourier(courier: FulfillmentCourier) {
     setSelectedCourier(courier);
-    setCourierMenuOpen(false);
     setCourierCitiesLoading(true);
     setCourierCities([]);
     setOrders((prev) => prev.map((o) => ({ ...o, courierCity: null, orderType: FULFILLMENT_DEFAULT_ORDER_TYPE })));
@@ -232,6 +230,7 @@ export function OrderFulfillmentPage() {
       confirmText: 'Fulfill',
     });
     if (!ok) return;
+    setFulfillPanelOpen(false);
 
     const progressOrders: FulfillmentProgressOrder[] = selectedOrders.map((o) => ({
       id: o.id, order_number: o.order_number, name: o.name, city: o.city, courier: selectedCourier!.name,
@@ -293,52 +292,75 @@ export function OrderFulfillmentPage() {
     });
   }
 
-  useEffect(() => {
-    if (!dateRangeNode) return;
-    const handle = createDateRangePicker(dateRangeNode, {
-      onSelect: (from, to) => {
-        const toLocal = (s: string) => { const [y, mo, d] = s.split('-').map(Number); return new Date(y, mo - 1, d); };
-        setFilters((f) => ({ ...f, dateFrom: toLocal(from), dateTo: toLocal(to) }));
-        setDateRangeLabel(`${formatDateDDMMYYYY(from)} – ${formatDateDDMMYYYY(to)}`);
-        handle?.setClearable(true);
-      },
-      onClear: () => {
-        setFilters((f) => ({ ...f, dateFrom: null, dateTo: null }));
-        setDateRangeLabel('Date range');
-        handle?.picker.clear();
-        handle?.setClearable(false);
-      },
+  function setColumnFilter(key: string, value: string | string[] | null) {
+    setFilters((f) => {
+      const columns = { ...f.columns };
+      if (value === null || value === '') delete columns[key]; else columns[key] = value;
+      return { ...f, columns };
     });
-    dateRangePickerRef.current = handle;
-    return () => handle?.destroy();
-  }, [dateRangeNode]);
-
-  function clearFilters() {
-    setFilters({ cities: null, tags: null, dateFrom: null, dateTo: null });
-    dateRangePickerRef.current?.picker.clear();
-    dateRangePickerRef.current?.setClearable(false);
-    setDateRangeLabel('Date range');
   }
 
-  const hasFilters = !!(filters.cities || filters.tags || filters.dateFrom);
-  const appliedFilters = (['cities', 'tags'] as const)
-    .filter((key) => filters[key])
-    .map((key) => ({
+  function clearFilters() {
+    setFilters({ columns: {}, dateFrom: null, dateTo: null });
+  }
+
+  const hasFilters = Object.keys(filters.columns).length > 0 || !!filters.dateFrom;
+  const appliedFilters = Object.entries(filters.columns).map(([key, v]) => {
+    const display = (s: string) => (key === 'risk' ? RISK_TABS.find((t) => t.tier === s)?.label || s : s);
+    return {
       key,
-      label: `${key === 'cities' ? 'City' : 'Tags'}: ${filters[key]!.join(', ')}`,
-      onRemove: () => setFilters((f) => ({ ...f, [key]: null })),
-    }));
+      label: `${COLUMNS.find((c) => c.key === key)?.title}: ${Array.isArray(v) ? v.map(display).join(', ') : v}`,
+      onRemove: () => setColumnFilter(key, null),
+    };
+  });
+
+  const orderTypes = (selectedCourier && FULFILLMENT_ORDER_TYPES[selectedCourier.id]) || [];
+  const isCouriersNext = selectedCourier?.id === 'couriers_next';
+  const pickupSelected = pickupAddresses.find((a) => a.code === pickupCode);
+
+  const courierChip = (c: FulfillmentCourier) => (c.logo
+    ? <span className="fulfillment-courier-logo-chip"><img src={c.logo} alt={c.name} /></span>
+    : <span className="fulfillment-courier-monogram" style={{ background: c.color }}>{c.monogram}</span>);
 
   usePageHeader({
     title: 'Order Fulfillment',
-    search: { value: search, onChange: setSearch, placeholder: 'Search orders...' },
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        <div className="orders-date-range-wrap header-inline">
-          <HeaderRefButton ref={setDateRangeNode} label={dateRangeLabel} title="Filter by order date" />
-        </div>
-        <HeaderButton onClick={() => showToast('Export not implemented yet', 'info', { silent: true })}>Export</HeaderButton>
+        <DateRangePopover
+          title="Filter by order date"
+          value={filters.dateFrom && filters.dateTo ? { from: dateToIso(filters.dateFrom), to: dateToIso(filters.dateTo) } : null}
+          onChange={(r) => setFilters((f) => ({ ...f, dateFrom: r ? isoToDate(r.from) : null, dateTo: r ? isoToDate(r.to) : null }))}
+        />
         <HeaderButton onClick={async () => { if (await fetchOrders()) showToast('Refreshed', 'success'); }}>Refresh</HeaderButton>
+        <Popover
+          active={fulfillPanelOpen} onClose={() => setFulfillPanelOpen(false)} preferredAlignment="right" fluidContent preventCloseOnChildOverlayClick
+          activator={(
+            <HeaderButton variant="primary" disclosure onClick={() => setFulfillPanelOpen((v) => !v)}>
+              {selectedOrders.length > 0 ? `Fulfill ${selectedOrders.length} Order${selectedOrders.length === 1 ? '' : 's'}` : 'Fulfill Orders'}
+            </HeaderButton>
+          )}
+        >
+          <div className="fulfillment-panel">
+            <BlockStack gap="300">
+              <Dropdown
+                label="Courier" placeholder="Select courier" fullWidth
+                icon={selectedCourier ? courierChip(selectedCourier) : undefined}
+                options={FULFILLMENT_COURIERS.map((c) => ({ label: c.name, value: c.id }))}
+                value={selectedCourier?.id || ''} onChange={(id) => pickCourier(FULFILLMENT_COURIERS.find((c) => c.id === id)!)}
+              />
+              <Dropdown
+                label="Pickup location" placeholder={selectedCourier ? 'Select pickup location' : 'Select courier first'} fullWidth
+                disabled={pickupAddresses.length === 0} value={pickupCode} onChange={setPickupCode}
+                options={pickupAddresses.map((a) => ({ label: fulfillmentPickupAddressLabel(a), value: a.code }))}
+              />
+              <Text as="p" tone={disabledReason ? 'subdued' : 'success'} variant="bodySm">
+                {disabledReason || `Ready to book ${selectedOrders.length} order(s) with ${selectedCourier!.name}`}
+              </Text>
+              <Button variant="primary" fullWidth disabled={!!disabledReason} onClick={fulfillSelected}>Book Orders</Button>
+            </BlockStack>
+          </div>
+        </Popover>
       </>
     ),
   });
@@ -351,79 +373,87 @@ export function OrderFulfillmentPage() {
     const failed = progress.orders.filter((o) => o.state === 'fail').length;
     const done = progress.phase === 'done';
     const pillLabel = progress.phase === 'shopify_sync' ? 'Updating Shopify…' : done ? (failed ? 'Completed with errors' : 'Fulfillment complete') : 'Live fulfillment in progress';
-    const pillClass = !done ? 'fulfillment-progress-pill--live' : failed === 0 ? 'fulfillment-progress-pill--done' : 'fulfillment-progress-pill--warn';
+    const pillTone = !done ? 'info' : failed === 0 ? 'success' : 'warning';
+    const STATE_TONE = { pending: undefined, booking: 'info', ok: 'success', fail: 'critical' } as const;
+    const printAll = async () => { try { await printAirwayBillsForOrders(progress.orders as any); } catch (e: any) { showToast(e?.message || 'Failed to print airway bills', 'error'); } };
     return (
-      <div className="fulfillment-progress-head-wrap">
-        <div className="fulfillment-progress-head">
-          <div className="fulfillment-progress-head-titles">
-            <h2 className="fulfillment-progress-title">Fulfillment Progress</h2>
-            <span className={`fulfillment-progress-pill ${pillClass}`}>{pillLabel}</span>
-          </div>
-          <span className="fulfillment-progress-courier">{progress.orders[0] ? `via ${progress.orders[0].courier}` : ''}</span>
-        </div>
-        <div className="fulfillment-progress-summary">
-          <div className="fulfillment-progress-stat"><span className="fulfillment-progress-stat-label">Total</span><span className="fulfillment-progress-stat-value">{total}</span></div>
-          <div className="fulfillment-progress-stat"><span className="fulfillment-progress-stat-label">Completed</span><span className="fulfillment-progress-stat-value fulfillment-progress-stat-value--ok">{ok}</span></div>
-          <div className="fulfillment-progress-stat"><span className="fulfillment-progress-stat-label">Failed</span><span className="fulfillment-progress-stat-value fulfillment-progress-stat-value--fail">{failed}</span></div>
-          <div className="fulfillment-progress-stat"><span className="fulfillment-progress-stat-label">Remaining</span><span className="fulfillment-progress-stat-value">{total - ok - failed}</span></div>
-        </div>
-        <div className="fulfillment-progress-bar"><div className="fulfillment-progress-bar-fill" style={{ width: total ? `${Math.round(((ok + failed) / total) * 100)}%` : '0%' }} /></div>
-        <div className="fulfillment-progress-list">
-          {progress.orders.map((o) => {
-            const meta = FULFILLMENT_PROGRESS_STATE_META[o.state];
-            return (
-              <div className="fulfillment-progress-row" key={o.id} data-state={o.state}>
-                <span className="fulfillment-progress-row-icon"><i className={`fa-solid ${o.state === 'ok' ? 'fa-circle-check' : o.state === 'fail' ? 'fa-circle-xmark' : o.state === 'booking' ? 'fa-spinner fa-spin' : 'fa-circle'}`} /></span>
-                <div className="fulfillment-progress-row-main">
-                  <span className="fulfillment-progress-row-order">#{o.order_number}</span>
-                  <span className="fulfillment-progress-row-sub">{[o.name, o.city].filter(Boolean).join(' · ')}</span>
-                </div>
-                <div className="fulfillment-progress-row-status">
-                  <span className={`fulfillment-progress-badge fulfillment-progress-badge--${o.state}`}>{meta.badge}</span>
-                  {o.state === 'fail' ? <span className="fulfillment-progress-row-error" title={o.error || 'Failed'}>{o.error || 'Failed'}</span>
-                    : o.tracking_number ? <span className="fulfillment-progress-row-tracking">{o.tracking_number}</span> : null}
-                </div>
-                {orderHasAirwayBill(o as any) && (
-                  <button type="button" className="fulfillment-progress-awb-btn" onClick={async () => { try { await printAirwayBillsForOrders([o as any]); } catch (e: any) { showToast(e?.message || 'Failed to print airway bill', 'error'); } }}>
-                    <i className="fa-solid fa-file-arrow-down" /> Airway Bill
-                  </button>
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <div className="fulfillment-progress-footer">
-          <button type="button" className="btn btn-secondary" disabled={!progress.orders.some((o) => orderHasAirwayBill(o as any))} onClick={async () => { try { await printAirwayBillsForOrders(progress.orders as any); } catch (e: any) { showToast(e?.message || 'Failed to print airway bills', 'error'); } }}>
-            <i className="fa-solid fa-print" /> Print All Airway Bills
-          </button>
-          <button type="button" className="btn btn-primary" disabled={!done} onClick={() => setProgress(null)}>Done</button>
-        </div>
+      <div className="fulfillment-progress-wrap">
+        <Card>
+          <BlockStack gap="400">
+            <InlineStack align="space-between" blockAlign="center">
+              <InlineStack gap="200" blockAlign="center">
+                <Text as="h2" variant="headingMd">Fulfillment Progress</Text>
+                <Badge tone={pillTone}>{pillLabel}</Badge>
+              </InlineStack>
+              <Text as="span" tone="subdued">{progress.orders[0] ? `via ${progress.orders[0].courier}` : ''}</Text>
+            </InlineStack>
+            <MetricsStrip label="Fulfillment progress" tiles={[
+              { label: 'Total', value: String(total) }, { label: 'Completed', value: String(ok) },
+              { label: 'Failed', value: String(failed), negative: failed > 0 }, { label: 'Remaining', value: String(total - ok - failed) },
+            ]} />
+            <ProgressBar progress={total ? Math.round(((ok + failed) / total) * 100) : 0} size="small" tone={failed ? 'critical' : 'success'} />
+            <BlockStack gap="200">
+              {progress.orders.map((o) => {
+                const meta = FULFILLMENT_PROGRESS_STATE_META[o.state];
+                return (
+                  <Box key={o.id} paddingBlock="200" borderBlockEndWidth="025" borderColor="border-secondary">
+                    <InlineStack align="space-between" blockAlign="center" gap="300" wrap={false}>
+                      <InlineStack gap="300" blockAlign="center" wrap={false}>
+                        {o.state === 'booking' ? <Spinner size="small" /> : <Badge tone={STATE_TONE[o.state]}>{meta.badge}</Badge>}
+                        <BlockStack gap="0">
+                          <Text as="span" fontWeight="semibold">#{o.order_number}</Text>
+                          <Text as="span" tone="subdued" variant="bodySm">{[o.name, o.city].filter(Boolean).join(' · ')}</Text>
+                        </BlockStack>
+                      </InlineStack>
+                      <InlineStack gap="300" blockAlign="center" wrap={false}>
+                        {o.state === 'fail'
+                          ? <Text as="span" tone="critical">{o.error || 'Failed'}</Text>
+                          : o.tracking_number ? <Text as="span" tone="subdued">{o.tracking_number}</Text> : null}
+                        {orderHasAirwayBill(o as any) && (
+                          <Button size="slim" icon={PrintIcon} onClick={async () => { try { await printAirwayBillsForOrders([o as any]); } catch (e: any) { showToast(e?.message || 'Failed to print airway bill', 'error'); } }}>Airway Bill</Button>
+                        )}
+                      </InlineStack>
+                    </InlineStack>
+                  </Box>
+                );
+              })}
+            </BlockStack>
+            <InlineStack align="end" gap="200">
+              <Button icon={PrintIcon} disabled={!progress.orders.some((o) => orderHasAirwayBill(o as any))} onClick={printAll}>Print All Airway Bills</Button>
+              <Button variant="primary" disabled={!done} onClick={() => setProgress(null)}>Done</Button>
+            </InlineStack>
+          </BlockStack>
+        </Card>
       </div>
     );
   }
 
-  const orderTypes = (selectedCourier && FULFILLMENT_ORDER_TYPES[selectedCourier.id]) || [];
-  const isCouriersNext = selectedCourier?.id === 'couriers_next';
-  const pickupSelected = pickupAddresses.find((a) => a.code === pickupCode);
-
-  const courierChip = (c: FulfillmentCourier) => (c.logo
-    ? <span className="fulfillment-courier-logo-chip"><img src={c.logo} alt={c.name} /></span>
-    : <span className="fulfillment-courier-monogram" style={{ background: c.color }}>{c.monogram}</span>);
-
   function renderColumnFilterCell(key: string) {
-    if (key === 'city') {
-      return <Dropdown multiple searchable fullWidth allLabel="All" options={allCities} value={filters.cities} onChange={(v) => setFilters((f) => ({ ...f, cities: v }))} />;
+    if (key === 'actions') return null;
+    const options = key === 'risk' ? RISK_TABS.filter((t) => t.tier).map((t) => ({ value: t.tier!, label: t.label })) : filterOptions[key];
+    if (options) {
+      return (
+        <Dropdown
+          multiple fullWidth allLabel="All" searchable={key === 'city' || key === 'courier_city'} options={options}
+          value={(filters.columns[key] as string[] | undefined) ?? null} onChange={(v) => setColumnFilter(key, v)}
+        />
+      );
     }
-    if (key === 'tags') {
-      return <Dropdown multiple fullWidth allLabel="All" options={allTags} value={filters.tags} onChange={(v) => setFilters((f) => ({ ...f, tags: v }))} />;
-    }
-    return null;
+    return (
+      <TextField
+        label="" labelHidden autoComplete="off" variant="borderless" size="slim" clearButton
+        align={key === 'cod' ? 'right' : undefined}
+        placeholder="Search..." value={(filters.columns[key] as string | undefined) || ''}
+        onChange={(v) => setColumnFilter(key, v)}
+        onClearButtonClick={() => setColumnFilter(key, null)}
+      />
+    );
   }
 
   return (
     <div id="orderFulfillmentView" className="view active">
-      <div className="orders-table-card">
-        <div className="orders-index-filters-wrap">
+      <div className="table-card">
+        <div className="table-index-filters">
           <IndexFilters
             mode={mode} setMode={setMode}
             tabs={RISK_TABS.map((t) => ({ id: t.id, content: t.label, badge: String(tierCounts[t.id] ?? 0) }))}
@@ -438,32 +468,10 @@ export function OrderFulfillmentPage() {
               <HeaderButton icon={<FilterX size={16} />} accessibilityLabel="Clear filters" onClick={clearFilters} variant="tertiary" />
             </Tooltip>
           )}
+          <Tooltip content={showFilterRow ? 'Hide filters' : 'Show filters'}>
+            <HeaderButton icon={<Filter size={16} />} accessibilityLabel="Toggle filters" onClick={() => setShowFilterRow((v) => !v)} variant="tertiary" pressed={showFilterRow} />
+          </Tooltip>
         </div>
-        {selectedOrders.length > 0 && (
-          <div className="fulfillment-selection-bar">
-            <Text as="span" fontWeight="semibold">{selectedOrders.length} selected</Text>
-            <Popover
-              active={courierMenuOpen} onClose={() => setCourierMenuOpen(false)}
-              activator={(
-                <Button disclosure icon={selectedCourier ? courierChip(selectedCourier) : undefined} onClick={() => setCourierMenuOpen((v) => !v)}>
-                  {selectedCourier ? selectedCourier.name : 'Select Courier'}
-                </Button>
-              )}
-            >
-              <ActionList items={FULFILLMENT_COURIERS.map((c) => ({ content: c.name, prefix: courierChip(c), onAction: () => pickCourier(c) }))} />
-            </Popover>
-            <div className="fulfillment-pickup-group" title={pickupSelected ? fulfillmentPickupAddressLabel(pickupSelected) : ''}>
-              <Dropdown
-                disabled={pickupAddresses.length === 0} placeholder="Select courier first" value={pickupCode} onChange={setPickupCode}
-                options={pickupAddresses.map((a) => ({ label: fulfillmentPickupAddressLabel(a), value: a.code }))}
-              />
-            </div>
-            <Tooltip content={disabledReason || 'Book the selected orders'}>
-              <Button variant="primary" disabled={!!disabledReason} onClick={fulfillSelected}>Fulfill Order</Button>
-            </Tooltip>
-            <Button onClick={clearSelection}>Cancel</Button>
-          </div>
-        )}
         <IndexTable
           resourceName={{ singular: 'order', plural: 'orders' }}
           // Same trick as OrdersPage: keep itemCount >= 1 so Polaris doesn't swap the whole
@@ -475,13 +483,15 @@ export function OrderFulfillmentPage() {
           loading={loading}
           condensed={false}
         >
-          <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
-            {COLUMNS.map((col) => <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>)}
-          </IndexTable.Row>
+          {showFilterRow && (
+            <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
+              {COLUMNS.map((col) => <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>)}
+            </IndexTable.Row>
+          )}
           {filtered.length === 0 && !loading && (
             <IndexTable.Row id="__empty__" position={-2} hideSelectable>
               <IndexTable.Cell colSpan={COLUMNS.length}>
-                <div className="orders-table-empty">No unfulfilled orders match these filters.</div>
+                <div className="table-empty">No unfulfilled orders match these filters.</div>
               </IndexTable.Cell>
             </IndexTable.Row>
           )}
@@ -513,7 +523,7 @@ export function OrderFulfillmentPage() {
               <IndexTable.Cell><RiskCell order={o} /></IndexTable.Cell>
               <IndexTable.Cell>
                 <Tooltip content="Shipping details">
-                  <Button icon={MenuVerticalIcon} variant="tertiary" size="micro" accessibilityLabel="Shipping details" onClick={() => setDetailsForId(o.id)} />
+                  <Button icon={MenuHorizontalIcon} variant="tertiary" size="micro" accessibilityLabel="Shipping details" onClick={() => setDetailsForId(o.id)} />
                 </Tooltip>
               </IndexTable.Cell>
             </IndexTable.Row>

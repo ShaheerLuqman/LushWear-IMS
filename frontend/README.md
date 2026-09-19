@@ -1,6 +1,6 @@
 # frontend/engine
 
-The SoftLush IMS frontend as a React + TypeScript SPA (Vite), replacing the
+The QuikMerchant frontend as a React + TypeScript SPA (Vite), replacing the
 old raw HTML/JS app in `frontend/` (`index.html`, `admin.html`,
 `frontend/js/*.js`). This is being migrated in over several passes - see the
 migration plan for the batch order. Old files are deleted as each is ported,

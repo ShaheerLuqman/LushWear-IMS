@@ -10,8 +10,8 @@ import { getPKTDate } from '../../logic/shared';
 
 export const ALL_ORDERS_VALUE = '__all__';
 export const CUSTOM_ORDERS_VALUE = '__custom__';
-const ORDERS_PERIOD_OLDEST_MONTH = 10;
-const ORDERS_PERIOD_OLDEST_YEAR = 2024;
+export const ORDERS_PERIOD_OLDEST_MONTH = 10;
+export const ORDERS_PERIOD_OLDEST_YEAR = 2024;
 const ORDERS_CACHE_KEY_PREFIX = 'lushwear_orders_cache_';
 const ORDERS_FETCH_RETRIES = 3;
 const ORDERS_FETCH_RETRY_DELAY_MS = 5000;
@@ -52,6 +52,13 @@ export function formatOrdersDateRangeLabel(fromYyyyMmDd: string, toYyyyMmDd: str
 
 export function getCurrentOrdersPeriod(fiscalMonthStartDay: number): { month: number; year: number } {
   return getPeriodForDate(getPKTDate(), fiscalMonthStartDay)!;
+}
+
+// null once `month`/`year` is at or before the oldest period orders are tracked for -
+// there's nothing before it to compare against.
+export function previousOrdersPeriod(month: number, year: number): { month: number; year: number } | null {
+  if (year < ORDERS_PERIOD_OLDEST_YEAR || (year === ORDERS_PERIOD_OLDEST_YEAR && month <= ORDERS_PERIOD_OLDEST_MONTH)) return null;
+  return month === 1 ? { month: 12, year: year - 1 } : { month: month - 1, year };
 }
 
 export interface PeriodOption {

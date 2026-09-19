@@ -1,19 +1,21 @@
 // Transactions: one day's entries grid, day navigation, Cash In Hand, and the
 // create-entry modal. Ported from transactions.js + ledgers.js's Cash In Hand bits.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation } from 'react-router-dom';
-import { AgGridReact } from 'ag-grid-react';
-import type { GridApi, GridReadyEvent } from 'ag-grid-community';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { SearchField } from '../../components/SearchField';
+import { Box, ButtonGroup, Popover } from '@shopify/polaris';
+import { ChevronLeftIcon, ChevronRightIcon, PlusIcon } from '@shopify/polaris-icons';
 import { HeaderButton } from '../../components/HeaderButton';
-import { formatDateDDMMYYYY, getPKTDateString, parseDDMMYYYYToYYYYMMDD } from '../../logic/shared';
+import { DateField } from '../../components/DateField';
+import { KeyValueList } from '../../components/KeyValueList';
+import { getPKTDateString, rowMatchesQuery } from '../../logic/shared';
 import { formatMoney, type LedgerBalancePatch } from '../../logic/ledgers';
 import { useLedgersData } from './useLedgersData';
-import { buildTransactionColumnDefs, isTransactionNewRow, type TransactionRow } from './TransactionsGridCells';
+import { DataTable } from '../../components/DataTable';
+import { buildTransactionColumns, isTransactionNewRow, type TransactionRow } from './TransactionsGridCells';
 import { TransactionEntryModal } from './TransactionEntryModal';
 import { CreateLedgerModal } from './LedgerModals';
 
@@ -37,19 +39,17 @@ export function TransactionsPage() {
   const { ledgers, loadLedgersList, applyLedgerBalancePatches, cashInHand } = useLedgersData();
 
   const [selectedDate, setSelectedDate] = useState(getPKTDateString());
-  const [dateInput, setDateInput] = useState(formatDateDDMMYYYY(getPKTDateString()));
   const [entries, setEntries] = useState<TransactionRow[]>([]);
   const [newRow, setNewRow] = useState<TransactionRow>(() => emptyRow(getPKTDateString()));
   const [search, setSearch] = useState('');
-  const [entryModalOpen, setEntryModalOpen] = useState(false);
+  const [entryModal, setEntryModal] = useState<'single' | 'bulk' | null>(null);
   const [cashTooltipOpen, setCashTooltipOpen] = useState(false);
   const [createLedgerFor, setCreateLedgerFor] = useState<{ rowId: string; field: 'from_account_id' | 'to_account_id' } | null>(null);
-
-  const gridApiRef = useRef<GridApi | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [flashRowId, setFlashRowId] = useState<string | null>(null);
 
   const loadDay = useCallback(async (date: string) => {
-    const api = gridApiRef.current;
-    if (api) api.showLoadingOverlay();
+    setLoading(true);
     try {
       const data = await apiJson<{ entries: TransactionRow[] }>(`/transactions/day/${date}`, { fallback: 'Failed to load transactions day' });
       setEntries((data.entries || []).map((e) => ({ ...e, entry_date: e.entry_date ? String(e.entry_date).slice(0, 10) : '' })));
@@ -58,40 +58,24 @@ export function TransactionsPage() {
       showToast('Failed to load transaction entries', 'error');
       setEntries([]);
     } finally {
-      gridApiRef.current?.hideOverlay();
+      setLoading(false);
     }
   }, [showToast]);
 
   useEffect(() => {
-    loadLedgersList();
-    // A "Go to transaction" link from a ledger statement lands here with a date/id to focus.
-    const state = location.state as { focusDate?: string; focusId?: string } | null;
+    // A "Go to transaction" link from a ledger statement lands here with a date/id to focus;
+    // a PWA shortcut (see DefaultRedirect) lands with an entry mode to open the modal in.
+    const state = location.state as { focusDate?: string; focusId?: string; entryMode?: 'single' | 'bulk' } | null;
+    loadLedgersList().then(() => { if (state?.entryMode) setEntryModal(state.entryMode); });
     const initialDate = state?.focusDate || getPKTDateString();
     setSelectedDate(initialDate);
-    setDateInput(formatDateDDMMYYYY(initialDate));
     setNewRow(emptyRow(initialDate));
-    loadDay(initialDate).then(() => {
-      if (state?.focusId) flashRow(state.focusId);
-    });
+    loadDay(initialDate).then(() => { if (state?.focusId) setFlashRowId(state.focusId); });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function flashRow(rowId: string) {
-    const api = gridApiRef.current;
-    if (!api) return;
-    setTimeout(() => {
-      const node = api.getRowNode(rowId);
-      if (!node) return;
-      api.ensureNodeVisible(node, 'middle');
-      const flash = () => api.flashCells({ rowNodes: [node], flashDelay: 600, fadeDelay: 600 });
-      flash();
-      setTimeout(flash, 1200);
-    }, 200);
-  }
-
   function changeDate(date: string) {
     setSelectedDate(date);
-    setDateInput(formatDateDDMMYYYY(date));
     setNewRow(emptyRow(date));
     loadDay(date);
   }
@@ -101,15 +85,6 @@ export function TransactionsPage() {
     const date = new Date(y, m - 1, d);
     date.setDate(date.getDate() + delta);
     changeDate(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`);
-  }
-
-  function applyDateFromInput() {
-    const parsed = parseDDMMYYYYToYYYYMMDD(dateInput);
-    if (parsed) changeDate(parsed);
-    else if (dateInput.trim() !== '') {
-      showToast('Enter date as DD/MM/YYYY', 'error', { silent: true });
-      setDateInput(formatDateDDMMYYYY(selectedDate));
-    }
   }
 
   async function onFieldChange(rowId: string, field: string, value: unknown) {
@@ -173,89 +148,62 @@ export function TransactionsPage() {
     }
   }
 
-  const columnDefs = useMemo(() => buildTransactionColumnDefs({
+  const columns = useMemo(() => buildTransactionColumns({
     ledgers, isEditingAllowed, onFieldChange, onDeleteRow,
     onCreateLedger: (rowId, field) => setCreateLedgerFor({ rowId, field }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [ledgers, isEditingAllowed, entries, newRow]);
 
-  const rowData = useMemo(() => [...sortedEntries(entries), newRow], [entries, newRow]);
-
-  function onGridReady(e: GridReadyEvent) { gridApiRef.current = e.api; }
+  const rows = useMemo(() => [...sortedEntries(entries).filter((e) => rowMatchesQuery(e, search)), newRow], [entries, newRow, search]);
 
   usePageHeader({
     title: 'Transactions',
+    search: { value: search, onChange: setSearch },
     actions: (
       <>
-        <div className="toolbar-search"><SearchField placeholder="Search this day's entries..." value={search} onChange={(v) => { setSearch(v); gridApiRef.current?.setGridOption('quickFilterText', v); }} /></div>
-        <div className={'cash-in-hand-display' + (cashTooltipOpen ? ' cash-in-hand-tooltip-open' : '')} onClick={(e) => { e.stopPropagation(); setCashTooltipOpen((v) => !v); }}>
-          <span className="cash-in-hand-label">Available Cash:</span>
-          <span className="cash-in-hand-amount">Rs {formatMoney(cashInHand.total)}</span>
-          <div className="cash-in-hand-tooltip">
-            <div className="cash-in-hand-tooltip-section">
-              <div className="cash-in-hand-tooltip-header">Cash in Hand:</div>
-              <div className="cash-in-hand-tooltip-item"><span className="cash-in-hand-tooltip-name">Cash</span><span className="cash-in-hand-tooltip-balance">Rs {formatMoney(cashInHand.physicalCashInHand)}</span></div>
-            </div>
-            <div className="cash-in-hand-tooltip-section">
-              <div className="cash-in-hand-tooltip-header">Cash in Bank Ledgers:</div>
-              {cashInHand.bankLedgerBalances.length === 0
-                ? <div className="cash-in-hand-tooltip-empty">No ledgers included</div>
-                : cashInHand.bankLedgerBalances.map((b) => (
-                  <div className="cash-in-hand-tooltip-item" key={b.name}><span className="cash-in-hand-tooltip-name">{b.name}</span><span className="cash-in-hand-tooltip-balance">Rs {formatMoney(b.balance)}</span></div>
-                ))}
-            </div>
-            <div className="cash-in-hand-tooltip-footer">
-              <span className="cash-in-hand-tooltip-total-label">Total:</span>
-              <span className="cash-in-hand-tooltip-total">Rs {formatMoney(cashInHand.total)}</span>
-            </div>
-          </div>
-        </div>
-        <HeaderButton icon={<i className="fa-solid fa-chevron-left" />} accessibilityLabel="Previous day" onClick={() => shiftDay(-1)} />
-        <input
-          type="text" className="transaction-date-filter" placeholder="DD/MM/YYYY" maxLength={10} autoComplete="off"
-          value={dateInput} onChange={(e) => setDateInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); applyDateFromInput(); } }}
-          onBlur={applyDateFromInput}
-        />
-        <HeaderButton icon={<i className="fa-solid fa-chevron-right" />} accessibilityLabel="Next day" onClick={() => shiftDay(1)} />
+        <Popover
+          active={cashTooltipOpen} onClose={() => setCashTooltipOpen(false)} preferredAlignment="right"
+          activator={<HeaderButton disclosure onClick={() => setCashTooltipOpen((v) => !v)}>{`Available Cash: Rs ${formatMoney(cashInHand.total)}`}</HeaderButton>}
+        >
+          <Box padding="300" minWidth="260px">
+            <KeyValueList rows={[
+              { label: 'Cash in hand', value: `Rs ${formatMoney(cashInHand.physicalCashInHand)}` },
+              { label: 'Cash in bank ledgers', value: '', kind: 'head' },
+              ...(cashInHand.bankLedgerBalances.length === 0
+                ? [{ label: 'No ledgers included', value: '' }]
+                : cashInHand.bankLedgerBalances.map((b) => ({ label: b.name, value: `Rs ${formatMoney(b.balance)}` }))),
+              { label: 'Total', value: `Rs ${formatMoney(cashInHand.total)}`, kind: 'subtotal' },
+            ]} />
+          </Box>
+        </Popover>
+        <ButtonGroup variant="segmented">
+          <HeaderButton icon={ChevronLeftIcon} accessibilityLabel="Previous day" onClick={() => shiftDay(-1)} />
+          <HeaderButton icon={ChevronRightIcon} accessibilityLabel="Next day" onClick={() => shiftDay(1)} />
+        </ButtonGroup>
+        <DateField label="Day" value={selectedDate} onChange={(v) => { if (v) changeDate(v); }} />
         <HeaderButton onClick={() => changeDate(getPKTDateString())}>Today</HeaderButton>
-        <HeaderButton variant="primary" icon={<i className="fa-solid fa-plus" />} onClick={() => setEntryModalOpen(true)}>New Transaction</HeaderButton>
+        <HeaderButton variant="primary" icon={PlusIcon} onClick={() => setEntryModal('single')}>New Transaction</HeaderButton>
       </>
     ),
   });
 
-  useEffect(() => {
-    function onDocClick() { setCashTooltipOpen(false); }
-    document.addEventListener('click', onDocClick);
-    return () => document.removeEventListener('click', onDocClick);
-  }, []);
-
   return (
     <>
-      <div className="ag-theme-alpine grid-container">
-        <AgGridReact
-          columnDefs={columnDefs}
-          rowData={rowData}
-          defaultColDef={{ sortable: true, resizable: true, filter: true, floatingFilter: false, minWidth: 80 }}
-          animateRows
-          pagination={false}
-          domLayout="normal"
-          singleClickEdit
-          stopEditingWhenCellsLoseFocus
-          getRowId={(p) => p.data.id}
-          getRowClass={(p) => (isTransactionNewRow(p.data?.id) ? 'transaction-new-row' : '')}
-          onGridReady={onGridReady}
-        />
-      </div>
-      {entryModalOpen && (
+      <DataTable
+        columns={columns} rows={rows} rowId={(r) => r.id} loading={loading} flashRowId={flashRowId}
+        rowTone={(r) => (isTransactionNewRow(r.id) ? 'subdued' : undefined)}
+        resourceName={{ singular: 'entry', plural: 'entries' }} emptyMessage="No entries on this day"
+      />
+      {entryModal && (
         <TransactionEntryModal
           ledgers={ledgers}
+          initialMode={entryModal}
           entryDate={selectedDate}
-          onClose={() => setEntryModalOpen(false)}
+          onClose={() => setEntryModal(null)}
           onLedgersChanged={loadLedgersList}
           onDone={async (patches) => {
             applyLedgerBalancePatches(patches);
-            setEntryModalOpen(false);
+            setEntryModal(null);
             await loadDay(selectedDate);
           }}
         />

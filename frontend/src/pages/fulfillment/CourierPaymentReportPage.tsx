@@ -1,19 +1,25 @@
 // Courier Payment Report: what the courier still owes for delivered/returned orders,
 // grouped by pickup date + courier, plus its bill-detail screen. Ported from
 // courier-payment-report.js.
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AgGridReact } from 'ag-grid-react';
-import type { ColDef, GridApi, GridReadyEvent } from 'ag-grid-community';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Badge, BlockStack, Button, Card, InlineGrid, InlineStack, ProgressBar, Text } from '@shopify/polaris';
+import { InfoModal } from '../../components/FormModal';
+import { ReportTable } from '../../components/ReportTable';
+import { ArrowLeftIcon, ExportIcon, ViewIcon } from '@shopify/polaris-icons';
+import { KeyValueList } from '../../components/KeyValueList';
+import { StatCardGrid } from '../../components/StatCardGrid';
 import { apiJson, apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { SearchField } from '../../components/SearchField';
-import { HeaderButton, HeaderRefButton } from '../../components/HeaderButton';
-import { createDateRangePicker, type DateRangePickerHandle } from '../../dateRangePicker';
+import { HeaderButton } from '../../components/HeaderButton';
+import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import { Dropdown } from '../../components/Dropdown';
-import { formatDateDDMMYYYY } from '../../logic/shared';
+import { DataTable, type DataColumn } from '../../components/DataTable';
+import { MetricsStrip } from '../../components/MetricsStrip';
+import { StatusBadge } from '../../components/StatusBadge';
 import { formatMoney } from '../../logic/ledgers';
-import { computeReceivable, orderStatusBadgeClass } from '../../logic/orders';
+import { computeReceivable } from '../../logic/orders';
 import {
   BILL_STATUS_META, COURIER_PAYMENT_STATUSES, COURIER_PAYMENT_STATUS_LABELS, COURIER_RESOLVED_STATUSES,
   billCourierLabel, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
@@ -39,58 +45,32 @@ function PostExSettlementsModal({ data, onClose }: { data: PostExSettlementsResu
   const num = (v: unknown) => Number(v || 0).toFixed(2);
   const totalReceivable = rows.reduce((sum, r) => sum + Number(r.receivable || 0), 0);
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>PostEx settlements</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">{data.message || ''} Checked {data.checked || 0} order(s); total receivable across the {rows.length} listed: {totalReceivable.toFixed(2)}.</p>
-          <div className="postex-mismatches-table-wrap">
-            <table className="postex-mismatches-table">
-              <thead>
-                <tr><th>Order #</th><th>Folio</th><th>Status</th><th>Settlement date</th><th>Invoice</th><th>Delivery charge</th><th>Tax</th><th>Receivable</th></tr>
-              </thead>
-              <tbody>
-                {rows.length ? rows.map((r, i) => (
-                  <tr key={i}>
-                    <td>{r.order_number}{r.corrected ? <em> (corrected)</em> : null}</td>
-                    <td>{r.folio || '-'}</td>
-                    <td>{r.order_status}</td>
-                    <td>{formatPostExDate(r.settlement_date)}</td>
-                    <td>{num(r.invoice_payment)}</td>
-                    <td>{num(r.delivery_charge)}</td>
-                    <td>{num(r.tax_amount)}</td>
-                    <td>{num(r.receivable)}</td>
-                  </tr>
-                )) : <tr><td colSpan={8}>No orders were ready to settle.</td></tr>}
-              </tbody>
-            </table>
-          </div>
-          <p className="modal-description">
-            {rows.length ? 'Tax is derived from the order value (2% income + 2% sales withholding); PostEx does not report it. Uploading the CPR CSV later replaces it with the exact figures.' : ''}
-          </p>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-primary" onClick={onClose}>Close</button>
-        </div>
-      </div>
-    </div>
+    <InfoModal title="PostEx settlements" onClose={onClose} size="large">
+      <BlockStack gap="400">
+        <Text as="p" tone="subdued">{data.message || ''} Checked {data.checked || 0} order(s); total receivable across the {rows.length} listed: {totalReceivable.toFixed(2)}.</Text>
+        <ReportTable
+          headings={['Order #', 'Folio', 'Status', 'Settlement date', 'Invoice', 'Delivery charge', 'Tax', 'Receivable']} numeric={[4, 5, 6, 7]}
+          emptyMessage="No orders were ready to settle."
+          rows={rows.map((r) => [
+            r.corrected ? `${r.order_number} (corrected)` : String(r.order_number), r.folio || '-', r.order_status, formatPostExDate(r.settlement_date),
+            num(r.invoice_payment), num(r.delivery_charge), num(r.tax_amount), num(r.receivable),
+          ])}
+        />
+        {rows.length > 0 && <Text as="p" tone="subdued">Tax is derived from the order value (2% income + 2% sales withholding); PostEx does not report it. Uploading the CPR CSV later replaces it with the exact figures.</Text>}
+      </BlockStack>
+    </InfoModal>
   );
 }
 
 function SettledOrdersCell({ bill }: { bill: CourierBill }) {
   const pct = bill.totalOrders > 0 ? Math.round((bill.settledCount / bill.totalOrders) * 100) : 0;
   return (
-    <div className="payment-progress-cell-wrap">
-      <div className="payment-progress">
-        <div className="payment-progress__row">
-          <span className="payment-progress__amounts">{bill.settledCount} / {bill.totalOrders} Orders</span>
-          <span className="payment-progress__pct">{pct}%</span>
-        </div>
-        <div className="payment-progress__bar"><div className="payment-progress__segment payment-progress__segment--received" style={{ width: `${pct}%` }} /></div>
+    <div className="payment-progress">
+      <div className="payment-progress__row">
+        <Text as="span" tone="subdued">{bill.settledCount} / {bill.totalOrders} Orders</Text>
+        <Text as="span" fontWeight="semibold">{pct}%</Text>
       </div>
+      <ProgressBar progress={pct} size="small" tone="success" />
     </div>
   );
 }
@@ -155,137 +135,110 @@ function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void })
   }
 
   const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
-  const netColor = bill.netReceivable < 0 ? 'var(--danger)' : 'var(--success)';
   const stats = paymentProgressStats(bill);
   const stops = paymentProgressPieStops(stats);
   const pieBackground = `conic-gradient(${PAYMENT_PROGRESS_COLORS.received} 0% ${stops.receivedEnd}%, ${PAYMENT_PROGRESS_COLORS.returned} ${stops.receivedEnd}% ${stops.returnedEnd}%, ${PAYMENT_PROGRESS_COLORS.charges} ${stops.returnedEnd}% ${stops.chargesEnd}%, ${PAYMENT_PROGRESS_COLORS.taxes} ${stops.chargesEnd}% ${stops.taxesEnd}%, ${PAYMENT_PROGRESS_COLORS.remaining} ${stops.taxesEnd}% 100%)`;
-
-  const legend = (color: string, label: string, value: number, pct: number) => (
-    <div className="progress-ring-legend__item" key={label}>
-      <span className="progress-ring-legend__label"><span className="progress-ring-legend__dot" style={{ background: color }} />{label}</span>
-      <span className="progress-ring-legend__value">Rs {formatMoney(value)} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({pct}%)</span></span>
-    </div>
-  );
-  const summaryRow = (label: string, value: string, opts: { total?: boolean; color?: string; bold?: boolean } = {}) => (
-    <div className={'bill-detail-summary-row' + (opts.total ? ' bill-detail-summary-row--total' : '')} key={label}>
-      <span>{label}</span><span style={{ color: opts.color, fontWeight: opts.bold ? 700 : undefined }}>{value}</span>
-    </div>
-  );
-  const courierRow = (label: string, value: string | number) => (
-    <div className="bill-detail-summary-row" key={label}><span>{label}</span><span>{value}</span></div>
-  );
+  const rs = (v: number) => `Rs ${formatMoney(v)}`;
+  const legend = (color: string, label: string, value: number, pct: number) => ({
+    key: label,
+    label: <InlineStack gap="200" blockAlign="center"><span className="progress-ring-legend__dot" style={{ background: color }} />{label}</InlineStack>,
+    value: <>{rs(value)} <Text as="span" tone="subdued">({pct}%)</Text></>,
+  });
 
   return (
     <div className="bill-detail-scroll">
-      <div className="bill-detail-header">
-        <div className="bill-detail-header-top">
-          <button type="button" className="btn btn-secondary btn-sm" onClick={onBack}><i className="fa-solid fa-arrow-left" /> Back</button>
-          <button type="button" className="btn btn-secondary btn-sm" disabled={downloading} onClick={downloadPdf}><i className="fa-solid fa-download" /> Download Summary (PDF)</button>
-        </div>
-        <div className="bill-detail-title-row">
-          <h2 className="bill-detail-title">Bill Details</h2>
-          <span className={`grid-status-badge ${meta.cls}`}>{meta.label}</span>
-        </div>
-        <p className="bill-detail-subtitle">{billPickupDateLabel(bill)} · {billCourierLabel(bill)} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</p>
-      </div>
+      <BlockStack gap="400">
+        <InlineStack align="space-between" blockAlign="center">
+          <InlineStack gap="300" blockAlign="center">
+            <Button icon={ArrowLeftIcon} onClick={onBack}>Back</Button>
+            <BlockStack gap="050">
+              <InlineStack gap="200" blockAlign="center"><Text as="h2" variant="headingMd">Bill Details</Text><Badge tone={meta.tone}>{meta.label}</Badge></InlineStack>
+              <Text as="span" tone="subdued">{billPickupDateLabel(bill)} · {billCourierLabel(bill)} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</Text>
+            </BlockStack>
+          </InlineStack>
+          <Button icon={ExportIcon} loading={downloading} onClick={downloadPdf}>Download Summary (PDF)</Button>
+        </InlineStack>
 
-      <div className="stats-grid bill-detail-stats-grid">
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Orders</span><span className="stat-detail">{bill.resolvedCount} resolved{bill.inTransitCount > 0 ? ` · ${bill.inTransitCount} in transit` : ''}</span><span className="stat-value">{bill.totalOrders}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Bill Value</span><span className="stat-value">Rs {formatMoney(bill.billValue)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Advance Received</span><span className="stat-value">Rs {formatMoney(bill.advanceTotal)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Returned Orders</span><span className="stat-value">- Rs {formatMoney(bill.returnedTotal)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Gross COD</span><span className="stat-value">Rs {formatMoney(bill.grossCod)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Delivery Charges</span><span className="stat-value">- Rs {formatMoney(bill.charges)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Taxes (SST)</span><span className="stat-value">- Rs {formatMoney(bill.taxes)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Net Receivable</span><span className="stat-value" style={{ color: netColor }}>Rs {formatMoney(bill.netReceivable)}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Total Cost Price</span><span className="stat-value">Rs {formatMoney(bill.costTotal)}</span></div></div>
-      </div>
+        <StatCardGrid columns={{ xs: 2, md: 3, lg: 5 }} tiles={[
+          { label: 'Total Orders', value: String(bill.totalOrders), detail: `${bill.resolvedCount} resolved${bill.inTransitCount > 0 ? ` · ${bill.inTransitCount} in transit` : ''}` },
+          { label: 'Bill Value', value: rs(bill.billValue) },
+          { label: 'Advance Received', value: rs(bill.advanceTotal) },
+          { label: 'Returned Orders', value: `- ${rs(bill.returnedTotal)}` },
+          { label: 'Gross COD', value: rs(bill.grossCod) },
+          { label: 'Total Delivery Charges', value: `- ${rs(bill.charges)}` },
+          { label: 'Total Taxes (SST)', value: `- ${rs(bill.taxes)}` },
+          { label: 'Net Receivable', value: rs(bill.netReceivable), tone: bill.netReceivable < 0 ? 'critical' : 'success' },
+          { label: 'Total Cost Price', value: rs(bill.costTotal) },
+        ]} />
 
-      <div className="bill-detail-summary-grid">
-        <div className="bill-detail-card">
-          <h3>Financial Summary</h3>
-          <div>
-            {summaryRow('Bill Value', `Rs ${formatMoney(bill.billValue)}`)}
-            {summaryRow('Less: Returned Orders', `- Rs ${formatMoney(bill.returnedTotal)}`)}
-            {summaryRow('Gross COD', `Rs ${formatMoney(bill.grossCod)}`, { total: true })}
-            {summaryRow('Less: Delivery Charges', `- Rs ${formatMoney(bill.charges)}`)}
-            {summaryRow('Less: Taxes (SST)', `- Rs ${formatMoney(bill.taxes)}`)}
-            {summaryRow('Net Receivable', `Rs ${formatMoney(bill.netReceivable)}`, { total: true, color: 'var(--text-primary)' })}
-            {summaryRow('Total Received', `Rs ${formatMoney(bill.receivedAmount)}`)}
-            {summaryRow('Remaining', `Rs ${formatMoney(bill.remainingAmount)}`, { color: '#7c3aed', bold: true })}
-          </div>
-        </div>
-        <div className="bill-detail-card">
-          <h3>Courier Summary</h3>
-          <div>
-            {courierRow('Courier', billCourierLabel(bill))}
-            {courierRow('Pickup Date', billPickupDateLabel(bill))}
-            {courierRow('Total Parcels', bill.totalOrders)}
-            {courierRow('Resolved', bill.resolvedCount)}
-            {courierRow('In Transit', bill.inTransitCount)}
-            {courierRow('Settled', `${bill.settledCount} / ${bill.resolvedCount}`)}
-          </div>
-        </div>
-        <div className="bill-detail-card">
-          <h3>Payment Progress</h3>
-          <div className="bill-detail-progress-ring-wrap">
-            <div className="progress-ring" style={{ background: pieBackground }}>
-              <div className="progress-ring__inner"><span className="progress-ring__pct">{stats.pct}%</span><span className="progress-ring__label">Settled</span></div>
-            </div>
-            <div className="progress-ring-legend">
-              {legend('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue, 100)}
-              {legend(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received, stats.receivedPct)}
-              {legend(PAYMENT_PROGRESS_COLORS.returned, 'Returned Orders', stats.returned, stats.returnedPct)}
-              {legend(PAYMENT_PROGRESS_COLORS.charges, 'Delivery Charges', stats.charges, stats.chargesPct)}
-              {legend(PAYMENT_PROGRESS_COLORS.taxes, 'Taxes (SST)', stats.taxes, stats.taxesPct)}
-              {legend(PAYMENT_PROGRESS_COLORS.remaining, 'Remaining', stats.remaining, stats.remainingPct)}
-            </div>
-          </div>
-        </div>
-      </div>
+        <InlineGrid columns={{ xs: 1, md: 3 }} gap="400">
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Financial Summary</Text>
+              <KeyValueList rows={[
+                { label: 'Bill Value', value: rs(bill.billValue) },
+                { label: 'Less: Returned Orders', value: `- ${rs(bill.returnedTotal)}`, kind: 'deduction' },
+                { label: 'Gross COD', value: rs(bill.grossCod), kind: 'subtotal' },
+                { label: 'Less: Delivery Charges', value: `- ${rs(bill.charges)}`, kind: 'deduction' },
+                { label: 'Less: Taxes (SST)', value: `- ${rs(bill.taxes)}`, kind: 'deduction' },
+                { label: 'Net Receivable', value: rs(bill.netReceivable), kind: 'subtotal' },
+                { label: 'Total Received', value: rs(bill.receivedAmount) },
+                { label: 'Remaining', value: rs(bill.remainingAmount), kind: 'final' },
+              ]} />
+            </BlockStack>
+          </Card>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Courier Summary</Text>
+              <KeyValueList rows={[
+                { label: 'Courier', value: billCourierLabel(bill) },
+                { label: 'Pickup Date', value: billPickupDateLabel(bill) },
+                { label: 'Total Parcels', value: String(bill.totalOrders) },
+                { label: 'Resolved', value: String(bill.resolvedCount) },
+                { label: 'In Transit', value: String(bill.inTransitCount) },
+                { label: 'Settled', value: `${bill.settledCount} / ${bill.resolvedCount}` },
+              ]} />
+            </BlockStack>
+          </Card>
+          <Card>
+            <BlockStack gap="300">
+              <Text as="h3" variant="headingSm">Payment Progress</Text>
+              <InlineStack gap="400" blockAlign="center" wrap={false}>
+                <div className="progress-ring" style={{ background: pieBackground }}>
+                  <div className="progress-ring__inner"><span className="progress-ring__pct">{stats.pct}%</span><span className="progress-ring__label">Settled</span></div>
+                </div>
+                <div style={{ flex: 1 }}>
+                  <KeyValueList rows={[
+                    legend('var(--text-muted)', 'Bill Value (Total Amount)', stats.billValue, 100),
+                    legend(PAYMENT_PROGRESS_COLORS.received, 'Received', stats.received, stats.receivedPct),
+                    legend(PAYMENT_PROGRESS_COLORS.returned, 'Returned Orders', stats.returned, stats.returnedPct),
+                    legend(PAYMENT_PROGRESS_COLORS.charges, 'Delivery Charges', stats.charges, stats.chargesPct),
+                    legend(PAYMENT_PROGRESS_COLORS.taxes, 'Taxes (SST)', stats.taxes, stats.taxesPct),
+                    legend(PAYMENT_PROGRESS_COLORS.remaining, 'Remaining', stats.remaining, stats.remainingPct),
+                  ]} />
+                </div>
+              </InlineStack>
+            </BlockStack>
+          </Card>
+        </InlineGrid>
 
-      <div className="bill-detail-orders-section">
-        <h3>Orders in this Bill ({orders?.length ?? 0})</h3>
-        <div className="postex-mismatches-table-wrap">
-          <table className="postex-mismatches-table">
-            <thead>
-              <tr>
-                <th>Order #</th><th>Folio</th><th>Customer Name</th><th>Tracking ID</th><th>Status</th><th>Total</th>
-                <th>Advance</th><th>COD (Rs.)</th><th>Delivery Charge</th><th>Tax</th><th>Net Receivable</th><th>Cost Price</th><th>Settled</th>
-              </tr>
-            </thead>
-            <tbody>
-              {!orders ? (
-                <tr><td colSpan={13}>Loading orders…</td></tr>
-              ) : orders.map((order) => {
-                const status = order.order_status || '';
-                const isResolved = COURIER_RESOLVED_STATUSES.has(status.toLowerCase());
-                const receivable = isResolved ? computeReceivable(order as any) : null;
-                const cod = computeCod(order);
-                return (
-                  <tr key={order.id}>
-                    <td>{order.order_number ?? ''}</td>
-                    <td>{order.folio || '-'}</td>
-                    <td>{customerNames.get(order.order_number || -1) ?? <span className="btn-loading-spinner" />}</td>
-                    <td>{order.tracking_number || '-'}</td>
-                    <td><span className={`grid-status-badge ${orderStatusBadgeClass(status)}`}>{status}</span></td>
-                    <td>{formatMoney(order.total_amount)}</td>
-                    <td>{formatMoney(order.advance_amount)}</td>
-                    <td>{formatMoney(cod)}</td>
-                    <td>{formatMoney(order.delivery_charge)}</td>
-                    <td>{formatMoney(order.tax_amount)}</td>
-                    <td>{receivable != null ? formatMoney(receivable) : '-'}</td>
-                    <td>{formatMoney(order.cost_price)}</td>
-                    <td>{order.is_order_settled
-                      ? <span className="grid-status-badge grid-status-delivered">Settled</span>
-                      : <span className="grid-status-badge grid-status-fulfilled">Unsettled</span>}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      </div>
+        <Text as="h3" variant="headingSm">Orders in this Bill ({orders?.length ?? 0})</Text>
+        <ReportTable
+          headings={['Order #', 'Folio', 'Customer Name', 'Tracking ID', 'Status', 'Total', 'Advance', 'COD (Rs.)', 'Delivery Charge', 'Tax', 'Net Receivable', 'Cost Price', 'Settled']}
+          numeric={[5, 6, 7, 8, 9, 10, 11]} emptyMessage={orders ? 'No orders' : 'Loading orders…'}
+          rows={(orders || []).map((order) => {
+            const status = order.order_status || '';
+            const isResolved = COURIER_RESOLVED_STATUSES.has(status.toLowerCase());
+            const receivable = isResolved ? computeReceivable(order as any) : null;
+            return [
+              String(order.order_number ?? ''), order.folio || '-', customerNames.get(order.order_number || -1) ?? '…', order.tracking_number || '-',
+              <StatusBadge status={status} />, formatMoney(order.total_amount), formatMoney(order.advance_amount), formatMoney(computeCod(order)),
+              formatMoney(order.delivery_charge), formatMoney(order.tax_amount), receivable != null ? formatMoney(receivable) : '-', formatMoney(order.cost_price),
+              <Badge tone={order.is_order_settled ? 'success' : 'info'}>{order.is_order_settled ? 'Settled' : 'Unsettled'}</Badge>,
+            ];
+          })}
+        />
+      </BlockStack>
     </div>
   );
 }
@@ -296,21 +249,17 @@ export function CourierPaymentReportPage() {
   const [couriers, setCouriers] = useState<string[]>([]);
   const [courierFilter, setCourierFilter] = useState<string[] | null | undefined>(undefined); // undefined = not yet defaulted
   const [statusFilter, setStatusFilter] = useState<string[] | null>(null);
-  const [dateRange, setDateRange] = useState(defaultRange());
-  const [dateLabel, setDateLabel] = useState('Date range');
+  const [dateRange, setDateRange] = useState<DateRange | null>(defaultRange());
   const [search, setSearch] = useState('');
   const [detailBill, setDetailBill] = useState<CourierBill | null>(null);
   const [fetchingSettlements, setFetchingSettlements] = useState(false);
   const [settlementsResult, setSettlementsResult] = useState<PostExSettlementsResult | null>(null);
-  const [dateBtnNode, setDateBtnNode] = useState<HTMLButtonElement | null>(null);
-  const pickerRef = useRef<DateRangePickerHandle | null>(null);
-  const gridApiRef = useRef<GridApi | null>(null);
+  const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    gridApiRef.current?.showLoadingOverlay();
+    setLoading(true);
     const params = new URLSearchParams();
-    if (dateRange.from) params.append('date_from', dateRange.from);
-    if (dateRange.to) params.append('date_to', dateRange.to);
+    if (dateRange) { params.append('date_from', dateRange.from); params.append('date_to', dateRange.to); }
     (courierFilter || []).forEach((c) => params.append('courier', c));
     (statusFilter || []).forEach((s) => params.append('payment_status', s));
     try {
@@ -329,22 +278,12 @@ export function CourierPaymentReportPage() {
       console.error('Error loading courier payment report:', error);
       showToast('Failed to load courier payment report data', 'error');
     } finally {
-      gridApiRef.current?.hideOverlay();
+      setLoading(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dateRange, courierFilter, statusFilter, showToast]);
 
   useEffect(() => { load(); }, [load]);
-
-  useEffect(() => {
-    if (!dateBtnNode) return;
-    const handle = createDateRangePicker(dateBtnNode, {
-      onSelect: (from, to) => { setDateRange({ from, to }); setDateLabel(`${formatDateDDMMYYYY(from)} – ${formatDateDDMMYYYY(to)}`); handle?.setClearable(true); },
-      onClear: () => { setDateRange({ from: '', to: '' }); setDateLabel('Date range'); handle?.picker.clear(); handle?.setClearable(false); },
-    });
-    pickerRef.current = handle;
-    return () => handle?.destroy();
-  }, [dateBtnNode]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -378,37 +317,23 @@ export function CourierPaymentReportPage() {
     setStatusFilter(null);
     setSearch('');
     setDateRange(defaultRange());
-    setDateLabel('Date range');
-    pickerRef.current?.picker.clear();
-    pickerRef.current?.setClearable(false);
   }
 
-  const columnDefs: ColDef[] = useMemo(() => [
-    { headerName: 'Date', field: 'pickupDate', width: 110, minWidth: 110, valueFormatter: (p: any) => billPickupDateLabel(p.data) },
-    {
-      headerName: 'Courier', field: 'courier', width: 130, minWidth: 110, valueFormatter: (p: any) => billCourierLabel(p.data),
-      cellRenderer: (p: any) => <span>{billCourierLabel(p.data)}</span>,
-    },
-    { headerName: 'Bill Value', field: 'billValue', width: 140, minWidth: 130, cellClass: 'ag-right-aligned-cell', valueFormatter: (p: any) => formatMoney(p.value) },
-    { headerName: 'Remaining', field: 'remainingAmount', width: 140, minWidth: 130, cellClass: 'ag-right-aligned-cell', valueFormatter: (p: any) => formatMoney(p.value) },
-    { headerName: 'Settled Orders', colId: 'settledOrders', field: 'settledCount', width: 300, minWidth: 240, cellRenderer: (p: any) => <SettledOrdersCell bill={p.data} /> },
-    {
-      headerName: 'Status', field: 'status', width: 130, minWidth: 120,
-      cellRenderer: (p: any) => { const meta = BILL_STATUS_META[p.value] || BILL_STATUS_META.unpaid; return <span className={`grid-status-badge ${meta.cls}`}>{meta.label}</span>; },
-    },
-    {
-      headerName: 'Actions', colId: 'viewOrders', width: 130, minWidth: 130, sortable: false, filter: false,
-      cellRenderer: (p: any) => (
-        <div className="bill-cell-center"><button type="button" className="bill-view-btn" title="View orders in this bill" onClick={() => setDetailBill(p.data)}><i className="fa-solid fa-eye" /><span>View Details</span></button></div>
-      ),
-    },
-  ], []);
+  const columns: DataColumn<CourierBill>[] = [
+    { key: 'pickupDate', heading: 'Date', render: (b) => billPickupDateLabel(b), sortValue: (b) => b.pickupDateKey },
+    { key: 'courier', heading: 'Courier', render: (b) => billCourierLabel(b), sortValue: (b) => b.courier },
+    { key: 'billValue', heading: 'Bill Value', alignment: 'end', render: (b) => formatMoney(b.billValue), sortValue: (b) => b.billValue },
+    { key: 'remainingAmount', heading: 'Remaining', alignment: 'end', render: (b) => formatMoney(b.remainingAmount), sortValue: (b) => b.remainingAmount },
+    { key: 'settled', heading: 'Settled Orders', render: (b) => <SettledOrdersCell bill={b} />, sortValue: (b) => (b.totalOrders ? b.settledCount / b.totalOrders : 0) },
+    { key: 'status', heading: 'Status', render: (b) => { const meta = BILL_STATUS_META[b.status] || BILL_STATUS_META.unpaid; return <Badge tone={meta.tone}>{meta.label}</Badge>; }, sortValue: (b) => b.status },
+    { key: 'actions', heading: '', alignment: 'end', render: (b) => <Button icon={ViewIcon} size="slim" onClick={() => setDetailBill(b)}>View Details</Button> },
+  ];
 
   usePageHeader({
     title: 'Courier Payment Report',
     actions: detailBill ? undefined : (
       <>
-        <HeaderRefButton ref={setDateBtnNode} label={dateLabel} title="Filter by pickup date range" />
+        <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by pickup date range" />
         <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
         <Dropdown multiple allLabel="All Status" options={COURIER_PAYMENT_STATUSES.map((v) => ({ value: v, label: COURIER_PAYMENT_STATUS_LABELS[v] }))} value={statusFilter} onChange={setStatusFilter} />
         <div className="toolbar-search"><SearchField placeholder="Search courier or order #..." value={search} onChange={setSearch} /></div>
@@ -420,22 +345,20 @@ export function CourierPaymentReportPage() {
 
   if (detailBill) return <BillDetail bill={detailBill} onBack={() => setDetailBill(null)} />;
 
-  function onGridReady(e: GridReadyEvent) { gridApiRef.current = e.api; }
-
   return (
     <>
-      <div className="stats-grid">
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Orders In Transit</span><span className="stat-detail">{Object.entries(summary.inTransitByStatus).sort((a, b) => b[1] - a[1]).map(([s, c]) => `${c} ${s}`).join(' · ') || 'None in transit'}</span><span className="stat-value">{summary.inTransit.toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Orders Resolved (Delivered/Returned)</span><span className="stat-value">{summary.resolved.toLocaleString()}</span></div></div>
-        <div className="stat-card"><div className="stat-info"><span className="stat-label">Net Owed by Courier</span><span className="stat-detail">{summary.netOwed > 0 ? 'Courier owes you' : summary.netOwed < 0 ? 'You owe the courier' : 'Settled'}</span><span className="stat-value" style={{ color: summary.netOwed < 0 ? 'var(--danger)' : undefined }}>{summary.netOwed < 0 ? `-Rs ${formatMoney(-summary.netOwed)}` : `Rs ${formatMoney(summary.netOwed)}`}</span></div></div>
-      </div>
-      <div className="ag-theme-alpine grid-container">
-        <AgGridReact
-          columnDefs={columnDefs} rowData={visible} rowHeight={74}
-          defaultColDef={{ sortable: true, resizable: true, filter: true, minWidth: 90 }}
-          pagination={false} domLayout="normal" getRowId={(p) => p.data.id} onGridReady={onGridReady}
-        />
-      </div>
+      <MetricsStrip
+        label="Courier payment summary"
+        tiles={[
+          { label: 'Orders In Transit', value: summary.inTransit.toLocaleString(), detail: Object.entries(summary.inTransitByStatus).sort((a, b) => b[1] - a[1]).map(([s, c]) => `${c} ${s}`).join(' · ') || 'None in transit' },
+          { label: 'Orders Resolved (Delivered/Returned)', value: summary.resolved.toLocaleString() },
+          { label: 'Net Owed by Courier', value: summary.netOwed < 0 ? `-Rs ${formatMoney(-summary.netOwed)}` : `Rs ${formatMoney(summary.netOwed)}`, negative: summary.netOwed < 0, detail: summary.netOwed > 0 ? 'Courier owes you' : summary.netOwed < 0 ? 'You owe the courier' : 'Settled' },
+        ]}
+      />
+      <DataTable
+        columns={columns} rows={visible} rowId={(b) => b.id} loading={loading} initialSort={{ key: 'pickupDate', direction: 'descending' }}
+        resourceName={{ singular: 'bill', plural: 'bills' }} emptyMessage="No courier bills in this range"
+      />
       {settlementsResult && <PostExSettlementsModal data={settlementsResult} onClose={() => setSettlementsResult(null)} />}
     </>
   );

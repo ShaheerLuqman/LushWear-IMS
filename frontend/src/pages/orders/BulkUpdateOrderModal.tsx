@@ -2,6 +2,9 @@
 // change to all of them, or select them in the grid. Ported from
 // modals-forms.js/orders-actions.js.
 import { useMemo, useState } from 'react';
+import { Badge, BlockStack, Button, InlineStack, Text, TextField, type ButtonProps } from '@shopify/polaris';
+import { FormModal, InfoModal } from '../../components/FormModal';
+import { OrderNumbersField } from '../../components/OrderNumbersField';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
@@ -136,90 +139,48 @@ export function BulkUpdateOrderModal({
     onClose();
   }
 
+  const action = (key: string, label: string, onAction: () => void, extra: Partial<ButtonProps> = {}) => (
+    <Button key={key} size="slim" disabled={!!busy} loading={busy === key} onClick={onAction} {...extra}>{label}</Button>
+  );
+  const numberList = (nums: Array<string | number> | undefined) => ((nums?.length ?? 0) === 0
+    ? <Text as="p" tone="subdued">None</Text>
+    : <InlineStack gap="100">{nums!.map((n) => <Badge key={n}>{String(n)}</Badge>)}</InlineStack>);
+
   return (
     <>
-      <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) close(); }}>
-        <div className="modal-content">
-          <div className="modal-header">
-            <h2>Bulk update order</h2>
-            <button type="button" className="modal-close" aria-label="Close" onClick={close}>&times;</button>
-          </div>
-          <div className="modal-body">
-            {!results ? (
-              <div>
-                <p className="modal-description">Enter order numbers, one per line:</p>
-                <textarea
-                  className="bulk-update-textarea" rows={6} placeholder={'e.g. 2721\n2722\n2723'}
-                  value={text} onChange={(e) => setText(e.target.value)} autoFocus
-                />
-                <p className="bulk-update-order-count">{orderNumbers.length === 1 ? '1 order' : `${orderNumbers.length} orders`}</p>
-
-                <div className="bulk-update-action-group">
-                  <span className="bulk-update-action-group-label">Order status</span>
-                  <div className="bulk-update-actions">
-                    <button type="button" className="btn btn-primary" disabled={!!busy} onClick={() => setStatus('delivered')}>
-                      {busy === 'delivered' && <span className="btn-loading-spinner" />}Delivered
-                    </button>
-                    <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => setStatus('returned')}>
-                      {busy === 'returned' && <span className="btn-loading-spinner" />}Returned
-                    </button>
-                    <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => setStatus('cancelled')}>
-                      {busy === 'cancelled' && <span className="btn-loading-spinner" />}Cancelled
-                    </button>
-                    <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={setPieceReceived}>
-                      {busy === 'piece_received' && <span className="btn-loading-spinner" />}Returned + Piece Received
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bulk-update-action-group">
-                  <span className="bulk-update-action-group-label">Courier &amp; charges</span>
-                  <div className="bulk-update-actions">
-                    <button type="button" className="btn btn-success" disabled={!!busy} onClick={() => setSettled(true)}>
-                      {busy === 'settled' && <span className="btn-loading-spinner" />}Mark Order Settled
-                    </button>
-                    <button type="button" className="btn btn-secondary" disabled={!!busy} onClick={() => setSettled(false)}>
-                      {busy === 'unsettled' && <span className="btn-loading-spinner" />}Mark Order Unsettled
-                    </button>
-                    <button
-                      type="button" className="btn btn-secondary" disabled={!!busy}
-                      onClick={() => { if (requireOrderNumbers()) setDeliveryChargesOpen(true); }}
-                    >
-                      Update Delivery Charges
-                    </button>
-                  </div>
-                </div>
-
-                <div className="bulk-update-action-group">
-                  <span className="bulk-update-action-group-label">Grid</span>
-                  <div className="bulk-update-actions">
-                    <button type="button" className="btn btn-secondary" onClick={selectInGrid}>Select in Grid</button>
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="bulk-update-results">
-                <p className="bulk-update-results-title">Results</p>
-                <div className="bulk-update-result-section">
-                  <strong>Updated successfully:</strong>
-                  {(results.updated_order_numbers?.length ?? 0) === 0
-                    ? <p className="bulk-update-empty">None</p>
-                    : <ul className="bulk-update-list">{results.updated_order_numbers!.map((n) => <li key={n}>{n}</li>)}</ul>}
-                </div>
-                <div className="bulk-update-result-section">
-                  <strong>Not found / failed:</strong>
-                  {(results.not_found_order_numbers?.length ?? 0) === 0
-                    ? <p className="bulk-update-empty">None</p>
-                    : <ul className="bulk-update-list">{results.not_found_order_numbers!.map((n) => <li key={n}>{n}</li>)}</ul>}
-                </div>
-                <div className="bulk-update-actions">
-                  <button type="button" className="btn btn-primary" onClick={close}>Close</button>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
+      <InfoModal title="Bulk update order" onClose={close}>
+        {!results ? (
+          <BlockStack gap="400">
+            <OrderNumbersField value={text} onChange={setText} rows={6} autoFocus />
+            <BlockStack gap="200">
+              <Text as="h3" variant="headingSm">Order status</Text>
+              <InlineStack gap="200">
+                {action('delivered', 'Delivered', () => setStatus('delivered'), { variant: 'primary' })}
+                {action('returned', 'Returned', () => setStatus('returned'))}
+                {action('cancelled', 'Cancelled', () => setStatus('cancelled'))}
+                {action('piece_received', 'Returned + Piece Received', setPieceReceived)}
+              </InlineStack>
+            </BlockStack>
+            <BlockStack gap="200">
+              <Text as="h3" variant="headingSm">Courier &amp; charges</Text>
+              <InlineStack gap="200">
+                {action('settled', 'Mark Order Settled', () => setSettled(true), { variant: 'primary', tone: 'success' })}
+                {action('unsettled', 'Mark Order Unsettled', () => setSettled(false))}
+                {action('charges', 'Update Delivery Charges', () => { if (requireOrderNumbers()) setDeliveryChargesOpen(true); })}
+              </InlineStack>
+            </BlockStack>
+            <BlockStack gap="200">
+              <Text as="h3" variant="headingSm">Grid</Text>
+              <InlineStack><Button size="slim" onClick={selectInGrid}>Select in Grid</Button></InlineStack>
+            </BlockStack>
+          </BlockStack>
+        ) : (
+          <BlockStack gap="400">
+            <BlockStack gap="200"><Text as="h3" variant="headingSm">Updated successfully</Text>{numberList(results.updated_order_numbers)}</BlockStack>
+            <BlockStack gap="200"><Text as="h3" variant="headingSm">Not found / failed</Text>{numberList(results.not_found_order_numbers)}</BlockStack>
+          </BlockStack>
+        )}
+      </InfoModal>
       {deliveryChargesOpen && (
         <BulkUpdateDeliveryChargesModal
           orderNumbers={orderNumbers}
@@ -284,27 +245,11 @@ function BulkUpdateDeliveryChargesModal({
   }
 
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Update delivery charges</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <p className="modal-description">Set delivery charges (Rs) for all selected orders:</p>
-          <div className="form-group" style={{ marginTop: 16 }}>
-            <label htmlFor="bulkUpdateDeliveryChargesValue">Delivery charges (Rs) *</label>
-            <input
-              type="number" id="bulkUpdateDeliveryChargesValue" className="form-input" min={0} step={0.01} placeholder="0.00"
-              value={value} onChange={(e) => setValue(e.target.value)} autoFocus
-            />
-          </div>
-        </div>
-        <div className="bulk-update-actions modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Updating...' : 'Confirm'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Update delivery charges" onClose={onClose} onSubmit={submit} submitLabel="Confirm" saving={saving} size="small">
+      <TextField
+        label="Delivery charges (Rs)" type="number" autoComplete="off" min={0} step={0.01} placeholder="0.00" autoFocus requiredIndicator
+        helpText={`Applies to ${orderNumbers.length} order${orderNumbers.length === 1 ? '' : 's'}.`} value={value} onChange={setValue}
+      />
+    </FormModal>
   );
 }

@@ -6,7 +6,9 @@ import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import { findLedgerByName, SYSTEM_LEDGER_LABELS, type Ledger } from '../../logic/ledgers';
+import { Banner, BlockStack, Checkbox, FormLayout, TextField } from '@shopify/polaris';
 import { Dropdown } from '../../components/Dropdown';
+import { FormModal } from '../../components/FormModal';
 
 const LEDGER_TYPE_OPTIONS = [
   { value: 'Asset', label: 'Asset (Cash, Bank, Accounts Receivable, Inventory, Equipment)' },
@@ -19,28 +21,24 @@ const LEDGER_TYPE_OPTIONS = [
 interface PartyFields { tax_number: string | null; phone: string | null; email: string | null; address: string | null }
 const EMPTY_PARTY: PartyFields = { tax_number: null, phone: null, email: null, address: null };
 
-function PartyFieldsFields({ prefix, value, onChange }: { prefix: string; value: PartyFields; onChange: (v: PartyFields) => void }) {
+interface LedgerFormState { name: string; type: string; openingBalance: string; cashInHand: boolean; monthSummary: boolean; party: PartyFields }
+
+function LedgerFormFields({ v, onChange, nameReadOnly, autoFocus }: { v: LedgerFormState; onChange: (patch: Partial<LedgerFormState>) => void; nameReadOnly?: boolean; autoFocus?: boolean }) {
+  const party = (patch: Partial<PartyFields>) => onChange({ party: { ...v.party, ...patch } });
   return (
-    <>
-      <div className="form-group">
-        <label htmlFor={`${prefix}LedgerTaxNumber`}>Tax number (NTN)</label>
-        <input type="text" id={`${prefix}LedgerTaxNumber`} className="form-input" value={value.tax_number || ''} onChange={(e) => onChange({ ...value, tax_number: e.target.value })} />
-      </div>
-      <div className="bill-form-row">
-        <div className="form-group">
-          <label htmlFor={`${prefix}LedgerPhone`}>Phone</label>
-          <input type="text" id={`${prefix}LedgerPhone`} className="form-input" value={value.phone || ''} onChange={(e) => onChange({ ...value, phone: e.target.value })} />
-        </div>
-        <div className="form-group">
-          <label htmlFor={`${prefix}LedgerEmail`}>Email</label>
-          <input type="text" id={`${prefix}LedgerEmail`} className="form-input" value={value.email || ''} onChange={(e) => onChange({ ...value, email: e.target.value })} />
-        </div>
-      </div>
-      <div className="form-group">
-        <label htmlFor={`${prefix}LedgerAddress`}>Address</label>
-        <input type="text" id={`${prefix}LedgerAddress`} className="form-input" value={value.address || ''} onChange={(e) => onChange({ ...value, address: e.target.value })} />
-      </div>
-    </>
+    <FormLayout>
+      <TextField label="Ledger name" autoComplete="off" placeholder="e.g. Main Bank Account" requiredIndicator readOnly={nameReadOnly} autoFocus={autoFocus} value={v.name} onChange={(name) => onChange({ name })} />
+      <Dropdown label="Type (Nature)" fullWidth placeholder="Select type..." options={LEDGER_TYPE_OPTIONS} value={v.type} onChange={(type) => onChange({ type })} />
+      <TextField label="Opening balance" type="number" autoComplete="off" placeholder="0.00" step={0.01} helpText="Positive is a Debit amount, negative is a Credit amount." value={v.openingBalance} onChange={(openingBalance) => onChange({ openingBalance })} />
+      {v.type === 'Asset' && <Checkbox label="Include in Cash In Hand" checked={v.cashInHand} onChange={(cashInHand) => onChange({ cashInHand })} />}
+      {v.type === 'Expense' && <Checkbox label="Show in Month Summary" checked={v.monthSummary} onChange={(monthSummary) => onChange({ monthSummary })} />}
+      <TextField label="Tax number (NTN)" autoComplete="off" value={v.party.tax_number || ''} onChange={(tax_number) => party({ tax_number })} />
+      <FormLayout.Group>
+        <TextField label="Phone" autoComplete="off" value={v.party.phone || ''} onChange={(phone) => party({ phone })} />
+        <TextField label="Email" autoComplete="off" value={v.party.email || ''} onChange={(email) => party({ email })} />
+      </FormLayout.Group>
+      <TextField label="Address" autoComplete="off" value={v.party.address || ''} onChange={(address) => party({ address })} />
+    </FormLayout>
   );
 }
 
@@ -98,43 +96,20 @@ export function CreateLedgerModal({
     }
   }
 
+  const form = { name, type, openingBalance, cashInHand, monthSummary, party };
+  const onChange = (patch: Partial<LedgerFormState>) => {
+    if (patch.name !== undefined) setName(patch.name);
+    if (patch.type !== undefined) setType(patch.type);
+    if (patch.openingBalance !== undefined) setOpeningBalance(patch.openingBalance);
+    if (patch.cashInHand !== undefined) setCashInHand(patch.cashInHand);
+    if (patch.monthSummary !== undefined) setMonthSummary(patch.monthSummary);
+    if (patch.party !== undefined) setParty(patch.party);
+  };
+
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Create Ledger</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body">
-          <form className="ledger-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-            <div className="form-group">
-              <label htmlFor="createLedgerName">Ledger name *</label>
-              <input type="text" id="createLedgerName" className="form-input" placeholder="e.g. Main Bank Account" required autoFocus value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="createLedgerType">Type (Nature) *</label>
-              <Dropdown id="createLedgerType" fullWidth placeholder="Select type..." options={LEDGER_TYPE_OPTIONS} value={type} onChange={setType} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="createLedgerOpeningBalance">Opening balance</label>
-              <input type="number" id="createLedgerOpeningBalance" className="form-input" placeholder="0.00" step={0.01} value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)} />
-              <span className="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
-            </div>
-            {type === 'Asset' && (
-              <label className="ledger-form-toggle"><input type="checkbox" checked={cashInHand} onChange={(e) => setCashInHand(e.target.checked)} /><span>Include in Cash In Hand</span></label>
-            )}
-            {type === 'Expense' && (
-              <label className="ledger-form-toggle"><input type="checkbox" checked={monthSummary} onChange={(e) => setMonthSummary(e.target.checked)} /><span>Show in Month Summary</span></label>
-            )}
-            <PartyFieldsFields prefix="create" value={party} onChange={setParty} />
-          </form>
-        </div>
-        <div className="modal-pinned-footer">
-          <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-          <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Creating...' : 'Create'}</button>
-        </div>
-      </div>
-    </div>
+    <FormModal title="Create Ledger" onClose={onClose} onSubmit={submit} submitLabel="Create" saving={saving}>
+      <LedgerFormFields v={form} onChange={onChange} autoFocus />
+    </FormModal>
   );
 }
 
@@ -231,50 +206,26 @@ export function EditLedgerModal({
     }
   }
 
+  const form = { name, type, openingBalance, cashInHand, monthSummary, party };
+  const onChange = (patch: Partial<LedgerFormState>) => {
+    if (patch.name !== undefined) setName(patch.name);
+    if (patch.type !== undefined) setType(patch.type);
+    if (patch.openingBalance !== undefined) setOpeningBalance(patch.openingBalance);
+    if (patch.cashInHand !== undefined) setCashInHand(patch.cashInHand);
+    if (patch.monthSummary !== undefined) setMonthSummary(patch.monthSummary);
+    if (patch.party !== undefined) setParty(patch.party);
+  };
+
   return (
-    <div className="modal active" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="modal-content">
-        <div className="modal-header">
-          <h2>Edit Ledger</h2>
-          <button type="button" className="modal-close" aria-label="Close" onClick={onClose}>&times;</button>
-        </div>
-        <div className="modal-body" onClick={(e) => e.stopPropagation()}>
-          <form className="ledger-form" onSubmit={(e) => { e.preventDefault(); submit(); }}>
-            {isSystem && (
-              <p className="ledger-system-notice">System account ({SYSTEM_LEDGER_LABELS[ledger.system_key!] || ledger.system_key}) — used by the app, so it can't be deleted.</p>
-            )}
-            <div className="form-group">
-              <label htmlFor="editLedgerName">Ledger name *</label>
-              <input type="text" id="editLedgerName" className="form-input" placeholder="e.g. Main Bank Account" required readOnly={isSystem} value={name} onChange={(e) => setName(e.target.value)} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="editLedgerType">Type (Nature) *</label>
-              <Dropdown id="editLedgerType" fullWidth placeholder="Select type..." options={LEDGER_TYPE_OPTIONS} value={type} onChange={setType} />
-            </div>
-            <div className="form-group">
-              <label htmlFor="editLedgerOpeningBalance">Opening balance</label>
-              <input type="number" id="editLedgerOpeningBalance" className="form-input" placeholder="0.00" step={0.01} value={openingBalance} onChange={(e) => setOpeningBalance(e.target.value)} />
-              <span className="form-hint">Positive is a Debit amount, negative is a Credit amount.</span>
-            </div>
-            {type === 'Asset' && (
-              <label className="ledger-form-toggle"><input type="checkbox" checked={cashInHand} onChange={(e) => setCashInHand(e.target.checked)} /><span>Include in Cash In Hand</span></label>
-            )}
-            {type === 'Expense' && (
-              <label className="ledger-form-toggle"><input type="checkbox" checked={monthSummary} onChange={(e) => setMonthSummary(e.target.checked)} /><span>Show in Month Summary</span></label>
-            )}
-            <PartyFieldsFields prefix="edit" value={party} onChange={setParty} />
-          </form>
-        </div>
-        <div className="modal-pinned-footer edit-ledger-actions">
-          <span className="ledger-edit-delete-wrap" title={isSystem ? 'Cannot delete: system account' : (hasEntries ? 'Cannot delete: ledger has entries' : 'Delete ledger (no entries)')}>
-            <button type="button" className={'btn btn-danger ledger-edit-delete-btn' + (cannotDelete ? ' ledger-edit-delete-btn-has-entries' : '')} disabled={cannotDelete} onClick={remove}>Delete</button>
-          </span>
-          <div className="edit-ledger-actions-right">
-            <button type="button" className="btn btn-secondary" onClick={onClose}>Cancel</button>
-            <button type="button" className="btn btn-primary" disabled={saving} onClick={submit}>{saving ? 'Saving...' : 'Save'}</button>
-          </div>
-        </div>
-      </div>
-    </div>
+    <FormModal
+      title="Edit Ledger" onClose={onClose} onSubmit={submit} saving={saving}
+      extraActions={[{ content: 'Delete', destructive: true, disabled: cannotDelete, onAction: remove }]}
+    >
+      <BlockStack gap="400">
+        {isSystem && <Banner tone="info">System account ({SYSTEM_LEDGER_LABELS[ledger.system_key!] || ledger.system_key}) — used by the app, so it can't be deleted.</Banner>}
+        {!isSystem && hasEntries && <Banner tone="info">This ledger has entries, so it can't be deleted.</Banner>}
+        <LedgerFormFields v={form} onChange={onChange} nameReadOnly={isSystem} />
+      </BlockStack>
+    </FormModal>
   );
 }

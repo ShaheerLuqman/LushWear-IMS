@@ -108,6 +108,7 @@ export interface LedgerMonthRow {
   collapsed: boolean;
   label: string;
   balance: number;
+  runningBalance: number;
 }
 
 export function ledgerMonthLabel(month: string): string {
@@ -115,25 +116,22 @@ export function ledgerMonthLabel(month: string): string {
   return new Date(year, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
 }
 
-/** Inserts a full-width divider row (month name + that month's own net movement)
- * ahead of each month's first entry. Entries whose month is in collapsedMonths
- * are left out of the grid entirely, leaving just the clickable header behind. */
-export function withLedgerMonthRows(
-  rows: LedgerStatementEntry[], collapsedMonths: Set<string>,
-): Array<LedgerStatementEntry | LedgerMonthRow> {
-  const monthNet: Record<string, number> = {};
-  rows.forEach((row) => {
-    const month = (row.entry_date || '').slice(0, 7);
-    if (!month) return;
-    monthNet[month] = (monthNet[month] || 0) + (row.debit || 0) - (row.credit || 0);
-  });
-
-  const out: Array<LedgerStatementEntry | LedgerMonthRow> = [];
+/** Inserts a divider row (month name, the month's own net movement and the running
+ * balance at its close) ahead of each month's first entry. Rows must be newest-first
+ * so the first row seen for a month is its closing one. Entries whose month is in
+ * collapsedMonths are left out entirely, leaving just the clickable header behind. */
+export function withLedgerMonthRows<R extends { entry_date?: string; balance: number; monthBalance: number }>(
+  rows: R[], collapsedMonths: Set<string>,
+): Array<R | LedgerMonthRow> {
+  const out: Array<R | LedgerMonthRow> = [];
   let prevMonth: string | null = null;
   rows.forEach((row) => {
     const month = (row.entry_date || '').slice(0, 7);
     if (month && month !== prevMonth) {
-      out.push({ id: `__month__${month}`, month_row: true, month, collapsed: collapsedMonths.has(month), label: ledgerMonthLabel(month), balance: monthNet[month] });
+      out.push({
+        id: `__month__${month}`, month_row: true, month, collapsed: collapsedMonths.has(month), label: ledgerMonthLabel(month),
+        balance: row.monthBalance, runningBalance: row.balance,
+      });
       prevMonth = month;
     }
     if (!month || !collapsedMonths.has(month)) out.push(row);
