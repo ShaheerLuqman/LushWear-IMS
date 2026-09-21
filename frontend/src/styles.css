@@ -429,23 +429,13 @@ body {
     white-space: nowrap;
 }
 
-/* Only the orders and order-fulfillment toolbars are wide enough to need scrolling; applying
-   this to every view puts a scrollbar under the transactions row, whose controls can't shrink. */
-body:has(#ordersView.active) .header-actions,
-body:has(#orderFulfillmentView.active) .header-actions {
-    overflow-x: auto;
-    overflow-y: visible;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-}
-
 .orders-more-actions {
     position: relative;
     flex-shrink: 0;
 }
 
-/* Fixed, not absolute: .header-actions scrolls horizontally, which would clip an
-   absolutely-positioned menu. Coordinates are set when the menu opens. */
+/* Fixed, not absolute: the menu would otherwise be clipped by the header row.
+   Coordinates are set when the menu opens. */
 .orders-more-actions__menu {
     display: none;
     position: fixed;
@@ -488,7 +478,7 @@ body:has(#orderFulfillmentView.active) .header-actions {
 
 /* Orders: fullscreen is a fixed square */
 .header-orders-app-actions {
-    display: none;
+    display: flex;
     flex-direction: row;
     flex-wrap: nowrap;
     align-items: center;

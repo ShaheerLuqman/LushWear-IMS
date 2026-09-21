@@ -9,7 +9,8 @@ import {
   IndexTable, IndexFilters, useSetIndexFiltersMode, useIndexResourceState,
   IndexTableSelectionType, InlineStack, TextField, Text, Tooltip, Pagination,
 } from '@shopify/polaris';
-import { MaximizeIcon } from '@shopify/polaris-icons';
+import { BarcodeIcon, MaximizeIcon } from '@shopify/polaris-icons';
+import { useNavigate } from 'react-router-dom';
 import { Filter, FilterX } from 'lucide-react';
 import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
@@ -131,6 +132,7 @@ const OrderRow = memo(function OrderRow({
 export function OrdersPage() {
   const { account, isEditingAllowed } = useAuth();
   const { showToast } = useToast();
+  const navigate = useNavigate();
   const confirm = useConfirm();
   const fiscalMonthStartDay = account?.fiscal_month_start_day || 22;
   const {
@@ -865,6 +867,9 @@ export function OrdersPage() {
             </div>
           )}
         </div>
+        <Tooltip content="Scan barcode">
+          <HeaderButton icon={BarcodeIcon} accessibilityLabel="Scan barcode" onClick={() => navigate('/scan-barcode')} />
+        </Tooltip>
         <div className="header-orders-app-actions" role="group" aria-label="App security and view">
           <Tooltip content="Full screen (Esc to exit)">
             <HeaderButton icon={MaximizeIcon} accessibilityLabel="Full screen (Esc to exit)" onClick={toggleFullscreen} />
