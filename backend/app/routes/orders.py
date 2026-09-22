@@ -3,7 +3,7 @@ import json
 import logging
 import re
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
@@ -998,6 +998,30 @@ async def get_sync_status(org_id: str = Depends(get_org_id)):
 @limiter.limit("10/minute")
 async def sync_shopify_orders(request: Request, org_id: str = Depends(get_org_id)):
     return await _sync_shopify_orders(org_id)
+
+
+@router.post("/backfill-history", response_model=SyncShopifyOrdersResult)
+@limiter.limit("2/hour")
+async def backfill_order_history(
+    request: Request,
+    since: Optional[date] = Query(None, description="Fetch orders from this date (default: all history)"),
+    org_id: str = Depends(get_org_id),
+):
+    """Pull order history older than the routine sync's window, so an org that has
+    just onboarded holds records for what it shipped before it started here.
+
+    Orders only: nothing it imports posts anything, because everything it reaches
+    predates onboarding_date and the cutoff trigger drops those postings. It does
+    not move the sync checkpoint - it reaches backwards, and advancing the
+    checkpoint would make the next ordinary sync skip everything recent.
+
+    Rate-limited hard: on a large store this walks Shopify's whole order history.
+    """
+    window_start = (
+        datetime.combine(since, dt_time.min, tzinfo=timezone.utc)
+        if since else datetime(2000, 1, 1, tzinfo=timezone.utc)
+    )
+    return await _sync_shopify_orders(org_id, window_start_override=window_start, advance_checkpoint=False)
 
 
 @router.post("/upload-postex-csv")
@@ -3062,6 +3086,26 @@ async def _fetch_couriersnext_bulk(tracking_numbers: List[Tuple[str, str]]) -> D
 DELIVERY_STATUS_SAVE_BATCH_SIZE = 500
 
 
+async def _sync_pre_onboarding_bill(org_id: str, courier: str) -> int:
+    """Attach any newly settled pre-onboarding parcels to the courier's
+    pre-onboarding bill and re-post it. A no-op for orgs that have none, and
+    best-effort: failing to accrete must not fail an upload whose settlement
+    data is already committed."""
+    try:
+        result = await asyncio.to_thread(
+            lambda: get_supabase().rpc(
+                "sync_pre_onboarding_bill", {"p_org_id": org_id, "p_courier": courier}
+            ).execute()
+        )
+        attached = result.data or 0
+        if attached:
+            logger.info("[pre-onboarding] attached %d settled pre-onboarding order(s) to the %s bill", attached, courier)
+        return attached
+    except Exception:
+        logger.exception("[pre-onboarding] bill sync failed for %s", courier)
+        return 0
+
+
 async def _assign_courier_bills(org_id: str, order_ids: List[str]) -> None:
     """Put the given orders on their (courier, pickup date) bill, creating it if needed.
     Call after any write that can change an order's courier or courier_pickup_date; it is
@@ -3111,6 +3155,12 @@ async def _post_postex_payout(org_id: str, order_ids: List[str], cash_ledger_id:
                 "assign_courier_payouts", {"p_org_id": org_id, "p_cash_ledger_id": cash_ledger_id}
             ).execute()
         )
+        # Orders now carry their payout link, so a parcel dispatched before
+        # onboarding whose CPR arrived after it can be identified and put on the
+        # pre-onboarding bill - before the vouchers below clear the receivable
+        # that bill creates. See PRE_ONBOARDING_COURIER_PLAN.md.
+        await _sync_pre_onboarding_bill(org_id, "PostEx")
+
         payout_ids_resp = await asyncio.to_thread(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select("courier_payout_id").in_("id", order_ids)

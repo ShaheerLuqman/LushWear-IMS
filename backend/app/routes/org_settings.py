@@ -3,7 +3,7 @@ import re
 from typing import List
 from urllib.parse import urlencode
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.auth import create_state_token, get_org_id
 from app.couriers import get_org_couriers, update_org_courier
@@ -27,6 +27,7 @@ from app.onboarding_settings import (
     set_org_onboarding_date,
 )
 from app.org_settings import get_org_integration_settings, to_public_shape, upsert_org_integration_settings
+from app.services import postex, pre_onboarding
 
 router = APIRouter(prefix="/org-settings", tags=["org-settings"])
 
@@ -78,6 +79,41 @@ async def read_org_fiscal_settings(org_id: str = Depends(get_org_id)):
 @router.put("/fiscal", response_model=OrgFiscalSettingsPublic)
 async def update_org_fiscal_settings(body: OrgFiscalSettingsUpdate, org_id: str = Depends(get_org_id)):
     return set_org_fiscal_settings(org_id, body.fiscal_month_start_day, body.fiscal_year_start_month)
+
+
+@router.post("/couriers/{courier_id}/pre-onboarding-csv")
+async def upload_pre_onboarding_csv(
+    courier_id: str,
+    files: List[UploadFile] = File(...),
+    org_id: str = Depends(get_org_id),
+):
+    """Reconcile a courier's CPRs covering the run-up to onboarding, then build
+    that courier's pre-onboarding bill from whatever is still unsettled.
+
+    Nothing is posted for the CSVs themselves: every settlement they carry is
+    dated before the books start, so its cash belongs to the opening position.
+    The bill is what posts - see PRE_ONBOARDING_COURIER_PLAN.md. Re-uploading
+    rebuilds it, so a missed or corrected CPR is just another upload."""
+    if not pre_onboarding.supported(courier_id):
+        raise HTTPException(status_code=400, detail=f"No CSV format is supported for {courier_id} yet")
+
+    contents = []
+    for upload in files:
+        if not upload.filename or not upload.filename.lower().endswith(".csv"):
+            raise HTTPException(status_code=400, detail=f"{upload.filename or 'File'} is not a CSV")
+        contents.append(await upload.read())
+
+    try:
+        by_order, _ = pre_onboarding.parse(courier_id, contents)
+    except postex.CsvFormatError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    if not by_order:
+        raise HTTPException(status_code=400, detail="No rows with an order number in those CSVs")
+
+    settled = pre_onboarding.mark_settled(org_id, courier_id, by_order)
+    courier_name = pre_onboarding.COURIER_NAMES.get(courier_id.lower(), courier_id)
+    bill = pre_onboarding.build_bill(org_id, courier_name)
+    return {"settled": settled, "bill": bill}
 
 
 @router.get("/onboarding", response_model=OrgOnboardingSettingsPublic)

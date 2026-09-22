@@ -71,6 +71,7 @@ export function DataTable<T>({
     return [...rows].filter((r) => !groupRow?.(r)).sort((a, b) => dir * compare(col.sortValue!(a), col.sortValue!(b)));
   }, [rows, sort, columns, groupRow]);
 
+
   const pageCount = pageSize ? Math.max(1, Math.ceil(sorted.length / pageSize)) : 1;
   useEffect(() => { if (page > pageCount - 1) setPage(0); }, [page, pageCount]);
   const pageRows = pageSize ? sorted.slice(page * pageSize, (page + 1) * pageSize) : sorted;

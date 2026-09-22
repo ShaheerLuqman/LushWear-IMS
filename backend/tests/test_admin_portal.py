@@ -239,6 +239,7 @@ class TestCreateOrganization:
 
         r = client.post("/api/admin/organizations", json={
             "org_name": "Acme", "admin_name": "Owner", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
+            "onboarding_date": "2026-09-23",
         })
         assert r.status_code == 200
         body = r.json()
@@ -273,6 +274,7 @@ class TestCreateOrganization:
 
         r = client.post("/api/admin/organizations", json={
             "org_name": "Beta", "admin_name": "Owner", "admin_email": "owner@acme.com", "admin_password": "supersecret1",
+            "onboarding_date": "2026-09-23",
         })
         assert r.status_code == 200
         body = r.json()

@@ -4,9 +4,10 @@ import { useNavigate } from 'react-router-dom';
 import {
   Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Spinner, Text, TextField,
 } from '@shopify/polaris';
-import { apiJson } from '../../api';
+import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
+import { formatMoney } from '../../logic/ledgers';
 import { DatePopover, formatDate } from '../../components/DatePopover';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
@@ -238,6 +239,15 @@ function IntegrationsSection() {
 interface CourierField { key: string; label: string; configured: boolean }
 interface CourierRow { id: string; label: string; enabled: boolean; ledger_id?: string | null; credentials: CourierField[] }
 
+// Couriers whose payment-report format the backend can parse
+// (app/services/pre_onboarding.py's PARSERS).
+const PRE_ONBOARDING_COURIERS = ['postex'];
+
+interface PreOnboardingResult {
+  settled: { matched: number; unmatched: string[] };
+  bill: { orders_on_bill?: number; cod_total?: number } | null;
+}
+
 function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow; financeOn: boolean; onChanged: () => void }) {
   const { showToast } = useToast();
   const navigate = useNavigate();
@@ -245,6 +255,8 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
   const [toggling, setToggling] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
   const [savingKeys, setSavingKeys] = useState(false);
+  const [reconciling, setReconciling] = useState(false);
+  const [reconResult, setReconResult] = useState<PreOnboardingResult | null>(null);
 
   async function toggle(checked: boolean) {
     setEnabled(checked);
@@ -276,6 +288,29 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
     }
   }
 
+  async function uploadPreOnboardingCsv(files: FileList | null) {
+    if (!files || !files.length) return;
+    const form = new FormData();
+    Array.from(files).forEach((f) => form.append('files', f));
+    setReconciling(true);
+    try {
+      // apiJson would JSON-stringify the FormData; apiRequest sends it as
+      // multipart and lets the browser set the boundary.
+      const res = await apiRequest(
+        `/org-settings/couriers/${courier.id}/pre-onboarding-csv`,
+        { method: 'POST', body: form, fallback: 'Could not reconcile those CSVs' },
+      );
+      const result: PreOnboardingResult = await res.json();
+      setReconResult(result);
+      showToast(`${result.settled.matched} order(s) settled from the CSVs`, 'success');
+      onChanged();
+    } catch (ex: any) {
+      showToast(ex?.message || 'Could not reconcile those CSVs', 'error');
+    } finally {
+      setReconciling(false);
+    }
+  }
+
   return (
     <BlockStack gap="300">
       <InlineStack align="space-between" blockAlign="center">
@@ -295,6 +330,32 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
           ))}
           <InlineStack align="end"><Button variant="primary" loading={savingKeys} onClick={saveKeys}>Save keys</Button></InlineStack>
         </FormLayout>
+      )}
+      {enabled && PRE_ONBOARDING_COURIERS.includes(courier.id) && (
+        <BlockStack gap="150">
+          <Text as="span" tone="subdued">
+            Upload {courier.label}'s payment reports covering the two months before your onboarding date.
+            Whatever they show as still unpaid becomes a "{courier.label} pre-onboarding remaining orders"
+            bill, so that money is on your books. Nothing the reports settle is posted - it arrived before
+            your books start. Uploading again rebuilds the bill.
+          </Text>
+          <InlineStack gap="300" blockAlign="center">
+            <label className="pre-onboarding-upload">
+              <input type="file" accept=".csv" multiple disabled={reconciling}
+                onChange={(e) => { uploadPreOnboardingCsv(e.target.files); e.target.value = ''; }} />
+              <Button disabled={reconciling} loading={reconciling}>Upload payment reports</Button>
+            </label>
+            {reconResult && (
+              <Text as="span" tone="subdued">
+                {reconResult.settled.matched} settled
+                {reconResult.bill?.orders_on_bill
+                  ? ` · ${reconResult.bill.orders_on_bill} still owed (${formatMoney(reconResult.bill.cod_total)})`
+                  : ' · nothing still owed'}
+                {reconResult.settled.unmatched.length ? ` · ${reconResult.settled.unmatched.length} unmatched` : ''}
+              </Text>
+            )}
+          </InlineStack>
+        </BlockStack>
       )}
     </BlockStack>
   );
@@ -472,7 +533,7 @@ function OnboardingDateModal({ onClose }: { onClose: () => void }) {
               ? `Your books start on this day — nothing can be dated before it. Your oldest entry is ${formatDate(earliest)}; pick a later date and everything before it is deleted, leaving each ledger on its existing opening balance.`
               : 'Your books start on this day — nothing can be dated before it.'}
           </Text>
-          <DatePopover value={onboardingDate} onChange={setOnboardingDate} placeholder="No start date" title="Onboarding date" clearable={false} />
+          <DatePopover value={onboardingDate} onChange={setOnboardingDate} title="Onboarding date" clearable={false} />
           {error && <InlineError message={error} fieldID="onboarding" />}
         </BlockStack>
       )}

@@ -21,7 +21,7 @@ import { formatMoney } from '../../logic/ledgers';
 import { computeReceivable } from '../../logic/orders';
 import {
   BILL_STATUS_META, COURIER_PAYMENT_STATUSES, COURIER_PAYMENT_STATUS_LABELS, COURIER_RESOLVED_STATUSES,
-  billCourierLabel, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
+  billCourierLabel, billDateSortValue, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
   paymentProgressPieStops, paymentProgressStats, PAYMENT_PROGRESS_COLORS, type CourierBill,
 } from '../../logic/courierPaymentReport';
 
@@ -324,7 +324,20 @@ export function CourierPaymentReportPage() {
   }
 
   const columns: DataColumn<CourierBill>[] = [
-    { key: 'pickupDate', heading: 'Date', render: (b) => billPickupDateLabel(b), sortValue: (b) => b.pickupDateKey },
+    {
+      key: 'pickupDate',
+      heading: 'Date',
+      // A bill's notes are its title where it has one - the pre-onboarding bill
+      // ("Pre-onboarding remaining orders") is otherwise indistinguishable from
+      // an ordinary dispatch on the same date.
+      render: (b) => (b.notes ? (
+        <BlockStack gap="050">
+          <Text as="span">{billPickupDateLabel(b)}</Text>
+          <Text as="span" tone="subdued" variant="bodySm">{b.notes}</Text>
+        </BlockStack>
+      ) : billPickupDateLabel(b)),
+      sortValue: (b) => billDateSortValue(b),
+    },
     { key: 'courier', heading: 'Courier', render: (b) => billCourierLabel(b), sortValue: (b) => b.courier },
     { key: 'billValue', heading: 'Bill Value', alignment: 'end', render: (b) => formatMoney(b.billValue), sortValue: (b) => b.billValue },
     { key: 'remainingAmount', heading: 'Remaining', alignment: 'end', render: (b) => formatMoney(b.remainingAmount), sortValue: (b) => b.remainingAmount },

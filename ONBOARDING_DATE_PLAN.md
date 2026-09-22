@@ -140,7 +140,15 @@ admin maintains (it is what the courier/CSV reconciliation produces and what the
 ledger edit modal writes), and the purge leaves it alone. Reviewing those
 opening balances afterwards is part of the operation.
 
-Scope is exactly the three tables the cutoff trigger guards. Orders, courier
+It also deletes the org's **pre-onboarding courier bills**. The purge removes
+vouchers but not bill rows, so a stale one dated at the old onboarding date would
+otherwise survive - and since only one such bill may exist per courier, the new
+tail could never build its own, while the settlements that cleared the stale
+bill's members are themselves purged. `courier_bill_id` is `ON DELETE SET NULL`,
+so its orders detach and the next `assign_courier_bills` regroups them onto
+ordinary pickup-date bills, which post nothing because they are pre-cutoff.
+
+Scope is otherwise exactly the three tables the cutoff trigger guards. Orders, courier
 bills and stock levels are untouched: stock added by a purged bill stays
 applied, the inventory equivalent of preserving an opening balance. Deleted
 transaction entries still land in `finances_transaction_entry_audit_log` via the

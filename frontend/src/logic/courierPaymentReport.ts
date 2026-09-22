@@ -9,6 +9,7 @@ export interface CourierBillOrder {
 
 export interface CourierBill {
   id: string; courier: string; pickupDate: Date; pickupDateKey: string; workflowStatus?: string; notes?: string;
+  isPreOnboarding: boolean;
   totalOrders: number; inTransitCount: number; inTransitByStatus: Record<string, number>; resolvedCount: number;
   settledCount: number; billValue: number; advanceTotal: number; grossCod: number; charges: number; taxes: number;
   costTotal: number; returnedTotal: number; netReceivable: number; receivedAmount: number; remainingAmount: number;
@@ -18,7 +19,8 @@ export interface CourierBill {
 export function mapCourierBillRow(row: any): CourierBill {
   return {
     id: row.id, courier: row.courier, pickupDate: new Date(`${row.pickup_date}T00:00:00`), pickupDateKey: row.pickup_date,
-    workflowStatus: row.workflow_status, notes: row.notes, totalOrders: row.total_orders, inTransitCount: row.in_transit_count,
+    workflowStatus: row.workflow_status, notes: row.notes, isPreOnboarding: !!row.is_pre_onboarding,
+    totalOrders: row.total_orders, inTransitCount: row.in_transit_count,
     inTransitByStatus: row.in_transit_by_status || {}, resolvedCount: row.resolved_count, settledCount: row.settled_count,
     billValue: row.bill_value, advanceTotal: row.advance_total, grossCod: row.gross_cod, charges: row.charges, taxes: row.taxes,
     costTotal: row.cost_total, returnedTotal: row.returned_total, netReceivable: row.net_receivable,
@@ -29,6 +31,13 @@ export function mapCourierBillRow(row: any): CourierBill {
 export function billPickupDateLabel(bill: CourierBill): string {
   return formatDateDDMMYYYY(bill.pickupDate);
 }
+/** Sorts the pre-onboarding bill ahead of the ordinary dispatch bill it shares a
+ *  date with. The report sorts dates descending, so the marker that wins a tie is
+ *  the one that compares *higher* - hence '1' for pre-onboarding, '0' otherwise. */
+export function billDateSortValue(bill: CourierBill): string {
+  return `${bill.pickupDateKey}${bill.isPreOnboarding ? '1' : '0'}`;
+}
+
 export function billCourierLabel(bill: CourierBill): string {
   return formatCourierForDisplay(bill.courier) as string;
 }

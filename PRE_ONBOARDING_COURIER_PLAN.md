@@ -1,8 +1,19 @@
 # Pre-Onboarding Courier Reconciliation — Plan
 
-Status: design settled, not yet implemented. Supersedes the "Deferred: Shopify
-window and the pre-onboarding courier tail" section of
-`ONBOARDING_DATE_PLAN.md`.
+Status: implemented (2026-09-23), except the UI entry point for the history
+backfill. Supersedes the "Deferred: Shopify window and the pre-onboarding
+courier tail" section of `ONBOARDING_DATE_PLAN.md`.
+
+| Piece | Where |
+|---|---|
+| `is_pre_onboarding`, two-leg posting, sweep exemptions, payout date filter, returns-to-OBE | `20260923010000_pre_onboarding_courier_bill.sql` |
+| Accretion (`sync_pre_onboarding_bill`) | `20260923020000_fix_pre_onboarding_accretion_scope.sql` |
+| Purge clears pre-onboarding bills | `20260923030000_cutoff_clears_pre_onboarding_bills.sql` |
+| Bill build/rebuild (`build_pre_onboarding_bill`) | `20260923040000_build_pre_onboarding_bill.sql` |
+| CSV parse / mark-settled / build | `backend/app/services/pre_onboarding.py` |
+| `POST /org-settings/couriers/{id}/pre-onboarding-csv` | `backend/app/routes/org_settings.py` |
+| Upload UI | `SettingsPage.tsx`, per courier in the Couriers card |
+| `POST /orders/backfill-history` | `backend/app/routes/orders.py` |
 
 ## Problem
 

@@ -1197,10 +1197,19 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
     return result
 
 
-async def _sync_shopify_orders(org_id: str) -> dict:
+async def _sync_shopify_orders(
+    org_id: str,
+    window_start_override: Optional[datetime] = None,
+    advance_checkpoint: bool = True,
+) -> dict:
     """The frontend decides when to auto-sync (see ledgers.js); this just guarantees
     at most one sync runs at a time per org, whether triggered by one tab, several
-    tabs, or the manual button while an auto-sync is in flight."""
+    tabs, or the manual button while an auto-sync is in flight.
+
+    The two overrides serve the onboarding history backfill (routes/orders.py's
+    /orders/backfill-history), which reaches *backwards* past the usual window:
+    it fetches from an explicit start, and must not move the checkpoint, since
+    doing so would make the next ordinary sync skip everything recent."""
     supabase = get_supabase()
 
     if not _try_acquire_sync_lock(supabase, org_id):
@@ -1218,7 +1227,9 @@ async def _sync_shopify_orders(org_id: str) -> dict:
         # re-fetching a fixed window - see _fetch_shopify_orders_in_range for why this is
         # both correct and, after the first run, dramatically cheaper (a periodic sync's
         # window is usually minutes wide, not SHOPIFY_SYNC_WINDOW_DAYS days).
-        window_start = _compute_sync_window_start(_get_last_synced_at(supabase, org_id), now)
+        window_start = window_start_override or _compute_sync_window_start(
+            _get_last_synced_at(supabase, org_id), now
+        )
         all_orders, page_count = await _fetch_shopify_orders_in_range(window_start, now, org_creds)
         t_shopify_fetch = time.perf_counter()
 
@@ -1392,10 +1403,11 @@ async def _sync_shopify_orders(org_id: str) -> dict:
         # one's did instead, which just re-covers a few seconds of overlap - harmless,
         # since re-processing an unchanged order is already a no-op (orders_to_skip).
         last_synced_at = now.isoformat()
-        try:
-            _set_last_synced_at(supabase, org_id, last_synced_at)
-        except Exception as e:
-            logger.warning("[sync-shopify] failed to persist last_synced_at: %s", e)
+        if advance_checkpoint:
+            try:
+                _set_last_synced_at(supabase, org_id, last_synced_at)
+            except Exception as e:
+                logger.warning("[sync-shopify] failed to persist last_synced_at: %s", e)
 
         return {
             "message": "Orders synced successfully",

@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from app.auth import get_org_id
 from app.database import get_supabase
 from app.db_utils import fetch_all
+from app.onboarding_settings import get_org_onboarding_date
 from app.org_scope import org_table
 
 logger = logging.getLogger("app.courier_bills")
@@ -51,12 +52,22 @@ async def list_courier_bills(
     reaches the org's whole history rather than only the periods /orders/ happens to
     return. payment_status is a derived column of the view, so filtering on it here is
     equivalent to (and replaces) the frontend's post-hoc filter.
+
+    Bills dispatched before the org's onboarding date are left out: they settled
+    before the books start, so their money is part of the opening position and
+    there is nothing on them to reconcile. Their rows, orders and tracking are
+    untouched - only this listing skips them. The pre-onboarding bill itself is
+    dated *at* the onboarding date, so it stays, and with it the one figure that
+    does still matter: what the courier owed at the cutover.
     """
     try:
         supabase = get_supabase()
+        onboarding = get_org_onboarding_date(org_id)
 
         def build():
             q = org_table(supabase, org_id, "shopify_courier_bills_with_totals").select("*")
+            if onboarding:
+                q = q.gte("pickup_date", onboarding)
             if date_from:
                 q = q.gte("pickup_date", date_from.isoformat())
             if date_to:

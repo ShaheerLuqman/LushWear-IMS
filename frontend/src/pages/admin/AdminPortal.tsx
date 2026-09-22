@@ -117,6 +117,9 @@ function AdminHeader({ onLogout }: { onLogout: () => void }) {
 function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { showToast } = useToast();
   const [orgName, setOrgName] = useState('');
+  // The day this org's books start - nothing may be dated before it. Today is
+  // right for an org being set up now; a migrating customer picks their own.
+  const [onboardingDate, setOnboardingDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [adminName, setAdminName] = useState('');
   const [adminEmail, setAdminEmail] = useState('');
   const [adminPassword, setAdminPassword] = useState('');
@@ -129,7 +132,10 @@ function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated
     try {
       await adminApiJson('/admin/organizations', {
         method: 'POST',
-        body: { org_name: orgName, admin_name: adminName, admin_email: adminEmail, admin_password: adminPassword },
+        body: {
+          org_name: orgName, onboarding_date: onboardingDate,
+          admin_name: adminName, admin_email: adminEmail, admin_password: adminPassword,
+        },
       });
       showToast(`${orgName} created`, 'success');
       onCreated();
@@ -145,6 +151,11 @@ function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated
       <FormLayout>
         <Text as="p" tone="subdued">Creates the organization and its first admin user in one step. That admin logs in themselves afterwards with the credentials you set here.</Text>
         <TextField label="Organization name" autoComplete="off" placeholder="e.g. Acme Co" requiredIndicator autoFocus value={orgName} onChange={setOrgName} />
+        <TextField
+          label="Onboarding date" type="date" autoComplete="off" requiredIndicator
+          value={onboardingDate} onChange={setOnboardingDate}
+          helpText="The day this organization's books start. No entry, bill or receipt can be dated before it."
+        />
         <TextField label="First admin name" autoComplete="off" placeholder="e.g. Jane Doe" requiredIndicator value={adminName} onChange={setAdminName} />
         <TextField label="First admin email" type="email" autoComplete="off" placeholder="owner@acme.com" requiredIndicator value={adminEmail} onChange={setAdminEmail} />
         <TextField label="First admin password" type="password" autoComplete="new-password" placeholder="At least 8 characters" requiredIndicator value={adminPassword} onChange={setAdminPassword} />

@@ -1622,6 +1622,23 @@ body.orders-table-fullscreen #ordersView .table-card {
     padding: 8px 4px;
 }
 
+/* File input wrapped around a Polaris Button: the real input is what the click
+   must reach, so it covers the button rather than being hidden away from it. */
+.pre-onboarding-upload {
+    position: relative;
+    display: inline-block;
+}
+
+.pre-onboarding-upload input[type="file"] {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    z-index: 1;
+}
+
 /* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
 
 /* admin.html is a standalone page (not the main app's fixed-viewport layout

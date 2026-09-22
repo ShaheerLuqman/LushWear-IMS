@@ -52,26 +52,26 @@ def get_earliest_financial_date(org_id: str) -> Optional[str]:
     return min(found) if found else None
 
 
-def set_org_onboarding_date(org_id: str, onboarding_date: Optional[date]) -> Optional[str]:
+def set_org_onboarding_date(org_id: str, onboarding_date: date) -> str:
     """Raises ValueError when the date would leave existing rows stranded before
     the cutoff - an org can only move its onboarding date back, never forward
-    past data it already has. Clearing it (None) removes the cutoff."""
-    if onboarding_date is not None:
-        earliest = get_earliest_financial_date(org_id)
-        if earliest and onboarding_date.isoformat() > earliest:
-            raise ValueError(
-                f"Onboarding date cannot be later than the earliest existing entry ({earliest})"
-            )
+    past data it already has (apply_onboarding_cutoff is the forward path). It
+    cannot be cleared: every org has one."""
+    earliest = get_earliest_financial_date(org_id)
+    if earliest and onboarding_date.isoformat() > earliest:
+        raise ValueError(
+            f"Onboarding date cannot be later than the earliest existing entry ({earliest})"
+        )
 
     supabase = get_supabase()
     supabase.table("system_organizations").update({
-        "onboarding_date": onboarding_date.isoformat() if onboarding_date else None,
+        "onboarding_date": onboarding_date.isoformat(),
     }).eq("id", org_id).execute()
     # The opening voucher's date is derived from onboarding_date, but only
     # ledgers_opening_balance_trigger rebuilds it - without this it would keep
     # the old date until someone happened to edit an opening balance.
     supabase.rpc("sync_opening_balance_journal", {"p_org_id": org_id}).execute()
-    return onboarding_date.isoformat() if onboarding_date else None
+    return onboarding_date.isoformat()
 
 
 def apply_onboarding_cutoff(org_id: str, onboarding_date: date) -> dict:
