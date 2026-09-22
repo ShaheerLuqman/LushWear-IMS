@@ -102,12 +102,14 @@ class TestSetOrgOnboardingDate:
         set_org_onboarding_date("org1", date(2026, 1, 15))
         assert client.rpcs == [("sync_opening_balance_journal", {"p_org_id": "org1"})]
 
-    def test_clearing_skips_the_existing_data_check(self, monkeypatch):
+    def test_an_org_with_no_data_yet_takes_any_date(self, monkeypatch):
+        """A brand-new org has nothing to strand, so the earliest-entry check
+        cannot reject anything."""
         client = _FakeWriteClient()
-        monkeypatch.setattr(onboarding, "get_earliest_financial_date", lambda _org: pytest.fail("should not be called"))
+        monkeypatch.setattr(onboarding, "get_earliest_financial_date", lambda _org: None)
         monkeypatch.setattr(onboarding, "get_supabase", lambda: client)
-        assert set_org_onboarding_date("org1", None) is None
-        assert client.written == [{"onboarding_date": None}]
+        assert set_org_onboarding_date("org1", date(2026, 9, 23)) == "2026-09-23"
+        assert client.written == [{"onboarding_date": "2026-09-23"}]
 
 
 class _FakeRpcSupabase:

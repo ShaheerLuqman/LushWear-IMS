@@ -584,10 +584,6 @@ body {
     margin: 0;
 }
 
-.header-actions .toolbar-search {
-    width: 240px;
-}
-
 .header-date {
     width: 200px;
 }
@@ -1040,6 +1036,29 @@ input[type="number"] {
     max-width: 100%;
     margin-top: var(--p-space-300);
     margin-left: var(--p-space-200);
+}
+
+.date-popover-nav {
+    display: flex;
+    gap: var(--p-space-100);
+    padding: 0 var(--p-space-200) var(--p-space-100);
+}
+
+.date-popover-nav > * {
+    flex: 1;
+    min-width: 0;
+}
+
+/* The month/year selects replace the header's label; its arrows stay for stepping. */
+.date-popover-calendar .Polaris-DatePicker__Title {
+    visibility: hidden;
+}
+
+/* A month renders 4-6 week rows, so the popover resizes as you navigate unless
+   the grid always reserves the tallest case. Day cells are square and the
+   calendar is a fixed 13rem wide, so six rows plus the weekday row is 14.4rem. */
+.date-popover-calendar .Polaris-DatePicker__Month {
+    min-height: 14.4rem;
 }
 
 .date-popover-calendar .Polaris-DatePicker__Day {

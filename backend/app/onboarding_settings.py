@@ -76,10 +76,11 @@ def set_org_onboarding_date(org_id: str, onboarding_date: Optional[date]) -> Opt
 
 def apply_onboarding_cutoff(org_id: str, onboarding_date: date) -> dict:
     """Moves the onboarding date forward onto existing history: deletes every
-    transaction entry, journal entry and bill before it, folding their net
-    position into each ledger's opening balance. Irreversible - the caller is
-    responsible for having asked first. See
-    supabase/migrations/20260922010000_onboarding_cutoff_purge.sql."""
+    transaction entry, journal entry and bill before it and discards their
+    amounts - each ledger keeps the opening balance it already had, so this is
+    not balance-preserving. Irreversible; the caller is responsible for having
+    asked first. See
+    supabase/migrations/20260922020000_cutoff_keeps_existing_opening_balance.sql."""
     return get_supabase().rpc("apply_onboarding_cutoff", {
         "p_org_id": org_id,
         "p_date": onboarding_date.isoformat(),

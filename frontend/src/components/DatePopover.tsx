@@ -3,9 +3,11 @@
 // browser's native <input type="date">. Same ISO YYYY-MM-DD contract as
 // DateRangePopover, whose date helpers it reuses; '' = no date.
 import { useState } from 'react';
-import { Button, DatePicker, Popover } from '@shopify/polaris';
+import { Button, DatePicker, Popover, Select } from '@shopify/polaris';
 import { getPKTDate } from '../logic/shared';
 import { dateToIso, isoToDate } from './DateRangePopover';
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
 export function formatDate(iso: string): string {
   return iso.split('-').reverse().join('/');
@@ -19,6 +21,14 @@ interface Props {
   /** Hides the "x" - for fields where an empty date makes no sense. */
   clearable?: boolean;
   disabled?: boolean;
+}
+
+// The shown year is always an option, even when a stored date predates the range.
+function yearOptions(shown: number): string[] {
+  const now = getPKTDate().getFullYear();
+  const from = Math.min(now - 10, shown);
+  const to = Math.max(now + 1, shown);
+  return Array.from({ length: to - from + 1 }, (_, i) => String(to - i));
 }
 
 export function DatePopover({ value, onChange, placeholder = 'Select date', title, clearable = true, disabled }: Props) {
@@ -53,6 +63,20 @@ export function DatePopover({ value, onChange, placeholder = 'Select date', titl
       >
         <Popover.Section>
           <div className="date-popover-calendar">
+          <div className="date-popover-nav">
+            <Select
+              label="Month" labelHidden
+              options={MONTHS.map((m, i) => ({ label: m, value: String(i) }))}
+              value={String(month)}
+              onChange={(m) => setMonth((s) => ({ ...s, month: Number(m) }))}
+            />
+            <Select
+              label="Year" labelHidden
+              options={yearOptions(year)}
+              value={String(year)}
+              onChange={(y) => setMonth((s) => ({ ...s, year: Number(y) }))}
+            />
+          </div>
           <DatePicker
             month={month} year={year}
             selected={value ? isoToDate(value) : undefined}

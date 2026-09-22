@@ -11,7 +11,6 @@ import { StatCardGrid } from '../../components/StatCardGrid';
 import { apiJson, apiRequest } from '../../api';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { SearchField } from '../../components/SearchField';
 import { HeaderButton } from '../../components/HeaderButton';
 import { DateRangePopover, type DateRange } from '../../components/DateRangePopover';
 import { Dropdown } from '../../components/Dropdown';
@@ -288,7 +287,12 @@ export function CourierPaymentReportPage() {
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
     if (!q) return bills;
-    return bills.filter((b) => b.courier.toLowerCase().includes(q) || (b.orders || []).some((o) => String(o.order_number ?? '').toLowerCase().includes(q)));
+    // Bill value is matched both formatted ("197,730.00") and bare ("197730") so a
+    // typed amount hits whether or not the separators are included.
+    return bills.filter((b) => [b.courier, billCourierLabel(b), billPickupDateLabel(b), b.pickupDateKey, formatMoney(b.billValue), String(b.billValue),
+      b.status, BILL_STATUS_META[b.status]?.label ?? '']
+      .some((field) => field.toLowerCase().includes(q))
+      || (b.orders || []).some((o) => String(o.order_number ?? '').toLowerCase().includes(q)));
   }, [bills, search]);
 
   const summary = useMemo(() => courierPaymentReportSummary(visible), [visible]);
@@ -336,11 +340,11 @@ export function CourierPaymentReportPage() {
         <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by pickup date range" />
         <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
         <Dropdown multiple allLabel="All Status" options={COURIER_PAYMENT_STATUSES.map((v) => ({ value: v, label: COURIER_PAYMENT_STATUS_LABELS[v] }))} value={statusFilter} onChange={setStatusFilter} />
-        <div className="toolbar-search"><SearchField placeholder="Search courier or order #..." value={search} onChange={setSearch} /></div>
         <HeaderButton onClick={clearFilters}>Clear Filters</HeaderButton>
         <HeaderButton loading={fetchingSettlements} onClick={fetchPostExSettlements}>Fetch Settlements</HeaderButton>
       </>
     ),
+    search: detailBill ? undefined : { value: search, onChange: setSearch, placeholder: 'Search courier, date, bill value, status or order #...' },
   });
 
   if (detailBill) return <BillDetail bill={detailBill} onBack={() => setDetailBill(null)} />;

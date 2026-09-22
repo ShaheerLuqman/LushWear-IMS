@@ -2,7 +2,7 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Text, TextField,
+  Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Spinner, Text, TextField,
 } from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
@@ -10,6 +10,7 @@ import { useConfirm } from '../../components/ConfirmContext';
 import { DatePopover, formatDate } from '../../components/DatePopover';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
+import { FormModal } from '../../components/FormModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { Dropdown } from '../../components/Dropdown';
 
@@ -399,13 +400,13 @@ function FiscalSection() {
   );
 }
 
-function OnboardingDateOption() {
+function OnboardingDateModal({ onClose }: { onClose: () => void }) {
   const { showToast } = useToast();
   const confirm = useConfirm();
   const [onboardingDate, setOnboardingDate] = useState('');
-  // The org's oldest entry/bill - the backend refuses anything later, so it
-  // bounds the input natively instead of letting the user discover it via a 400.
+  // The org's oldest entry/bill - the backend refuses anything later without a purge.
   const [earliest, setEarliest] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -417,7 +418,10 @@ function OnboardingDateOption() {
         setEarliest(settings.earliest_financial_date);
       } catch (ex: any) {
         showToast(ex?.message || 'Failed to load onboarding date', 'error');
+        onClose();
+        return;
       }
+      setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -428,6 +432,7 @@ function OnboardingDateOption() {
 
   async function submit() {
     setError('');
+    if (!onboardingDate) { setError('Pick an onboarding date'); return; }
     if (purging && !await confirm({
       title: 'Delete everything before this date?',
       message: `Every entry, bill and receipt before ${onboardingDate} will be deleted for good, and the amounts on them are not carried over — each ledger keeps whatever opening balance it already has. Check those opening balances afterwards. This cannot be undone.`,
@@ -442,35 +447,49 @@ function OnboardingDateOption() {
         const result = await apiJson<{ transaction_entries_deleted: number; journal_entries_deleted: number; bills_deleted: number }>(
           '/org-settings/onboarding/cutoff', { method: 'POST', body: { onboarding_date: onboardingDate } });
         showToast(`Removed ${result.transaction_entries_deleted} entries, ${result.journal_entries_deleted} vouchers and ${result.bills_deleted} bills`, 'success');
-        // Everything older is gone, so the opening voucher is now the oldest thing there is.
-        setEarliest(onboardingDate);
       } else {
-        await apiJson('/org-settings/onboarding', { method: 'PUT', body: { onboarding_date: onboardingDate || null } });
+        await apiJson('/org-settings/onboarding', { method: 'PUT', body: { onboarding_date: onboardingDate } });
         showToast('Onboarding date saved', 'success');
       }
+      onClose();
     } catch (ex: any) {
       setError(ex?.message || 'Could not save onboarding date');
+      setSaving(false);
     }
-    setSaving(false);
   }
 
+  return (
+    <FormModal
+      title="Onboarding date" onClose={onClose} onSubmit={submit} saving={saving} disabled={loading}
+      destructive={purging} submitLabel={purging ? 'Delete and move date' : 'Save onboarding date'}
+    >
+      {loading ? (
+        <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Loading onboarding date...</Text></InlineStack>
+      ) : (
+        <BlockStack gap="300">
+          <Text as="p" tone="subdued">
+            {earliest
+              ? `Your books start on this day — nothing can be dated before it. Your oldest entry is ${formatDate(earliest)}; pick a later date and everything before it is deleted, leaving each ledger on its existing opening balance.`
+              : 'Your books start on this day — nothing can be dated before it.'}
+          </Text>
+          <DatePopover value={onboardingDate} onChange={setOnboardingDate} placeholder="No start date" title="Onboarding date" clearable={false} />
+          {error && <InlineError message={error} fieldID="onboarding" />}
+        </BlockStack>
+      )}
+    </FormModal>
+  );
+}
+
+function OnboardingDateOption() {
+  const [open, setOpen] = useState(false);
   return (
     <Card>
       <BlockStack gap="200">
         <Text as="h3" variant="headingSm" fontWeight="bold">Onboarding date</Text>
-        <Text as="p" tone="subdued">
-          {earliest
-            ? `Your books start on this day — nothing can be dated before it. Your oldest entry is ${formatDate(earliest)}; pick a later date and everything before it is deleted, leaving each ledger on its existing opening balance.`
-            : 'Your books start on this day — nothing can be dated before it. Leave it empty for no start date.'}
-        </Text>
-        <InlineStack align="space-between" blockAlign="center" gap="300">
-          <DatePopover value={onboardingDate} onChange={setOnboardingDate} placeholder="No start date" title="Onboarding date" />
-          <Button variant="primary" tone={purging ? 'critical' : undefined} loading={saving} onClick={submit}>
-            {purging ? 'Delete and move date' : 'Save onboarding date'}
-          </Button>
-        </InlineStack>
-        {error && <InlineError message={error} fieldID="onboarding" />}
+        <Text as="p" tone="subdued">Your books start on this day — nothing can be dated before it. Moving it forward deletes everything dated earlier.</Text>
+        <InlineStack align="end"><Button onClick={() => setOpen(true)}>Set onboarding date</Button></InlineStack>
       </BlockStack>
+      {open && <OnboardingDateModal onClose={() => setOpen(false)} />}
     </Card>
   );
 }

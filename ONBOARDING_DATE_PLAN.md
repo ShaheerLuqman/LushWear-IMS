@@ -1,8 +1,10 @@
 # Organization Onboarding Date — Implementation Plan
 
-Status: design settled, not yet implemented. Supersedes the earlier draft of
+Status: implemented and migrated (2026-09-22). Supersedes the earlier draft of
 this file, which predated the React frontend migration and proposed app-layer
 validation only (see "Why the DB, not the routes" below for why that was wrong).
+Still open: surfacing `onboarding_date` on `AccountPublic` (§1) was skipped - the
+Settings endpoint is its only consumer, and it would cost a query on every /me.
 
 ## Goal
 
@@ -150,7 +152,56 @@ confirm dialog with `danger` and `holdSeconds: 5`
 (`components/ConfirmContext.tsx`), which disables the confirm button and counts
 down before it can be clicked. Nothing recovers the deleted rows afterwards.
 
-## 7. Check
+## Trap: two-step inserts and the silent skip
+
+The trigger suppresses a pre-onboarding row by returning NULL, so any function
+that inserts a journal header and then its lines must check that the header
+survived - otherwise the intended skip becomes a `23502` on
+`journal_lines.journal_id` that rolls back whatever wrote it.
+
+`post_journal_entry` hit this for real (resolving the last open order in a
+pre-onboarding fiscal period makes `sync_period_cogs_journal` post that period's
+COGS voucher) and was fixed in
+`20260922030000_post_journal_entry_skips_pre_onboarding.sql`, which guards the
+shared function so the courier bill and payout paths are covered too.
+
+Two other functions have the same shape:
+
+- `sync_opening_balance_journal` - safe. Its voucher is dated *at*
+  `onboarding_date` and the trigger compares with `<`, so it always survives.
+- `project_transaction_entry_to_journal` - **not currently reachable**, and
+  deliberately left unguarded. Its only live caller is the BEFORE-trigger path,
+  which never fires for a suppressed row, and a one-off re-projection `DO` block
+  that has already run. Anyone writing another bulk re-projection sweep must
+  either add the NULL check first or exclude pre-onboarding entries, or the
+  migration will abort part-way through.
+
+## 7. Planned change: `onboarding_date` becomes mandatory
+
+Decided, not yet implemented. Nullable was only ever a way to ship the cutoff
+without changing behaviour for existing orgs; once `journal_orders_from` is
+removed (see `PRE_ONBOARDING_COURIER_PLAN.md`) this is the only gate left, and
+NULL meaning "post everything" becomes a trap.
+
+- **Migration**: backfill `onboarding_date = DATE '2026-01-01'` wherever it is
+  NULL — the same date `journal_orders_from` has defaulted to since the
+  sales-journal cutover, so nothing about what posts changes — then
+  `SET NOT NULL` and `SET DEFAULT CURRENT_DATE`.
+- **New orgs are asked for it at creation.** `SuperadminOrgCreate` gains a
+  required `onboarding_date`, `POST /admin/organizations` writes it, and the
+  Superadmin Portal's create-organization modal gets a date field defaulting to
+  today.
+- **The bootstrap path is not asked.** `auth_bootstrap` creates the very first
+  org before there is anyone to ask, so it relies on the column default
+  (`CURRENT_DATE`), which is right for an org being set up at that moment.
+- **Clearing goes away.** `OrgOnboardingSettingsUpdate.onboarding_date` becomes
+  required, `set_org_onboarding_date` no longer accepts `None`, and the Settings
+  field loses its clear affordance and its "leave it empty" help text.
+- The `IS NOT NULL` guards in `enforce_onboarding_cutoff`,
+  `sync_opening_balance_journal` and `assign_courier_payouts` can stay as cheap
+  defensive checks; they simply stop being reachable.
+
+## 8. Check
 
 One `backend/tests/test_onboarding_cutoff.py`: set a date, attempt a
 pre-onboarding transaction entry, journal entry and bill, assert none landed;
@@ -158,7 +209,10 @@ insert one dated exactly on the onboarding date, assert it did.
 
 ## Deferred: Shopify window and the pre-onboarding courier tail
 
-Kept from the original draft, still unbuilt, not required for the cutoff itself.
+Superseded by `PRE_ONBOARDING_COURIER_PLAN.md`, which settles most of this:
+the courier tail becomes a posted courier bill rather than an opening balance,
+and the sync is a full backfill rather than a 60-day floor. The notes below are
+kept only for the parts that plan still leaves open.
 
 - `_compute_sync_window_start()` in `backend/app/services/shopify_sync.py`
   currently backfills `SHOPIFY_SYNC_WINDOW_DAYS = 60` days before *now* on a
