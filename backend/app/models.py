@@ -693,6 +693,27 @@ class OrgFiscalSettingsUpdate(BaseModel):
 class OrgFiscalSettingsPublic(OrgFiscalSettingsUpdate):
     pass
 
+class OrgOnboardingSettingsUpdate(BaseModel):
+    """PUT /org-settings/onboarding body. None clears the cutoff (see
+    app/onboarding_settings.py)."""
+    onboarding_date: Optional[date] = None
+
+class OrgOnboardingSettingsPublic(OrgOnboardingSettingsUpdate):
+    # The org's oldest existing entry/bill date, so the UI can bound its date
+    # input instead of discovering the limit through a 400.
+    earliest_financial_date: Optional[date] = None
+
+class OrgOnboardingCutoffBody(BaseModel):
+    """POST /org-settings/onboarding/cutoff body - the middle-point date to move
+    the org onto, deleting everything financial before it."""
+    onboarding_date: date
+
+class OrgOnboardingCutoffResult(BaseModel):
+    onboarding_date: date
+    transaction_entries_deleted: int
+    journal_entries_deleted: int
+    bills_deleted: int
+
 class SuperadminOrgCreate(BaseModel):
     """POST /admin/organizations body - creates an org and its first admin
     user in one step (Superadmin Portal)."""

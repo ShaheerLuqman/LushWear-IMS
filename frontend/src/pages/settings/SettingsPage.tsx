@@ -1,11 +1,13 @@
-// Settings: Account, Users, Financial calendar, Integrations, Couriers.
+// Settings: Account, Users, Financial calendar, Integrations, Couriers, Danger zone.
 import { useEffect, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
-  Badge, BlockStack, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Text, TextField,
+  Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Text, TextField,
 } from '@shopify/polaris';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
+import { useConfirm } from '../../components/ConfirmContext';
+import { DatePopover, formatDate } from '../../components/DatePopover';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { ChangePasswordModal } from './ChangePasswordModal';
@@ -13,18 +15,21 @@ import { Dropdown } from '../../components/Dropdown';
 
 const ROLE_OPTIONS = [{ value: 'staff', label: 'Staff' }, { value: 'admin', label: 'Admin' }];
 
-function Section({ title, description, children }: { title: string; description?: string; children: ReactNode }) {
-  return (
-    <Card>
-      <BlockStack gap="400">
-        <BlockStack gap="100">
-          <Text as="h2" variant="headingMd">{title}</Text>
-          {description && <Text as="p" tone="subdued">{description}</Text>}
-        </BlockStack>
-        {children}
+function Section({ title, description, danger, children }: { title: string; description?: string; danger?: boolean; children: ReactNode }) {
+  const body = (
+    <BlockStack gap="400">
+      <BlockStack gap="100">
+        <Text as="h2" variant="headingMd" tone={danger ? 'critical' : undefined}>{title}</Text>
+        {description && <Text as="p" tone="subdued">{description}</Text>}
       </BlockStack>
-    </Card>
+      {children}
+    </BlockStack>
   );
+  // Outlined in red rather than carded, the way GitHub separates its danger zone
+  // - a Card's shadow reads as "same as the settings above", which this is not.
+  return danger
+    ? <Box background="bg-surface-secondary" padding="400" borderRadius="300" borderWidth="025" borderColor="border-critical-secondary">{body}</Box>
+    : <Card>{body}</Card>;
 }
 
 interface UserRow { id: string; name?: string; email: string; role: 'admin' | 'staff'; is_active: boolean }
@@ -394,6 +399,94 @@ function FiscalSection() {
   );
 }
 
+function OnboardingDateOption() {
+  const { showToast } = useToast();
+  const confirm = useConfirm();
+  const [onboardingDate, setOnboardingDate] = useState('');
+  // The org's oldest entry/bill - the backend refuses anything later, so it
+  // bounds the input natively instead of letting the user discover it via a 400.
+  const [earliest, setEarliest] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const settings = await apiJson<{ onboarding_date: string | null; earliest_financial_date: string | null }>('/org-settings/onboarding', { fallback: 'Failed to load onboarding date' });
+        setOnboardingDate(settings.onboarding_date || '');
+        setEarliest(settings.earliest_financial_date);
+      } catch (ex: any) {
+        showToast(ex?.message || 'Failed to load onboarding date', 'error');
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Past the org's oldest entry the plain setter refuses: that date can only be
+  // reached by purging everything before it, which is irreversible.
+  const purging = !!(onboardingDate && earliest && onboardingDate > earliest);
+
+  async function submit() {
+    setError('');
+    if (purging && !await confirm({
+      title: 'Delete everything before this date?',
+      message: `Every entry, bill and receipt before ${onboardingDate} will be deleted for good, and the amounts on them are not carried over — each ledger keeps whatever opening balance it already has. Check those opening balances afterwards. This cannot be undone.`,
+      confirmText: 'Delete and move date',
+      danger: true,
+      holdSeconds: 5,
+    })) return;
+
+    setSaving(true);
+    try {
+      if (purging) {
+        const result = await apiJson<{ transaction_entries_deleted: number; journal_entries_deleted: number; bills_deleted: number }>(
+          '/org-settings/onboarding/cutoff', { method: 'POST', body: { onboarding_date: onboardingDate } });
+        showToast(`Removed ${result.transaction_entries_deleted} entries, ${result.journal_entries_deleted} vouchers and ${result.bills_deleted} bills`, 'success');
+        // Everything older is gone, so the opening voucher is now the oldest thing there is.
+        setEarliest(onboardingDate);
+      } else {
+        await apiJson('/org-settings/onboarding', { method: 'PUT', body: { onboarding_date: onboardingDate || null } });
+        showToast('Onboarding date saved', 'success');
+      }
+    } catch (ex: any) {
+      setError(ex?.message || 'Could not save onboarding date');
+    }
+    setSaving(false);
+  }
+
+  return (
+    <Card>
+      <BlockStack gap="200">
+        <Text as="h3" variant="headingSm" fontWeight="bold">Onboarding date</Text>
+        <Text as="p" tone="subdued">
+          {earliest
+            ? `Your books start on this day — nothing can be dated before it. Your oldest entry is ${formatDate(earliest)}; pick a later date and everything before it is deleted, leaving each ledger on its existing opening balance.`
+            : 'Your books start on this day — nothing can be dated before it. Leave it empty for no start date.'}
+        </Text>
+        <InlineStack align="space-between" blockAlign="center" gap="300">
+          <DatePopover value={onboardingDate} onChange={setOnboardingDate} placeholder="No start date" title="Onboarding date" />
+          <Button variant="primary" tone={purging ? 'critical' : undefined} loading={saving} onClick={submit}>
+            {purging ? 'Delete and move date' : 'Save onboarding date'}
+          </Button>
+        </InlineStack>
+        {error && <InlineError message={error} fieldID="onboarding" />}
+      </BlockStack>
+    </Card>
+  );
+}
+
+/** Settings that can destroy data. The red outline is the zone; each option is a
+ *  standalone card inside it - add the next one as a sibling in this stack. */
+function DangerZoneSection() {
+  return (
+    <Section danger title="Danger zone" description="Changes here can delete data permanently.">
+      <BlockStack gap="500">
+        <OnboardingDateOption />
+      </BlockStack>
+    </Section>
+  );
+}
+
 export function SettingsPage() {
   const { account } = useAuth();
   const [changePasswordOpen, setChangePasswordOpen] = useState(false);
@@ -421,6 +514,7 @@ export function SettingsPage() {
         {isAdmin && <FiscalSection />}
         {isAdmin && <IntegrationsSection />}
         {isAdmin && <CouriersSection financeOn={financeOn} />}
+        {isAdmin && <DangerZoneSection />}
       </BlockStack>
 
       {changePasswordOpen && <ChangePasswordModal onClose={() => setChangePasswordOpen(false)} />}

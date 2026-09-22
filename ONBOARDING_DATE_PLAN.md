@@ -1,169 +1,188 @@
-# Organization Onboarding Date — Draft Plan
+# Organization Onboarding Date — Implementation Plan
 
-Status: draft, not yet implemented. Captures the design discussion before any
-migrations/code are written.
+Status: design settled, not yet implemented. Supersedes the earlier draft of
+this file, which predated the React frontend migration and proposed app-layer
+validation only (see "Why the DB, not the routes" below for why that was wrong).
 
 ## Goal
 
-Let an org have an `onboarding_date` — normally the day the customer starts
-using the software, but adjustable by an admin — such that:
+Give an org an `onboarding_date` — normally the day the customer starts using
+the software — such that no transaction entry, journal entry (including receipt
+and payment vouchers), or bill can ever exist before it. The org's
+pre-onboarding financial position is carried by ledger opening balances as of
+that date instead.
 
-- Transactions, journal entries, and ledgers start strictly from that date;
-  opening balances are shown as of that date.
-- Shopify order sync only reaches back to 2 months prior to that date (not
-  further, and not based on "now").
-- The 2-month trailing window is reconciled via admin-uploaded historical
-  PostEx CSVs, producing (a) an opening balance and (b) a "remaining bill" of
-  orders still unsettled with the courier at onboarding time.
+Out of scope here, deferred to the end of this document: bounding the Shopify
+backfill window and reconciling the trailing pre-onboarding courier tail.
 
-## Grounding in the current codebase
+## Rules
 
-- Per-org settings already follow one pattern: a column on
-  `system_organizations`, a small dedicated module
-  (`backend/app/fiscal_settings.py`), and a `GET/PUT /org-settings/<name>`
-  pair in `backend/app/routes/org_settings.py` (see the existing
-  `/org-settings/fiscal` endpoints). The onboarding date should follow the
-  same shape.
-- Ledgers (`finances_ledgers`) already have a per-account `opening_balance`
-  column, rebuilt into a single synthetic journal entry per org by the DB
-  function `sync_opening_balance_journal(org_id)`, currently dated
-  `MIN(entry_date) - 1`.
-- Shopify order sync (`backend/app/services/shopify_sync.py`,
-  `_compute_sync_window_start()`) backfills `SHOPIFY_SYNC_WINDOW_DAYS = 60`
-  days from *now* on first sync, then proceeds incrementally.
-- PostEx CSV reconciliation already exists end-to-end: upload endpoint
-  (`POST /orders/upload-postex-csv` in `backend/app/routes/orders.py`),
-  parsing (`backend/app/services/postex.py`), settlement matching against
-  `shopify_orders`, and posting via `assign_courier_payouts` +
-  `post_courier_payout_journal`. This is the mechanism to reuse for the
-  historical trailing-window reconciliation rather than building something new.
+| Where | Rule |
+|---|---|
+| Trigger on `finances_journal_entries` / `finances_transaction_entries` / `finances_bills` | reject when the row's date `< onboarding_date` |
+| `PUT /org-settings/onboarding` | reject when `onboarding_date >` the org's earliest existing `entry_date`/`bill_date`, naming that date |
+| `sync_opening_balance_journal(org_id)` | opening entry dated `onboarding_date` exactly; the existing `MIN(entry_date) - 1` heuristic survives only as the `onboarding_date IS NULL` fallback |
+| `ledger_statement` view | order the opening voucher first within its date |
+
+Entries are allowed **on** the onboarding date. The opening entry shares that
+date with them, so it is kept first by voucher type in the statement ordering
+rather than by being dated a day earlier.
+
+## Why the DB, not the routes
+
+Most dated financial rows in this codebase are written by Postgres functions,
+not by Python: sales posting, COGS, courier payout journals, and the opening
+balance rebuild all `INSERT INTO finances_journal_entries` from plpgsql. Only
+`routes/journal.py` and `routes/transactions.py` insert from the app. A guard in
+the route layer would therefore miss most writers, so the cutoff is enforced by
+one trigger function attached to the three date-bearing tables — every caller,
+app or RPC, routes through it.
+
+Machine postings are **skipped** (`RETURN NULL`), not raised on: raising would
+break the Shopify sync the moment it touches a pre-onboarding order.
+
+Because nothing pre-onboarding is ever written, every existing read, report, RPC
+and ledger balance is correct with no read-side date filtering anywhere. That is
+the point of enforcing on write.
 
 ## 1. Data model
 
-- Add `onboarding_date DATE` to `system_organizations` via a new migration
-  (same format as `20260905000000_org_fiscal_settings.sql`).
-- Backfill existing orgs' `onboarding_date` (candidate: `created_at::date`,
-  or the earliest existing journal/order date if earlier — see Open
-  Questions).
-- New `backend/app/onboarding_settings.py` mirroring `fiscal_settings.py`:
-  `get_org_onboarding_date` / `set_org_onboarding_date`.
-- Add `GET/PUT /org-settings/onboarding` to `routes/org_settings.py`, same
-  shape as `/org-settings/fiscal`.
-- Surface `onboarding_date` on `AccountPublic` so the frontend can gate UI
+- New migration: `ALTER TABLE system_organizations ADD COLUMN IF NOT EXISTS onboarding_date DATE;`
+  Same shape as `20260905000000_org_fiscal_settings.sql`.
+- Nullable with no backfill. `NULL` means "no cutoff", so every existing org
+  behaves exactly as it does today until an admin sets a date.
+- Surface `onboarding_date` on `AccountPublic` so the frontend can read it
   without an extra fetch.
 
-## 2. Enforcing "nothing before onboarding_date"
+## 2. The cutoff trigger
 
-- Validate at the app/route layer (consistent with how `org_table()` rather
-  than RLS is the real tenant-isolation mechanism in this codebase): reject
-  `entry_date < onboarding_date` in `routes/transactions.py`,
-  `routes/journal.py`, and bill creation.
-- Change `sync_opening_balance_journal(org_id)` so the synthetic
-  opening-balance entry is dated at `onboarding_date` (falling back to the
-  current "day before earliest transaction" heuristic only when
-  `onboarding_date` is unset).
+Same migration. One `BEFORE INSERT` trigger function, attached to all three
+tables, resolving the org's `onboarding_date` and returning `NULL` when the
+row's date falls before it:
 
-## 3. Bounding the Shopify order sync
+| Table | Date column |
+|---|---|
+| `finances_journal_entries` | `entry_date` |
+| `finances_transaction_entries` | `entry_date` |
+| `finances_bills` | `bill_date` |
 
-- Change `_compute_sync_window_start()`'s backfill floor from
-  "`SHOPIFY_SYNC_WINDOW_DAYS` days before now" to
-  "`SHOPIFY_SYNC_WINDOW_DAYS` days before `onboarding_date`" — sync never
-  reaches further back than that, regardless of when the org actually first
-  syncs.
-- This is the one deliberate exception to "nothing before onboarding_date":
-  *order records* in the trailing 2 months get synced (so CSV reconciliation
-  in step 4 has something to match against), but no *financial entries* get
-  posted at their real, pre-onboarding dates because of the rule in §2.
+Receipts are journal entries with `voucher_type = 'receipt'`, so they need no
+separate handling.
 
-## 4. Historical reconciliation for the trailing 2 months
+Alongside it, a `400` check in `routes/transactions.py`
+(`create_transaction_entry` and the bulk variant), `routes/journal.py`
+(`create_journal_entry`) and `routes/bills.py` (`create_bill`), so a human
+typing a pre-onboarding date gets a real error instead of a silent no-op. The
+trigger is the correctness boundary; these checks only supply the message.
 
-Read on the intent: PostEx settlement lags orders by roughly 1-2 months, so
-at onboarding there's a tail of orders already placed but not yet settled
-with the courier. Plan is to reuse the existing `upload-postex-csv` flow
-rather than build a parallel one:
+## 3. Opening balance entry
 
-- Admin uploads the same kind of CPR CSVs they'd use normally, covering the
-  trailing 2-month window.
-- Orders the CSV shows as **already settled** → don't post individual
-  journal entries at their real (pre-onboarding) dates (barred by §2);
-  instead **net their financial effect into the PostEx system ledger's
-  `opening_balance`**, dated as of onboarding via the existing
-  opening-balance journal mechanism.
-- Orders the CSV shows as **still unsettled** → become a normal open
-  `shopify_courier_bill` and flow through the existing ongoing
-  reconciliation machinery after onboarding, same as any new order.
+`sync_opening_balance_journal(org_id)` currently dates its synthetic entry
+`COALESCE(MIN(entry_date), CURRENT_DATE) - 1` (see
+`20260801070000_journal_seed_and_backfill.sql`). The `- 1` exists purely to sort
+ahead of the first entry: the opening entry is deleted and reinserted on every
+rebuild, so its `created_at` is always the newest and it would otherwise sort
+last within its date.
 
-**Revised, per discussion: no new opening-balance posting UI/logic is
-needed.** Confirmed via code investigation:
+- Date it `onboarding_date` when one is set; keep `MIN(entry_date) - 1` as the
+  `NULL` fallback. Changing that fallback to something like ledger creation date
+  would risk landing the opening entry after backdated entries in existing orgs.
+- In the same migration, redefine the ledger statement view (latest definition:
+  `20260819030000_ledger_statement_source_id.sql`) with
+  `ORDER BY je.entry_date, (je.voucher_type = 'opening') DESC, je.created_at, jl.created_at`.
+- The trigger compares with `<`, so an entry dated exactly `onboarding_date` —
+  including this one — passes.
 
-- Every org already gets a PostEx system ledger (`system_key =
-  'courier_postex'`) unconditionally at org creation, independent of
-  whether the PostEx courier is toggled on in Settings — so it's always
-  there to edit.
-- `opening_balance` is already a first-class field end-to-end: present on
-  `LedgerUpdate` (`backend/app/models.py`), updatable with no
-  system-ledger restriction via `PUT /ledgers/{id}`
-  (`backend/app/routes/ledger.py`), and already an editable (not disabled)
-  input in the existing ledger edit modal (`editLedgerOpeningBalance` in
-  `frontend/js/ledgers.js` / `editLedgerModal` in `frontend/index.html`).
-- So: the opening balance produced by reconciling the historical CSV
-  against the trailing-window orders is simply **entered into the PostEx
-  ledger's existing opening_balance field via its existing edit modal** —
-  the same place any ledger's opening balance is set. It then flows through
-  the existing `sync_opening_balance_journal` rebuild like any other
-  ledger's opening balance. No separate onboarding-specific posting
-  endpoint or review screen is needed for this part.
-- One small pre-existing gap worth fixing along the way: the frontend's
-  `SYSTEM_LEDGER_LABELS` map in `ledgers.js` doesn't include the courier
-  system ledgers (`courier_postex`, etc.), so the edit modal's system
-  notice currently shows the raw key ("System account (courier_postex)…")
-  instead of "PostEx". The backend already has the correct mapping
-  (`COURIER_LEDGER_LABELS` in `app/couriers.py`, used in the delete-route
-  error message) — just needs mirroring into the frontend map.
+Existing orgs keep their current opening entry date until something rebuilds it.
+A one-off `sync_opening_balance_journal` sweep can normalize them if the mixed
+dating matters.
 
-## 5. UX flow (draft)
+## 4. Settings module, endpoint, UI
 
-1. Org admin sets/confirms `onboarding_date` (default = signup day) — a
-   one-time "Getting Started" step, editable later from Settings.
-2. Once confirmed, system runs the bounded Shopify sync (§3) to pull in the
-   trailing 2-month + ongoing orders.
-3. Admin is prompted to upload historical PostEx CSV(s) for that trailing
-   window (reusing the existing upload-postex-csv flow/UI).
-4. The settled portion nets into the PostEx ledger's `opening_balance`,
-   entered via that ledger's existing edit modal (§4) — either manually by
-   the admin reading the CSV summary, or pre-filled by the upload response
-   if we choose to compute it automatically (open question below).
-5. The unsettled portion becomes live courier bills automatically, flowing
-   through the existing ongoing reconciliation machinery — normal operation
-   begins.
+- `backend/app/onboarding_settings.py` mirroring `fiscal_settings.py`:
+  `get_org_onboarding_date` / `set_org_onboarding_date`, the latter carrying the
+  "not later than the earliest existing entry" check.
+- `GET/PUT /org-settings/onboarding` in `routes/org_settings.py`, same shape as
+  the existing `/org-settings/fiscal` pair, with matching Pydantic models in
+  `app/models.py`.
+- Frontend: one `<input type="date">` in a "Danger zone" card at the bottom of
+  `frontend/src/pages/settings/SettingsPage.tsx`, below Couriers — it is the only
+  setting there that can destroy data (§6). Editable any time; no wizard, no lock.
 
-## Open questions
+## 5. What happens to orgs already using the app
 
-- **Mandatory vs. optional**: is `onboarding_date` set once at org creation
-  (superadmin, in `admin_portal.py`) and locked, or admin-editable anytime
-  from Settings?
-- **Changing it after data exists**: if an org already has journal entries,
-  should changing `onboarding_date` be blocked/warned if it would move later
-  than existing entries?
-- **"2 months"**: exactly 60 days (matches the existing
-  `SHOPIFY_SYNC_WINDOW_DAYS` constant) or calendar months?
-- **Review step**: should the opening-balance numbers derived from the
-  historical CSV be admin-reviewed/editable before posting, or fully
-  automatic?
-- **Reuse vs. new endpoint**: extend `upload-postex-csv` with an
-  "onboarding mode" flag, or build a separate onboarding-specific upload
-  endpoint, since the accounting treatment (net-into-opening-balance vs.
-  per-order posting) differs?
-- **Auto-compute vs. manual entry for the PostEx opening balance**: should
-  the historical CSV upload compute and pre-fill the suggested
-  `opening_balance` value (admin then confirms/adjusts it in the PostEx
-  ledger's edit modal), or should the admin read the CSV-derived totals and
-  type the number in themselves? Auto-fill is friendlier but means the
-  upload response needs to hand a number to the ledger edit UI somehow
-  (e.g. a banner/prompt linking straight into `editLedgerModal` for the
-  PostEx ledger, pre-populated).
+Nothing is deleted, ever. The trigger only sees inserts, and the column defaults
+to `NULL`, so deploying the migration changes no existing behavior.
 
-## Next step
+When an admin later sets a date, the §4 set-check means they can only choose one
+at or before their earliest existing entry. That makes "nothing before this
+date" a true statement about their data rather than a retroactive edit: reports
+don't change, and the opening entry still sorts first.
 
-Once the open questions above are resolved, turn this into a concrete
-implementation plan: migrations, endpoints, and frontend screens.
+## 6. Moving the date forward onto existing history
+
+Picking a date *later* than the org's oldest entry is the one destructive path,
+so it does not go through the guarded setter at all:
+`POST /org-settings/onboarding/cutoff` calls
+`apply_onboarding_cutoff(org_id, date)`
+(`20260922010000_onboarding_cutoff_purge.sql`, amended by
+`20260922020000_cutoff_keeps_existing_opening_balance.sql`), which in one
+transaction sets the new date, deletes the pre-cutoff transaction entries,
+journal entries and bills, and rebuilds the opening voucher at the new date from
+each ledger's **existing, unchanged** `opening_balance`.
+
+The purge is deliberately **not** balance-preserving: the entries between the
+old opening balance and the new date are discarded, not rolled forward, so every
+ledger drops whatever they contributed. The opening balance is a figure the
+admin maintains (it is what the courier/CSV reconciliation produces and what the
+ledger edit modal writes), and the purge leaves it alone. Reviewing those
+opening balances afterwards is part of the operation.
+
+Scope is exactly the three tables the cutoff trigger guards. Orders, courier
+bills and stock levels are untouched: stock added by a purged bill stays
+applied, the inventory equivalent of preserving an opening balance. Deleted
+transaction entries still land in `finances_transaction_entry_audit_log` via the
+existing delete trigger.
+
+The field lives in a "Danger zone" card at the bottom of Settings and has no
+`max`, so a later date is reachable; submitting one routes through the shared
+confirm dialog with `danger` and `holdSeconds: 5`
+(`components/ConfirmContext.tsx`), which disables the confirm button and counts
+down before it can be clicked. Nothing recovers the deleted rows afterwards.
+
+## 7. Check
+
+One `backend/tests/test_onboarding_cutoff.py`: set a date, attempt a
+pre-onboarding transaction entry, journal entry and bill, assert none landed;
+insert one dated exactly on the onboarding date, assert it did.
+
+## Deferred: Shopify window and the pre-onboarding courier tail
+
+Kept from the original draft, still unbuilt, not required for the cutoff itself.
+
+- `_compute_sync_window_start()` in `backend/app/services/shopify_sync.py`
+  currently backfills `SHOPIFY_SYNC_WINDOW_DAYS = 60` days before *now* on a
+  first sync. Flooring it at `onboarding_date - SHOPIFY_SYNC_WINDOW_DAYS`
+  instead bounds how far back an org ever reaches, regardless of when it first
+  syncs. Order *records* in that trailing window still land; their auto-postings
+  are dropped by §2's trigger, which is the intended split.
+- PostEx settlement lags orders by 1-2 months, so at onboarding there is a tail
+  of orders placed but not yet settled. The existing CPR CSV upload
+  (`POST /orders/upload-postex-csv`, `services/postex.py`) is the mechanism to
+  reuse: orders the CSV shows as already settled net into the PostEx system
+  ledger's `opening_balance`; orders still unsettled become normal open courier
+  bills and flow through the ongoing machinery.
+- No new opening-balance UI is needed for that. Every org gets a
+  `system_key = 'courier_postex'` ledger at creation, `opening_balance` is
+  editable via `PUT /ledgers/{id}` with no system-ledger restriction, and the
+  ledger edit modal (`frontend/src/pages/finance/LedgerModals.tsx`) already
+  exposes it.
+- Small pre-existing gap worth fixing alongside: `SYSTEM_LEDGER_LABELS` in
+  `frontend/src/logic/ledgers.ts` omits the courier system ledgers, so the edit
+  modal's system banner shows the raw key ("System account (courier_postex)")
+  instead of "PostEx". The backend already has the mapping
+  (`COURIER_LEDGER_LABELS` in `app/couriers.py`).
+
+Open question for that phase: should the CSV upload compute and pre-fill the
+suggested PostEx opening balance, or should the admin read the CSV totals and
+enter the number themselves?

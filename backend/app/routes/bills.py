@@ -22,6 +22,7 @@ from app import shopify
 from app.auth import get_org_id, require_auth
 from app.database import get_supabase
 from app.models import Bill, BillCreate, BillUpdate
+from app.onboarding_settings import ensure_not_before_onboarding
 from app.org_scope import org_table
 from app.org_settings import ensure_valid_shopify_token, get_org_integration_settings
 
@@ -202,6 +203,10 @@ async def create_bill(
     """Creates a draft. Nothing is posted and no stock moves until it is
     received — a draft is a record of intent, not a liability."""
     supabase = get_supabase()
+    try:
+        ensure_not_before_onboarding(supabase, org_id, [bill.bill_date])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     number = supabase.rpc("next_bill_number", {"p_org_id": org_id}).execute().data
     if not number:

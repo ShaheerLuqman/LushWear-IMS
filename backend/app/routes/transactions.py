@@ -15,6 +15,7 @@ from app.models import (
 )
 from app.advance_status import recompute_advance_statuses
 from app.ledger_roles import get_system_ledger_id
+from app.onboarding_settings import ensure_not_before_onboarding
 from app.org_scope import org_table
 
 router = APIRouter(prefix="/transactions", tags=["transactions"])
@@ -121,12 +122,12 @@ async def get_transaction_entries(
 
 @router.post("/entries", response_model=TransactionEntry)
 async def create_transaction_entry(entry: TransactionEntryCreate, org_id: str = Depends(get_org_id)):
+    supabase = get_supabase()
     try:
         payload = _normalize_entry_payload(entry.model_dump(), is_create=True)
+        ensure_not_before_onboarding(supabase, org_id, [payload["entry_date"]])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    supabase = get_supabase()
 
     if payload.get("idempotency_key"):
         existing_by_key, _ = _split_existing_by_idempotency_key(supabase, org_id, [payload])
@@ -159,14 +160,14 @@ async def create_transaction_entries_bulk(entries: List[TransactionEntryCreate],
     if not entries:
         raise HTTPException(status_code=400, detail="No entries provided")
 
+    supabase = get_supabase()
     try:
         # amount and the two-distinct-sides rule are already enforced by
         # TransactionEntryCreate itself, so only normalization is needed here.
         payloads = [_normalize_entry_payload(e.model_dump(), is_create=True) for e in entries]
+        ensure_not_before_onboarding(supabase, org_id, [p["entry_date"] for p in payloads])
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-
-    supabase = get_supabase()
     existing_by_key, to_insert = _split_existing_by_idempotency_key(supabase, org_id, payloads)
 
     inserted = []

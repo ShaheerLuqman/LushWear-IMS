@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.auth import get_org_id, require_auth
 from app.database import get_supabase
 from app.models import JournalEntry, JournalEntryCreate, TrialBalance
+from app.onboarding_settings import ensure_not_before_onboarding
 from app.org_scope import org_table
 
 router = APIRouter(prefix="/journal", tags=["journal"])
@@ -91,6 +92,10 @@ async def create_journal_entry(
     re-checks them (plus that every account belongs to this org) because it is
     also reachable from other posting code."""
     supabase = get_supabase()
+    try:
+        ensure_not_before_onboarding(supabase, org_id, [entry.entry_date])
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     try:
         resp = supabase.rpc("post_journal_entry", {
             "p_org_id": org_id,

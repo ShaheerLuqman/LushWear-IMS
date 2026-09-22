@@ -2,12 +2,13 @@
 // airway bills. Test harness for now - scans are only listed on screen, nothing
 // is sent to the backend yet.
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Badge, Banner, BlockStack, Button, Card, InlineStack, Text } from '@shopify/polaris';
+import { Button, Text } from '@shopify/polaris';
 import { BrowserMultiFormatReader } from '@zxing/browser';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { useToast } from '../../toast/ToastContext';
 
 const COOLDOWN_MS = 10_000;
+const HIT_FLASH_MS = 2500;
 
 interface Scan { code: string; at: number; }
 
@@ -16,9 +17,11 @@ export function ScanBarcodePage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const lastSeen = useRef(new Map<string, number>());
   const stopRef = useRef<(() => void) | null>(null);
+  const hitTimer = useRef<number>();
   const [scanning, setScanning] = useState(false);
   const [engine, setEngine] = useState('');
   const [scans, setScans] = useState<Scan[]>([]);
+  const [hit, setHit] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const record = useCallback((code: string) => {
@@ -27,7 +30,11 @@ export function ScanBarcodePage() {
     if (seen && now - seen < COOLDOWN_MS) return;
     lastSeen.current.set(code, now);
     setScans((prev) => [{ code, at: now }, ...prev]);
+    setHit(code);
+    clearTimeout(hitTimer.current);
+    hitTimer.current = window.setTimeout(() => setHit(null), HIT_FLASH_MS);
     showToast(`Tracking number read: ${code}`, 'success');
+    navigator.vibrate?.(80);
   }, [showToast]);
 
   const stop = useCallback(() => {
@@ -55,13 +62,13 @@ export function ScanBarcodePage() {
           } catch { /* frame not ready */ }
         }, 200);
         stopRef.current = () => { clearInterval(timer); stopTracks(); };
-        setEngine('BarcodeDetector (native)');
+        setEngine('Native detector');
       } else {
         const controls = await new BrowserMultiFormatReader().decodeFromStream(stream, video, (result) => {
           if (result) record(result.getText());
         });
         stopRef.current = () => { controls.stop(); stopTracks(); };
-        setEngine('ZXing (JS fallback)');
+        setEngine('ZXing fallback');
       }
       setScanning(true);
     } catch (e: any) {
@@ -69,41 +76,50 @@ export function ScanBarcodePage() {
     }
   }
 
-  useEffect(() => () => stopRef.current?.(), []);
+  useEffect(() => () => { stopRef.current?.(); clearTimeout(hitTimer.current); }, []);
 
-  usePageHeader({ title: 'Scan Barcode', subtitle: 'Point the camera at an airway bill barcode' });
+  usePageHeader({ title: 'Scan Barcode' });
 
   return (
-    <BlockStack gap="400">
-      {error && <Banner tone="critical">{error}</Banner>}
-      <Card>
-        <BlockStack gap="300">
-          <video
-            ref={videoRef}
-            muted
-            playsInline
-            style={{ width: '100%', maxWidth: 480, aspectRatio: '3 / 4', objectFit: 'cover', background: '#000', borderRadius: 8 }}
-          />
-          <InlineStack gap="300" blockAlign="center">
-            <Button variant="primary" tone={scanning ? 'critical' : undefined} onClick={scanning ? stop : start}>
-              {scanning ? 'Stop camera' : 'Start camera'}
-            </Button>
-            {engine && <Text as="span" tone="subdued">{engine}</Text>}
-          </InlineStack>
-        </BlockStack>
-      </Card>
-      <Card>
-        <BlockStack gap="300">
-          <Text as="h2" variant="headingMd">Scanned ({scans.length})</Text>
-          {scans.length === 0 && <Text as="p" tone="subdued">Nothing scanned yet.</Text>}
-          {scans.map((s) => (
-            <InlineStack key={`${s.code}-${s.at}`} align="space-between" blockAlign="center">
-              <Text as="span" fontWeight="semibold">{s.code}</Text>
-              <Badge>{new Date(s.at).toLocaleTimeString()}</Badge>
-            </InlineStack>
-          ))}
-        </BlockStack>
-      </Card>
-    </BlockStack>
+    <div className="scan-page">
+      <div className="scan-viewport">
+        <video ref={videoRef} muted playsInline className="scan-video" />
+        {scanning && <div className="scan-frame" />}
+        {scanning && <span className="scan-chip">{engine}</span>}
+        {!scanning && !error && (
+          <div className="scan-placeholder">
+            <Text as="p" variant="bodyMd">Start the camera and hold a barcode inside the frame</Text>
+          </div>
+        )}
+        {error && <div className="scan-placeholder scan-placeholder--error"><Text as="p" variant="bodyMd">{error}</Text></div>}
+        {hit && (
+          <div className="scan-hit" role="status">
+            <span>Tracking number read</span>
+            <strong>{hit}</strong>
+          </div>
+        )}
+      </div>
+
+      <Button variant="primary" size="large" fullWidth tone={scanning ? 'critical' : undefined} onClick={scanning ? stop : start}>
+        {scanning ? 'Stop scanning' : 'Start scanning'}
+      </Button>
+
+      <div className="scan-results">
+        <div className="scan-results__head">
+          <Text as="h2" variant="headingSm">Scanned</Text>
+          <Text as="span" variant="headingSm" tone="subdued">{scans.length}</Text>
+        </div>
+        <div className="scan-results__list">
+          {scans.length === 0
+            ? <Text as="p" tone="subdued">Nothing scanned yet.</Text>
+            : scans.map((s) => (
+              <div key={`${s.code}-${s.at}`} className="scan-results__row">
+                <span className="scan-results__code">{s.code}</span>
+                <Text as="span" tone="subdued" variant="bodySm">{new Date(s.at).toLocaleTimeString()}</Text>
+              </div>
+            ))}
+        </div>
+      </div>
+    </div>
   );
 }

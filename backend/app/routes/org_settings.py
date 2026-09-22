@@ -15,6 +15,16 @@ from app.models import (
     OrgFiscalSettingsUpdate,
     OrgIntegrationSettingsPublic,
     OrgIntegrationSettingsUpdate,
+    OrgOnboardingCutoffBody,
+    OrgOnboardingCutoffResult,
+    OrgOnboardingSettingsPublic,
+    OrgOnboardingSettingsUpdate,
+)
+from app.onboarding_settings import (
+    apply_onboarding_cutoff,
+    get_earliest_financial_date,
+    get_org_onboarding_date,
+    set_org_onboarding_date,
 )
 from app.org_settings import get_org_integration_settings, to_public_shape, upsert_org_integration_settings
 
@@ -68,6 +78,38 @@ async def read_org_fiscal_settings(org_id: str = Depends(get_org_id)):
 @router.put("/fiscal", response_model=OrgFiscalSettingsPublic)
 async def update_org_fiscal_settings(body: OrgFiscalSettingsUpdate, org_id: str = Depends(get_org_id)):
     return set_org_fiscal_settings(org_id, body.fiscal_month_start_day, body.fiscal_year_start_month)
+
+
+@router.get("/onboarding", response_model=OrgOnboardingSettingsPublic)
+async def read_org_onboarding_settings(org_id: str = Depends(get_org_id)):
+    return {
+        "onboarding_date": get_org_onboarding_date(org_id),
+        "earliest_financial_date": get_earliest_financial_date(org_id),
+    }
+
+
+@router.put("/onboarding", response_model=OrgOnboardingSettingsPublic)
+async def update_org_onboarding_settings(
+    body: OrgOnboardingSettingsUpdate, org_id: str = Depends(get_org_id)
+):
+    try:
+        set_org_onboarding_date(org_id, body.onboarding_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    return await read_org_onboarding_settings(org_id)
+
+
+@router.post("/onboarding/cutoff", response_model=OrgOnboardingCutoffResult)
+async def apply_org_onboarding_cutoff(
+    body: OrgOnboardingCutoffBody, org_id: str = Depends(get_org_id)
+):
+    """Destructive: moves the onboarding date forward and purges everything
+    financial before it. The UI confirms first (SettingsPage's hold-to-confirm
+    dialog); this endpoint does not ask again."""
+    try:
+        return apply_onboarding_cutoff(org_id, body.onboarding_date)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
 
 
 @router.get("/shopify/install")
