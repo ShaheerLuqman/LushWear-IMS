@@ -152,7 +152,9 @@ export const ORDERS_COLUMNS: OrdersColumnDef[] = [
     key: 'courier', heading: 'Courier', sortable: true,
     sortValue: (o) => getCourierDisplayName(o),
     exportValue: (o) => getCourierDisplayName(o),
-    render: (o) => <Text as="span">{getCourierDisplayName(o)}</Text>,
+    // truncate keeps a long courier name on one line; the title gives the full
+    // value on hover, since the cell clips at its max width.
+    render: (o) => <span title={getCourierDisplayName(o)}><Text as="span" truncate>{getCourierDisplayName(o)}</Text></span>,
   },
   {
     key: 'order_status', heading: 'Order Status', sortable: true,

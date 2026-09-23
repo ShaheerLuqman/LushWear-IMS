@@ -9,11 +9,11 @@ import { useLayoutEffect } from 'react';
 // CSS position:sticky is the right primitive for "stick within this scroll container", so we
 // keep it, but borrow their StickyManager technique of stacking sticky rows by the measured
 // height of whichever ones are above it, recomputed on resize (their manageStickyItems).
-// `rootSelector` scopes the lookup to the page's view wrapper; `hasRows` matters because the
-// real <thead> only exists once IndexTable has rows to show (itemCount>0) - it renders an
-// empty-state placeholder instead while still loading, so re-running only on selection would
-// leave this stuck at the initial "no thead yet" no-op forever.
-export function useStickyIndexTableHeader(rootSelector: string, hasRows: boolean) {
+// `rootSelector` scopes the lookup to the page's view wrapper; `ready` has to cover *both*
+// DOM preconditions this reads, or it silently no-ops forever: the real <thead> only exists
+// once IndexTable has rows to show (itemCount>0, it renders an empty-state placeholder while
+// loading), and the filter row only exists while the page's "Show filters" toggle is on.
+export function useStickyIndexTableHeader(rootSelector: string, ready: boolean) {
   useLayoutEffect(() => {
     const thead = document.querySelector(`${rootSelector} .Polaris-IndexTable thead`) as HTMLElement | null;
     const tableRoot = document.querySelector(`${rootSelector} .Polaris-IndexTable`) as HTMLElement | null;
@@ -54,6 +54,13 @@ export function useStickyIndexTableHeader(rootSelector: string, hasRows: boolean
     const observer = new ResizeObserver(recalcStickyOffsets);
     observer.observe(thead);
     observer.observe(filtersRow);
-    return () => observer.disconnect();
-  }, [rootSelector, hasRows]);
+    return () => {
+      observer.disconnect();
+      // Hiding the filter row unmounts it but leaves these inline vars behind, so the
+      // ::before backdrop would keep painting a band the height of a row that's no longer
+      // there. Cleared here (not on the CSS side) so the fallbacks in styles.css take over.
+      ['--orders-sticky-top', '--orders-sticky-filters-height', '--orders-sticky-backdrop-width']
+        .forEach((v) => tableRoot.style.removeProperty(v));
+    };
+  }, [rootSelector, ready]);
 }

@@ -113,6 +113,10 @@ function aggregateCell(col: OrdersColumnDef, sums: SelectionSums): React.ReactNo
   );
 }
 
+/** Columns whose content is free text of unpredictable length - capped so one long
+ *  courier name or delivery status cannot push the money columns off screen. */
+const WIDTH_CAPPED_COLUMNS = new Set(['courier', 'delivery']);
+
 /* Selecting a row re-renders OrdersPage, which would otherwise re-run every column's render()
    (several are live TextField/Select inputs) for all PAGE_SIZE rows just to flip one checkbox.
    Memoized so only the row whose `selected` actually changed re-renders - columnCtx is itself
@@ -120,10 +124,22 @@ function aggregateCell(col: OrdersColumnDef, sums: SelectionSums): React.ReactNo
 const OrderRow = memo(function OrderRow({
   order, index, selected, tone, columnCtx,
 }: { order: Order; index: number; selected: boolean; tone: 'subdued' | undefined; columnCtx: OrdersColumnCtx }) {
+  // Polaris' `tone` only tints the row background; the class is what actually
+  // greys the content, since IndexTable.Row takes no className of its own.
+  const cellClass = [
+    tone === 'subdued' ? 'orders-row-cancelled' : '',
+  ].filter(Boolean).join(' ') || undefined;
+
   return (
     <IndexTable.Row id={order.id} position={index} selected={selected} tone={tone} onClick={() => {}}>
       {ORDERS_COLUMNS.map((col) => (
-        <IndexTable.Cell key={col.key}>{col.render(order, columnCtx)}</IndexTable.Cell>
+        <IndexTable.Cell
+          key={col.key}
+          className={[cellClass, WIDTH_CAPPED_COLUMNS.has(col.key) ? 'orders-cell-capped' : '']
+            .filter(Boolean).join(' ') || undefined}
+        >
+          {col.render(order, columnCtx)}
+        </IndexTable.Cell>
       ))}
     </IndexTable.Row>
   );
@@ -726,7 +742,7 @@ export function OrdersPage() {
     return () => scrollContainer.removeEventListener('scroll', syncScroll);
   }, [selectionSums != null]);
 
-  useStickyIndexTableHeader('#ordersView', pageRows.length > 0);
+  useStickyIndexTableHeader('#ordersView', pageRows.length > 0 && showFilterRow);
 
   // Per-column filters live in the header row rendered just below IndexTable's real
   // headings (see the `rowType="subheader"` row below) - this only turns each active one

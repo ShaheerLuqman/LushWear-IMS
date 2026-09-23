@@ -1639,6 +1639,22 @@ body.orders-table-fullscreen #ordersView .table-card {
     z-index: 1;
 }
 
+/* Cancelled orders: Polaris' subdued row tone only tints the background, which is
+   near-invisible against the grid - fade the content so the row reads as inactive. */
+.Polaris-IndexTable__TableRow .Polaris-IndexTable__TableCell.orders-row-cancelled {
+    opacity: 0.55;
+}
+
+/* Courier and Delivery hold free text of unpredictable length; cap them so a long
+   value is clipped to its column instead of widening it or wrapping the row taller.
+   The full value stays available via the cell's title attribute. */
+.Polaris-IndexTable__TableCell.orders-cell-capped {
+    max-width: 180px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
 /* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
 
 /* admin.html is a standalone page (not the main app's fixed-viewport layout
@@ -2303,6 +2319,16 @@ body.orders-table-fullscreen .table-card {
    ~20ch intrinsic width - zero what the filter box asks for so the column stays sized by the
    heading/data alone, while min-width:100% still stretches it to fill the cell. */
 #__filters__ .Polaris-TextField {
+    width: 0;
+    min-width: 100%;
+}
+
+/* Same reason, for the multi-select filters: .dropdown--multi's 120px floor (there to stop the
+   "NN selected" label resizing the button, see above) is an intrinsic width too, so showing the
+   filter row was widening Order Status/Piece Received/Status and shifting every column after
+   them. The chips in the filter bar already spell out the selection, so a clipped count here
+   costs nothing. */
+#__filters__ .dropdown--multi {
     width: 0;
     min-width: 100%;
 }

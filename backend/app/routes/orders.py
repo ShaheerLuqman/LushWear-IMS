@@ -202,7 +202,11 @@ async def get_all_orders(
                     q = q.gte("order_receiving_date", from_iso)
                 if to_iso:
                     q = q.lt("order_receiving_date", to_iso)
-                return q.order("order_receiving_date", desc=True).order("order_number", desc=True)
+                # order_number alone, as on every listing path. Leading with
+                # order_receiving_date diverges from the number order whenever a
+                # date does not line up with its number (a backdated or edited
+                # order), which reads as the grid losing its sort.
+                return q.order("order_number", desc=True)
 
             range_orders = _reshape_delivery_status_latest(fetch_all(_build_range_query))
             t_query = time.perf_counter()
@@ -221,7 +225,6 @@ async def get_all_orders(
                 .select(ORDERS_LIST_SELECT)
                 .gte("order_receiving_date", start_iso)
                 .lt("order_receiving_date", end_iso)
-                .order("order_receiving_date", desc=True)
                 .order("order_number", desc=True)
             )
             period_orders = _reshape_delivery_status_latest(period_orders)
@@ -239,7 +242,6 @@ async def get_all_orders(
             lambda: org_table(supabase, org_id, "shopify_orders")
             .select(ORDERS_LIST_SELECT)
             .gte("order_receiving_date", cutoff_iso)
-            .order("order_receiving_date", desc=True)
             .order("order_number", desc=True)
         )
         recent = _reshape_delivery_status_latest(recent)

@@ -170,7 +170,7 @@ export function OrderFulfillmentPage() {
     filtered as unknown as Array<FulfillmentOrder & { [key: string]: unknown }>, { resourceIDResolver: (o) => o.id },
   );
   const selectedOrders = useMemo(() => orders.filter((o) => selectedResources.includes(o.id)), [orders, selectedResources]);
-  useStickyIndexTableHeader('#orderFulfillmentView', filtered.length > 0);
+  useStickyIndexTableHeader('#orderFulfillmentView', filtered.length > 0 && showFilterRow);
 
   function updateOrder(id: string, patch: Partial<FulfillmentOrder>) {
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
