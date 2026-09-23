@@ -65,3 +65,19 @@ class TestOrderTotalFromFulfillments:
     def test_missing_quantity_defaults_to_one(self):
         order = {"fulfillments": [{"status": "success", "line_items": [{"price": "100.00"}]}]}
         assert _order_total_from_fulfillments(order) == 100.0
+
+
+def test_price_reduction_code_not_double_subtracted_from_net_total():
+    from app.services.shopify_sync import _reconcile_one_order
+    sp_order = {
+        "order_number": 14120,
+        "total_line_items_price": "5998.00",
+        "current_total_price": "5398.20",
+        "current_total_discounts": "599.80",
+        "discount_codes": [{"code": "Get10off", "amount": "599.80"}],
+        "financial_status": "pending",
+        "line_items": [{"price": "2999.00", "quantity": 2, "title": "X"}],
+    }
+    r = _reconcile_one_order(sp_order, {}, {}, {}, {}, {}, {}, "2026-09-23T00:00:00Z")
+    assert r.order_data["total_amount"] == 5398.2
+    assert r.order_data["advance_amount"] == 0.0

@@ -15,6 +15,7 @@ interface Scan { code: string; at: number; }
 export function ScanBarcodePage() {
   const { showToast } = useToast();
   const videoRef = useRef<HTMLVideoElement>(null);
+  const frameRef = useRef<HTMLDivElement>(null);
   const lastSeen = useRef(new Map<string, number>());
   const stopRef = useRef<(() => void) | null>(null);
   const hitTimer = useRef<number>();
@@ -48,28 +49,36 @@ export function ScanBarcodePage() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } });
       const video = videoRef.current!;
-      const stopTracks = () => stream.getTracks().forEach((t) => t.stop());
+      video.srcObject = stream;
+      await video.play();
       // Native BarcodeDetector (Android Chrome) reads 1D codes far better than the
       // JS fallback; ZXing covers iOS/desktop where it isn't implemented.
       const Detector = (window as any).BarcodeDetector;
-      if (Detector) {
-        const detector = new Detector();
-        video.srcObject = stream;
-        await video.play();
-        const timer = window.setInterval(async () => {
-          try {
-            for (const code of await detector.detect(video)) record(code.rawValue);
-          } catch { /* frame not ready */ }
-        }, 200);
-        stopRef.current = () => { clearInterval(timer); stopTracks(); };
-        setEngine('Native detector');
-      } else {
-        const controls = await new BrowserMultiFormatReader().decodeFromStream(stream, video, (result) => {
-          if (result) record(result.getText());
-        });
-        stopRef.current = () => { controls.stop(); stopTracks(); };
-        setEngine('ZXing fallback');
-      }
+      const detector = Detector && new Detector();
+      const zxing = new BrowserMultiFormatReader();
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d')!;
+      // Only the region under .scan-frame is decoded, so codes outside it are ignored.
+      // The video is object-fit: cover, so map the frame's screen rect back into
+      // video pixels through the cover scale/offset.
+      const timer = window.setInterval(async () => {
+        const frame = frameRef.current;
+        if (!frame || !video.videoWidth) return;
+        const v = video.getBoundingClientRect();
+        const f = frame.getBoundingClientRect();
+        const scale = Math.max(v.width / video.videoWidth, v.height / video.videoHeight);
+        const sx = (f.left - v.left - (v.width - video.videoWidth * scale) / 2) / scale;
+        const sy = (f.top - v.top - (v.height - video.videoHeight * scale) / 2) / scale;
+        canvas.width = f.width / scale;
+        canvas.height = f.height / scale;
+        ctx.drawImage(video, sx, sy, canvas.width, canvas.height, 0, 0, canvas.width, canvas.height);
+        try {
+          if (detector) for (const code of await detector.detect(canvas)) record(code.rawValue);
+          else record(zxing.decodeFromCanvas(canvas).getText());
+        } catch { /* nothing decodable in the frame */ }
+      }, 200);
+      stopRef.current = () => { clearInterval(timer); stream.getTracks().forEach((t) => t.stop()); };
+      setEngine(detector ? 'Native detector' : 'ZXing fallback');
       setScanning(true);
     } catch (e: any) {
       setError(e?.message || 'Could not start the camera. It needs HTTPS (or localhost) and camera permission.');
@@ -84,7 +93,7 @@ export function ScanBarcodePage() {
     <div className="scan-page">
       <div className="scan-viewport">
         <video ref={videoRef} muted playsInline className="scan-video" />
-        {scanning && <div className="scan-frame" />}
+        {scanning && <div ref={frameRef} className="scan-frame" />}
         {scanning && <span className="scan-chip">{engine}</span>}
         {!scanning && !error && (
           <div className="scan-placeholder">

@@ -788,12 +788,17 @@ def _reconcile_one_order(
     current_total = sp_order.get("current_total_price")
     total_price_val = sp_order.get("total_price")
     fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+    # Shopify's current_total_price/total_price are already net of discounts; the
+    # fulfillment and line-item sums are not.
+    discount_applied = False
     if fulfillment_based_total is not None:
         total_amount = fulfillment_based_total + shopify_tax
     elif current_total is not None and str(current_total).strip() != "":
         total_amount = float(current_total)
+        discount_applied = True
     elif total_price_val is not None and str(total_price_val).strip() != "":
         total_amount = float(total_price_val) - shipping_price
+        discount_applied = True
     else:
         total_amount = total_line_items_price + shopify_tax
 
@@ -805,7 +810,8 @@ def _reconcile_one_order(
 
     if has_price_reduction_discount_code:
         # Code-based discounts reduce selling price instead of being treated as advance.
-        total_amount = max(0.0, total_amount - total_discounts)
+        if not discount_applied:
+            total_amount = max(0.0, total_amount - total_discounts)
         advance_amount = total_amount if paid_in_advance else 0.0
     elif paid_in_advance:
         advance_amount = total_amount

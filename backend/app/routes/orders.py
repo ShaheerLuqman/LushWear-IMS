@@ -1554,6 +1554,9 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             order_status = extract_order_status(sp_order)
             shopify_tax = extract_tax_amount(sp_order) or 0.0
             fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+            # Shopify's current_total_price/total_price are already net of discounts; the
+            # fulfillment and line-item sums are not.
+            discount_applied = False
             if fulfillment_based_total is not None:
                 total_amount = fulfillment_based_total + shopify_tax
             else:
@@ -1561,8 +1564,10 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 total_price_val = sp_order.get("total_price")
                 if current_total is not None and str(current_total).strip() != "":
                     total_amount = float(current_total)
+                    discount_applied = True
                 elif total_price_val is not None and str(total_price_val).strip() != "":
                     total_amount = float(total_price_val)
+                    discount_applied = True
                 else:
                     try:
                         total_amount = float(sp_order.get("total_line_items_price") or 0) + shopify_tax
@@ -1585,7 +1590,8 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             # "paid" means the customer paid up front (same rule as shopify_sync's).
             paid_in_advance = financial_status == "paid" and not has_settled_tag(sp_order.get("tags"))
             if has_price_reduction_discount_code:
-                total_amount = max(0.0, total_amount - total_discounts)
+                if not discount_applied:
+                    total_amount = max(0.0, total_amount - total_discounts)
                 advance_amount = total_amount if paid_in_advance else 0.0
             else:
                 advance_amount = total_amount if paid_in_advance else total_discounts
