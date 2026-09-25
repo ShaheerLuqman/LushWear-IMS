@@ -16,6 +16,7 @@ from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.auth import get_org_id
 from app.config import settings
+from app.couriers import enabled_courier_ids
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
@@ -400,6 +401,13 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
     except Exception:
         logger.exception("unfulfilled orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@router.get("/enabled-couriers")
+async def get_enabled_couriers(org_id: str = Depends(get_org_id)):
+    """Courier ids turned on in Settings > Couriers, for the Order Fulfillment courier
+    picker. Lives here because /org-settings is admin-only and staff fulfill orders."""
+    return await asyncio.to_thread(enabled_courier_ids, org_id)
 
 
 @router.get("/courier-cities")

@@ -79,6 +79,11 @@ def _status(courier_id: str, couriers: dict, org_id: str, supabase) -> CourierSt
     )
 
 
+def enabled_courier_ids(org_id: str) -> List[str]:
+    couriers = get_org_integration_settings(org_id).couriers
+    return [cid for cid in COURIER_CATALOG if _is_enabled(couriers.get(cid) or {}, cid)]
+
+
 def get_org_couriers(org_id: str) -> List[CourierStatus]:
     supabase = get_supabase()
     couriers = get_org_integration_settings(org_id).couriers

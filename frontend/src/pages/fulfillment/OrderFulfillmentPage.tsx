@@ -95,6 +95,7 @@ export function OrderFulfillmentPage() {
   const [search, setSearch] = useState('');
   const [showFilterRow, setShowFilterRow] = useState(false);
   const [riskTab, setRiskTab] = useState(0);
+  const [couriers, setCouriers] = useState<FulfillmentCourier[]>([]);
   const [selectedCourier, setSelectedCourier] = useState<FulfillmentCourier | null>(null);
   const [fulfillPanelOpen, setFulfillPanelOpen] = useState(false);
   const { mode, setMode } = useSetIndexFiltersMode();
@@ -146,6 +147,12 @@ export function OrderFulfillmentPage() {
   }, [showToast]);
 
   useEffect(() => { fetchOrders(); }, [fetchOrders]);
+
+  useEffect(() => {
+    apiJson<string[]>('/orders/enabled-couriers', { fallback: 'Failed to load couriers' })
+      .then((ids) => setCouriers(FULFILLMENT_COURIERS.filter((c) => ids.includes(c.id))))
+      .catch((error: any) => showToast(error?.message || 'Failed to load couriers', 'error'));
+  }, [showToast]);
 
   function autoSelectCourierCities(list: FulfillmentOrder[], cities: string[]): FulfillmentOrder[] {
     if (cities.length === 0) return list;
@@ -370,8 +377,8 @@ export function OrderFulfillmentPage() {
               <Dropdown
                 label="Courier" placeholder="Select courier" fullWidth
                 icon={selectedCourier ? courierChip(selectedCourier) : undefined}
-                options={FULFILLMENT_COURIERS.map((c) => ({ label: c.name, value: c.id }))}
-                value={selectedCourier?.id || ''} onChange={(id) => pickCourier(FULFILLMENT_COURIERS.find((c) => c.id === id)!)}
+                options={couriers.map((c) => ({ label: c.name, value: c.id }))}
+                value={selectedCourier?.id || ''} onChange={(id) => pickCourier(couriers.find((c) => c.id === id)!)}
               />
               <Dropdown
                 label="Pickup location" placeholder={selectedCourier ? 'Select pickup location' : 'Select courier first'} fullWidth

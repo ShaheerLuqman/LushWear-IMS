@@ -7,6 +7,7 @@ import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { formatMoney } from '../../logic/ledgers';
+import { FULFILLMENT_COURIERS } from '../../logic/fulfillment';
 import { DatePopover, formatDate } from '../../components/DatePopover';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
@@ -471,6 +472,9 @@ function CouriersModal({ onClose }: { onClose: () => void }) {
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const selected = couriers?.find((c) => c.id === selectedId);
+  // Listed on Order Fulfillment but with no backend integration or ledger yet.
+  const comingSoon = FULFILLMENT_COURIERS.filter((c) => !couriers?.some((r) => r.id === c.id));
+  const selectedComingSoon = comingSoon.find((c) => c.id === selectedId);
 
   return (
     <InfoModal title="Couriers" size="large" onClose={onClose}>
@@ -485,9 +489,25 @@ function CouriersModal({ onClose }: { onClose: () => void }) {
                   {c.enabled ? c.label : `${c.label} (off)`}
                 </Button>
               ))}
+              {comingSoon.map((c) => (
+                <Button key={c.id} variant="tertiary" textAlign="left" fullWidth pressed={c.id === selectedId} onClick={() => setSelectedId(c.id)}>
+                  {`${c.name} (coming soon)`}
+                </Button>
+              ))}
             </BlockStack>
             {/* keyed so switching couriers resets the form's local state */}
-            <div>{selected && <CourierDetails key={selected.id} courier={selected} onChanged={load} />}</div>
+            <div>
+              {selected && <CourierDetails key={selected.id} courier={selected} onChanged={load} />}
+              {selectedComingSoon && (
+                <BlockStack gap="200">
+                  <InlineStack gap="200" blockAlign="center">
+                    <Text as="h3" variant="headingMd">{selectedComingSoon.name}</Text>
+                    <Badge tone="info">Coming soon</Badge>
+                  </InlineStack>
+                  <Text as="p" tone="subdued">{selectedComingSoon.name} isn't available yet.</Text>
+                </BlockStack>
+              )}
+            </div>
           </div>
         )}
       </div>
