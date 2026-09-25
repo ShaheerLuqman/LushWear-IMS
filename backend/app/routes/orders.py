@@ -516,6 +516,7 @@ async def _book_one_order(
     client: httpx.AsyncClient, body: FulfillOrdersBody, order_id: str,
     request: FulfillOrderRequest, row: Optional[dict], courier_name: str,
     credential: str, client_code: Optional[str], supabase, org_id: str,
+    fixed_delivery_charge: Optional[float],
 ) -> Tuple[FulfillOrderResult, Optional[Tuple[dict, str]]]:
     """Book one parcel with the courier and record the tracking number locally. Returns
     the order's outcome and, only when the booking succeeded, the (row, tracking_number)
@@ -632,6 +633,7 @@ async def _book_one_order(
             "order_status": "fulfilled",
             "fulfilled_at": now_iso,
             "updated_at": now_iso,
+            **({"delivery_charge": fixed_delivery_charge} if fixed_delivery_charge else {}),
         }).eq("id", order_id).execute()
     except Exception:
         # The parcel exists at the courier regardless, so surface the tracking number
@@ -691,6 +693,8 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     # Couriers Next identifies the merchant on every booking by a client_code that is
     # not stored alongside the auth key - it is read back from the same call that lists
     # the shipper profiles, so it is fetched once here rather than per order.
+    fixed_delivery_charge = (org_creds.couriers.get(body.courier) or {}).get("fixed_delivery_charge")
+
     client_code = None
     if body.courier == "couriers_next":
         client_code, _ = await couriers_next.fetch_shippers(credential)
@@ -720,7 +724,7 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
                 async with sem:
                     return await _book_one_order(
                         client, body, order_id, request, rows_by_id.get(order_id),
-                        courier_name, credential, client_code, supabase, org_id,
+                        courier_name, credential, client_code, supabase, org_id, fixed_delivery_charge,
                     )
 
             # Bounded by courier (see _FULFILL_CONCURRENCY) rather than strictly
@@ -1743,6 +1747,40 @@ async def get_order_by_number(order_number: int, org_id: str = Depends(get_org_i
     except Exception:
         logger.exception("orders endpoint failed")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+_SCAN_CODE = re.compile(r"[A-Za-z0-9#-]{1,64}")
+# Airway bills carry the order ref as "#1234"; capped at 9 digits so long numeric
+# tracking numbers never get cast into the INTEGER order_number column.
+_SCAN_ORDER_REF = re.compile(r"#?(\d{1,9})")
+
+
+@router.get("/resolve-scan")
+async def resolve_scan(code: str = Query(...), org_id: str = Depends(get_org_id)):
+    """Map a scanned barcode/QR (tracking number or order ref) to its order, or null."""
+    code = code.strip()
+    # Also guards the PostgREST or_() filter string against injected operators.
+    if not _SCAN_CODE.fullmatch(code):
+        return None
+    filters = [f"tracking_number.eq.{code}"]
+    ref = _SCAN_ORDER_REF.fullmatch(code)
+    if ref:
+        filters.append(f"order_number.eq.{int(ref.group(1))}")
+    try:
+        rows = (
+            org_table(get_supabase(), org_id, "shopify_orders")
+            .select("id, order_number, tracking_number, courier, order_status")
+            .or_(",".join(filters))
+            .limit(2)
+            .execute()
+            .data
+        )
+    except Exception:
+        logger.exception("orders endpoint failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+    # A code could match one order's tracking number and another's order number; the
+    # tracking number is the more specific read.
+    return next((r for r in rows if r["tracking_number"] == code), rows[0] if rows else None)
 
 
 class LoadSheetLogCreate(BaseModel):

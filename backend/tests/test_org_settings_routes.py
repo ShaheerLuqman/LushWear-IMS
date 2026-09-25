@@ -1,6 +1,8 @@
 """Route tests for /api/org-settings (admin-only per-org Shopify/PostEx
 credentials). See app/org_settings.py for the encrypt/decrypt chokepoint
 these routes are a thin wrapper around."""
+from unittest.mock import MagicMock
+
 import pytest
 from cryptography.fernet import Fernet
 
@@ -143,6 +145,24 @@ class TestCourierCredentialsBlob:
         settings = org_settings.get_org_integration_settings("test-org")
         assert settings.postex_merchant_token == "pk_secret"
         assert settings.couriers_next_auth_key == "cn_secret"
+
+
+class TestCourierFixedDeliveryCharge:
+    def test_must_be_positive_and_is_kept_unless_sent(self, make_client, monkeypatch):
+        import app.couriers as couriers
+
+        blob = {"postex": {"merchant_token": "pk", "fixed_delivery_charge": 200.0}}
+        monkeypatch.setattr(couriers, "get_org_integration_settings", lambda _org: type("S", (), {"couriers": blob})())
+        monkeypatch.setattr(couriers, "upsert_org_integration_settings", lambda *_a, **_k: None)
+        monkeypatch.setattr(couriers, "get_system_ledger_id", lambda *_a: None)
+        monkeypatch.setattr(couriers, "get_supabase", MagicMock)
+        client = make_client()
+
+        assert client.put("/api/org-settings/couriers/postex", json={"enabled": True, "fixed_delivery_charge": 0}).status_code == 422
+        r = client.put("/api/org-settings/couriers/postex", json={"enabled": True})
+        assert r.json()["fixed_delivery_charge"] == 200.0
+        r = client.put("/api/org-settings/couriers/postex", json={"enabled": True, "fixed_delivery_charge": None})
+        assert r.json()["fixed_delivery_charge"] is None
 
 
 class TestTimestampParsing:

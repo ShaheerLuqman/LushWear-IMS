@@ -677,12 +677,17 @@ class CourierStatus(BaseModel):
     # The courier's system ledger (finances_ledgers.system_key = 'courier_<id>'),
     # or None until the courier has been enabled at least once.
     ledger_id: Optional[str] = None
+    # Written onto each order as its delivery_charge when it is booked through /fulfill;
+    # None means off.
+    fixed_delivery_charge: Optional[float] = None
 
 class CourierUpdate(BaseModel):
     """PUT /org-settings/couriers/{id} body. `credentials` only carries keys the
-    admin actually typed - a blank/omitted field keeps whatever is stored."""
+    admin actually typed - a blank/omitted field keeps whatever is stored.
+    `fixed_delivery_charge` omitted keeps what is stored; an explicit null turns it off."""
     enabled: bool
     credentials: Dict[str, NonBlankStr] = {}
+    fixed_delivery_charge: Optional[float] = Field(default=None, gt=0)
 
 class OrgFiscalSettingsUpdate(BaseModel):
     """PUT /org-settings/fiscal body - both fields required, the whole fiscal

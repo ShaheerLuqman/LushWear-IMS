@@ -75,6 +75,7 @@ def _status(courier_id: str, couriers: dict, org_id: str, supabase) -> CourierSt
         ledger_id=get_system_ledger_id(
             supabase, org_id, f"{SYSTEM_KEY_PREFIX}{courier_id}"
         ),
+        fixed_delivery_charge=entry.get("fixed_delivery_charge"),
     )
 
 
@@ -84,8 +85,12 @@ def get_org_couriers(org_id: str) -> List[CourierStatus]:
     return [_status(cid, couriers, org_id, supabase) for cid in COURIER_CATALOG]
 
 
+_UNCHANGED = object()
+
+
 def update_org_courier(
-    org_id: str, courier_id: str, enabled: bool, credentials: Dict[str, str]
+    org_id: str, courier_id: str, enabled: bool, credentials: Dict[str, str],
+    fixed_delivery_charge=_UNCHANGED,
 ) -> CourierStatus:
     if courier_id not in COURIER_CATALOG:
         raise KeyError(courier_id)
@@ -101,6 +106,8 @@ def update_org_courier(
     for key, value in credentials.items():
         if value:
             entry[key] = value
+    if fixed_delivery_charge is not _UNCHANGED:
+        entry["fixed_delivery_charge"] = fixed_delivery_charge
     upsert_org_integration_settings(org_id, couriers_blob=couriers)
 
     if enabled:

@@ -64,7 +64,10 @@ async def list_couriers(org_id: str = Depends(get_org_id)):
 @router.put("/couriers/{courier_id}", response_model=CourierStatus)
 async def update_courier(courier_id: str, body: CourierUpdate, org_id: str = Depends(get_org_id)):
     try:
-        return update_org_courier(org_id, courier_id, body.enabled, body.credentials)
+        return update_org_courier(
+            org_id, courier_id, body.enabled, body.credentials,
+            **body.model_dump(include={"fixed_delivery_charge"}, exclude_unset=True),
+        )
     except KeyError:
         raise HTTPException(status_code=404, detail="Unknown courier")
     except ValueError as exc:

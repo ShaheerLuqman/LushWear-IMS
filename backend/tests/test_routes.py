@@ -644,7 +644,7 @@ class TestFulfillOrdersRoute:
             {"id": "o2", "order_number": 102, "order_status": "fulfilled", "tracking_number": "X1"},
         ]})
         monkeypatch.setattr(orders, "get_org_integration_settings",
-                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None, couriers={}))
 
         async def _fake_create_order(*_a, **_k):
             return "PX999"
@@ -680,7 +680,7 @@ class TestFulfillOrdersRoute:
              "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
         ]})
         monkeypatch.setattr(orders, "get_org_integration_settings",
-                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None, couriers={}))
 
         captured = {}
 
@@ -712,6 +712,44 @@ class TestFulfillOrdersRoute:
         assert captured["customer_phone"] == "03119998877"
         assert captured["delivery_address"] == "9 New Rd"
 
+    def test_courier_fixed_delivery_charge_is_written_on_booking(self, make_client, monkeypatch):
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 0, "line_items": [{"name": "Tee", "qty": 1}],
+             "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings", lambda _org: SimpleNamespace(
+            postex_merchant_token="pk", couriers_next_auth_key=None, couriers={"postex": {"fixed_delivery_charge": 250.0}}))
+
+        updates = []
+        real_org_table = orders.org_table
+
+        def _spy_org_table(*args):
+            query = real_org_table(*args)
+            query.update = lambda payload: updates.append(payload) or query
+            return query
+
+        async def _fake_create_order(*_a, **_k):
+            return "PX999"
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders, "org_table", _spy_org_table)
+        monkeypatch.setattr(orders.postex, "create_order", _fake_create_order)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+        monkeypatch.setattr(orders, "_POST_BOOKING_LABEL_DELAY", 0)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "postex", "pickup_address_code": "PA1",
+            "orders": [{"order_id": "o1", "courier_city": "Lahore"}],
+        })
+        assert r.status_code == 200
+        assert [u.get("delivery_charge") for u in updates if u.get("order_status") == "fulfilled"] == [250.0]
+
     def test_fragile_handling_adds_a_bullet_to_the_instructions_note(self, make_client, monkeypatch):
         from types import SimpleNamespace
         import app.routes.orders as orders
@@ -725,7 +763,7 @@ class TestFulfillOrdersRoute:
              "customer_name": "Bo", "customer_phone": "03007654321", "customer_address": "2 Side St"},
         ]})
         monkeypatch.setattr(orders, "get_org_integration_settings",
-                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None, couriers={}))
 
         seen = []
 
@@ -761,7 +799,7 @@ class TestFulfillOrdersRoute:
              "customer_name": "Ada", "customer_phone": "03001234567", "customer_address": "1 Main St"},
         ]})
         monkeypatch.setattr(orders, "get_org_integration_settings",
-                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None))
+                            lambda _org: SimpleNamespace(postex_merchant_token="pk", couriers_next_auth_key=None, couriers={}))
 
         captured = {}
 
@@ -1574,3 +1612,19 @@ class TestErrorHandling:
         assert r.status_code == 500
         assert r.json() == {"detail": "Internal server error"}
         assert "secret" not in r.text
+
+
+class TestResolveScan:
+    def test_prefers_the_tracking_number_match_over_an_order_number_match(self, make_client):
+        client = make_client({"shopify_orders": [
+            {"id": "a", "order_number": 1234, "tracking_number": "999"},
+            {"id": "b", "order_number": 5678, "tracking_number": "1234"},
+        ]})
+        assert client.get("/api/orders/resolve-scan", params={"code": "1234"}).json()["id"] == "b"
+
+    def test_rejects_codes_that_could_inject_postgrest_filters(self, make_client):
+        client = make_client({"shopify_orders": [{"id": "a", "order_number": 1, "tracking_number": "x"}]})
+        assert client.get("/api/orders/resolve-scan", params={"code": "x,id.neq.0"}).json() is None
+
+    def test_returns_null_when_nothing_matches(self, make_client):
+        assert make_client({}).get("/api/orders/resolve-scan", params={"code": "#42"}).json() is None

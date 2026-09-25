@@ -730,6 +730,7 @@ CREATE INDEX IF NOT EXISTS idx_orders_org_id                 ON shopify_orders(o
 CREATE INDEX IF NOT EXISTS idx_orders_customer_id            ON shopify_orders(customer_id);
 -- Print Airway Bill screen: fulfilled orders within a date range, newest first.
 CREATE INDEX IF NOT EXISTS idx_orders_fulfilled_at           ON shopify_orders(org_id, fulfilled_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_tracking_number        ON shopify_orders(org_id, tracking_number);
 -- assign_courier_payouts's WHERE clause (settled orders with a folio) - without this
 -- it sequentially scans the org's entire order history on every CSV upload.
 CREATE INDEX IF NOT EXISTS idx_shopify_orders_settled_folio

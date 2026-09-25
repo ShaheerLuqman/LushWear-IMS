@@ -1,8 +1,7 @@
-// Settings: Account, Users, Financial calendar, Integrations, Couriers, Danger zone.
+// Settings: Account, Users, Financial calendar, Couriers, Danger zone (incl. Shopify).
 import { useEffect, useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router-dom';
 import {
-  Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Link, Spinner, Text, TextField,
+  Badge, BlockStack, Box, Button, Card, Checkbox, Divider, FormLayout, InlineError, InlineStack, Spinner, Text, TextField,
 } from '@shopify/polaris';
 import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
@@ -11,7 +10,7 @@ import { formatMoney } from '../../logic/ledgers';
 import { DatePopover, formatDate } from '../../components/DatePopover';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
-import { FormModal } from '../../components/FormModal';
+import { FormModal, InfoModal } from '../../components/FormModal';
 import { ChangePasswordModal } from './ChangePasswordModal';
 import { Dropdown } from '../../components/Dropdown';
 
@@ -36,7 +35,7 @@ function Section({ title, description, danger, children }: { title: string; desc
 
 interface UserRow { id: string; name?: string; email: string; role: 'admin' | 'staff'; is_active: boolean }
 
-function UsersSection() {
+function UsersModal({ onClose }: { onClose: () => void }) {
   const { showToast } = useToast();
   const [users, setUsers] = useState<UserRow[] | null>(null);
   const [name, setName] = useState('');
@@ -49,9 +48,11 @@ function UsersSection() {
 
   async function load() {
     try {
-      setUsers(await apiJson<UserRow[]>('/users/', { fallback: 'Failed to load users' }));
+      const all = await apiJson<UserRow[]>('/users/', { fallback: 'Failed to load users' });
+      setUsers(all.filter((u) => u.is_active));
     } catch (ex: any) {
       showToast(ex?.message || 'Failed to load users', 'error');
+      if (!users) onClose();
     }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
@@ -68,11 +69,11 @@ function UsersSection() {
     }
   }
 
-  async function toggleActive(user: UserRow) {
+  async function deactivate(user: UserRow) {
     setBusyId(user.id);
     try {
-      await apiJson(`/users/${user.id}`, { method: 'PUT', body: { is_active: !user.is_active } });
-      showToast(!user.is_active ? 'User activated' : 'User deactivated', 'success');
+      await apiJson(`/users/${user.id}`, { method: 'PUT', body: { is_active: false } });
+      showToast('User deactivated', 'success');
       await load();
     } catch (ex: any) {
       showToast(ex?.message || 'Could not update user', 'error');
@@ -101,50 +102,61 @@ function UsersSection() {
   }
 
   return (
-    <Section title="Users">
-      <BlockStack gap="200">
-        {(users || []).map((user) => (
-          <InlineStack key={user.id} align="space-between" blockAlign="center" gap="300" wrap={false}>
-            <InlineStack gap="200" blockAlign="center">
-              <Text as="span" tone={user.is_active ? undefined : 'subdued'}>{user.name ? `${user.name} (${user.email})` : user.email}</Text>
-              {!user.is_active && <Badge>Inactive</Badge>}
-            </InlineStack>
-            <InlineStack gap="200" blockAlign="center" wrap={false}>
-              <Dropdown options={ROLE_OPTIONS} value={user.role} onChange={(v) => changeRole(user, v)} />
-              <Button size="slim" loading={busyId === user.id} onClick={() => toggleActive(user)}>{user.is_active ? 'Deactivate' : 'Activate'}</Button>
-            </InlineStack>
-          </InlineStack>
-        ))}
-      </BlockStack>
-      <Divider />
-      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
-        <FormLayout>
-          <Text as="h3" variant="headingSm">Add user</Text>
-          <FormLayout.Group>
-            <TextField label="Name" autoComplete="off" maxLength={200} value={name} onChange={setName} />
-            <TextField label="Email" type="email" autoComplete="off" placeholder="teammate@example.com" requiredIndicator value={email} onChange={setEmail} />
-          </FormLayout.Group>
-          <FormLayout.Group>
-            <TextField label="Temporary password" type="password" autoComplete="new-password" helpText="Leave blank if they already have an account elsewhere" value={password} onChange={setPassword} />
-            <Dropdown label="Role" fullWidth options={ROLE_OPTIONS} value={role} onChange={(v) => setRole(v as 'staff' | 'admin')} />
-          </FormLayout.Group>
-          {error && <InlineError message={error} fieldID="addUser" />}
-          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Add user</Button></InlineStack>
-        </FormLayout>
-      </form>
+    <FormModal title="Manage users" onClose={onClose} onSubmit={submit} saving={saving} disabled={!users} submitLabel="Add user">
+      {!users ? (
+        <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Loading users...</Text></InlineStack>
+      ) : (
+        <BlockStack gap="400">
+          <BlockStack gap="200">
+            {users.map((user) => (
+              <InlineStack key={user.id} align="space-between" blockAlign="center" gap="300" wrap={false}>
+                <Text as="span">{user.name ? `${user.name} (${user.email})` : user.email}</Text>
+                <InlineStack gap="200" blockAlign="center" wrap={false}>
+                  <Dropdown options={ROLE_OPTIONS} value={user.role} onChange={(v) => changeRole(user, v)} />
+                  <Button size="slim" loading={busyId === user.id} onClick={() => deactivate(user)}>Deactivate</Button>
+                </InlineStack>
+              </InlineStack>
+            ))}
+          </BlockStack>
+          <Divider />
+          <FormLayout>
+            <Text as="h3" variant="headingSm">Add user</Text>
+            <FormLayout.Group>
+              <TextField label="Name" autoComplete="off" maxLength={200} value={name} onChange={setName} />
+              <TextField label="Email" type="email" autoComplete="off" placeholder="teammate@example.com" requiredIndicator value={email} onChange={setEmail} />
+            </FormLayout.Group>
+            <FormLayout.Group>
+              <TextField label="Temporary password" type="password" autoComplete="new-password" helpText="Leave blank if they already have an account elsewhere" value={password} onChange={setPassword} />
+              <Dropdown label="Role" fullWidth options={ROLE_OPTIONS} value={role} onChange={(v) => setRole(v as 'staff' | 'admin')} />
+            </FormLayout.Group>
+            {error && <InlineError message={error} fieldID="addUser" />}
+          </FormLayout>
+        </BlockStack>
+      )}
+    </FormModal>
+  );
+}
+
+function UsersSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section title="Users" description="Who can sign in to this organization and what they can do.">
+      <InlineStack align="end"><Button onClick={() => setOpen(true)}>Manage users</Button></InlineStack>
+      {open && <UsersModal onClose={() => setOpen(false)} />}
     </Section>
   );
 }
 
-const TOKEN_PLACEHOLDER_CONFIGURED = 'Configured — leave blank to keep it';
+const TOKEN_PLACEHOLDER_CONFIGURED = '*'.repeat(30);
 const TOKEN_PLACEHOLDER_UNSET = 'Not configured';
 
-function IntegrationsSection() {
+function ShopifyModal({ onClose }: { onClose: () => void }) {
   const { showToast } = useToast();
   const [storeUrl, setStoreUrl] = useState('');
   const [apiVersion, setApiVersion] = useState('');
   const [token, setToken] = useState('');
   const [tokenConfigured, setTokenConfigured] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
   const [connectStatus, setConnectStatus] = useState('');
@@ -162,7 +174,12 @@ function IntegrationsSection() {
       return null;
     }
   }
-  useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    (async () => {
+      if (!await load()) { onClose(); return; }
+      setLoading(false);
+    })();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   function connectShopify() {
     const shop = storeUrl.trim();
@@ -204,40 +221,55 @@ function IntegrationsSection() {
     setSaving(true);
     try {
       await apiJson('/org-settings/', { method: 'PUT', body });
-      setToken('');
-      showToast('Integrations saved', 'success');
-      await load();
+      showToast('Shopify settings saved', 'success');
+      onClose();
     } catch (ex: any) {
-      setError(ex?.message || 'Could not save integrations');
-    } finally {
+      setError(ex?.message || 'Could not save Shopify settings');
       setSaving(false);
     }
   }
 
   return (
-    <Section title="Integrations">
-      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+    <FormModal title="Configure Shopify" onClose={onClose} onSubmit={submit} saving={saving} disabled={loading} submitLabel="Save Shopify settings">
+      {loading ? (
+        <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Loading Shopify settings...</Text></InlineStack>
+      ) : (
         <FormLayout>
           <TextField
             label="Shopify store URL" autoComplete="off" placeholder="your-store.myshopify.com" value={storeUrl} onChange={setStoreUrl}
             connectedRight={<Button loading={connecting} onClick={connectShopify}>Connect Shopify</Button>} error={connectStatus || undefined}
           />
-          <TextField
-            label="Shopify access token (advanced)" type="password" autoComplete="new-password" placeholder={tokenConfigured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
-            helpText={`${tokenConfigured ? 'Configured' : 'Not configured'}. Only needed as a manual fallback - "Connect Shopify" above sets this for you.`}
-            value={token} onChange={setToken}
-          />
+          <div className={tokenConfigured ? 'secret-set' : undefined}>
+            <TextField
+              label="Shopify access token (advanced)" type="password" autoComplete="new-password" placeholder={tokenConfigured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
+              helpText='Only needed as a manual fallback - "Connect Shopify" above sets this for you.'
+              value={token} onChange={setToken}
+            />
+          </div>
           <TextField label="Shopify API version" autoComplete="off" placeholder="e.g. 2024-07" value={apiVersion} onChange={setApiVersion} />
           {error && <InlineError message={error} fieldID="integrations" />}
-          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Save integrations</Button></InlineStack>
         </FormLayout>
-      </form>
-    </Section>
+      )}
+    </FormModal>
+  );
+}
+
+function ShopifyOption() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Card>
+      <BlockStack gap="200">
+        <Text as="h3" variant="headingSm" fontWeight="bold">Shopify</Text>
+        <Text as="p" tone="subdued">The store orders sync from. Pointing this at a different store mixes its orders into your books.</Text>
+        <InlineStack align="end"><Button onClick={() => setOpen(true)}>Configure Shopify</Button></InlineStack>
+      </BlockStack>
+      {open && <ShopifyModal onClose={() => setOpen(false)} />}
+    </Card>
   );
 }
 
 interface CourierField { key: string; label: string; configured: boolean }
-interface CourierRow { id: string; label: string; enabled: boolean; ledger_id?: string | null; credentials: CourierField[] }
+interface CourierRow { id: string; label: string; enabled: boolean; credentials: CourierField[]; fixed_delivery_charge?: number | null }
 
 // Couriers whose payment-report format the backend can parse
 // (app/services/pre_onboarding.py's PARSERS).
@@ -248,13 +280,16 @@ interface PreOnboardingResult {
   bill: { orders_on_bill?: number; cod_total?: number } | null;
 }
 
-function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow; financeOn: boolean; onChanged: () => void }) {
+function CourierDetails({ courier, onChanged }: { courier: CourierRow; onChanged: () => void }) {
   const { showToast } = useToast();
-  const navigate = useNavigate();
   const [enabled, setEnabled] = useState(courier.enabled);
   const [toggling, setToggling] = useState(false);
   const [values, setValues] = useState<Record<string, string>>({});
+  const [fixedDcOn, setFixedDcOn] = useState(!!courier.fixed_delivery_charge);
+  const [fixedDc, setFixedDc] = useState(courier.fixed_delivery_charge ? String(courier.fixed_delivery_charge) : '');
+  const [fixedDcError, setFixedDcError] = useState('');
   const [savingKeys, setSavingKeys] = useState(false);
+  const [savingFixedDc, setSavingFixedDc] = useState(false);
   const [reconciling, setReconciling] = useState(false);
   const [reconResult, setReconResult] = useState<PreOnboardingResult | null>(null);
 
@@ -288,6 +323,31 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
     }
   }
 
+  async function saveFixedDc(amount: number | null) {
+    setSavingFixedDc(true);
+    try {
+      await apiJson(`/org-settings/couriers/${courier.id}`, { method: 'PUT', body: { enabled: true, fixed_delivery_charge: amount } });
+      showToast(amount ? `${courier.label} fixed delivery charge saved` : `${courier.label} fixed delivery charge turned off`, 'success');
+      onChanged();
+    } catch (ex: any) {
+      showToast(ex?.message || 'Could not save fixed delivery charge', 'error');
+    } finally {
+      setSavingFixedDc(false);
+    }
+  }
+
+  function toggleFixedDc(checked: boolean) {
+    setFixedDcOn(checked);
+    setFixedDcError('');
+    if (!checked && courier.fixed_delivery_charge) saveFixedDc(null);
+  }
+
+  function submitFixedDc() {
+    const amount = Number(fixedDc);
+    if (!(amount > 0)) { setFixedDcError('Enter an amount greater than 0'); return; }
+    saveFixedDc(amount);
+  }
+
   async function uploadPreOnboardingCsv(files: FileList | null) {
     if (!files || !files.length) return;
     const form = new FormData();
@@ -312,24 +372,56 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
   }
 
   return (
-    <BlockStack gap="300">
-      <InlineStack align="space-between" blockAlign="center">
-        <Checkbox label={courier.label} checked={enabled} disabled={toggling} onChange={toggle} />
-        {enabled && courier.ledger_id && (financeOn
-          ? <Link onClick={() => navigate(`/ledgers/${courier.ledger_id}`)}>View ledger</Link>
-          : <Text as="span" tone="subdued">Ledger ready</Text>)}
+    <BlockStack gap="600">
+      <InlineStack align="space-between" blockAlign="center" gap="300">
+        <InlineStack gap="200" blockAlign="center">
+          <Text as="h3" variant="headingMd">{courier.label}</Text>
+          <Badge tone={enabled ? 'success' : undefined}>{enabled ? 'Enabled' : 'Disabled'}</Badge>
+        </InlineStack>
+        <Button variant={enabled ? undefined : 'primary'} loading={toggling} onClick={() => toggle(!enabled)}>{enabled ? 'Disable' : 'Enable'}</Button>
       </InlineStack>
       {enabled && courier.credentials.length > 0 && (
         <FormLayout>
           {courier.credentials.map((field) => (
-            <TextField
-              key={field.key} label={field.label} type="password" autoComplete="new-password"
-              placeholder={field.configured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET} helpText={field.configured ? 'Configured' : 'Not configured'}
-              value={values[field.key] || ''} onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
-            />
+            <form key={field.key} className={field.configured ? 'secret-set' : undefined} onSubmit={(e) => { e.preventDefault(); saveKeys(); }}>
+              <TextField
+                label={field.label} type="password" autoComplete="new-password"
+                placeholder={field.configured ? TOKEN_PLACEHOLDER_CONFIGURED : TOKEN_PLACEHOLDER_UNSET}
+                value={values[field.key] || ''} onChange={(v) => setValues((prev) => ({ ...prev, [field.key]: v }))}
+                connectedRight={<Button variant="primary" submit loading={savingKeys}>Save</Button>}
+              />
+            </form>
           ))}
-          <InlineStack align="end"><Button variant="primary" loading={savingKeys} onClick={saveKeys}>Save keys</Button></InlineStack>
         </FormLayout>
+      )}
+      {/* Only couriers with an integration are booked through /fulfill, where this applies. */}
+      {enabled && courier.credentials.length > 0 && (
+        <BlockStack gap="200">
+          <Checkbox
+            label="Automatically fill a fixed delivery charge at fulfillment" checked={fixedDcOn} disabled={savingFixedDc}
+            helpText="Every order booked with this courier gets this amount as its delivery charge."
+            onChange={toggleFixedDc}
+          />
+          {fixedDcOn && (
+            <Box paddingInlineStart="800">
+              <form onSubmit={(e) => { e.preventDefault(); submitFixedDc(); }}>
+                <BlockStack gap="100">
+                  <InlineStack gap="200" blockAlign="center" wrap={false}>
+                    <Text as="span">Fixed delivery charge:</Text>
+                    <Box width="220px">
+                      <TextField
+                        label="Fixed delivery charge" labelHidden type="number" autoComplete="off" min={1} value={fixedDc}
+                        onChange={(v) => { setFixedDc(v); setFixedDcError(''); }} error={!!fixedDcError}
+                        connectedRight={<Button variant="primary" submit loading={savingFixedDc}>Save</Button>}
+                      />
+                    </Box>
+                  </InlineStack>
+                  {fixedDcError && <InlineError message={fixedDcError} fieldID="fixedDeliveryCharge" />}
+                </BlockStack>
+              </form>
+            </Box>
+          )}
+        </BlockStack>
       )}
       {enabled && PRE_ONBOARDING_COURIERS.includes(courier.id) && (
         <BlockStack gap="150">
@@ -361,26 +453,54 @@ function CourierRowView({ courier, financeOn, onChanged }: { courier: CourierRow
   );
 }
 
-function CouriersSection({ financeOn }: { financeOn: boolean }) {
+function CouriersModal({ onClose }: { onClose: () => void }) {
+  const { showToast } = useToast();
   const [couriers, setCouriers] = useState<CourierRow[] | null>(null);
-  const [error, setError] = useState('');
+  const [selectedId, setSelectedId] = useState('');
 
   async function load() {
-    setError('');
     try {
-      setCouriers(await apiJson<CourierRow[]>('/org-settings/couriers', { fallback: 'Failed to load couriers' }));
+      const rows = await apiJson<CourierRow[]>('/org-settings/couriers', { fallback: 'Failed to load couriers' });
+      setCouriers(rows);
+      setSelectedId((id) => id || rows[0]?.id || '');
     } catch (ex: any) {
-      setError(ex?.message || 'Failed to load couriers');
+      showToast(ex?.message || 'Failed to load couriers', 'error');
+      onClose();
     }
   }
   useEffect(() => { load(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const selected = couriers?.find((c) => c.id === selectedId);
+
   return (
-    <Section title="Couriers" description="Turn on the couriers you ship with. Enabling a courier opens its integration keys and creates a ledger for it.">
-      <BlockStack gap="400">
-        {(couriers || []).map((c) => <CourierRowView key={c.id} courier={c} financeOn={financeOn} onChanged={load} />)}
-      </BlockStack>
-      {error && <InlineError message={error} fieldID="couriers" />}
+    <InfoModal title="Couriers" size="large" onClose={onClose}>
+      <div className="courier-modal-body">
+        {!couriers ? (
+          <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Loading couriers...</Text></InlineStack>
+        ) : (
+          <div className="courier-config">
+            <BlockStack gap="100">
+              {couriers.map((c) => (
+                <Button key={c.id} variant="tertiary" textAlign="left" fullWidth pressed={c.id === selectedId} onClick={() => setSelectedId(c.id)}>
+                  {c.enabled ? c.label : `${c.label} (off)`}
+                </Button>
+              ))}
+            </BlockStack>
+            {/* keyed so switching couriers resets the form's local state */}
+            <div>{selected && <CourierDetails key={selected.id} courier={selected} onChanged={load} />}</div>
+          </div>
+        )}
+      </div>
+    </InfoModal>
+  );
+}
+
+function CouriersSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section title="Couriers" description="Turn on the couriers you ship with, set their integration keys and fixed delivery charges.">
+      <InlineStack align="end"><Button onClick={() => setOpen(true)}>Configure couriers</Button></InlineStack>
+      {open && <CouriersModal onClose={() => setOpen(false)} />}
     </Section>
   );
 }
@@ -393,10 +513,11 @@ function ordinal(n: number): string {
   return n + (suffixes[(v - 20) % 10] || suffixes[v] || suffixes[0]);
 }
 
-function FiscalSection() {
+function FiscalModal({ onClose }: { onClose: () => void }) {
   const { showToast } = useToast();
   const [day, setDay] = useState('22');
   const [startMonth, setStartMonth] = useState('1');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -408,7 +529,10 @@ function FiscalSection() {
         setStartMonth(String(settings.fiscal_year_start_month));
       } catch (ex: any) {
         showToast(ex?.message || 'Failed to load financial calendar', 'error');
+        onClose();
+        return;
       }
+      setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -439,8 +563,10 @@ function FiscalSection() {
   }
 
   return (
-    <Section title="Financial calendar">
-      <form onSubmit={(e) => { e.preventDefault(); submit(); }}>
+    <FormModal title="Financial calendar" onClose={onClose} onSubmit={submit} saving={saving} disabled={loading} submitLabel="Save financial calendar">
+      {loading ? (
+        <InlineStack align="center" gap="200" blockAlign="center"><Spinner size="small" /><Text as="span" tone="subdued">Loading financial calendar...</Text></InlineStack>
+      ) : (
         <FormLayout>
           <FormLayout.Group>
             <TextField
@@ -454,9 +580,18 @@ function FiscalSection() {
             <Text as="span" tone="subdued">Financial month: <Text as="span" fontWeight="semibold">{monthPreview}</Text></Text>
           </InlineStack>
           {error && <InlineError message={error} fieldID="fiscal" />}
-          <InlineStack align="end"><Button variant="primary" submit loading={saving}>Save financial calendar</Button></InlineStack>
         </FormLayout>
-      </form>
+      )}
+    </FormModal>
+  );
+}
+
+function FiscalSection() {
+  const [open, setOpen] = useState(false);
+  return (
+    <Section title="Financial calendar" description="When your reporting months and financial year begin.">
+      <InlineStack align="end"><Button onClick={() => setOpen(true)}>Configure financial calendar</Button></InlineStack>
+      {open && <FiscalModal onClose={() => setOpen(false)} />}
     </Section>
   );
 }
@@ -562,6 +697,7 @@ function DangerZoneSection() {
     <Section danger title="Danger zone" description="Changes here can delete data permanently.">
       <BlockStack gap="500">
         <OnboardingDateOption />
+        <ShopifyOption />
       </BlockStack>
     </Section>
   );
@@ -574,7 +710,6 @@ export function SettingsPage() {
   usePageHeader({ title: 'Settings' });
 
   const isAdmin = account?.role === 'admin';
-  const financeOn = !!account?.enabled_features?.includes('finance');
 
   return (
     <div className="settings-container">
@@ -592,8 +727,7 @@ export function SettingsPage() {
 
         {isAdmin && <UsersSection />}
         {isAdmin && <FiscalSection />}
-        {isAdmin && <IntegrationsSection />}
-        {isAdmin && <CouriersSection financeOn={financeOn} />}
+        {isAdmin && <CouriersSection />}
         {isAdmin && <DangerZoneSection />}
       </BlockStack>
 

@@ -52,6 +52,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Courier settings modal** — Settings card opens a sidebar modal listing couriers with per-courier details.
+- [x] **Fixed courier delivery charge** — optional per-courier fixed DC (>0) written onto orders at fulfillment.
 - [x] **Whole app on the Polaris theme** — every page, modal and table now uses Polaris; AG Grid removed; shared `DataTable`, `RowActions`, `FormModal`/`InfoModal`, `MetricsStrip`, `StatCardGrid`, `KeyValueList`, `ReportTable` components.
 - [x] **Shopify-style dropdowns everywhere** — one Polaris-based `Dropdown` (single, checkbox multi, searchable) replaced every native select and custom picker.
 - [x] **Reusable Polaris components** — added `SearchField`, `MetricsStrip`, `FormModal`; Shipping Details modal ported as the reference.

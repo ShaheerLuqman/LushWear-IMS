@@ -1624,6 +1624,54 @@ body.orders-table-fullscreen #ordersView .table-card {
 
 /* File input wrapped around a Polaris Button: the real input is what the click
    must reach, so it covers the button rather than being hidden away from it. */
+/* A saved secret shows as a row of asterisks in the placeholder, styled as if it were the value. */
+.secret-set input::placeholder {
+    color: var(--p-color-text);
+    opacity: 1;
+}
+
+/* Fixed height so switching couriers doesn't resize the modal; the details pane scrolls instead. */
+.courier-modal-body {
+    height: 60vh;
+}
+
+.courier-config {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    height: 100%;
+}
+
+.courier-config > * {
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.courier-config > :first-child {
+    padding-right: 16px;
+    border-right: 1px solid var(--p-color-border);
+}
+
+.courier-config > :last-child {
+    padding-left: 24px;
+}
+
+@media (max-width: 600px) {
+    .courier-config {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr;
+    }
+
+    .courier-config > :first-child {
+        padding: 0 0 12px;
+        border-right: none;
+        border-bottom: 1px solid var(--p-color-border);
+    }
+
+    .courier-config > :last-child {
+        padding: 16px 0 0;
+    }
+}
+
 .pre-onboarding-upload {
     position: relative;
     display: inline-block;

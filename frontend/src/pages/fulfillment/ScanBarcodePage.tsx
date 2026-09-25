@@ -1,16 +1,19 @@
-// Camera barcode scanner (mobile-first) for reading tracking numbers off printed
-// airway bills. Test harness for now - scans are only listed on screen, nothing
-// is sent to the backend yet.
+// Camera barcode scanner (mobile-first) for airway bills: each read (tracking
+// number or "#1234" order ref) is resolved to its order. Test harness for now -
+// resolved scans are only listed on screen.
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Text } from '@shopify/polaris';
 import { BrowserMultiFormatReader } from '@zxing/browser';
+import { apiJson } from '../../api';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { useToast } from '../../toast/ToastContext';
 
 const COOLDOWN_MS = 10_000;
 const HIT_FLASH_MS = 2500;
 
-interface Scan { code: string; at: number; }
+interface ScannedOrder { order_number: number; tracking_number: string | null; }
+// order: undefined while resolving, null when no order matched.
+interface Scan { code: string; at: number; order?: ScannedOrder | null; }
 
 export function ScanBarcodePage() {
   const { showToast } = useToast();
@@ -22,7 +25,7 @@ export function ScanBarcodePage() {
   const [scanning, setScanning] = useState(false);
   const [engine, setEngine] = useState('');
   const [scans, setScans] = useState<Scan[]>([]);
-  const [hit, setHit] = useState<string | null>(null);
+  const [hit, setHit] = useState<Scan | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const record = useCallback((code: string) => {
@@ -30,12 +33,21 @@ export function ScanBarcodePage() {
     const seen = lastSeen.current.get(code);
     if (seen && now - seen < COOLDOWN_MS) return;
     lastSeen.current.set(code, now);
-    setScans((prev) => [{ code, at: now }, ...prev]);
-    setHit(code);
+    const scan: Scan = { code, at: now };
+    setScans((prev) => [scan, ...prev]);
+    setHit(scan);
     clearTimeout(hitTimer.current);
     hitTimer.current = window.setTimeout(() => setHit(null), HIT_FLASH_MS);
-    showToast(`Tracking number read: ${code}`, 'success');
     navigator.vibrate?.(80);
+    apiJson<ScannedOrder | null>(`/orders/resolve-scan?code=${encodeURIComponent(code)}`)
+      .catch(() => null)
+      .then((order) => {
+        const resolved = { ...scan, order };
+        setScans((prev) => prev.map((s) => (s === scan ? resolved : s)));
+        setHit((prev) => (prev === scan ? resolved : prev));
+        if (order) showToast(`Order #${order.order_number}`, 'success');
+        else showToast(`No order found for ${code}`, 'error');
+      });
   }, [showToast]);
 
   const stop = useCallback(() => {
@@ -103,8 +115,8 @@ export function ScanBarcodePage() {
         {error && <div className="scan-placeholder scan-placeholder--error"><Text as="p" variant="bodyMd">{error}</Text></div>}
         {hit && (
           <div className="scan-hit" role="status">
-            <span>Tracking number read</span>
-            <strong>{hit}</strong>
+            <span>{hit.code}</span>
+            <strong>{hit.order === undefined ? 'Looking up…' : hit.order ? `Order #${hit.order.order_number}` : 'No matching order'}</strong>
           </div>
         )}
       </div>
@@ -123,7 +135,11 @@ export function ScanBarcodePage() {
             ? <Text as="p" tone="subdued">Nothing scanned yet.</Text>
             : scans.map((s) => (
               <div key={`${s.code}-${s.at}`} className="scan-results__row">
-                <span className="scan-results__code">{s.code}</span>
+                <div>
+                  <span className="scan-results__code">{s.order ? `Order #${s.order.order_number}` : s.order === null ? 'No matching order' : 'Looking up…'}</span>
+                  <Text as="p" tone="subdued" variant="bodySm">Scanned: {s.code}</Text>
+                  {s.order && <Text as="p" tone="subdued" variant="bodySm">Tracking: {s.order.tracking_number || '—'}</Text>}
+                </div>
                 <Text as="span" tone="subdued" variant="bodySm">{new Date(s.at).toLocaleTimeString()}</Text>
               </div>
             ))}
