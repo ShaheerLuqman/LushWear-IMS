@@ -46,6 +46,7 @@ import { GenerateLoadSheetModal } from './GenerateLoadSheetModal';
 import { PackagingListModal } from './PackagingListModal';
 import { UploadPostExModal } from './UploadPostExModal';
 import { PostExUploadReportModal, type PostExUploadReportData } from './PostExUploadReportModal';
+import { ReceiveAdvanceModal } from './ReceiveAdvanceModal';
 
 const ORDERS_VIEW_TABS = [
   { id: 'all', label: 'All', statuses: null as string[] | null },
@@ -210,6 +211,7 @@ export function OrdersPage() {
   const [uploadPostExModalOpen, setUploadPostExModalOpen] = useState(false);
   const [postExUploadReport, setPostExUploadReport] = useState<PostExUploadReportData | null>(null);
   const [viewOrderId, setViewOrderId] = useState<string | null>(null);
+  const [advanceOrderId, setAdvanceOrderId] = useState<string | null>(null);
   const condensed = useBreakpoints().mdDown;
 
   const { ledgers, loadLedgersList } = useLedgersData();
@@ -242,10 +244,7 @@ export function OrdersPage() {
     setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, [field]: value } : o)));
     (async () => {
       try {
-        const updated = await apiJson<Order>(`/orders/${orderId}`, { method: 'PUT', body: { [field]: value }, fallback: `Failed to update ${field}` });
-        if (field === 'advance_amount' && updated && updated.advance_status !== undefined) {
-          setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, advance_status: updated.advance_status } : o)));
-        }
+        await apiJson<Order>(`/orders/${orderId}`, { method: 'PUT', body: { [field]: value }, fallback: `Failed to update ${field}` });
         showToast(`Order ${field.replace('_', ' ')} updated`, 'success');
       } catch (error: any) {
         console.error(`Error saving ${field}:`, error);
@@ -317,7 +316,8 @@ export function OrdersPage() {
       confirmText: 'Cancel order',
     }),
     onView: (order) => setViewOrderId(order.id),
-  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne]);
+    onAdvance: (order) => { loadLedgersList(); setAdvanceOrderId(order.id); },
+  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne, loadLedgersList]);
 
   function removeFetchedByNumberRows() {
     if (fetchedByNumberIdsRef.current.size === 0) return;
@@ -1115,6 +1115,17 @@ export function OrdersPage() {
       {viewOrderId && (() => {
         const order = orders.find((o) => o.id === viewOrderId);
         return order ? <OrderDetailsModal order={order} ctx={columnCtx} onClose={() => setViewOrderId(null)} /> : null;
+      })()}
+      {advanceOrderId && (() => {
+        const order = orders.find((o) => o.id === advanceOrderId);
+        return order ? (
+          <ReceiveAdvanceModal
+            order={order}
+            ledgers={ledgers}
+            onClose={() => setAdvanceOrderId(null)}
+            onSaved={(patch) => setOrders((prev) => prev.map((o) => (o.id === order.id ? { ...o, ...patch } : o)))}
+          />
+        ) : null;
       })()}
       {postExUploadReport && (
         <PostExUploadReportModal data={postExUploadReport} onClose={() => setPostExUploadReport(null)} />

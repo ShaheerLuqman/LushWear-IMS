@@ -9,24 +9,25 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.responses import Response, StreamingResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from supabase import create_client
 
 from app import shopify
-from app.advance_status import recompute_advance_statuses
+from app.advance_status import fetch_transaction_advance_totals, get_orders_ledger_id, recompute_advance_statuses
 from app.auth import get_org_id
 from app.config import settings
 from app.couriers import enabled_courier_ids
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
-from app.models import Order, OrderCreate, OrderUpdate
+from app.models import Order, OrderCreate, OrderUpdate, TransactionEntryCreate
 from app.money import money
 from app.order_pdf import extract_order_numbers
 from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
 from app.rate_limit import limiter
+from app.routes.transactions import create_transaction_entry
 from app.services import couriers_next, event_bus, postex
 from app.services.courier_cities import get_courier_cities
 from app.services.pdf.courier_bill_summary import generate_courier_bill_summary_pdf
@@ -39,15 +40,13 @@ from app.services.pdf.packaging_list import (
 )
 from app.services.shopify_orders import _fetch_shopify_order_by_order_number, _fetch_shopify_unfulfilled_orders
 from app.services.shopify_sync import (
-    PRICE_REDUCTION_DISCOUNT_CODES,
-    has_settled_tag,
     SyncShopifyOrdersResult,
+    derive_total_and_advance,
     _cost_from_line_items,
     _delivery_charge_from_other_tags,
     _get_sync_status_row,
     _line_items_incomplete,
     _line_items_signature,
-    _order_total_from_fulfillments,
     _resolve_line_item_cost,
     _sync_shopify_orders,
 )
@@ -1454,30 +1453,6 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 return "fulfilled"
             return "unfulfilled"
 
-        def extract_tax_amount(order):
-            if "current_total_tax_set" in order and order["current_total_tax_set"]:
-                shop_money = order["current_total_tax_set"].get("shop_money", {})
-                if shop_money:
-                    try:
-                        return float(shop_money.get("amount", "0.00"))
-                    except (TypeError, ValueError):
-                        pass
-            try:
-                return float(order.get("current_total_tax") or 0)
-            except (TypeError, ValueError):
-                pass
-            if "total_tax_set" in order and order["total_tax_set"]:
-                shop_money = order["total_tax_set"].get("shop_money", {})
-                if shop_money:
-                    try:
-                        return float(shop_money.get("amount", "0.00"))
-                    except (TypeError, ValueError):
-                        pass
-            try:
-                return float(order.get("total_tax", "0.00"))
-            except (TypeError, ValueError):
-                return 0.0
-
         def extract_cost_price(order):
             for attr in order.get("note_attributes") or []:
                 if attr.get("name") in ["cost_price", "Cost Price", "cost"]:
@@ -1564,55 +1539,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             courier = extract_courier(sp_order)
             tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
-            shopify_tax = extract_tax_amount(sp_order) or 0.0
-            fulfillment_based_total = _order_total_from_fulfillments(sp_order)
-            # Shopify's current_total_price/total_price are already net of discounts; the
-            # fulfillment and line-item sums are not.
-            discount_applied = False
-            if fulfillment_based_total is not None:
-                total_amount = fulfillment_based_total + shopify_tax
-            else:
-                current_total = sp_order.get("current_total_price")
-                total_price_val = sp_order.get("total_price")
-                if current_total is not None and str(current_total).strip() != "":
-                    total_amount = float(current_total)
-                    discount_applied = True
-                elif total_price_val is not None and str(total_price_val).strip() != "":
-                    total_amount = float(total_price_val)
-                    discount_applied = True
-                else:
-                    try:
-                        total_amount = float(sp_order.get("total_line_items_price") or 0) + shopify_tax
-                    except (TypeError, ValueError):
-                        total_amount = shopify_tax
-
-            discount_codes = sp_order.get("discount_codes") or []
-            normalized_discount_codes = {
-                str(code_obj.get("code") or "").strip().upper()
-                for code_obj in discount_codes
-                if isinstance(code_obj, dict)
-            }
-            has_price_reduction_discount_code = any(
-                code in PRICE_REDUCTION_DISCOUNT_CODES
-                for code in normalized_discount_codes
-            )
-            total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
-            financial_status = (sp_order.get("financial_status") or "").strip().lower()
-            # A settled COD payout is marked paid in Shopify too, so only an untagged
-            # "paid" means the customer paid up front (same rule as shopify_sync's).
-            paid_in_advance = financial_status == "paid" and not has_settled_tag(sp_order.get("tags"))
-            if has_price_reduction_discount_code:
-                if not discount_applied:
-                    total_amount = max(0.0, total_amount - total_discounts)
-                advance_amount = total_amount if paid_in_advance else 0.0
-            else:
-                advance_amount = total_amount if paid_in_advance else total_discounts
-
-            # Shopify zeroes a cancelled order's total - mirror that instead of carrying
-            # forward a stale amount (see the same rule in shopify_sync._sync_shopify_orders).
-            if order_status == "cancelled":
-                total_amount = 0.0
-                advance_amount = 0.0
+            total_amount, advance_amount = derive_total_and_advance(sp_order, order_status)
 
             structured_line_items = extract_line_items(sp_order, order_status)
             cost_price = extract_cost_price(sp_order)
@@ -2357,6 +2284,109 @@ async def cancel_order(order_id: str, org_id: str = Depends(get_org_id)):
     }).eq("id", order_id).execute()
     event_bus.publish(org_id, {"type": "orders_changed"})
     return {"order_number": row["order_number"], "order_status": "cancelled"}
+
+
+class OrderAdvanceBody(BaseModel):
+    advance: float = Field(ge=0)
+    ledger_id: str
+    entry_date: date
+    description: Optional[str] = None
+    idempotency_key: Optional[str] = None
+
+
+@router.put("/{order_id}/advance")
+async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str = Depends(get_org_id)):
+    """Set an order's total customer advance. Posts only the difference from what the
+    Customer Advances ledger already holds for it (received into, or handed back from, `ledger_id`),
+    then mirrors it to Shopify: a "Partial Advance" tag, or an "Advance Paid" tag plus
+    Mark as paid once the whole total is in. Saving the amount the ledger already holds posts nothing and just retries
+    the Shopify step.
+
+    Only before booking - the courier is handed total - advance as its COD - and a full
+    advance is final, since Shopify's paid status can't be taken back."""
+    supabase = get_supabase()
+    rows = (
+        org_table(supabase, org_id, "shopify_orders")
+        .select("id, order_number, order_status, courier, tracking_number, total_amount, advance_amount")
+        .eq("id", order_id).limit(1).execute().data
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="Order not found")
+    row = rows[0]
+    order_number = str(row["order_number"])
+    courier = (row.get("courier") or "").strip().lower()
+    if (row.get("order_status") or "").lower() != "unfulfilled" or row.get("tracking_number") or courier not in ("", "unassigned"):
+        raise HTTPException(status_code=400, detail="An advance can only be recorded before the order is booked with a courier.")
+    total = money(row.get("total_amount") or 0)
+    advance = money(body.advance)
+    if total and money(row.get("advance_amount") or 0) >= total:
+        raise HTTPException(status_code=400, detail="This order is already fully paid in advance.")
+    if advance > total:
+        raise HTTPException(status_code=400, detail=f"The advance cannot exceed the order total ({total:,.2f}).")
+
+    ledgers = (
+        org_table(supabase, org_id, "finances_ledgers")
+        .select("type, system_key").eq("id", body.ledger_id).limit(1).execute().data
+    )
+    if not ledgers or ledgers[0].get("type") != "Asset" or (ledgers[0].get("system_key") or "").startswith("courier_"):
+        raise HTTPException(status_code=400, detail="Pick a cash, bank or wallet account for the advance.")
+    orders_ledger_id = get_orders_ledger_id(supabase, org_id)
+    if not orders_ledger_id:
+        raise HTTPException(status_code=400, detail="This organization has no Customer Advances ledger.")
+
+    try:
+        shopify_order_id, org_creds = await _shopify_order_id_for(row["order_number"], org_id)
+    except Exception as exc:
+        logger.exception("Advance: could not look up order %s on Shopify", order_number)
+        raise HTTPException(status_code=502, detail=f"Could not reach Shopify: {exc}")
+    if not shopify_order_id:
+        raise HTTPException(status_code=400, detail=f"Order #{order_number} was not found on Shopify.")
+
+    held = money(fetch_transaction_advance_totals(supabase, org_id, order_number).get(order_number, 0))
+    difference = money(advance - held)
+    if difference:
+        received = difference > 0
+        # Cash is stored as an empty side, not as the cash ledger's id (see TransactionEntryBase).
+        account = None if ledgers[0].get("system_key") == "cash" else body.ledger_id
+        await create_transaction_entry(TransactionEntryCreate(
+            entry_date=body.entry_date,
+            amount=abs(difference),
+            description=body.description or (
+                f"{'Additional advance' if held else 'Advance'} received for Order #{order_number}" if received
+                else f"Advance returned for Order #{order_number}"
+            ),
+            from_account_id=orders_ledger_id if received else account,
+            to_account_id=account if received else orders_ledger_id,
+            order_number=order_number,
+            idempotency_key=body.idempotency_key,
+        ), org_id=org_id)
+
+    try:
+        async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+            if advance == total:
+                tag = shopify.ADVANCE_PAID_TAG
+            else:
+                tag = shopify.partial_advance_tag(advance) if advance else None
+            await shopify.set_advance_tag(shopify_order_id, tag, org_creds, client)
+            if advance == total:
+                await shopify.mark_order_paid(shopify_order_id, org_creds, client)
+    except Exception as exc:
+        logger.exception("Advance: could not update order %s on Shopify", order_number)
+        raise HTTPException(
+            status_code=502,
+            detail=f"The ledger entry was saved, but Shopify could not be updated ({exc}). Save the same amount again to retry.",
+        )
+
+    org_table(supabase, org_id, "shopify_orders").update({
+        "advance_amount": advance,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }).eq("id", order_id).execute()
+    recompute_advance_statuses(supabase, org_id, [order_number])
+    event_bus.publish(org_id, {"type": "orders_changed"})
+    status_rows = (
+        org_table(supabase, org_id, "shopify_orders").select("advance_status").eq("id", order_id).limit(1).execute().data
+    )
+    return {"advance_amount": advance, "advance_status": status_rows[0]["advance_status"] if status_rows else None}
 
 
 @router.post("/postex-airway-bills")

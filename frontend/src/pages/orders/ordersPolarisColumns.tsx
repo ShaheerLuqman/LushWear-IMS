@@ -20,6 +20,7 @@ export interface OrdersColumnCtx {
   onSetStatus: (order: Order, status: 'delivered' | 'returned', pieceReceived?: boolean) => void;
   onUnbook: (order: Order) => void;
   onCancel: (order: Order) => void;
+  onAdvance: (order: Order) => void;
   onView: (order: Order) => void;
 }
 
@@ -118,6 +119,11 @@ export function orderActionItems(order: Order, ctx: OrdersColumnCtx): ActionList
     if (status !== 'returned') items.push({ content: 'Mark Returned', onAction: () => ctx.onSetStatus(order, 'returned') });
     if (!(status === 'returned' && pieceReceived)) items.push({ content: 'Mark Returned + Piece Received', onAction: () => ctx.onSetStatus(order, 'returned', true) });
   }
+  // Only before booking: the courier is handed total - advance as its COD. A full advance is final.
+  const advance = parseFloat(String(order.advance_amount)) || 0;
+  if (status === 'unfulfilled' && !booked && advance < (parseFloat(String(order.total_amount)) || 0)) {
+    items.push({ content: advance ? 'Edit advance' : 'Receive advance', onAction: () => ctx.onAdvance(order) });
+  }
   if (booked && !resolved) items.push({ content: 'Unbook courier', destructive: true, onAction: () => ctx.onUnbook(order) });
   if (status !== 'cancelled' && !resolved) items.push({ content: 'Cancel order', destructive: true, onAction: () => ctx.onCancel(order) });
   return items;
@@ -194,12 +200,12 @@ export const ORDERS_COLUMNS: OrdersColumnDef[] = [
     key: 'advance_amount', heading: 'Advance', alignment: 'end', sortable: true,
     sortValue: (o) => parseFloat(String(o.advance_amount)) || 0,
     exportValue: (o) => money(o.advance_amount),
-    render: (o, ctx) => {
+    render: (o) => {
       const meta = advanceStatusMeta(o.advance_status);
       return (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, justifyContent: 'flex-end' }}>
           <span className="advance-dot" style={{ background: meta.color }} title={meta.title} />
-          <EditableAmount value={o.advance_amount} editable={ctx.isEditingAllowed()} onSave={(n) => ctx.saveOrderField(o.id, 'advance_amount', n)} />
+          <Text as="span" numeric>{money(o.advance_amount)}</Text>
         </div>
       );
     },

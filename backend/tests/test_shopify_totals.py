@@ -1,4 +1,4 @@
-from app.routes.orders import _order_total_from_fulfillments
+from app.services.shopify_sync import _order_total_from_fulfillments
 
 
 def _shop_money(amount):
@@ -81,3 +81,39 @@ def test_price_reduction_code_not_double_subtracted_from_net_total():
     r = _reconcile_one_order(sp_order, {}, {}, {}, {}, {}, {}, "2026-09-23T00:00:00Z")
     assert r.order_data["total_amount"] == 5398.2
     assert r.order_data["advance_amount"] == 0.0
+
+
+class TestDeriveTotalAndAdvance:
+    """Discounts are price reductions; the advance is the Partial Advance tag, else the
+    whole total when the customer paid up front (see ADVANCE_PAYMENT_PLAN.md)."""
+
+    FULFILLED = {"fulfillments": [{"status": "success", "line_items": [{"price": "3000.00", "quantity": 1}]}]}
+
+    @staticmethod
+    def _derive(sp_order, status="fulfilled"):
+        from app.services.shopify_sync import derive_total_and_advance
+        return derive_total_and_advance(sp_order, status)
+
+    def test_a_plain_discount_lowers_the_total_and_is_not_an_advance(self):
+        order = {**self.FULFILLED, "current_total_discounts": "1000.00", "financial_status": "pending"}
+        assert self._derive(order) == (2000.0, 0.0)
+
+    def test_the_partial_advance_tag_is_the_advance(self):
+        order = {**self.FULFILLED, "tags": "Confirmed, Partial Advance: 1500", "financial_status": "pending"}
+        assert self._derive(order) == (3000.0, 1500.0)
+
+    def test_the_tag_survives_a_courier_settlement(self):
+        order = {**self.FULFILLED, "tags": "Partial Advance: 1500, Settled", "financial_status": "paid"}
+        assert self._derive(order) == (3000.0, 1500.0)
+
+    def test_advance_paid_tag_is_the_whole_total_even_once_settled(self):
+        order = {**self.FULFILLED, "tags": "Advance Paid, Settled", "financial_status": "paid"}
+        assert self._derive(order) == (3000.0, 3000.0)
+
+    def test_paid_up_front_is_the_whole_total(self):
+        assert self._derive({**self.FULFILLED, "financial_status": "paid"}) == (3000.0, 3000.0)
+        assert self._derive({**self.FULFILLED, "financial_status": "paid", "tags": "Settled"}) == (3000.0, 0.0)
+
+    def test_cancelled_zeroes_both(self):
+        order = {**self.FULFILLED, "tags": "Partial Advance: 1500"}
+        assert self._derive(order, "cancelled") == (0.0, 0.0)

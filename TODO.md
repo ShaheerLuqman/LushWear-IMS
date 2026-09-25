@@ -33,6 +33,10 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
 - [ ] **Shopify orders still on REST** — kept on REST deliberately (GraphQL bills ~105 cost points per nested order); revisit before REST is retired.
 
+#### Orders
+- [ ] **Advance release checks** — test mark-paid and tag round-trip on Shopify, then run the migration.
+- [ ] **Advance refund on return** — Return + Piece Received (row/bulk) asks if advances were refunded; post refunds.
+
 #### Couriers
 - [ ] **Couriers Next status lag** — `TrackOrder.php` shows stale status vs `CurrentStatus.php`; ask their team before fixing.
 
@@ -52,6 +56,10 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Customer Advances ledger** — renamed the Orders system ledger to reflect what it holds.
+- [x] **Receive advance popup** — orders row records full/partial advance to a ledger and tags or marks paid on Shopify.
+- [x] **Tag-based advances** — sync reads `Partial Advance: N` tags; discounts are now price reductions only.
+- [x] **Single advance entry point** — advance cell read-only; order-advance option removed from transaction entry.
 - [x] **View order popup** — eye button per orders row opens full order details (items, payment, customer, shipping, history).
 - [x] **Mobile orders page** — phone widths show Shopify-style tappable order cards; header stacks into rows.
 - [x] **Courier settings modal** — Settings card opens a sidebar modal listing couriers with per-courier details.

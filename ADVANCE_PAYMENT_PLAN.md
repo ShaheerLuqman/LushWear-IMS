@@ -1,6 +1,16 @@
 # Receive Advance from the Orders Grid — Plan
 
-Status: planning. Nothing implemented.
+Status: implemented (2026-09-26). Not yet released: the deferred Shopify tests and the
+migration run are still to do.
+
+| Piece | Where |
+|---|---|
+| Popup | `frontend/src/pages/orders/ReceiveAdvanceModal.tsx`, row action in `ordersPolarisColumns.tsx` |
+| Endpoint | `PUT /orders/{id}/advance`, `set_order_advance` in `backend/app/routes/orders.py` |
+| Shopify tag / mark paid | `set_advance_tag`, `mark_order_paid` in `backend/app/shopify.py` |
+| Sync rule | `derive_total_and_advance` in `backend/app/services/shopify_sync.py`, also used by force sync |
+| Net ledger totals | `fetch_transaction_advance_totals` in `backend/app/advance_status.py` |
+| Migration | `backend/scripts/migrate_discount_advances.py` (dry run by default, `--apply` writes) |
 
 ## Problem
 
@@ -18,14 +28,19 @@ The goal is to do all of this in a single popup opened from the order row.
 
 | Question | Decision |
 |---|---|
-| Where the advance is recorded in Shopify | **Partial:** a `Partial Advance: <amount>` tag, and nothing else. **Full:** the order is marked paid, with no tag. Partial payments can't be recorded through the API without Shopify Plus (see "Why a tag"). |
+| Where the advance is recorded in Shopify | **Partial:** a `Partial Advance: <amount>` tag, and nothing else. **Full:** the order is marked paid and tagged `Advance Paid`; the sync reads that tag as the whole total. Partial payments can't be recorded through the API without Shopify Plus (see "Why a tag"). |
 | Discount-as-advance | **Retired.** Every discount becomes a real price reduction, and only the tag or the paid status counts as an advance. |
 | Orders in progress that use discount-as-advance | Converted by a **one-off script** |
 | When an advance can be received or edited | **Only before the courier is booked.** The COD amount is fixed at booking, so once an order has a courier or tracking number, the action is hidden and the endpoint refuses it. |
 | Overpayment | **Rejected.** The advance can never exceed the order total. |
-| Undo | **Edit it again.** The same popup reopens with the current advance, and saving a lower amount (down to 0) reverses the difference. There is no separate reverse action. |
+| Undo | **Edit it again**, for partial advances only. The same popup reopens with the current advance, and saving a lower amount (down to 0) reverses the difference. There is no separate reverse action. |
+| Full advance | **Final.** It can never be refunded or edited down. Once `advance = total`, the action is hidden and the endpoint refuses it, so Shopify's paid status never has to be undone. |
 | Orders not in Shopify | **Not a case.** Every order comes from Shopify. An order with no Shopify ID is an error, not a separate path. |
 | Tests on Shopify (`orderMarkAsPaid`, tag round-trip, discount removal) | **Deferred.** They are run before this ships, not now. |
+| Other ways to set an advance | **Removed.** The inline Advance cell in the Orders grid becomes read-only. The Transaction Entry modal's "Order Advance Amount" checkbox and the `Order#` bulk-entry shorthand go away. The popup is the only way to record an advance. |
+| Force sync | **Same per-order logic as the normal sync.** It exists only to catch orders whose Shopify `updated_at` never moved, so it differs only in which orders it fetches. |
+| Ledger name | **Customer Advances**, renamed from "Orders" (`20260926000000_rename_orders_ledger_to_customer_advances.sql`). The internal key stays `orders`; the ledger only ever holds customer advances. |
+| Sequencing | **Implementation first, then the migration script**, in the same change. The script reuses the tag helper and runs at release, straight after the new sync rule is live. |
 
 ## What already exists and is reused
 
@@ -41,8 +56,9 @@ The goal is to do all of this in a single popup opened from the order row.
 
 ## Proposed flow
 
-**UI.** The row menu gets **Receive advance**, or **Edit advance** once the order has one.
-It is shown only for orders that are unfulfilled, not cancelled and not booked. It opens a
+**UI.** The row menu gets **Receive advance**, or **Edit advance** once the order has a
+partial one. It is shown only for orders that are unfulfilled, not cancelled, not booked
+and not fully paid. It opens a
 `FormModal` with a pinned footer, per CLAUDE.md:
 
 - Order # and Total (read-only)
@@ -57,8 +73,8 @@ It is shown only for orders that are unfulfilled, not cancelled and not booked. 
 **Backend.** Add one endpoint, `PUT /orders/{id}/advance {advance, ledger_id, entry_date, particulars}`.
 It sets the order's total advance:
 
-1. **Validate.** The order must be unfulfilled and not booked (the UI hides the action, but
-   the server enforces it too). Also check `0 ≤ advance ≤ total`, that the ledger is an
+1. **Validate.** The order must be unfulfilled, not booked and not already fully paid (the
+   UI hides the action, but the server enforces it too). Also check `0 ≤ advance ≤ total`, that the ledger is an
    Asset, that the Orders system ledger exists, and that the date is on or after
    onboarding.
 2. **Ledger: post only the difference** between `advance` and what the ledger already holds
@@ -70,7 +86,9 @@ It sets the order's total advance:
 
    All three use the idempotency-key path of `create_transaction_entry`.
 3. **Shopify:**
-   - Full (`advance = total`): remove any `Partial Advance:` tag, then `orderMarkAsPaid`.
+   - Full (`advance = total`): replace any `Partial Advance:` tag with `Advance Paid`, then
+     `orderMarkAsPaid`. The tag goes first, so a webhook caught between the two writes still
+     reads the full advance.
    - Partial (`0 < advance < total`): set `Partial Advance: <advance>`, replacing any
      earlier one.
    - Zero: remove the tag.
@@ -93,13 +111,25 @@ the record, because it lowers the sale and gets confused with real discounts.
 
 - **The sync rule for `advance_amount`** (`shopify_sync._reconcile_one_order`), checked in
   this order:
-  1. A `Partial Advance: N` tag gives `N`.
-  2. Otherwise, `paid` without the `Settled` tag gives `total`.
-  3. Otherwise, `0`.
+  1. An `Advance Paid` tag gives `total`.
+  2. Otherwise, a `Partial Advance: N` tag gives `N`.
+  3. Otherwise, `paid` without the `Settled` tag gives `total`.
+  4. Otherwise, `0`.
 
-  A full advance that later gets `Settled` would fall through to 0 under this rule.
-  Settlement only happens after delivery, though, and by then `freeze_advance` has already
-  locked the value, so it is never re-derived.
+  Both tags come before the paid check, so a later `Settled` tag can't drop an advance.
+- **The rule is duplicated.** `/orders/sync-shopify-force` (`routes/orders.py`, around
+  line 1600) re-implements the same total/advance derivation. Its only purpose is to catch
+  orders skipped because their `updated_at` didn't change, so it moves onto the same
+  derivation helper in `shopify_sync`, and the two paths can't drift apart.
+- **Remove the other advance writers.**
+  - Make the Advance column in `ordersPolarisColumns.tsx` plain text, dropping
+    `EditableAmount`. Drop the `advance_amount` special case in `OrdersPage.tsx`'s save
+    handler if nothing else uses it.
+  - In `TransactionEntryModal.tsx`, remove the `isAdvance` checkbox, the order-number
+    field, the `Order#` help text and the `orderAdvanceParticularPlaceholder` path if it
+    has no other caller.
+  - Remove the `Order#` / `Orders <n>` resolution in `transactionsBulkEntry.ts`.
+  - Existing advance entries and `advance_status` keep working unchanged.
 - **Every discount lowers `total_amount`.** Today a discount only lowers the total when
   its code is in `PRICE_REDUCTION_DISCOUNT_CODES`. Any other discount leaves the total as
   it is and is counted as the advance instead, so the CoD still comes out as the net price.
@@ -115,16 +145,35 @@ the record, because it lowers the sale and gets confused with real discounts.
   - A fully paid order has nothing outstanding and is only tagged.
   - Orders with no pending checkout sale, like #14204, are only tagged, both today and
     after this change.
-- **One-off migration script** for orders in progress that carry a discount-as-advance,
-  meaning orders not yet frozen: unfulfilled or fulfilled.
-  - Tag each one `Partial Advance: <discount>`.
-  - For **unfulfilled** orders, also remove the discount in Shopify. Their total is still
-    re-derived from `current_total_price`, which is net of the discount, so leaving it
-    there would subtract the advance twice.
-  - Fulfilled orders already have a frozen gross total, so they only need the tag.
-  - Their ledger entries were posted by hand through the Transaction Entry modal and are
-    left as they are.
-  - Run it once, when the new sync rule goes live.
+- **One-off migration script**, run once when the new sync rule goes live. Its targets
+  are orders whose advance can still re-sync (unfulfilled or fulfilled) and whose advance
+  comes from a discount, meaning `0 < advance_amount < total_amount`. Orders fully paid
+  at checkout need nothing, because `paid` still maps to `total`.
+  - **Fulfilled:** tag only, `Partial Advance: <advance_amount>`. Their total is already
+    frozen at the gross price, so the discount left in Shopify is never subtracted again.
+  - **Unfulfilled:** tag, and remove the discount **by hand** in Shopify admin; the
+    script flags each one. Their total is still re-derived from the discounted
+    `current_total_price`, so leaving the discount would subtract the advance twice. The
+    order-editing API (`orderEditBegin` → `orderEditRemoveDiscount` → `orderEditCommit`,
+    present on `2024-07`) was left unautomated because none existed and it is untested.
+  - **Scope: orders on or after `onboarding_date`.** Pre-onboarding orders (below about
+    #5000) are out of scope, and the script filters by the org's onboarding date, not by
+    an order-number cutoff.
+  - **Every in-scope candidate is converted**, whatever its ledger status. Ledger
+    mismatches are cleaned up separately, by hand.
+  - Ledger entries already posted through the Transaction Entry modal are left as they
+    are.
+  - **Snapshot on 2026-09-25:** 3 in-scope candidates, all fulfilled, so the
+    discount-removal branch would not run today.
+
+    | Order | Tag | Ledger (to fix later) |
+    |---|---|---|
+    | #13321 | `Partial Advance: 10000` | matches |
+    | #13963 | `Partial Advance: 4298` | no entry |
+    | #14066 | `Partial Advance: 4798` | 9,594 (looks posted twice) |
+
+    Run it again at release, since new orders may come in with discount-advances before
+    then.
 - **Tests.**
   - One sync test: `Partial Advance: 1500` survives a re-sync, a plain discount lowers the
     total, and neither counts as an advance.
@@ -133,14 +182,9 @@ the record, because it lowers the sale and gets confused with real discounts.
 
 ## Open questions
 
-1. **Editing a full advance down to a partial one.** `orderMarkAsPaid` can't be undone
-   through the API except as a refund of that manual payment. That would leave the order
-   `partially_refunded` in Shopify. The sync then reads the `Partial Advance` tag, so the
-   figures stay correct, but the order's payment status in Shopify reads oddly. Options:
-   - (a) Refund through the API when editing down (recommended; add it to the deferred
-     tests).
-   - (b) Block editing below the total once an order is fully paid.
-2. **Removing a discount in Shopify for the migration** needs the order-editing API
-   (`orderEditBegin` → remove discount → `orderEditCommit`). Removing a discount this way
-   has not been checked on our API version. If it isn't available, the fallback is to
-   remove those few discounts by hand in the admin before the script runs.
+None block implementation.
+
+1. **Deferred Shopify tests** to run before release: `orderMarkAsPaid` on an order with
+   no transactions, a tag round-trip, and `orderEditRemoveDiscount` on a discount applied
+   at checkout. The last only matters if an unfulfilled order has a discount-advance at
+   release.

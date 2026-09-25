@@ -3,7 +3,7 @@ Advance reconciliation status helpers.
 
 An order's advance can come from two places:
   - Shopify: stored on orders.advance_amount
-  - Transactions: order-advance credit entries posted to the Orders ledger, tagged with
+  - Transactions: order-advance credit entries posted to the Customer Advances ledger (system_key 'orders'), tagged with
     the order_number column on transaction_entries
 
 advance_status (stored on orders.advance_status) reconciles the two:
@@ -14,7 +14,7 @@ advance_status (stored on orders.advance_status) reconciles the two:
   5 = advance present in both but they do not match (differ by Rs. 5 or more)
 """
 from concurrent.futures import ThreadPoolExecutor
-from typing import Dict
+from typing import Dict, Optional
 
 from supabase import create_client
 
@@ -68,36 +68,38 @@ def compute_advance_status(shopify_advance: float, transaction_advance: float) -
     return ADV_MATCH if abs(shopify - transaction) < MATCH_TOLERANCE else ADV_MISMATCH
 
 
-def fetch_transaction_advance_totals(supabase, org_id: str) -> Dict[str, float]:
+def fetch_transaction_advance_totals(supabase, org_id: str, order_number: Optional[str] = None) -> Dict[str, float]:
     """
-    Sum order-advance transaction entries per order number.
+    Net order-advance transaction entries per order number, optionally for one order only.
 
-    Order-advance entries have the Orders ledger on their From side and carry an order_number.
-    Returns a map of order_number (str) -> total advance amount from transaction entries.
+    Order-advance entries carry an order_number and have the Customer Advances ledger on one side:
+    From when the advance was received, To when some of it was handed back (an advance
+    edited down - see routes/orders.set_order_advance).
+    Returns a map of order_number (str) -> net advance amount from transaction entries.
     """
     totals: Dict[str, float] = {}
     orders_ledger_id = get_orders_ledger_id(supabase, org_id)
     if not orders_ledger_id:
         return totals
 
-    rows = fetch_all(
-        lambda: org_table(supabase, org_id, "finances_transaction_entries")
-        .select("order_number, amount")
-        # An advance is money received FROM the Orders account into cash.
-        .eq("from_account_id", orders_ledger_id)
-        .not_.is_("order_number", "null")
-    )
-    for row in rows:
-        num = row.get("order_number")
-        if num is None:
-            continue
-        key = str(num).strip()
+    def query():
+        q = (
+            org_table(supabase, org_id, "finances_transaction_entries")
+            .select("order_number, amount, from_account_id")
+            .or_(f"from_account_id.eq.{orders_ledger_id},to_account_id.eq.{orders_ledger_id}")
+        )
+        return q.eq("order_number", order_number) if order_number else q.not_.is_("order_number", "null")
+
+    for row in fetch_all(query):
+        key = str(row.get("order_number") or "").strip()
         if not key:
             continue
         try:
-            totals[key] = totals.get(key, 0.0) + float(row.get("amount") or 0)
+            amount = float(row.get("amount") or 0)
         except (TypeError, ValueError):
             continue
+        received = row.get("from_account_id") == orders_ledger_id
+        totals[key] = totals.get(key, 0.0) + (amount if received else -amount)
     return totals
 
 

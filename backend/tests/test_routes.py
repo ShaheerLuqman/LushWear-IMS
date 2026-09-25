@@ -3,6 +3,8 @@
 Supabase is faked (see conftest), so these never touch the network or the real DB.
 """
 
+import pytest
+
 
 class TestHealthAndAuth:
     def test_health_is_open(self, make_client):
@@ -1628,3 +1630,88 @@ class TestResolveScan:
 
     def test_returns_null_when_nothing_matches(self, make_client):
         assert make_client({}).get("/api/orders/resolve-scan", params={"code": "#42"}).json() is None
+
+
+class TestSetOrderAdvance:
+    """PUT /orders/{id}/advance posts only the difference to the ledger, then mirrors the
+    advance to Shopify (tag for partial, Mark as paid for full). Shopify and the ledger
+    write are spied, not performed."""
+
+    ORDER = {"id": "o1", "order_number": 14204, "order_status": "unfulfilled", "courier": "Unassigned",
+             "tracking_number": None, "total_amount": 3000, "advance_amount": 0, "advance_status": 1}
+    BANK = {"id": "bank", "type": "Asset", "system_key": None}
+
+    @staticmethod
+    def _spy(monkeypatch, held=0.0, shopify_fails=False):
+        import app.routes.orders as orders
+
+        calls = []
+
+        async def _lookup(_order_number, _org_id):
+            return 555, object()
+
+        async def _create_entry(entry, org_id):
+            calls.append(("entry", entry.amount, entry.from_account_id, entry.to_account_id))
+
+        async def _tag(order_id, tag, *_a):
+            if shopify_fails:
+                raise RuntimeError("shopify down")
+            calls.append(("tag", tag))
+
+        async def _paid(order_id, *_a):
+            calls.append(("paid", order_id))
+
+        monkeypatch.setattr(orders, "_shopify_order_id_for", _lookup)
+        monkeypatch.setattr(orders, "get_orders_ledger_id", lambda *_a: "orders-ledger")
+        monkeypatch.setattr(orders, "fetch_transaction_advance_totals", lambda *_a: {"14204": held})
+        monkeypatch.setattr(orders, "create_transaction_entry", _create_entry)
+        monkeypatch.setattr(orders, "recompute_advance_statuses", lambda *_a: 0)
+        monkeypatch.setattr(orders.shopify, "set_advance_tag", _tag)
+        monkeypatch.setattr(orders.shopify, "mark_order_paid", _paid)
+        return calls
+
+    def _put(self, make_client, advance, order=None, ledger=None):
+        client = make_client({"shopify_orders": [order or self.ORDER], "finances_ledgers": [ledger or self.BANK]})
+        return client.put("/api/orders/o1/advance", json={"advance": advance, "ledger_id": "bank", "entry_date": "2026-09-26"})
+
+    def test_partial_advance_posts_the_receipt_and_tags_the_order(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch)
+        r = self._put(make_client, 1500)
+        assert r.status_code == 200
+        assert calls == [("entry", 1500, "orders-ledger", "bank"), ("tag", "Partial Advance: 1500")]
+
+    def test_full_advance_tags_advance_paid_and_marks_paid(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=1000)
+        r = self._put(make_client, 3000, order={**self.ORDER, "advance_amount": 1000})
+        assert r.status_code == 200
+        assert calls == [("entry", 2000, "orders-ledger", "bank"), ("tag", "Advance Paid"), ("paid", 555)]
+
+    def test_lowering_the_advance_posts_a_return(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=1500)
+        r = self._put(make_client, 500, order={**self.ORDER, "advance_amount": 1500})
+        assert r.status_code == 200
+        assert calls == [("entry", 1000, "bank", "orders-ledger"), ("tag", "Partial Advance: 500")]
+
+    def test_same_amount_posts_nothing_and_retries_shopify(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=1500)
+        assert self._put(make_client, 1500).status_code == 200
+        assert calls == [("tag", "Partial Advance: 1500")]
+
+    @pytest.mark.parametrize("advance, order, ledger", [
+        (1000, {**ORDER, "courier": "PostEx", "tracking_number": "PX1"}, None),
+        (1000, {**ORDER, "order_status": "fulfilled"}, None),
+        (1000, {**ORDER, "advance_amount": 3000}, None),
+        (3001, None, None),
+        (1000, None, {"id": "bank", "type": "Liability", "system_key": None}),
+        (1000, None, {"id": "bank", "type": "Asset", "system_key": "courier_postex"}),
+    ])
+    def test_refusals_write_nothing(self, make_client, monkeypatch, advance, order, ledger):
+        calls = self._spy(monkeypatch)
+        assert self._put(make_client, advance, order, ledger).status_code == 400
+        assert calls == []
+
+    def test_shopify_failure_keeps_the_entry_and_reports_it(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, shopify_fails=True)
+        r = self._put(make_client, 1500)
+        assert r.status_code == 502
+        assert calls == [("entry", 1500, "orders-ledger", "bank")]

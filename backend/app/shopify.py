@@ -541,6 +541,67 @@ async def add_order_tag(
         json={"order": {"id": shopify_order_id, "tags": ", ".join(tags + [tag])}})
 
 
+# A customer's partial advance is recorded as "Partial Advance: <amount>". Shopify only
+# accepts a partial payment amount through the API on Shopify Plus, so the tag is the
+# record the sync reads back (shopify_sync.partial_advance_from_tags). A full advance is
+# tagged ADVANCE_PAID_TAG alongside Shopify's own paid status.
+PARTIAL_ADVANCE_TAG = "Partial Advance"
+ADVANCE_PAID_TAG = "Advance Paid"
+
+
+def partial_advance_tag(amount: float) -> str:
+    return f"{PARTIAL_ADVANCE_TAG}: {amount:.2f}".removesuffix(".00")
+
+
+def is_partial_advance_tag(tag: str) -> bool:
+    return tag.strip().lower().startswith(f"{PARTIAL_ADVANCE_TAG.lower()}:")
+
+
+def is_advance_tag(tag: str) -> bool:
+    return is_partial_advance_tag(tag) or tag.strip().lower() == ADVANCE_PAID_TAG.lower()
+
+
+async def set_advance_tag(
+    shopify_order_id: int, tag: Optional[str], org_creds: OrgIntegrationSettings,
+    client: httpx.AsyncClient,
+) -> None:
+    """Replace the order's advance tag (Partial Advance or Advance Paid) with `tag`, or
+    drop it when `tag` is None - one per order, never a second alongside the old one."""
+    store_url, access_token = _credentials(org_creds)
+    headers = {"X-Shopify-Access-Token": access_token, "Content-Type": "application/json"}
+    base = f"https://{store_url}/admin/api/{org_creds.shopify_api_version}"
+
+    response = await _request_with_retry(
+        client, "GET", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        params={"fields": "id,tags"})
+    tags = [t.strip() for t in (response.json()["order"].get("tags") or "").split(",") if t.strip()]
+    new_tags = [t for t in tags if not is_advance_tag(t)]
+    if tag is not None:
+        new_tags.append(tag)
+    if new_tags == tags:
+        return
+
+    await _request_with_retry(
+        client, "PUT", f"{base}/orders/{shopify_order_id}.json", headers=headers,
+        json={"order": {"id": shopify_order_id, "tags": ", ".join(new_tags)}})
+
+
+_MARK_AS_PAID_MUTATION = """
+mutation($input: OrderMarkAsPaidInput!) {
+  orderMarkAsPaid(input: $input) { userErrors { field message } }
+}
+"""
+
+
+async def mark_order_paid(
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, client: Optional[httpx.AsyncClient] = None,
+) -> None:
+    """Shopify's own "Mark as paid" - records the whole outstanding balance as paid."""
+    data = await graphql(
+        _MARK_AS_PAID_MUTATION, {"input": {"id": f"gid://shopify/Order/{shopify_order_id}"}}, org_creds, client)
+    _check_user_errors("orderMarkAsPaid", data.get("orderMarkAsPaid"))
+
+
 async def cancel_fulfillments(
     shopify_order_id: int, org_creds: OrgIntegrationSettings, client: httpx.AsyncClient
 ) -> int:

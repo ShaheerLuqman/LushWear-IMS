@@ -76,10 +76,10 @@ class TestSystemLedgersCannotBeDeleted:
         assert "system account" in response.json()["detail"]
 
     def test_the_message_names_the_account(self, make_client):
-        client = make_client(tables={"finances_ledgers": [_ledger(ORDERS, "Orders", "orders")]})
+        client = make_client(tables={"finances_ledgers": [_ledger(ORDERS, "Customer Advances", "orders")]})
         detail = client.delete(f"/api/ledgers/{ORDERS}").json()["detail"]
 
-        assert "Orders" in detail
+        assert "Customer Advances" in detail
 
     def test_an_unused_ordinary_ledger_can_be_deleted(self, make_client):
         client = make_client(tables={"finances_ledgers": [_ledger(PLAIN, "Advances")], "finances_journal_lines": []})

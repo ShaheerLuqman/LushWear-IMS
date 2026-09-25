@@ -104,7 +104,7 @@ class TestRecomputeAdvanceStatuses:
              "order_receiving_date": "2026-07-18T13:23:08+00:00"},
         ])
         transaction_table = _FakeTable([
-            {"order_number": "100", "amount": 500.0},
+            {"order_number": "100", "amount": 500.0, "from_account_id": "orders-ledger-id"},
         ])
         supabase = _FakeSupabase({
             "shopify_orders": orders_table,

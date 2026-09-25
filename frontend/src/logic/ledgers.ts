@@ -35,7 +35,7 @@ export const LEDGER_VOUCHER_LABELS: Record<string, string> = {
 export const SYSTEM_LEDGER_LABELS: Record<string, string> = {
   cash: 'Cash',
   opening_balance_equity: 'Opening Balance Equity',
-  orders: 'Orders',
+  orders: 'Customer Advances',
   inventory: 'Inventory',
   tax_on_purchases: 'Tax on Purchases',
   other_expenses: 'Other Expenses',

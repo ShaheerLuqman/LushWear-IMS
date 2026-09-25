@@ -52,14 +52,6 @@ class SyncShopifyOrdersResult(BaseModel):
 # limits when scoping a query to a large set of order numbers.
 IN_QUERY_CHUNK_SIZE = 200
 
-# Discounts applied with these codes reduce the order total and are not treated as advance.
-PRICE_REDUCTION_DISCOUNT_CODES = {
-    "INFLUOFF",
-    "REPLACEMENT100OFF",
-    "GET10OFF",
-    "GET5OFF",
-}
-
 
 def _resolve_line_item_cost(
     name: str, product_id: Optional[str], costs_by_id: Dict[str, float], products_cost_map: Dict[str, float],
@@ -186,6 +178,19 @@ def has_settled_tag(tags_raw) -> bool:
     advance derivation below. `tags_raw` is Shopify's own comma-separated `tags` string."""
     tags_str = tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")
     return any(tag.strip().lower() == shopify.SETTLED_TAG.lower() for tag in tags_str.split(","))
+
+
+def partial_advance_from_tags(tags_raw) -> Optional[float]:
+    """The amount on the order's "Partial Advance: <amount>" tag (shopify.set_advance_tag),
+    or None when it has none. `tags_raw` is Shopify's own comma-separated `tags` string."""
+    tags_str = tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")
+    tag = next((t for t in tags_str.split(",") if shopify.is_partial_advance_tag(t)), None)
+    if tag is None:
+        return None
+    try:
+        return float(tag.split(":", 1)[1])
+    except ValueError:
+        return None
 
 
 def _delivery_charge_from_other_tags(courier: Optional[str], tags_raw) -> Optional[float]:
@@ -725,6 +730,56 @@ class OrderReconciliation:
     replacement_of: Optional[int] = None
 
 
+def derive_total_and_advance(sp_order: dict, order_status: str) -> Tuple[float, float]:
+    """(total_amount, advance_amount) for one Shopify order - shared by the sync and
+    /orders/sync-shopify-force so the two never read an order differently.
+
+    Every discount lowers the total; none counts as an advance. The advance is the whole
+    total under the "Advance Paid" tag, else the "Partial Advance" tag's amount, else the
+    whole total when the customer paid up front, else nothing."""
+    total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
+    # Used only for the total; tax is never stored from Shopify.
+    shopify_tax = extract_tax_amount(sp_order) or 0.0
+    current_total = sp_order.get("current_total_price")
+    total_price_val = sp_order.get("total_price")
+    fulfillment_based_total = _order_total_from_fulfillments(sp_order)
+    # Shopify's current_total_price/total_price are already net of discounts; the
+    # fulfillment and line-item sums are not.
+    if fulfillment_based_total is not None:
+        total_amount = max(0.0, fulfillment_based_total + shopify_tax - total_discounts)
+    elif current_total is not None and str(current_total).strip() != "":
+        total_amount = float(current_total)
+    elif total_price_val is not None and str(total_price_val).strip() != "":
+        # Shipping is never part of total_amount; delivery_charge is set in-app.
+        shipping_money = (sp_order.get("total_shipping_price_set") or {}).get("shop_money") or {}
+        shipping_price = float(shipping_money.get("amount") or sp_order.get("total_shipping_price") or 0)
+        total_amount = float(total_price_val) - shipping_price
+    else:
+        line_items_price = subtotal_line_items_excluding_removed(sp_order)
+        if line_items_price is None:
+            line_items_price = float(sp_order.get("total_line_items_price") or 0)
+        total_amount = max(0.0, line_items_price + shopify_tax - total_discounts)
+
+    # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
+    # cancelled order - mirror that instead of carrying forward a stale amount.
+    if order_status == "cancelled":
+        return 0.0, 0.0
+
+    tags_raw = sp_order.get("tags")
+    if any(t.strip().lower() == shopify.ADVANCE_PAID_TAG.lower() for t in str(tags_raw or "").split(",")):
+        return total_amount, total_amount
+    partial_advance = partial_advance_from_tags(tags_raw)
+    if partial_advance is not None:
+        return total_amount, partial_advance
+    # A courier payout is marked paid in Shopify too (see shopify.mark_order_settled),
+    # so "paid" alone can't mean the customer paid up front - only an untagged one can.
+    paid_in_advance = (
+        (sp_order.get("financial_status") or "").strip().lower() == "paid"
+        and not has_settled_tag(sp_order.get("tags"))
+    )
+    return total_amount, total_amount if paid_in_advance else 0.0
+
+
 def _reconcile_one_order(
     sp_order: dict,
     existing_orders_map: Dict[int, dict],
@@ -752,79 +807,7 @@ def _reconcile_one_order(
     courier = extract_courier(sp_order)
     tracking_number = extract_tracking_number(sp_order)
     order_status = extract_order_status(sp_order)
-
-    # Calculate total amount: use only non-removed line items (exclude quantity 0 / removed products)
-    total_line_items_price = subtotal_line_items_excluding_removed(sp_order)
-    if total_line_items_price is None:
-        total_line_items_price = float(sp_order.get("total_line_items_price") or 0)
-    shopify_tax = extract_tax_amount(sp_order) or 0.0  # Used only for total_amount calc; we never store tax from Shopify
-
-    # Shopify shipping: we never store it as total_amount; delivery_charge is set in-app. If delivery was removed manually in Shopify, subtract it so total_amount excludes it.
-    shipping_price = 0.0
-    if "total_shipping_price_set" in sp_order and sp_order["total_shipping_price_set"]:
-        shop_money = sp_order["total_shipping_price_set"].get("shop_money", {})
-        if shop_money:
-            shipping_price = float(shop_money.get("amount", "0.00"))
-    elif "total_shipping_price" in sp_order:
-        shipping_price = float(sp_order.get("total_shipping_price") or 0)
-
-    # Treat only configured discount codes as true price reductions.
-    discount_codes = sp_order.get("discount_codes") or []
-    normalized_discount_codes = {
-        str(code_obj.get("code") or "").strip().upper()
-        for code_obj in discount_codes
-        if isinstance(code_obj, dict)
-    }
-    has_price_reduction_discount_code = any(
-        code in PRICE_REDUCTION_DISCOUNT_CODES
-        for code in normalized_discount_codes
-    )
-    total_discounts = float(sp_order.get("current_total_discounts") or sp_order.get("total_discounts") or 0)
-
-    # Total amount:
-    # Prefer fulfillment-derived merchandise + shipping for all orders.
-    # If unavailable, fall back to Shopify totals.
-    financial_status_peek = (sp_order.get("financial_status") or "").strip().lower()
-    current_total = sp_order.get("current_total_price")
-    total_price_val = sp_order.get("total_price")
-    fulfillment_based_total = _order_total_from_fulfillments(sp_order)
-    # Shopify's current_total_price/total_price are already net of discounts; the
-    # fulfillment and line-item sums are not.
-    discount_applied = False
-    if fulfillment_based_total is not None:
-        total_amount = fulfillment_based_total + shopify_tax
-    elif current_total is not None and str(current_total).strip() != "":
-        total_amount = float(current_total)
-        discount_applied = True
-    elif total_price_val is not None and str(total_price_val).strip() != "":
-        total_amount = float(total_price_val) - shipping_price
-        discount_applied = True
-    else:
-        total_amount = total_line_items_price + shopify_tax
-
-    # A courier payout is marked paid in Shopify too (see shopify.mark_order_settled),
-    # so "paid" alone can't mean the customer paid up front - only an untagged one can.
-    settled_payout = has_settled_tag(sp_order.get("tags"))
-    financial_status = financial_status_peek
-    paid_in_advance = financial_status == "paid" and not settled_payout
-
-    if has_price_reduction_discount_code:
-        # Code-based discounts reduce selling price instead of being treated as advance.
-        if not discount_applied:
-            total_amount = max(0.0, total_amount - total_discounts)
-        advance_amount = total_amount if paid_in_advance else 0.0
-    elif paid_in_advance:
-        advance_amount = total_amount
-    else:
-        # Includes a settled payout: that money came from the courier, so whatever
-        # advance the customer paid is still only what the discount field records.
-        advance_amount = total_discounts
-
-    # Shopify zeroes current_total_price (and moves financial_status to "voided") on a
-    # cancelled order - mirror that instead of carrying forward a stale amount.
-    if order_status == "cancelled":
-        total_amount = 0.0
-        advance_amount = 0.0
+    total_amount, advance_amount = derive_total_and_advance(sp_order, order_status)
 
     # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
     delivery_charge = 0.0
@@ -987,7 +970,7 @@ def _reconcile_one_order(
         order_data["order_status"] = shopify_order_status
     else:
         order_data["order_status"] = existing_order.get("order_status")
-    # Advance is always from Shopify: paid = total_amount, not paid = total_discounts
+    # Advance is always from Shopify (see derive_total_and_advance)
     order_data["advance_amount"] = advance_amount
     # Preserve tax_amount (never from Shopify; set manually or via CSV)
     order_data["tax_amount"] = existing_order.get("tax_amount", 0)

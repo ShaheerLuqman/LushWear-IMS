@@ -124,7 +124,7 @@ export function OrderDetailsModal({ order, ctx, onClose }: { order: Order; ctx: 
               <Section title="Payment">
                 <KeyValueList rows={[
                   { label: 'Total', value: render('total_amount', readOnlyCtx), kind: 'subtotal' },
-                  { label: 'Advance', value: field('advance_amount', 'advance') },
+                  { label: 'Advance', value: render('advance_amount', readOnlyCtx) },
                   { label: 'CoD', value: money(cod(o)) },
                   { label: 'Delivery charge', value: field('delivery_charge', 'delivery charge') },
                   { label: 'Tax', value: field('tax_amount', 'tax') },

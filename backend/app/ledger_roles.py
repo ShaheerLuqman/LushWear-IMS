@@ -19,7 +19,7 @@ from app.org_scope import org_table
 SYSTEM_LEDGER_LABELS = {
     "cash": "Cash",
     "opening_balance_equity": "Opening Balance Equity",
-    "orders": "Orders",
+    "orders": "Customer Advances",
     "inventory": "Inventory",
     "cost_of_goods_sold": "COGS",
     "sales_revenue": "Sales Revenue",

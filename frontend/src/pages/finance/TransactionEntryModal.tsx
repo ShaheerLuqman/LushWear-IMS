@@ -5,11 +5,8 @@ import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { cashSideLabel, selectableLedgers, type Ledger, type LedgerBalancePatch } from '../../logic/ledgers';
-import {
-  bulkEntryValidationHtml, defaultTransactionParticulars, getOrdersLedgerId, orderAdvanceParticularPlaceholder,
-  parseBulkEntryText,
-} from '../../logic/transactionsBulkEntry';
-import { Banner, BlockStack, Checkbox, Collapsible, FormLayout, List, Text, TextField } from '@shopify/polaris';
+import { bulkEntryValidationHtml, defaultTransactionParticulars, parseBulkEntryText } from '../../logic/transactionsBulkEntry';
+import { Banner, BlockStack, Collapsible, FormLayout, List, Text, TextField } from '@shopify/polaris';
 import { Dropdown } from '../../components/Dropdown';
 import { FormModal } from '../../components/FormModal';
 import { CreateLedgerModal } from './LedgerModals';
@@ -45,8 +42,6 @@ export function TransactionEntryModal({
   const { isEditingAllowed } = useAuth();
   const { showToast } = useToast();
   const [mode, setMode] = useState(initialMode);
-  const [isAdvance, setIsAdvance] = useState(false);
-  const [orderNumber, setOrderNumber] = useState('');
   const [fromId, setFromId] = useState('');
   const [toId, setToId] = useState('');
   const [amount, setAmount] = useState('');
@@ -66,9 +61,7 @@ export function TransactionEntryModal({
 
   function ledgerName(id: string) { return ledgers.find((l) => l.id === id)?.name || ''; }
 
-  const particularPlaceholder = isAdvance
-    ? orderAdvanceParticularPlaceholder(orderNumber)
-    : defaultTransactionParticulars(ledgerName(fromId), ledgerName(toId)) || 'Amount received from...';
+  const particularPlaceholder = defaultTransactionParticulars(ledgerName(fromId), ledgerName(toId)) || 'Amount received from...';
 
   const bulkParsed = useMemo(() => parseBulkEntryText(ledgers, bulkText), [ledgers, bulkText]);
 
@@ -81,28 +74,20 @@ export function TransactionEntryModal({
 
   async function submitSingle() {
     if (!isEditingAllowed()) { showToast('Editing is locked', 'error', { silent: true }); return; }
-    if (isAdvance && !getOrdersLedgerId(ledgers)) {
-      showToast('No Orders ledger is set. Assign the Orders role in Edit Ledger.', 'error', { silent: true });
-      return;
-    }
-    const trimmedOrderNumber = isAdvance ? orderNumber.trim().replace(/^#/, '') : '';
-    if (isAdvance && !trimmedOrderNumber) { showToast('Enter an order number', 'error', { silent: true }); return; }
-
-    const from = (isAdvance ? getOrdersLedgerId(ledgers) : fromId) || null;
+    const from = fromId || null;
     const to = toId || null;
     const amountNum = parseFloat(amount);
     if (Number.isNaN(amountNum) || amountNum <= 0) { showToast('Enter a valid amount', 'error', { silent: true }); return; }
     if (!from && !to) { showToast(`Both sides are ${cashSideLabel(ledgers)} — name an account on one side`, 'error', { silent: true }); return; }
     if (from && from === to) { showToast('From and To must be different accounts', 'error', { silent: true }); return; }
 
-    const payload: Record<string, unknown> = {
+    const payload = {
       entry_date: entryDate,
       amount: amountNum,
       description: particular.trim() || particularPlaceholder,
       from_account_id: from,
       to_account_id: to,
     };
-    if (isAdvance) payload.order_number = trimmedOrderNumber;
 
     setSaving(true);
     try {
@@ -164,11 +149,9 @@ export function TransactionEntryModal({
           <div className="entry-mode-body">
           {mode === 'single' ? (
             <FormLayout>
-              <Checkbox label="Order Advance Amount" checked={isAdvance} onChange={setIsAdvance} />
-              {isAdvance && <TextField label="Order number" autoComplete="off" placeholder="e.g. 1234" requiredIndicator value={orderNumber} onChange={setOrderNumber} />}
               <TextField label="Amount" type="number" autoComplete="off" min={0.01} step={0.01} placeholder="0.00" requiredIndicator value={amount} onChange={setAmount} />
               <FormLayout.Group>
-                {!isAdvance && <LedgerSelect label="From Account (Credit)" value={fromId} onChange={setFromId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('from')} />}
+                <LedgerSelect label="From Account (Credit)" value={fromId} onChange={setFromId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('from')} />
                 <LedgerSelect label="To Account (Debit)" value={toId} onChange={setToId} ledgers={ledgers} onCreateLedger={() => setCreatingFor('to')} />
               </FormLayout.Group>
               <Text as="p" tone="subdued">An empty side is Cash. Name both and the money moves without touching cash.</Text>
@@ -192,7 +175,6 @@ export function TransactionEntryModal({
                       <List.Item><code>2064 from Meezan Bank to Fabric Supplier</code> — bank pays the supplier; cash is not touched</List.Item>
                     </List>
                     <Text as="p">Particulars are optional — omit them and a default description is generated.</Text>
-                    <Text as="p">Order advance shorthand — use <code>Order#</code> in place of a ledger name to post straight to the Orders ledger: <code>3500 from Order# 11473</code></Text>
                   </BlockStack>
                 </Banner>
               </Collapsible>
