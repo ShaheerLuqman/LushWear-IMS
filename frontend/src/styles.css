@@ -217,6 +217,14 @@ body {
     }
 }
 
+/* The mobile drawer forces every group open via `selected` (see AppShell.tsx), which would
+   paint every parent as the current page - keep the highlight only on the actual one. */
+@media (max-width: 47.9975em) {
+    .sidebar-nav-scroll .Polaris-Navigation__ItemInnerWrapper--selected:not(:has([aria-current="page"])) {
+        background-color: transparent;
+    }
+}
+
 /* Settings sits in its own Section pinned below the main list (Shopify-admin style) -
    .Polaris-Navigation is itself flex-direction:column, so .sidebar-nav-scroll taking flex:1
    pushes .sidebar-nav-settings to the bottom instead of it trailing right after the list. */
@@ -525,9 +533,21 @@ body {
     to { opacity: 1; transform: translateY(0); }
 }
 
+/* Polaris bumps inputs to 16px below 48em (iOS Safari zooms into focused inputs smaller than
+   that), leaving them bigger than every other control on phones. Keep its desktop size; the
+   zoom is stopped instead in index.html. */
+.Polaris-TextField__Input {
+    font-size: var(--p-font-size-325);
+    line-height: var(--p-font-line-height-500);
+}
+
 .header-search {
     flex: 0 10 480px;
     min-width: 160px;
+}
+
+.header-search-toggle {
+    display: none;
 }
 /* Polaris draws inputs with a solid (darker-topped) border but buttons with an inset
    shadow - sitting between the header's buttons/dropdowns that made the search box look
@@ -1208,6 +1228,9 @@ body.orders-table-fullscreen #ordersView .table-card {
     flex-direction: column;
     gap: 8px;
     margin: 8px 0 4px;
+    /* The line grid below needs ~720px; on narrower modals (phones) the header and lines
+       scroll sideways together rather than spilling out of the dialog. */
+    overflow-x: auto;
 }
 
 /* The header is one flat row of labels: Image, Item name, the mode toggle,
@@ -1472,12 +1495,13 @@ body.orders-table-fullscreen #ordersView .table-card {
 .pa-trend-axis { display: flex; justify-content: space-between; font-size: 11px; color: var(--text-muted); }
 
 /* donut */
-.pa-donut-wrap { display: flex; align-items: center; gap: 16px; }
+/* The legend drops under the donut once it can't get ~200px beside it (phones, narrow cards). */
+.pa-donut-wrap { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 16px; }
 .pa-donut { width: 110px; height: 110px; flex-shrink: 0; }
 .pa-donut-total { text-anchor: middle; fill: var(--text-primary); font-size: 17px; font-weight: 700; font-family: var(--font-mono); }
 .pa-donut-label { text-anchor: middle; fill: var(--text-muted); font-size: 8px; }
 
-.pa-legend-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1; }
+.pa-legend-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; min-width: 0; flex: 1 1 200px; }
 .pa-legend-list li { display: flex; align-items: center; gap: 8px; font-size: 12px; min-width: 0; }
 .pa-legend-name { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .pa-legend-val { color: var(--text-muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
@@ -1696,11 +1720,16 @@ body.orders-table-fullscreen #ordersView .table-card {
 /* Courier and Delivery hold free text of unpredictable length; cap them so a long
    value is clipped to its column instead of widening it or wrapping the row taller.
    The full value stays available via the cell's title attribute. */
-.Polaris-IndexTable__TableCell.orders-cell-capped {
+.Polaris-IndexTable__TableCell.orders-cell-capped,
+.cell-capped {
     max-width: 180px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.cell-capped {
+    display: block;
 }
 
 /* Superadmin Portal (admin.html) - standalone page, reuses settings styles. */
@@ -1895,7 +1924,10 @@ body.admin-portal-page {
         padding-right: max(12px, env(safe-area-inset-right));
     }
 
+    /* Menu, title and the notification bell share the first row; search and then the
+       toolbar each drop to their own full-width row below. */
     .header-title {
+        flex: 1;
         min-width: 0;
     }
 
@@ -1903,13 +1935,32 @@ body.admin-portal-page {
         font-size: 16px;
     }
 
-    /* Toolbar drops to its own full-width row under the title. */
+    /* Search collapses to an icon button beside the bell; tapping it (or an active query)
+       brings the full-width row back. */
+    .header-search {
+        order: 2;
+        flex-basis: 100%;
+    }
+
+    .header-search:not(.header-search--open) {
+        display: none;
+    }
+
+    .header-search-toggle {
+        display: inline-flex;
+    }
+
+    .header-orders-app-actions {
+        display: none;
+    }
+
+    /* Toolbar drops to its own full-width row under the title and wraps, so a trailing
+       primary action is never scrolled out of sight. */
     .header-actions {
         order: 3;
         flex-basis: 100%;
+        flex-wrap: wrap;
         justify-content: flex-start;
-        overflow-x: auto;
-        padding-bottom: 2px;
     }
 
     
@@ -1959,6 +2010,9 @@ body.admin-portal-page {
    ===================================================================== */
 
 .metrics-strip {
+    /* Containing block for Polaris's absolutely-positioned visually-hidden text (e.g. inside
+       a trend Badge) - without it that text escapes this scroller and widens the document. */
+    position: relative;
     display: flex;
     flex-shrink: 0;
     overflow-x: auto;
@@ -2331,6 +2385,7 @@ body.admin-portal-page {
 .Polaris-Button--variantPrimary .Polaris-Text--root,
 .Polaris-Button--variantPrimary .Polaris-Button__Icon,
 .Polaris-Frame-Toast :is(.Polaris-InlineStack, .Polaris-Text--root, .Polaris-Icon),
+.Polaris-ActionList--destructive *,
 .Polaris-DatePicker__Day--selected .Polaris-Text--root,
 .Polaris-DatePicker__Day:hover .Polaris-Text--root {
     color: inherit;
@@ -2351,15 +2406,72 @@ body.orders-table-fullscreen .table-card {
     border-radius: 0;
 }
 
-@media (max-width: 720px) {
+/* Phone widths: the IndexTable switches to condensed cards (useBreakpoints().mdDown, i.e.
+   below Polaris' 48em md breakpoint). Those render as a plain <ul> outside the scroll
+   container the desktop table relies on, so the page itself scrolls instead of the card. */
+/* The order popup reuses the table's borderless inline-edit cells as its pencil-button
+   editors; give them Polaris' regular input chrome so an open editor reads as a field. */
+.order-details .Polaris-TextField--borderless .Polaris-TextField__Backdrop {
+    background-color: var(--p-color-input-bg-surface);
+    border: var(--p-border-width-0165) solid var(--p-color-input-border);
+    border-top-color: #898f94;
+}
+
+.orders-mobile-row {
+    width: 100%;
+    min-width: 0;
+    padding: 12px 16px;
+}
+
+.orders-mobile-row--cancelled {
+    opacity: 0.55;
+}
+
+@media (max-width: 47.9975em) {
     #ordersView.active {
-        padding: 10px;
-        gap: 8px;
+        height: auto;
+        overflow: visible;
     }
 
-    .metric {
-        min-width: 128px;
+    #ordersView .table-card {
+        flex: none;
+    }
+
+    .table-card .Polaris-IndexTable__CondensedList .Polaris-IndexTable__TableRow {
+        height: auto;
+        cursor: pointer;
+    }
+}
+
+/* Phones: tiles in a 2-up grid instead of a sideways-scrolling strip that cuts them off;
+   an odd last tile spans the full row. */
+@media (max-width: 820px) {
+    .metrics-strip {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        overflow: hidden;
+    }
+
+    .metrics-strip .metric {
+        min-width: 0;
         padding: 10px 14px;
+        border-right: 1px solid var(--border-color);
+        border-bottom: 1px solid var(--border-color);
+        overflow-wrap: anywhere;
+    }
+
+    .metrics-strip .metric:nth-child(2n),
+    .metrics-strip .metric:last-child:nth-child(odd) {
+        border-right: 0;
+    }
+
+    .metrics-strip .metric:last-child:nth-child(odd) {
+        grid-column: 1 / -1;
+    }
+
+    .metrics-strip .metric:last-child,
+    .metrics-strip .metric:nth-last-child(2):nth-child(odd) {
+        border-bottom: 0;
     }
 }
 

@@ -1,7 +1,7 @@
 import { StrictMode } from 'react';
 import type { ComponentProps } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Link } from 'react-router-dom';
+import { NavLink } from 'react-router-dom';
 import '@fortawesome/fontawesome-free/css/all.min.css';
 import '@shopify/polaris/build/esm/styles.css';
 import { AppProvider } from '@shopify/polaris';
@@ -17,8 +17,9 @@ import { InstallAppBanner } from './InstallAppBanner';
 type PolarisLinkProps = ComponentProps<NonNullable<AppProviderProps['linkComponent']>>;
 
 // Routes Polaris's own url-based nav (Navigation.Item, via Frame) through the router instead of a full reload.
+// NavLink for its aria-current="page", which the mobile drawer's highlight keys off (see styles.css).
 function PolarisLink({ url, ...rest }: PolarisLinkProps) {
-  return <Link to={url} {...rest} />;
+  return <NavLink to={url} {...rest} />;
 }
 
 createRoot(document.getElementById('root')!).render(

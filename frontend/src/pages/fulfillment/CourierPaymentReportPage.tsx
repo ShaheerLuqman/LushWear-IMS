@@ -5,7 +5,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Badge, BlockStack, Button, Card, InlineGrid, InlineStack, ProgressBar, Text } from '@shopify/polaris';
 import { InfoModal } from '../../components/FormModal';
 import { ReportTable } from '../../components/ReportTable';
-import { ArrowLeftIcon, ExportIcon, ViewIcon } from '@shopify/polaris-icons';
+import { ExportIcon, ViewIcon } from '@shopify/polaris-icons';
+import { useNavigate, useParams } from 'react-router-dom';
 import { KeyValueList } from '../../components/KeyValueList';
 import { StatCardGrid } from '../../components/StatCardGrid';
 import { apiJson, apiRequest } from '../../api';
@@ -74,19 +75,23 @@ function SettledOrdersCell({ bill }: { bill: CourierBill }) {
   );
 }
 
-function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void }) {
+// `initial` is the list row when opened from the table; a deep link / reload has none and
+// renders once the detail fetch (needed for the orders anyway) returns the bill.
+function BillDetail({ id, initial }: { id: string; initial?: CourierBill }) {
   const { showToast } = useToast();
-  const [orders, setOrders] = useState(bill.orders);
+  const [bill, setBill] = useState(initial);
+  const [orders, setOrders] = useState<any[] | null>(null);
   const [customerNames, setCustomerNames] = useState<Map<number, string>>(new Map());
   const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      if (orders) return;
       try {
-        const detail = await apiJson<{ orders: any[] }>(`/courier-bills/${bill.id}`, { fallback: 'Failed to load bill orders' });
-        if (!cancelled) setOrders(detail.orders);
+        const detail = await apiJson<{ orders: any[] }>(`/courier-bills/${id}`, { fallback: 'Failed to load bill orders' });
+        if (cancelled) return;
+        setBill(mapCourierBillRow(detail));
+        setOrders(detail.orders);
       } catch (error) {
         console.error('Error loading bill orders:', error);
         showToast('Failed to load bill orders', 'error');
@@ -94,7 +99,7 @@ function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void })
     })();
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [bill.id]);
+  }, [id]);
 
   useEffect(() => {
     if (!orders || orders.length === 0) return;
@@ -111,7 +116,9 @@ function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void })
     return () => { cancelled = true; };
   }, [orders]);
 
-  async function downloadPdf() {
+  if (!bill) return null;
+
+  const downloadPdf = async () => {
     setDownloading(true);
     try {
       const query = new URLSearchParams({ pickup_date: bill.pickupDateKey, courier: bill.courier });
@@ -131,7 +138,7 @@ function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void })
     } finally {
       setDownloading(false);
     }
-  }
+  };
 
   const meta = BILL_STATUS_META[bill.status] || BILL_STATUS_META.unpaid;
   const stats = paymentProgressStats(bill);
@@ -148,13 +155,10 @@ function BillDetail({ bill, onBack }: { bill: CourierBill; onBack: () => void })
     <div className="bill-detail-scroll">
       <BlockStack gap="400">
         <InlineStack align="space-between" blockAlign="center">
-          <InlineStack gap="300" blockAlign="center">
-            <Button icon={ArrowLeftIcon} onClick={onBack}>Back</Button>
-            <BlockStack gap="050">
-              <InlineStack gap="200" blockAlign="center"><Text as="h2" variant="headingMd">Bill Details</Text><Badge tone={meta.tone}>{meta.label}</Badge></InlineStack>
-              <Text as="span" tone="subdued">{billPickupDateLabel(bill)} · {billCourierLabel(bill)} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</Text>
-            </BlockStack>
-          </InlineStack>
+          <BlockStack gap="050">
+            <InlineStack gap="200" blockAlign="center"><Text as="h2" variant="headingMd">Bill Details</Text><Badge tone={meta.tone}>{meta.label}</Badge></InlineStack>
+            <Text as="span" tone="subdued">{billPickupDateLabel(bill)} · {billCourierLabel(bill)} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</Text>
+          </BlockStack>
           <Button icon={ExportIcon} loading={downloading} onClick={downloadPdf}>Download Summary (PDF)</Button>
         </InlineStack>
 
@@ -250,7 +254,8 @@ export function CourierPaymentReportPage() {
   const [statusFilter, setStatusFilter] = useState<string[] | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(defaultRange());
   const [search, setSearch] = useState('');
-  const [detailBill, setDetailBill] = useState<CourierBill | null>(null);
+  const { id: detailId } = useParams();
+  const navigate = useNavigate();
   const [fetchingSettlements, setFetchingSettlements] = useState(false);
   const [settlementsResult, setSettlementsResult] = useState<PostExSettlementsResult | null>(null);
   const [loading, setLoading] = useState(true);
@@ -343,12 +348,12 @@ export function CourierPaymentReportPage() {
     { key: 'remainingAmount', heading: 'Remaining', alignment: 'end', render: (b) => formatMoney(b.remainingAmount), sortValue: (b) => b.remainingAmount },
     { key: 'settled', heading: 'Settled Orders', render: (b) => <SettledOrdersCell bill={b} />, sortValue: (b) => (b.totalOrders ? b.settledCount / b.totalOrders : 0) },
     { key: 'status', heading: 'Status', render: (b) => { const meta = BILL_STATUS_META[b.status] || BILL_STATUS_META.unpaid; return <Badge tone={meta.tone}>{meta.label}</Badge>; }, sortValue: (b) => b.status },
-    { key: 'actions', heading: '', alignment: 'end', render: (b) => <Button icon={ViewIcon} size="slim" onClick={() => setDetailBill(b)}>View Details</Button> },
+    { key: 'actions', heading: '', alignment: 'end', render: (b) => <Button icon={ViewIcon} size="slim" onClick={() => navigate(`/courier-payment-report/${b.id}`)}>View Details</Button> },
   ];
 
   usePageHeader({
     title: 'Courier Payment Report',
-    actions: detailBill ? undefined : (
+    actions: detailId ? undefined : (
       <>
         <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by pickup date range" />
         <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
@@ -357,10 +362,10 @@ export function CourierPaymentReportPage() {
         <HeaderButton loading={fetchingSettlements} onClick={fetchPostExSettlements}>Fetch Settlements</HeaderButton>
       </>
     ),
-    search: detailBill ? undefined : { value: search, onChange: setSearch, placeholder: 'Search courier, date, bill value, status or order #...' },
+    search: detailId ? undefined : { value: search, onChange: setSearch, placeholder: 'Search courier, date, bill value, status or order #...' },
   });
 
-  if (detailBill) return <BillDetail bill={detailBill} onBack={() => setDetailBill(null)} />;
+  if (detailId) return <BillDetail key={detailId} id={detailId} initial={bills.find((b) => b.id === detailId)} />;
 
   return (
     <>

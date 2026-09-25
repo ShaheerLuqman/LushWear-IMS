@@ -63,7 +63,7 @@ export function CourierPerformancePage() {
 
   const pct = (n: number) => (totals.orders ? `${(n / totals.orders * 100).toFixed(1)}%` : '0%');
   const columns: DataColumn<PerfRow>[] = [
-    { key: 'city', heading: 'City', render: (r) => r.city, sortValue: (r) => r.city },
+    { key: 'city', heading: 'City', render: (r) => <span className="cell-capped" title={r.city}>{r.city}</span>, sortValue: (r) => r.city },
     { key: 'courier', heading: 'Courier', render: (r) => r.courier, sortValue: (r) => r.courier },
     { key: 'orders', heading: 'Orders', alignment: 'end', render: (r) => r.orders.toLocaleString(), sortValue: (r) => r.orders },
     { key: 'delivered', heading: 'Delivered', alignment: 'end', render: (r) => r.delivered.toLocaleString(), sortValue: (r) => r.delivered },

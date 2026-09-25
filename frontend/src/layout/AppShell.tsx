@@ -3,10 +3,11 @@
 // from Polaris's Navigation (matched against useLocation()) inside a Polaris
 // Frame app shell, per-view header content from PageHeaderContext (see
 // usePageHeader in each page component) instead of ~15 imperative show/hide calls.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
-import { Button, Frame, Icon, Navigation } from '@shopify/polaris';
-import { ArrowLeftIcon } from '@shopify/polaris-icons';
+import { Button, Frame, Icon, Navigation, useBreakpoints } from '@shopify/polaris';
+import { ArrowLeftIcon, SearchIcon } from '@shopify/polaris-icons';
 import { Menu } from 'lucide-react';
 import { useAuth } from '../auth/AuthContext';
 import { NotificationBell } from '../toast/NotificationBell';
@@ -19,18 +20,22 @@ import { SearchField } from '../components/SearchField';
 
 const MOBILE_BREAKPOINT = 820;
 
-function toNavItem(group: NavGroup, onNavigate: () => void, hover?: HoverState) {
+function toNavItem(group: NavGroup, onNavigate: () => void, hover?: HoverState, openInDrawer?: (to: string) => void) {
+  const drawerGroup = !!openInDrawer && !!group.children;
   return {
     url: group.to,
     label: group.label,
     icon: group.icon,
-    onClick: onNavigate,
+    // In the mobile drawer Polaris cancels a tap on a parent with children (expand/collapse
+    // only) but still calls onClick afterwards, so that's where the parent navigates itself.
+    onClick: drawerGroup ? () => openInDrawer!(group.to) : onNavigate,
     // Polaris only renders a group's sub-items while it's selected (Section overwrites the
     // `expanded` prop with its own state), so forcing `selected` on a hovered group is the
     // only way to open a nest without first navigating to its parent. `undefined` keeps
     // Polaris's own URL matching for the rest. Groups stay open until the pointer leaves the
     // whole rail - closing on item mouse-leave shifted the list under the cursor mid-move.
-    selected: hover?.opened.includes(group.label) ? true : undefined,
+    // The drawer keeps every group open the same way (its highlight follows aria-current instead).
+    selected: drawerGroup || hover?.opened.includes(group.label) ? true : undefined,
     onMouseEnter: hover?.open,
     // SubNavigationItem's type omits `icon`, but Polaris spreads every sub-item prop into
     // the same Item component, so it renders the icon just like a top-level entry.
@@ -45,6 +50,9 @@ type HoverState = { opened: string[]; open: (label: string) => void };
 function Sidebar({ onNavigate }: { onNavigate: () => void }) {
   const { hasFeature } = useAuth();
   const location = useLocation();
+  const navigate = useNavigate();
+  const { mdDown } = useBreakpoints();
+  const openInDrawer = mdDown ? (to: string) => { navigate(to); onNavigate(); } : undefined;
   const [opened, setOpened] = useState<string[]>([]);
   const hover: HoverState = {
     opened,
@@ -68,7 +76,7 @@ function Sidebar({ onNavigate }: { onNavigate: () => void }) {
           <Navigation.Section
             items={NAV_SECTIONS.filter((section) => hasFeature(section.feature))
               .flatMap((section) => section.groups)
-              .map((group) => toNavItem(group, onNavigate, hover))}
+              .map((group) => toNavItem(group, onNavigate, openInDrawer ? undefined : hover, openInDrawer))}
           />
         </div>
         <div className="sidebar-nav-settings">
@@ -87,6 +95,17 @@ function Header({ onToggleMobileNav }: { onToggleMobileNav: () => void }) {
   const location = useLocation();
   const navigate = useNavigate();
   const nav = getNavEntryForPath(location.pathname);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
+  useEffect(() => setSearchOpen(false), [location.pathname]);
+
+  // Focus inside the tap itself (flushSync un-hides the row first) - iOS only raises the
+  // keyboard for a focus() made synchronously within the user gesture.
+  function toggleSearch() {
+    flushSync(() => setSearchOpen((v) => !v));
+    searchRef.current?.querySelector('input')?.focus();
+  }
+
   return (
     <header className="header">
       <button type="button" className="mobile-nav-toggle" aria-label="Open navigation" onClick={onToggleMobileNav}>
@@ -108,11 +127,16 @@ function Header({ onToggleMobileNav }: { onToggleMobileNav: () => void }) {
         {header.subtitle && <p className="header-subtitle">{header.subtitle}</p>}
       </div>
       {header.search && (
-        <div className="header-search">
+        <div ref={searchRef} className={'header-search' + (searchOpen || header.search.value ? ' header-search--open' : '')}>
           <SearchField value={header.search.value} onChange={header.search.onChange} placeholder={header.search.placeholder} />
         </div>
       )}
       <div className="header-actions">{header.actions}</div>
+      {header.search && (
+        <span className="header-search-toggle">
+          <Button icon={SearchIcon} accessibilityLabel="Search" pressed={searchOpen} onClick={toggleSearch} />
+        </span>
+      )}
       <NotificationBell />
     </header>
   );

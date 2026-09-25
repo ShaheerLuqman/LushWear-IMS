@@ -26,8 +26,9 @@ export interface Order {
   is_order_settled?: boolean;
   order_receiving_date?: string;
   created_at?: string;
-  line_items?: Array<{ name?: string; variant_title?: string; qty?: number }>;
+  line_items?: Array<{ name?: string; variant_title?: string; qty?: number; unit_price?: number }>;
   replacement_of_order_no?: number;
+  customer_name?: string;
   [key: string]: unknown;
 }
 

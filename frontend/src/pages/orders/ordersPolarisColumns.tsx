@@ -1,8 +1,8 @@
 // Orders table cell config for the Polaris IndexTable rebuild (replaces the old AG Grid
 // ordersColumns.ts). One entry per visible column: how to render it, how to sort it, and
 // how to export it to Excel - single source of truth for all three so they can't drift.
-import { Badge, Text, Button, Tooltip } from '@shopify/polaris';
-import { RefreshIcon } from '@shopify/polaris-icons';
+import { Badge, Text, Button, Tooltip, InlineStack, type ActionListItemDescriptor } from '@shopify/polaris';
+import { RefreshIcon, ViewIcon } from '@shopify/polaris-icons';
 import { Dropdown } from '../../components/Dropdown';
 import { EditableAmount, EditableText } from '../../components/EditableCell';
 import { RowActions } from '../../components/RowActions';
@@ -18,31 +18,31 @@ export interface OrdersColumnCtx {
   confirmActionOnTerminalOrders: (orderNumbers: Array<string | number>, actionLabel: string, statuses?: string[]) => Promise<boolean>;
   onRefreshDelivery: (orderId: string) => void;
   onSetStatus: (order: Order, status: 'delivered' | 'returned', pieceReceived?: boolean) => void;
-  onSetSettled: (order: Order, settled: boolean) => void;
   onUnbook: (order: Order) => void;
   onCancel: (order: Order) => void;
+  onView: (order: Order) => void;
 }
 
 export const PIECE_RECEIVED_VALUES = ['Pending', 'Done', 'Received'];
 
-function money(value: unknown): string {
+export function money(value: unknown): string {
   return (parseFloat(String(value)) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-function cod(order: Order): number {
+export function cod(order: Order): number {
   const status = (order.order_status || '').toLowerCase();
   if (status === 'returned') return 0;
   return (parseFloat(String(order.total_amount)) || 0) - (parseFloat(String(order.advance_amount)) || 0);
 }
 
-function profitPercent(order: Order): number | null {
+export function profitPercent(order: Order): number | null {
   const netProfit = computeNetProfit(order);
   if (netProfit == null) return null;
   const total = parseFloat(String(order.total_amount)) || 0;
   return total > 0 ? (netProfit / total) * 100 : 0;
 }
 
-function statusTone(status?: string): 'attention' | 'info' | 'success' | 'warning' | 'critical' {
+export function statusTone(status?: string): 'attention' | 'info' | 'success' | 'warning' | 'critical' {
   const s = (status || '').toLowerCase();
   if (s === 'fulfilled') return 'info';
   if (s === 'delivered') return 'success';
@@ -105,25 +105,37 @@ function DeliveryCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
   );
 }
 
-function ActionsCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
-  if (!ctx.isEditingAllowed()) return <span className="row-actions-spacer" />;
+/** Per-order actions for a status - shared by the row kebab and the order popup. */
+export function orderActionItems(order: Order, ctx: OrdersColumnCtx): ActionListItemDescriptor[] {
   const status = (order.order_status || '').toLowerCase();
   const resolved = status === 'delivered' || status === 'returned';
   const courier = (order.courier || '').trim().toLowerCase();
   const booked = !!order.tracking_number || (courier !== '' && courier !== 'unassigned');
   const pieceReceived = (order.piece_received || '').trim() === 'Received';
-  const items = [];
+  const items: ActionListItemDescriptor[] = [];
   if (status !== 'cancelled') {
     if (status !== 'delivered') items.push({ content: 'Mark Delivered', onAction: () => ctx.onSetStatus(order, 'delivered') });
     if (status !== 'returned') items.push({ content: 'Mark Returned', onAction: () => ctx.onSetStatus(order, 'returned') });
     if (!(status === 'returned' && pieceReceived)) items.push({ content: 'Mark Returned + Piece Received', onAction: () => ctx.onSetStatus(order, 'returned', true) });
-    items.push(order.is_order_settled
-      ? { content: 'Mark Unsettled', onAction: () => ctx.onSetSettled(order, false) }
-      : { content: 'Mark Settled', onAction: () => ctx.onSetSettled(order, true) });
   }
-  if (booked && !resolved) items.push({ content: 'Unbook courier', onAction: () => ctx.onUnbook(order) });
+  if (booked && !resolved) items.push({ content: 'Unbook courier', destructive: true, onAction: () => ctx.onUnbook(order) });
   if (status !== 'cancelled' && !resolved) items.push({ content: 'Cancel order', destructive: true, onAction: () => ctx.onCancel(order) });
-  return <RowActions items={items} accessibilityLabel={`Actions for order ${order.order_number}`} />;
+  return items;
+}
+
+function ActionsCell({ order, ctx }: { order: Order; ctx: OrdersColumnCtx }) {
+  const viewButton = (
+    <Tooltip content="View order">
+      <Button icon={ViewIcon} variant="tertiary" accessibilityLabel={`View order ${order.order_number}`} onClick={() => ctx.onView(order)} />
+    </Tooltip>
+  );
+  if (!ctx.isEditingAllowed()) return viewButton;
+  return (
+    <InlineStack gap="100" blockAlign="center" wrap={false}>
+      {viewButton}
+      <RowActions items={orderActionItems(order, ctx)} accessibilityLabel={`Actions for order ${order.order_number}`} />
+    </InlineStack>
+  );
 }
 
 export interface OrdersColumnDef {

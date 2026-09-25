@@ -157,7 +157,7 @@ def _period_start_end_dates(month: int, year: int, start_day: int = DEFAULT_FISC
 ORDERS_LIST_SELECT = (
     "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
     "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
-    "order_receiving_date, courier_pickup_date, line_items, advance_status, is_order_settled, replacement_of_order_no, "
+    "order_receiving_date, courier_pickup_date, line_items, advance_status, is_order_settled, replacement_of_order_no, customer_name, "
     "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
 )
 

@@ -52,6 +52,8 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **View order popup** — eye button per orders row opens full order details (items, payment, customer, shipping, history).
+- [x] **Mobile orders page** — phone widths show Shopify-style tappable order cards; header stacks into rows.
 - [x] **Courier settings modal** — Settings card opens a sidebar modal listing couriers with per-courier details.
 - [x] **Fixed courier delivery charge** — optional per-courier fixed DC (>0) written onto orders at fulfillment.
 - [x] **Whole app on the Polaris theme** — every page, modal and table now uses Polaris; AG Grid removed; shared `DataTable`, `RowActions`, `FormModal`/`InfoModal`, `MetricsStrip`, `StatCardGrid`, `KeyValueList`, `ReportTable` components.

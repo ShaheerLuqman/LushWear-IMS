@@ -7,10 +7,9 @@ import {
 import * as XLSX from 'xlsx';
 import {
   IndexTable, IndexFilters, useSetIndexFiltersMode, useIndexResourceState,
-  IndexTableSelectionType, InlineStack, TextField, Text, Tooltip, Pagination,
+  IndexTableSelectionType, InlineStack, TextField, Text, Tooltip, Pagination, Badge, BlockStack, useBreakpoints,
 } from '@shopify/polaris';
-import { BarcodeIcon, MaximizeIcon } from '@shopify/polaris-icons';
-import { useNavigate } from 'react-router-dom';
+import { MaximizeIcon } from '@shopify/polaris-icons';
 import { Filter, FilterX } from 'lucide-react';
 import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
@@ -25,15 +24,17 @@ import { DateRangePopover, type DateRange } from '../../components/DateRangePopo
 import {
   computeNetProfit, FINAL_STATUS_VALUES, ORDER_STATUS_VALUES, orderStatusDisplayLabel, type Order,
 } from '../../logic/orders';
-import { getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
+import { formatDateDDMMYYYY, getCourierDisplayName, rowMatchesQuery } from '../../logic/shared';
 import { AnalyticsDeltaBadge } from '../../logic/analyticsCharts';
 import {
   ALL_ORDERS_VALUE, buildStaticPeriodOptions, CUSTOM_ORDERS_VALUE, formatOrdersDateRangeLabel,
   getCurrentOrdersPeriod, ORDERS_PERIOD_OLDEST_MONTH, ORDERS_PERIOD_OLDEST_YEAR, previousOrdersPeriod, useOrdersData,
 } from './useOrdersData';
 import {
-  ORDERS_COLUMNS, PIECE_RECEIVED_VALUES, calculateSelectedSums, type OrdersColumnCtx, type OrdersColumnDef, type SelectionSums,
+  ORDERS_COLUMNS, PIECE_RECEIVED_VALUES, calculateSelectedSums, money, statusTone,
+  type OrdersColumnCtx, type OrdersColumnDef, type SelectionSums,
 } from './ordersPolarisColumns';
+import { OrderDetailsModal } from './OrderDetailsModal';
 import { BulkUpdateOrderModal } from './BulkUpdateOrderModal';
 import { DeliveryStatusModal } from './DeliveryStatusModal';
 import { DeliveryStatusReportModal } from './DeliveryStatusReportModal';
@@ -122,8 +123,40 @@ const WIDTH_CAPPED_COLUMNS = new Set(['courier', 'delivery']);
    Memoized so only the row whose `selected` actually changed re-renders - columnCtx is itself
    memoized above, so unrelated rows' props are reference-equal and this fully bails out. */
 const OrderRow = memo(function OrderRow({
-  order, index, selected, tone, columnCtx,
-}: { order: Order; index: number; selected: boolean; tone: 'subdued' | undefined; columnCtx: OrdersColumnCtx }) {
+  order, index, selected, tone, columnCtx, condensed,
+}: {
+  order: Order; index: number; selected: boolean; tone: 'subdued' | undefined; columnCtx: OrdersColumnCtx; condensed: boolean;
+}) {
+  // Shopify's phone layout: one tappable card per order that opens it. Polaris makes
+  // condensed tables non-selectable, so there's no tap-to-select to preserve here.
+  if (condensed) {
+    const itemCount = orderLineItemQty(order);
+    return (
+      <IndexTable.Row id={order.id} position={index} selected={selected} tone={tone} onClick={() => columnCtx.onView(order)}>
+        <div className={'orders-mobile-row' + (tone === 'subdued' ? ' orders-mobile-row--cancelled' : '')}>
+          <BlockStack gap="100">
+            <InlineStack align="space-between" blockAlign="center" gap="200" wrap={false}>
+              <Text as="span" fontWeight="semibold">
+                #{order.order_number}{order.replacement_of_order_no ? ` (${order.replacement_of_order_no}-R)` : ''}
+              </Text>
+              <Text as="span" fontWeight="semibold" numeric>Rs {money(order.total_amount)}</Text>
+            </InlineStack>
+            <Text as="p" tone="subdued" variant="bodySm" truncate>
+              {[formatDateDDMMYYYY(order.order_receiving_date || order.created_at), order.customer_name].filter(Boolean).join(' · ')}
+            </Text>
+            <InlineStack gap="200" blockAlign="center" wrap={false}>
+              <Badge tone={statusTone(order.order_status)}>{orderStatusDisplayLabel(order.order_status || '')}</Badge>
+              <Text as="span" tone="subdued" variant="bodySm" truncate>
+                {getCourierDisplayName(order)} · {itemCount} item{itemCount === 1 ? '' : 's'}
+                {order.delivery_status?.latest_status ? ` · ${order.delivery_status.latest_status}` : ''}
+              </Text>
+            </InlineStack>
+          </BlockStack>
+        </div>
+      </IndexTable.Row>
+    );
+  }
+
   // Polaris' `tone` only tints the row background; the class is what actually
   // greys the content, since IndexTable.Row takes no className of its own.
   const cellClass = [
@@ -148,7 +181,6 @@ const OrderRow = memo(function OrderRow({
 export function OrdersPage() {
   const { account, isEditingAllowed } = useAuth();
   const { showToast } = useToast();
-  const navigate = useNavigate();
   const confirm = useConfirm();
   const fiscalMonthStartDay = account?.fiscal_month_start_day || 22;
   const {
@@ -177,6 +209,8 @@ export function OrdersPage() {
   const [packagingListModalOpen, setPackagingListModalOpen] = useState(false);
   const [uploadPostExModalOpen, setUploadPostExModalOpen] = useState(false);
   const [postExUploadReport, setPostExUploadReport] = useState<PostExUploadReportData | null>(null);
+  const [viewOrderId, setViewOrderId] = useState<string | null>(null);
+  const condensed = useBreakpoints().mdDown;
 
   const { ledgers, loadLedgersList } = useLedgersData();
   const { riderNames, nextAssignmentNumber, load: loadLoadSheetLogs } = useLoadSheetLogs();
@@ -272,8 +306,6 @@ export function OrdersPage() {
         { order_status: status, ...(pieceReceived ? { piece_received: 'Received' } : {}) },
         pieceReceived ? 'Marked returned + piece received' : `Marked ${status}`);
     },
-    onSetSettled: (order, settled) => bulkForOne(order, '/orders/bulk-update-order-settled',
-      { is_order_settled: settled }, { is_order_settled: settled }, settled ? 'Marked settled' : 'Marked unsettled'),
     onUnbook: (order) => runOrderAction(order, 'unbook', {
       title: `Unbook order #${order.order_number}?`,
       message: `This cancels the Shopify fulfillment and clears the ${getCourierDisplayName(order)} booking (${order.tracking_number || 'no tracking number'}) so the order can be booked again.\n\nThe parcel itself is not cancelled with the courier.`,
@@ -284,6 +316,7 @@ export function OrdersPage() {
       message: 'This cancels the order on Shopify (and its fulfillment, if any) and marks it cancelled here. Any courier booking stays on record.',
       confirmText: 'Cancel order',
     }),
+    onView: (order) => setViewOrderId(order.id),
   }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne]);
 
   function removeFetchedByNumberRows() {
@@ -395,7 +428,7 @@ export function OrdersPage() {
 
   const pageCount = Math.max(1, Math.ceil(filteredOrders.length / PAGE_SIZE));
   const pageRows = filteredOrders.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
-  const hasAnyOrders = ordersRealRows(orders).length > 0;
+  const emptyMessage = <div className="table-empty">{ordersRealRows(orders).length > 0 ? 'No orders match this filter' : 'No orders yet'}</div>;
 
   useEffect(() => { setPage(0); }, [activeTab, columnFilters]);
   useEffect(() => { if (page > pageCount - 1) setPage(pageCount - 1); }, [page, pageCount]);
@@ -723,7 +756,7 @@ export function OrdersPage() {
     const observer = new ResizeObserver(recalcColumnWidths);
     headerCells.forEach((el) => observer.observe(el));
     return () => observer.disconnect();
-  }, [pageRows.length > 0]);
+  }, [pageRows.length > 0, condensed]);
 
   // The table itself scrolls horizontally when columns overflow the card's width (its own
   // scrollbar, not just the page's) - since the aggregate row lives outside that scroll
@@ -740,9 +773,10 @@ export function OrdersPage() {
     syncScroll();
     scrollContainer.addEventListener('scroll', syncScroll, { passive: true });
     return () => scrollContainer.removeEventListener('scroll', syncScroll);
-  }, [selectionSums != null]);
+  }, [selectionSums != null, condensed]);
 
-  useStickyIndexTableHeader('#ordersView', pageRows.length > 0 && showFilterRow);
+  const filterRowShown = showFilterRow && !condensed;
+  useStickyIndexTableHeader('#ordersView', pageRows.length > 0 && filterRowShown);
 
   // Per-column filters live in the header row rendered just below IndexTable's real
   // headings (see the `rowType="subheader"` row below) - this only turns each active one
@@ -883,9 +917,6 @@ export function OrdersPage() {
             </div>
           )}
         </div>
-        <Tooltip content="Scan barcode">
-          <HeaderButton icon={BarcodeIcon} accessibilityLabel="Scan barcode" onClick={() => navigate('/scan-barcode')} />
-        </Tooltip>
         <div className="header-orders-app-actions" role="group" aria-label="App security and view">
           <Tooltip content="Full screen (Esc to exit)">
             <HeaderButton icon={MaximizeIcon} accessibilityLabel="Full screen (Esc to exit)" onClick={toggleFullscreen} />
@@ -921,9 +952,9 @@ export function OrdersPage() {
           kpi('Orders', metrics.orders.toLocaleString('en-US'), metrics.orders, prevMetrics.orders, false),
           kpi('Items ordered', metrics.items.toLocaleString('en-US'), metrics.items, prevMetrics.items, false),
           kpi('Total Sales', compactRs(metrics.total), metrics.total, prevMetrics.total, true),
+          kpi('Net profit', compactRs(metrics.netProfit), metrics.netProfit, prevMetrics.netProfit, true, metrics.netProfit < 0),
           kpi('Delivered', metrics.delivered.toLocaleString('en-US'), metrics.delivered, prevMetrics.delivered, false),
           kpi('Returned', metrics.returned.toLocaleString('en-US'), metrics.returned, prevMetrics.returned, false),
-          kpi('Net profit', compactRs(metrics.netProfit), metrics.netProfit, prevMetrics.netProfit, true, metrics.netProfit < 0),
         ]}
       />
       <div className="table-card">
@@ -943,6 +974,9 @@ export function OrdersPage() {
             hideQueryField
             hideFilters
             canCreateNewView={false}
+            // Its sticky mode pins against the window scroll, so once the phone layout lets
+            // the page scroll it floats over the app header instead of the table.
+            disableStickyMode={condensed}
           />
           {Object.keys(columnFilters).length > 0 && (
             <Tooltip content="Clear filters">
@@ -954,9 +988,11 @@ export function OrdersPage() {
               />
             </Tooltip>
           )}
-          <Tooltip content={showFilterRow ? 'Hide filters' : 'Show filters'}>
-            <HeaderButton icon={<Filter size={16} />} accessibilityLabel="Toggle filters" onClick={() => setShowFilterRow((v) => !v)} variant="tertiary" pressed={showFilterRow} />
-          </Tooltip>
+          {!condensed && (
+            <Tooltip content={showFilterRow ? 'Hide filters' : 'Show filters'}>
+              <HeaderButton icon={<Filter size={16} />} accessibilityLabel="Toggle filters" onClick={() => setShowFilterRow((v) => !v)} variant="tertiary" pressed={showFilterRow} />
+            </Tooltip>
+          )}
         </div>
           <IndexTable
             resourceName={{ singular: 'order', plural: 'orders' }}
@@ -972,9 +1008,9 @@ export function OrdersPage() {
             sortDirection={sort?.direction}
             onSort={(index, direction) => setSort({ index, direction })}
             loading={tableLoading}
-            condensed={false}
+            condensed={condensed}
           >
-            {showFilterRow && (
+            {filterRowShown && (
               <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
                 {ORDERS_COLUMNS.map((col) => (
                   <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>
@@ -983,9 +1019,7 @@ export function OrdersPage() {
             )}
             {pageRows.length === 0 && !tableLoading && (
               <IndexTable.Row id="__empty__" position={-2} hideSelectable>
-                <IndexTable.Cell colSpan={ORDERS_COLUMNS.length}>
-                  <div className="table-empty">{hasAnyOrders ? 'No orders match this filter' : 'No orders yet'}</div>
-                </IndexTable.Cell>
+                {condensed ? emptyMessage : <IndexTable.Cell colSpan={ORDERS_COLUMNS.length}>{emptyMessage}</IndexTable.Cell>}
               </IndexTable.Row>
             )}
             {pageRows.map((order, index) => (
@@ -994,10 +1028,11 @@ export function OrdersPage() {
                 selected={selectedResources.includes(order.id)}
                 tone={(order.order_status || '').toLowerCase() === 'cancelled' ? 'subdued' : undefined}
                 columnCtx={columnCtx}
+                condensed={condensed}
               />
             ))}
           </IndexTable>
-          {selectionSums && (
+          {selectionSums && !condensed && (
             <div className="orders-aggregate-row">
               <div className="orders-aggregate-row__inner" ref={aggregateRowInnerRef}>
                 {aggregateColumnWidths[0] != null && <div style={{ width: aggregateColumnWidths[0], flex: '0 0 auto' }} />}
@@ -1077,6 +1112,10 @@ export function OrdersPage() {
           onUploaded={setPostExUploadReport}
         />
       )}
+      {viewOrderId && (() => {
+        const order = orders.find((o) => o.id === viewOrderId);
+        return order ? <OrderDetailsModal order={order} ctx={columnCtx} onClose={() => setViewOrderId(null)} /> : null;
+      })()}
       {postExUploadReport && (
         <PostExUploadReportModal data={postExUploadReport} onClose={() => setPostExUploadReport(null)} />
       )}

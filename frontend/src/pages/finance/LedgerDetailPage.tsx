@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Button, InlineStack, Text } from '@shopify/polaris';
-import { ArrowLeftIcon, ArrowRightIcon, ChevronDownIcon, ChevronRightIcon } from '@shopify/polaris-icons';
+import { ArrowRightIcon, ChevronDownIcon, ChevronRightIcon } from '@shopify/polaris-icons';
 import { apiJson } from '../../api';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { DataTable, type DataColumn } from '../../components/DataTable';
@@ -66,7 +66,7 @@ export function LedgerDetailPage() {
         setCollapsedMonths(new Set(normalized.map((e) => (e.entry_date || '').slice(0, 7)).filter((m) => m && m !== currentMonth)));
       } catch (error) {
         console.error('Error loading ledger:', error);
-        navigate('/ledgers');
+        navigate('/ledgers', { replace: true });
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -130,10 +130,7 @@ export function LedgerDetailPage() {
     { key: 'balance', heading: 'Balance (Rs)', alignment: 'end', render: (r) => balanceCell(r, isMonthRow(r) ? r.runningBalance : entry(r).balance) },
   ];
 
-  usePageHeader({
-    title: ledger?.name || 'Ledger',
-    actions: <Button icon={ArrowLeftIcon} onClick={() => navigate('/ledgers')}>Back to Ledgers</Button>,
-  });
+  usePageHeader({ title: ledger?.name || 'Ledger' });
 
   return (
     <DataTable

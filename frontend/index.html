@@ -4,6 +4,11 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Stops iOS zooming into focused inputs (kept at 13px, see styles.css). iOS still allows
+         pinch-zoom with this; Android wouldn't, and it doesn't focus-zoom anyway - so iOS only. -->
+    <script>
+        if (/iPad|iPhone|iPod/.test(navigator.userAgent)) document.querySelector('meta[name=viewport]').content += ', maximum-scale=1';
+    </script>
     <title>QuikMerchant</title>
     <link rel="icon" type="image/png" href="/assets/Logo.png" />
     <link rel="manifest" href="/manifest.json" />
