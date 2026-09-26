@@ -53,12 +53,36 @@ class TestSystemKeyIsServerManaged:
         assert "No fields to update" in response.json()["detail"]
 
     def test_an_ordinary_field_still_updates_on_a_system_ledger(self, make_client):
-        """Renaming or recategorising a system account is fine — only its role
-        is fixed."""
+        """The edit modal sends the whole form, so the unchanged name rides along."""
+        client = make_client(tables={"finances_ledgers": [_ledger(CASH, "Cash", "cash")]})
+        response = client.put(f"/api/ledgers/{CASH}", json={"name": "Cash", "show_in_month_summary": True})
+
+        assert response.status_code == 200, response.text
+
+    def test_a_system_ledger_cannot_be_renamed(self, make_client):
         client = make_client(tables={"finances_ledgers": [_ledger(CASH, "Cash", "cash")]})
         response = client.put(f"/api/ledgers/{CASH}", json={"name": "Cash Box"})
 
-        assert response.status_code == 200, response.text
+        assert response.status_code == 400
+        assert "can't be renamed" in response.json()["detail"]
+
+
+class TestSystemLedgerNamesAreReserved:
+    def test_creating_one_is_refused_even_before_the_org_has_it(self, make_client):
+        """courier_other is created lazily; taking its name first would push the system
+        account onto "Courier Others (2)"."""
+        client = make_client(tables={"finances_ledgers": []})
+        response = client.post("/api/ledgers/", json={"name": "courier others", "type": "Asset"})
+
+        assert response.status_code == 400
+        assert "reserved for a system ledger" in response.json()["detail"]
+
+    def test_renaming_onto_one_is_refused(self, make_client):
+        client = make_client(tables={"finances_ledgers": [_ledger(PLAIN, "Advances")]})
+        response = client.put(f"/api/ledgers/{PLAIN}", json={"name": "Courier Local Delivery"})
+
+        assert response.status_code == 400
+        assert "reserved for a system ledger" in response.json()["detail"]
 
     def test_the_roles_endpoint_is_gone(self, make_client):
         """There is nothing for a user to choose, so the picker it fed was

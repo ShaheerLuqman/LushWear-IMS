@@ -25,7 +25,7 @@ from supabase import create_client
 from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.config import settings
-from app.couriers import assign_courier_bills, canonical_courier
+from app.couriers import LOCAL_DELIVERY_LABELS, assign_courier_bills, canonical_courier, fixed_delivery_charges
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
@@ -210,6 +210,27 @@ def _other_courier_delivery_charge(courier: Optional[str], tracking_number: Opti
         if m:
             return float(m.group(1)) or None
     return None
+
+
+def _synced_delivery_charge(
+    courier: Optional[str], tracking_number: Optional[str], tags_raw, existing, fixed_charges: Dict[str, float],
+) -> Optional[float]:
+    """An order's delivery_charge on sync - never read from Shopify itself. "Other"'s
+    tracking number / tag is re-derived every time; otherwise what's on file stays, and
+    only a charge never entered (None) takes the courier's fixed one from Settings >
+    Couriers (couriers.fixed_delivery_charges)."""
+    other = _other_courier_delivery_charge(courier, tracking_number, tags_raw)
+    if other is not None:
+        return other
+    if existing is not None:
+        return float(existing)
+    return fixed_charges.get((courier or "").strip().lower())
+
+
+def _delivery_charge_changed(new: Optional[float], old) -> bool:
+    if new is None or old is None:
+        return (new is None) != (old is None)
+    return abs(new - float(old)) > 0.01
 
 
 def _order_total_from_fulfillments(sp_order: dict) -> Optional[float]:
@@ -791,13 +812,15 @@ def _reconcile_one_order(
     costs_by_variant_id: Dict[Any, float],
     products_cost_map: Dict[str, float],
     current_time: str,
+    fixed_charges: Dict[str, float],
 ) -> Optional[OrderReconciliation]:
     """Reconcile one Shopify order against `existing_orders_map` (order_number -> DB row).
     Returns None if `sp_order` carries no order_number - nothing to reconcile. Shared by
     _sync_shopify_orders (called once per order in its periodic fetch) and the webhook
     handler (called for the single order an event carries) so the reconciliation rules
     below - the freeze-after-fulfilled logic, app-owned bookings, `<n>-R` replacement
-    handling - live in exactly one place."""
+    handling - live in exactly one place. `fixed_charges` is
+    couriers.fixed_delivery_charges for the org."""
     order_number = sp_order.get("order_number")
     if not order_number:
         return None
@@ -811,18 +834,11 @@ def _reconcile_one_order(
     order_status = extract_order_status(sp_order)
     total_amount, advance_amount = derive_total_and_advance(sp_order, order_status)
 
-    # delivery_charge and tax_amount are never taken from Shopify; set manually or via CSV
-    delivery_charge = 0.0
+    # tax_amount is never taken from Shopify; set via CSV
+    delivery_charge = _synced_delivery_charge(courier, tracking_number, sp_order.get("tags"), None, fixed_charges)
     tax_amount = 0.0
     cost_price = extract_cost_price(sp_order) or 0.0
 
-    # Set fixed delivery charge for SCS courier
-    if courier.upper() == "SCS":
-        delivery_charge = 180.0
-    else:
-        other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
-        if other_charge is not None:
-            delivery_charge = other_charge
     structured_line_items = extract_line_items(
         sp_order, product_id_by_shopify, variant_id_by_shopify, costs_by_id, products_cost_map,
         costs_by_variant_id, order_status,
@@ -911,22 +927,27 @@ def _reconcile_one_order(
     # three days running (2026-09-17 13839/13803, 09-18 13915, 09-19 13940). Undoing a
     # booking is /orders/{id}/unbook's job, and a DB trigger enforces the same invariant.
     booked_in_app = bool(existing_order.get("fulfilled_at"))
+    # Shopify only knows a Local Delivery order as "Other" (whether booked here or, before
+    # Local Delivery existed, in Shopify - see 20260927030000_legacy_local_deliveries.sql),
+    # so its courier on file is ours to keep, like an in-app booking's.
+    local_delivery = (existing_order.get("courier") or "").strip().lower() in {l.lower() for l in LOCAL_DELIVERY_LABELS}
     if existing_status in ("delivered", "returned"):
         existing_courier_lower = (existing_order.get("courier") or "").strip().lower()
         shopify_courier_lower = (courier or "").strip().lower()
-        if existing_courier_lower == "other" or shopify_courier_lower == "other":
+        if not local_delivery and (existing_courier_lower == "other" or shopify_courier_lower == "other"):
             # "Other" has no tracking API, so the courier name / delivery charge can
             # only ever be corrected via the tracking number or courier tag - keep pulling
             # those in even past the delivered/returned freeze below.
             existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
             shopify_tracking_frozen = (tracking_number or "").strip() or None
-            existing_delivery_charge_frozen = float(existing_order.get("delivery_charge") or 0)
-            other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
-            new_delivery_charge_frozen = other_charge if other_charge is not None else existing_delivery_charge_frozen
+            existing_delivery_charge_frozen = existing_order.get("delivery_charge")
+            new_delivery_charge_frozen = _synced_delivery_charge(
+                courier, tracking_number, sp_order.get("tags"), existing_delivery_charge_frozen, fixed_charges,
+            )
             if (
                 shopify_courier_lower != existing_courier_lower
                 or shopify_tracking_frozen != existing_tracking_frozen
-                or abs(new_delivery_charge_frozen - existing_delivery_charge_frozen) > 0.01
+                or _delivery_charge_changed(new_delivery_charge_frozen, existing_delivery_charge_frozen)
             ):
                 update_payload = {
                     **existing_order,
@@ -1001,7 +1022,11 @@ def _reconcile_one_order(
     # A cancelled order keeps whatever booking it had on record, whoever made it. An
     # app-booked row with nothing on record (a booking wrongly cleared before the guard
     # existed) has nothing to keep - let Shopify's fulfillment fill it back in.
-    keep_booking = (booked_in_app and (courier_is_assigned or bool(existing_tracking))) or order_data["order_status"] == "cancelled"
+    keep_booking = (
+        (booked_in_app and (courier_is_assigned or bool(existing_tracking)))
+        or local_delivery
+        or order_data["order_status"] == "cancelled"
+    )
     courier_changed = not keep_booking and existing_courier_normalized != shopify_courier_normalized
     tracking_changed = not keep_booking and existing_tracking != shopify_tracking
 
@@ -1012,23 +1037,12 @@ def _reconcile_one_order(
         order_data["courier"] = existing_order.get("courier")
         order_data["tracking_number"] = existing_order.get("tracking_number")
 
-    # Set delivery_charge: 180 for SCS courier only if not already set to a non-zero value
-    # Preserve any manually set delivery_charge (never from Shopify; set manually or via CSV)
-    final_courier = (order_data.get("courier") or "").strip().upper()
-    existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
-    if final_courier == "SCS" and existing_delivery_charge == 0:
-        # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
-        order_data["delivery_charge"] = 180.0
-    elif final_courier == "OTHER":
-        # The tracking number / courier tag is the authoritative source, re-derived
-        # on every sync; falls back to whatever's on file when neither matches, so a
-        # manually set charge isn't zeroed out just because nothing carries one.
-        other_charge = _other_courier_delivery_charge(order_data.get("courier"), order_data.get("tracking_number"), sp_order.get("tags"))
-        order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
-    else:
-        # Preserve existing delivery_charge (including any non-zero values)
-        order_data["delivery_charge"] = existing_delivery_charge
-    delivery_charge_changed = abs(order_data["delivery_charge"] - existing_delivery_charge) > 0.01
+    existing_delivery_charge = existing_order.get("delivery_charge")
+    order_data["delivery_charge"] = _synced_delivery_charge(
+        order_data.get("courier"), order_data.get("tracking_number"), sp_order.get("tags"),
+        existing_delivery_charge, fixed_charges,
+    )
+    delivery_charge_changed = _delivery_charge_changed(order_data["delivery_charge"], existing_delivery_charge)
 
     # Preserve existing order_receiving_date - never overwrite from Shopify for existing orders
     order_data["order_receiving_date"] = existing_order.get("order_receiving_date")
@@ -1152,6 +1166,7 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
     result = _reconcile_one_order(
         sp_order, existing_orders_map, product_id_by_shopify, variant_id_by_shopify,
         costs_by_id, costs_by_variant_id, products_cost_map, current_time,
+        fixed_delivery_charges(get_org_integration_settings(org_id).couriers),
     )
     if result is None or result.action == "skip":
         return result
@@ -1304,11 +1319,12 @@ async def _sync_shopify_orders(
         orders_to_skip = []
         original_orders_to_reset_piece_received = set()
         current_time = datetime.now(timezone.utc).isoformat()
+        fixed_charges = fixed_delivery_charges(org_creds.couriers)
 
         for sp_order in all_orders:
             result = _reconcile_one_order(
                 sp_order, existing_orders_map, product_id_by_shopify, variant_id_by_shopify,
-                costs_by_id, costs_by_variant_id, products_cost_map, current_time,
+                costs_by_id, costs_by_variant_id, products_cost_map, current_time, fixed_charges,
             )
             if result is None:
                 continue

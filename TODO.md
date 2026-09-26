@@ -31,6 +31,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 #### Data & reporting
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
+- [ ] **Entered-DC status rule** — Warning/OK and net profit: NULL DC means missing, 0 is valid.
 - [ ] **Shopify orders still on REST** — kept on REST deliberately (GraphQL bills ~105 cost points per nested order); revisit before REST is retired.
 
 #### Couriers
@@ -52,6 +53,15 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Old rider orders on Local Deliveries** — last 60 days of "Other" rider orders moved to Local Delivery.
+- [x] **Blank DC shown as dash** — unentered delivery charge shows a greyed dash instead of 0.00.
+- [x] **Advance from fulfillment** — unpaid Local Delivery booking offers Record Advance, then Retry Failed.
+- [x] **Local Delivery courier** — books with no pickup/city/COD; fully prepaid orders only.
+- [x] **Local Deliveries page** — per-order DC, paid-from ledger and Delivered; posts rider payment, settles bill.
+- [x] **Nullable delivery charge** — blank DC means not entered; existing zeros cleared to blank.
+- [x] **SCS fixed charge via Settings** — SCS added as a courier; hard-coded 180 replaced by fixed DC.
+- [x] **Courier ledger names** — courier ledgers renamed "Courier <name>"; catch-all is "Courier Others".
+- [x] **Locked system ledger names** — system ledgers can't be renamed; their names are reserved.
 - [x] **FedEx stored as TCS** — Shopify's auto-assigned "FedEx" is saved as TCS; bills, filter and ledger all read TCS.
 - [x] **Descriptive courier particulars** — ledger lines read e.g. "CPR PostEx 8/9/26 - Advances Applied", "Payout PostEx 1/4/26 - Delivery Charges".
 - [x] **All orders in courier bills** — every shipped order is on a bill; enabled couriers get their own, the rest share an "Other" bill.

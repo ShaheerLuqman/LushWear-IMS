@@ -348,7 +348,7 @@ _CONNECTION_ERROR_RETRIES = 3
 
 
 async def create_fulfillment(
-    shopify_order_id: int, tracking_number: str, tracking_company: str,
+    shopify_order_id: int, tracking_number: Optional[str], tracking_company: str,
     tracking_url: Optional[str], org_creds: OrgIntegrationSettings,
     client: Optional[httpx.AsyncClient] = None,
 ) -> None:
@@ -408,7 +408,8 @@ async def create_fulfillment(
                 "fulfillment": {
                     "line_items_by_fulfillment_order": [{"fulfillment_order_id": fo["id"]} for fo in fulfillment_orders],
                     "tracking_info": {
-                        "number": tracking_number,
+                        # None for a Local Delivery rider booked without a reference.
+                        **({"number": tracking_number} if tracking_number else {}),
                         "company": tracking_company,
                         **({"url": tracking_url} if tracking_url else {}),
                     },

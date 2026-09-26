@@ -1,7 +1,7 @@
 import {
   BookOpenIcon, ChartLineIcon, ChartVerticalIcon, ClipboardIcon, DeliveryIcon, HomeIcon,
   BarcodeIcon, InventoryIcon, LocationIcon, MeasurementWeightIcon, OrderIcon, PackageFulfilledIcon, PrintIcon, ReceiptIcon,
-  SettingsIcon, TransactionIcon, WalletIcon,
+  SendIcon, SettingsIcon, TransactionIcon, WalletIcon,
 } from '@shopify/polaris-icons';
 
 export type NavIcon = typeof HomeIcon;
@@ -36,6 +36,7 @@ export const NAV_SECTIONS: NavSection[] = [
         to: '/orders', label: 'Orders', icon: OrderIcon,
         children: [
           { to: '/order-fulfillment', label: 'Order Fulfillment', icon: PackageFulfilledIcon },
+          { to: '/local-deliveries', label: 'Local Deliveries', icon: SendIcon },
           { to: '/print-airway-bill', label: 'Print Airway Bill', icon: PrintIcon },
           { to: '/scan-barcode', label: 'Scan Barcode', icon: BarcodeIcon },
         ],

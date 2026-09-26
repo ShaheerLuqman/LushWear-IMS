@@ -1,6 +1,9 @@
 // Order Fulfillment business logic - ported 1:1 from order-fulfillment.js.
 export interface FulfillmentCourier {
   id: string; name: string; logo?: string; monogram?: string; color?: string;
+  // A rider booked on demand (no booking API, pickup, courier city or COD) - mirrors
+  // COURIER_CATALOG's `kind` on the backend.
+  kind?: 'local_delivery';
 }
 
 // Couriers with a real logo asset show it; the rest use a plain monogram chip.
@@ -10,7 +13,7 @@ export const FULFILLMENT_COURIERS: FulfillmentCourier[] = [
   { id: 'leopards', name: 'Leopards Courier', monogram: 'LC', color: '#c45c2e' },
   { id: 'tcs', name: 'TCS', monogram: 'TCS', color: '#c4342e' },
   { id: 'trax', name: 'Trax', monogram: 'TX', color: '#2e5fc4' },
-  { id: 'bykea', name: 'Bykea', monogram: 'BK', color: '#1fa35c' },
+  { id: 'local_delivery', name: 'Local Delivery', monogram: 'LD', color: '#1fa35c', kind: 'local_delivery' },
   { id: 'other', name: 'Other', monogram: '···', color: '#6d6d78' },
 ];
 
@@ -35,6 +38,8 @@ export interface FulfillmentOrder {
   tags: string[];
   city: string;
   order_date: Date;
+  total_amount: number;
+  advance_amount: number;
   line_items?: FulfillmentLineItem[];
   customer_status?: CustomerStatus;
   tracking_number?: string | null;
@@ -47,6 +52,8 @@ export interface FulfillmentOrder {
   pieces: number;
   invoiceDivision: number;
   handling: string;
+  // Local Delivery only: the rider's booking ID or phone, optional.
+  trackingRef?: string;
 }
 
 /** "1 x Ruby Camisole Set L", dropping the size for a product with no variants ("-").

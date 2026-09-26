@@ -18,7 +18,7 @@ export interface Order {
   total_amount?: number;
   advance_amount?: number;
   advance_status?: number;
-  delivery_charge?: number;
+  delivery_charge?: number | null;
   tax_amount?: number;
   cost_price?: number;
   folio?: string | null;

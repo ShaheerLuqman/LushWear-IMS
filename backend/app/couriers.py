@@ -33,15 +33,23 @@ logger = logging.getLogger("app.couriers")
 SYSTEM_KEY_PREFIX = "courier_"
 
 # Ordered: the Settings screen renders couriers in this order. `credentials` is
-# empty for a courier with no integration yet (TCS, Bykea) - it still gets the
-# toggle and the ledger.
+# empty for a courier with no integration yet (TCS, Local Delivery, SCS) - it still gets the
+# toggle and the ledger. The ledger names are seeded by hand in SQL too
+# (trg_organizations_seed_system_ledgers) - adding a courier here needs a line there.
 COURIER_CATALOG = {
     "postex": {"label": "PostEx", "ledger_code": "1150"},
     "couriers_next": {"label": "Couriers Next", "ledger_code": "1151"},
     # `aliases`: names Shopify reports for this courier - see canonical_courier.
     "tcs": {"label": "TCS", "ledger_code": "1152", "aliases": ["FedEx"]},
-    "bykea": {"label": "Bykea", "ledger_code": "1153"},
+    # `local_delivery`: a rider booked on demand rather than a courier company - no
+    # booking API, no COD, a delivery charge paid on the spot. See LOCAL_DELIVERY_PLAN.md.
+    "local_delivery": {"label": "Local Delivery", "ledger_code": "1153", "kind": "local_delivery"},
+    "scs": {"label": "SCS", "ledger_code": "1154"},
 }
+
+LOCAL_DELIVERY_IDS = {cid for cid, spec in COURIER_CATALOG.items() if spec.get("kind") == "local_delivery"}
+# As stored on orders' `courier`.
+LOCAL_DELIVERY_LABELS = [COURIER_CATALOG[cid]["label"] for cid in LOCAL_DELIVERY_IDS]
 
 CREDENTIAL_LABELS = {
     "merchant_token": "Merchant token",
@@ -49,7 +57,7 @@ CREDENTIAL_LABELS = {
 }
 
 COURIER_LEDGER_LABELS = {
-    f"{SYSTEM_KEY_PREFIX}{cid}": spec["label"] for cid, spec in COURIER_CATALOG.items()
+    f"{SYSTEM_KEY_PREFIX}{cid}": f"Courier {spec['label']}" for cid, spec in COURIER_CATALOG.items()
 }
 
 _LABEL_BY_ALIAS = {
@@ -103,6 +111,16 @@ def enabled_courier_ids(org_id: str) -> List[str]:
     return [cid for cid in COURIER_CATALOG if _is_enabled(couriers.get(cid) or {}, cid)]
 
 
+def fixed_delivery_charges(couriers: dict) -> Dict[str, float]:
+    """Settings > Couriers' fixed delivery charge per courier, keyed by the lowercased
+    name orders store in `courier`. `couriers` is OrgIntegrationSettings.couriers."""
+    return {
+        spec["label"].lower(): couriers[cid]["fixed_delivery_charge"]
+        for cid, spec in COURIER_CATALOG.items()
+        if (couriers.get(cid) or {}).get("fixed_delivery_charge")
+    }
+
+
 async def assign_courier_bills(org_id: str, order_ids: Optional[List[str]]) -> None:
     """Put orders on their (courier, dispatch date) bill - the order's own courier's if
     enabled, else the shared 'Other' one (see assign_courier_bills in SQL). None regroups
@@ -112,15 +130,24 @@ async def assign_courier_bills(org_id: str, order_ids: Optional[List[str]]) -> N
     Orders whose courier/date moved them off a settled or pre-onboarding bill are kept
     there by the function and only logged - silently rewriting a bill you have closed out
     with the courier would be worse than leaving it stale. Best-effort: a failure leaves
-    the orders saved but unassigned until the next call picks them up."""
+    the orders saved but unassigned until the next call picks them up.
+
+    Also re-derives the status of the Local Delivery bills these orders sit on (settled
+    once all delivered), since every write that can change that already calls this."""
     if order_ids is not None and not order_ids:
         return
 
     def run():
+        supabase = get_supabase()
         names = [COURIER_CATALOG[cid]["label"].lower() for cid in enabled_courier_ids(org_id)]
-        return get_supabase().rpc(
+        result = supabase.rpc(
             "assign_courier_bills", {"p_org_id": org_id, "p_order_ids": order_ids, "p_couriers": names}
         ).execute()
+        supabase.rpc("sync_local_delivery_bill_status", {
+            "p_org_id": org_id, "p_order_ids": order_ids,
+            "p_couriers": [label.lower() for label in LOCAL_DELIVERY_LABELS],
+        }).execute()
+        return result
 
     try:
         result = await asyncio.to_thread(run)
@@ -172,7 +199,7 @@ def update_org_courier(
             {
                 "p_org_id": org_id,
                 "p_system_key": f"{SYSTEM_KEY_PREFIX}{courier_id}",
-                "p_name": spec["label"],
+                "p_name": COURIER_LEDGER_LABELS[f"{SYSTEM_KEY_PREFIX}{courier_id}"],
                 "p_code": spec["ledger_code"],
             },
         ).execute()

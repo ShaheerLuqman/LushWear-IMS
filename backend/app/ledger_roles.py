@@ -32,9 +32,9 @@ SYSTEM_LEDGER_LABELS = {
     # Same lazy creation, for a bill's other (non-tax, non-stock) expense.
     "other_expenses": "Other Expenses",
     # Created on demand by resolve_courier_ledger for a courier with no system
-    # ledger of its own (SCS, "Other", one switched off in Settings); the
+    # ledger of its own ("Other", one switched off in Settings); the
     # per-courier accounts themselves are labelled in couriers.py.
-    "courier_other": "Courier Receivables - Other",
+    "courier_other": "Courier Others",
 }
 
 

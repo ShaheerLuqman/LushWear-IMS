@@ -36,7 +36,7 @@ export function cod(order: Order): number {
   return (parseFloat(String(order.total_amount)) || 0) - (parseFloat(String(order.advance_amount)) || 0);
 }
 
-export function isFullyPaid(order: Order): boolean {
+export function isFullyPaid(order: Pick<Order, 'total_amount' | 'advance_amount'>): boolean {
   const total = parseFloat(String(order.total_amount)) || 0;
   return total > 0 && (parseFloat(String(order.advance_amount)) || 0) >= total;
 }
@@ -228,7 +228,10 @@ export const ORDERS_COLUMNS: OrdersColumnDef[] = [
     sortValue: (o) => parseFloat(String(o.delivery_charge)) || 0,
     exportValue: (o) => money(o.delivery_charge),
     render: (o, ctx) => (
-      <EditableAmount value={o.delivery_charge} editable={ctx.isEditingAllowed()} onSave={(n) => ctx.saveOrderField(o.id, 'delivery_charge', n)} />
+      <EditableAmount
+        value={o.delivery_charge} placeholder="—" emptyLabel="—" editable={ctx.isEditingAllowed()}
+        onSave={(n) => ctx.saveOrderField(o.id, 'delivery_charge', n)}
+      />
     ),
   },
   {

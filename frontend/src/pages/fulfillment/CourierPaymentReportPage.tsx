@@ -235,7 +235,7 @@ function BillDetail({ id, initial }: { id: string; initial?: CourierBill }) {
             return [
               String(order.order_number ?? ''), order.folio || '-', customerNames.get(order.order_number || -1) ?? '…', order.tracking_number || '-',
               <StatusBadge status={status} />, formatMoney(order.total_amount), formatMoney(order.advance_amount), formatMoney(computeCod(order)),
-              formatMoney(order.delivery_charge), formatMoney(order.tax_amount), receivable != null ? formatMoney(receivable) : '-', formatMoney(order.cost_price),
+              order.delivery_charge == null ? <Text as="span" tone="subdued">—</Text> : formatMoney(order.delivery_charge), formatMoney(order.tax_amount), receivable != null ? formatMoney(receivable) : '-', formatMoney(order.cost_price),
               <Badge tone={order.is_order_settled ? 'success' : 'info'}>{order.is_order_settled ? 'Settled' : 'Unsettled'}</Badge>,
             ];
           })}

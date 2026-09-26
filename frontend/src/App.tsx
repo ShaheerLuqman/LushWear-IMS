@@ -13,6 +13,7 @@ import { LedgerDetailPage } from './pages/finance/LedgerDetailPage';
 import { TrialBalancePage } from './pages/finance/TrialBalancePage';
 import { BillsPage } from './pages/finance/BillsPage';
 import { OrderFulfillmentPage } from './pages/fulfillment/OrderFulfillmentPage';
+import { LocalDeliveriesPage } from './pages/fulfillment/LocalDeliveriesPage';
 import { PrintAirwayBillPage } from './pages/fulfillment/PrintAirwayBillPage';
 import { ScanBarcodePage } from './pages/fulfillment/ScanBarcodePage';
 import { CourierPaymentReportPage } from './pages/fulfillment/CourierPaymentReportPage';
@@ -57,6 +58,7 @@ function AuthedRoutes() {
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="orders" element={<OrdersPage />} />
         <Route path="order-fulfillment" element={<OrderFulfillmentPage />} />
+        <Route path="local-deliveries" element={<LocalDeliveriesPage />} />
         <Route path="print-airway-bill" element={<PrintAirwayBillPage />} />
         <Route path="scan-barcode" element={<ScanBarcodePage />} />
         <Route path="products" element={<InventoryPage />} />

@@ -78,7 +78,7 @@ def test_price_reduction_code_not_double_subtracted_from_net_total():
         "financial_status": "pending",
         "line_items": [{"price": "2999.00", "quantity": 2, "title": "X"}],
     }
-    r = _reconcile_one_order(sp_order, {}, {}, {}, {}, {}, {}, "2026-09-23T00:00:00Z")
+    r = _reconcile_one_order(sp_order, {}, {}, {}, {}, {}, {}, "2026-09-23T00:00:00Z", {})
     assert r.order_data["total_amount"] == 5398.2
     assert r.order_data["advance_amount"] == 0.0
 

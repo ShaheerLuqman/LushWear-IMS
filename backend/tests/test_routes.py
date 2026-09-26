@@ -737,6 +737,46 @@ class TestFulfillOrdersRoute:
         assert captured["customer_phone"] == "03119998877"
         assert captured["delivery_address"] == "9 New Rd"
 
+    def test_local_delivery_books_only_fully_paid_orders_without_a_courier_api(self, make_client, monkeypatch):
+        """No pickup, city or credentials; an order short of a full advance would post its
+        remainder as COD owed by the rider, so it is refused."""
+        import json
+        from types import SimpleNamespace
+        import app.routes.orders as orders
+
+        client = make_client({"shopify_orders": [
+            {"id": "o1", "order_number": 101, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 1000},
+            {"id": "o2", "order_number": 102, "order_status": "unfulfilled", "tracking_number": None,
+             "total_amount": 1000, "advance_amount": 400},
+        ]})
+        monkeypatch.setattr(orders, "get_org_integration_settings", lambda _org: SimpleNamespace(
+            postex_merchant_token=None, couriers_next_auth_key=None, couriers={}))
+        updates = []
+        real_org_table = orders.org_table
+
+        def _spy_org_table(*args):
+            query = real_org_table(*args)
+            real_update = query.update
+            query.update = lambda payload: updates.append(payload) or real_update(payload)
+            return query
+
+        async def _noop_push(*_a, **_k):
+            return None
+
+        monkeypatch.setattr(orders, "org_table", _spy_org_table)
+        monkeypatch.setattr(orders, "_push_fulfillments_to_shopify", _noop_push)
+
+        r = client.post("/api/orders/fulfill", json={
+            "courier": "local_delivery",
+            "orders": [{"order_id": "o1", "tracking_number": " BK-77 "}, {"order_id": "o2"}],
+        })
+        assert r.status_code == 200
+        results = {e["result"]["order_id"]: e["result"] for e in map(json.loads, r.text.splitlines()) if e["type"] == "order"}
+        assert results["o1"]["ok"] is True and results["o1"]["tracking_number"] == "BK-77"
+        assert results["o2"]["ok"] is False and "Not fully paid" in results["o2"]["error"]
+        assert updates[0]["courier"] == "Local Delivery" and updates[0]["order_status"] == "fulfilled"
+
     def test_courier_fixed_delivery_charge_is_written_on_booking(self, make_client, monkeypatch):
         from types import SimpleNamespace
         import app.routes.orders as orders

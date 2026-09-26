@@ -30,6 +30,8 @@ import {
 } from '../../logic/fulfillment';
 import { EditableAmount } from '../../components/EditableCell';
 import { FulfillmentDetailsModal } from './FulfillmentDetailsModal';
+import { AdvanceModal } from '../orders/AdvanceModal';
+import { useLedgersData } from '../finance/useLedgersData';
 
 const COLUMNS: Array<{ key: string; title: string; alignment?: 'end'; tooltipContent?: string }> = [
   { key: 'order_number', title: 'Order ID' },
@@ -38,12 +40,15 @@ const COLUMNS: Array<{ key: string; title: string; alignment?: 'end'; tooltipCon
   { key: 'mobile', title: 'Mobile Number' },
   { key: 'tags', title: 'Tags' },
   { key: 'city', title: 'City' },
+  { key: 'ref', title: 'Ref', tooltipContent: "The rider's booking ID or phone, if you have one." },
   { key: 'courier_city', title: 'Courier City', tooltipContent: 'Select a courier above to populate this with its supported cities' },
   { key: 'order_type', title: 'Type', tooltipContent: "The courier's own order type." },
   { key: 'cod', title: 'CoD', alignment: 'end', tooltipContent: 'Amount the rider collects on delivery.' },
   { key: 'risk', title: 'Risk / Customer Status', tooltipContent: "Based on this customer's past delivered vs. total orders" },
   { key: 'actions', title: 'Actions' },
 ];
+// A Local Delivery rider has no courier city, order type or COD (see logic/fulfillment.ts).
+const LOCAL_DELIVERY_HIDDEN = new Set(['courier_city', 'order_type', 'cod']);
 
 // Tabs in the filter strip, same as OrdersPage's status tabs: null = no tier filter.
 const RISK_TABS: Array<{ id: string; label: string; tier: CustomerStatus['tier'] | null }> = [
@@ -106,6 +111,12 @@ export function OrderFulfillmentPage() {
   const [detailsForId, setDetailsForId] = useState<string | null>(null);
   const [fulfilling, setFulfilling] = useState(false);
   const [progress, setProgress] = useState<{ orders: FulfillmentProgressOrder[]; phase: 'booking' | 'shopify_sync' | 'done' } | null>(null);
+  const isLocal = selectedCourier?.kind === 'local_delivery';
+  // Local Delivery refuses an order short of a full advance; the progress screen lets it
+  // be recorded on the spot and the booking retried.
+  const [advanceForId, setAdvanceForId] = useState<string | null>(null);
+  const { ledgers, loadLedgersList } = useLedgersData();
+  const columns = useMemo(() => COLUMNS.filter((c) => (isLocal ? !LOCAL_DELIVERY_HIDDEN.has(c.key) : c.key !== 'ref')), [isLocal]);
 
   const ordersRef = useRef(orders);
   ordersRef.current = orders;
@@ -183,13 +194,19 @@ export function OrderFulfillmentPage() {
     setOrders((prev) => prev.map((o) => (o.id === id ? { ...o, ...patch } : o)));
   }
 
+  function needsAdvance(id: string): boolean {
+    const order = orders.find((x) => x.id === id);
+    return isLocal && !!order && order.advance_amount < order.total_amount;
+  }
+
   async function pickCourier(courier: FulfillmentCourier) {
     setSelectedCourier(courier);
-    setCourierCitiesLoading(true);
     setCourierCities([]);
     setOrders((prev) => prev.map((o) => ({ ...o, courierCity: null, orderType: FULFILLMENT_DEFAULT_ORDER_TYPE })));
     setPickupAddresses([]);
     setPickupCode('');
+    if (courier.kind === 'local_delivery') return;
+    setCourierCitiesLoading(true);
     // Independent try/catches, not Promise.all - a failure fetching one (e.g. pickup
     // addresses down) shouldn't also blank out the other one that actually succeeded.
     const citiesPromise = (async () => {
@@ -222,19 +239,21 @@ export function OrderFulfillmentPage() {
   const disabledReason = useMemo(() => {
     if (fulfilling) return 'Booking in progress…';
     if (!selectedCourier) return 'Select a courier first';
-    if (!pickupCode) return 'Select a pickup location first';
+    if (!isLocal && !pickupCode) return 'Select a pickup location first';
     if (selectedOrders.length === 0) return 'Select at least one order';
-    const missingCity = selectedOrders.filter((o) => !o.courierCity);
+    const missingCity = isLocal ? [] : selectedOrders.filter((o) => !o.courierCity);
     if (missingCity.length > 0) return `Pick a courier city for ${missingCity.length === 1 ? `order #${missingCity[0].order_number}` : `${missingCity.length} orders`} first`;
     return '';
-  }, [fulfilling, selectedCourier, pickupCode, selectedOrders]);
+  }, [fulfilling, selectedCourier, isLocal, pickupCode, selectedOrders]);
 
   async function fulfillSelected() {
     if (disabledReason) { showToast(disabledReason, 'error', { silent: true }); return; }
     const pickup = pickupAddresses.find((a) => a.code === pickupCode);
     const ok = await confirm({
       title: 'Fulfill Orders',
-      message: `Book ${selectedOrders.length} order(s) with ${selectedCourier!.name}?\n\nPickup from: ${pickup ? fulfillmentPickupAddressLabel(pickup) : pickupCode}\n\nThis creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`,
+      message: isLocal
+        ? `Send ${selectedOrders.length} order(s) by ${selectedCourier!.name}?\n\nThis marks them fulfilled in Shopify. Enter each order's delivery charge on the Local Deliveries page.`
+        : `Book ${selectedOrders.length} order(s) with ${selectedCourier!.name}?\n\nPickup from: ${pickup ? fulfillmentPickupAddressLabel(pickup) : pickupCode}\n\nThis creates real shipments the courier will collect, and marks the orders fulfilled in Shopify.`,
       confirmText: 'Fulfill',
     });
     if (!ok) return;
@@ -273,7 +292,10 @@ export function OrderFulfillmentPage() {
     const courierName = selectedCourier!.name;
     try {
       for await (const event of apiJsonStream<any>('/orders/fulfill', {
-        body: {
+        body: isLocal ? {
+          courier: selectedCourier!.id,
+          orders: targets.map((o) => ({ order_id: o.id, tracking_number: o.trackingRef?.trim() || null })),
+        } : {
           courier: selectedCourier!.id, pickup_address_code: pickupCode,
           orders: targets.map((o) => ({
             order_id: o.id, courier_city: o.courierCity, order_type: o.orderType, cod_amount: o.codAmount,
@@ -380,11 +402,13 @@ export function OrderFulfillmentPage() {
                 options={couriers.map((c) => ({ label: c.name, value: c.id }))}
                 value={selectedCourier?.id || ''} onChange={(id) => pickCourier(couriers.find((c) => c.id === id)!)}
               />
-              <Dropdown
-                label="Pickup location" placeholder={selectedCourier ? 'Select pickup location' : 'Select courier first'} fullWidth
-                disabled={pickupAddresses.length === 0} value={pickupCode} onChange={setPickupCode}
-                options={pickupAddresses.map((a) => ({ label: fulfillmentPickupAddressLabel(a), value: a.code }))}
-              />
+              {!isLocal && (
+                <Dropdown
+                  label="Pickup location" placeholder={selectedCourier ? 'Select pickup location' : 'Select courier first'} fullWidth
+                  disabled={pickupAddresses.length === 0} value={pickupCode} onChange={setPickupCode}
+                  options={pickupAddresses.map((a) => ({ label: fulfillmentPickupAddressLabel(a), value: a.code }))}
+                />
+              )}
               <Text as="p" tone={disabledReason ? 'subdued' : 'success'} variant="bodySm">
                 {disabledReason || `Ready to book ${selectedOrders.length} order(s) with ${selectedCourier!.name}`}
               </Text>
@@ -407,6 +431,7 @@ export function OrderFulfillmentPage() {
     const pillTone = !done ? 'info' : failed === 0 ? 'success' : 'warning';
     const STATE_TONE = { pending: undefined, booking: 'info', ok: 'success', fail: 'critical' } as const;
     const printAll = async () => { try { await printAirwayBillsForOrders(progress.orders as any); } catch (e: any) { showToast(e?.message || 'Failed to print airway bills', 'error'); } };
+    const advanceOrder = advanceForId ? orders.find((x) => x.id === advanceForId) : undefined;
     return (
       <div className="fulfillment-progress-wrap">
         <Card>
@@ -440,6 +465,9 @@ export function OrderFulfillmentPage() {
                         {o.state === 'fail'
                           ? <Text as="span" tone="critical">{o.error || 'Failed'}</Text>
                           : o.tracking_number ? <Text as="span" tone="subdued">{o.tracking_number}</Text> : null}
+                        {done && o.state === 'fail' && needsAdvance(o.id) && (
+                          <Button size="slim" onClick={() => { loadLedgersList(); setAdvanceForId(o.id); }}>Record Advance</Button>
+                        )}
                         {orderHasAirwayBill(o as any) && (
                           <Button size="slim" icon={PrintIcon} onClick={async () => { try { await printAirwayBillsForOrders([o as any]); } catch (e: any) { showToast(e?.message || 'Failed to print airway bill', 'error'); } }}>Airway Bill</Button>
                         )}
@@ -456,12 +484,20 @@ export function OrderFulfillmentPage() {
             </InlineStack>
           </BlockStack>
         </Card>
+        {advanceOrder && (
+          <AdvanceModal
+            order={advanceOrder}
+            ledgers={ledgers}
+            onClose={() => setAdvanceForId(null)}
+            onSaved={({ advance_amount }) => updateOrder(advanceOrder.id, { advance_amount: Number(advance_amount) || 0 })}
+          />
+        )}
       </div>
     );
   }
 
   function renderColumnFilterCell(key: string) {
-    if (key === 'actions') return null;
+    if (key === 'actions' || key === 'ref') return null;
     const options = key === 'risk' ? RISK_TABS.filter((t) => t.tier).map((t) => ({ value: t.tier!, label: t.label })) : filterOptions[key];
     if (options) {
       return (
@@ -511,18 +547,18 @@ export function OrderFulfillmentPage() {
           itemCount={filtered.length || 1}
           selectedItemsCount={allResourcesSelected ? 'All' : selectedResources.length}
           onSelectionChange={handleSelectionChange}
-          headings={COLUMNS.map(({ title, alignment, tooltipContent }) => ({ title, alignment, tooltipContent })) as any}
+          headings={columns.map(({ title, alignment, tooltipContent }) => ({ title, alignment, tooltipContent })) as any}
           loading={loading}
           condensed={false}
         >
           {showFilterRow && (
             <IndexTable.Row id="__filters__" position={-1} rowType="subheader" hideSelectable>
-              {COLUMNS.map((col) => <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>)}
+              {columns.map((col) => <IndexTable.Cell key={col.key}>{renderColumnFilterCell(col.key)}</IndexTable.Cell>)}
             </IndexTable.Row>
           )}
           {filtered.length === 0 && !loading && (
             <IndexTable.Row id="__empty__" position={-2} hideSelectable>
-              <IndexTable.Cell colSpan={COLUMNS.length}>
+              <IndexTable.Cell colSpan={columns.length}>
                 <div className="table-empty">No unfulfilled orders match these filters.</div>
               </IndexTable.Cell>
             </IndexTable.Row>
@@ -539,19 +575,30 @@ export function OrderFulfillmentPage() {
                 </div>
               </IndexTable.Cell>
               <IndexTable.Cell><Text as="span">{o.city}</Text></IndexTable.Cell>
-              <IndexTable.Cell>
-                <Dropdown
-                  searchable size="slim" disabled={courierCities.length === 0}
-                  placeholder={courierCitiesLoading ? 'Loading…' : '—'}
-                  options={courierCities} value={o.courierCity || ''} onChange={(city) => updateOrder(o.id, { courierCity: city })}
-                />
-              </IndexTable.Cell>
-              <IndexTable.Cell>
-                {orderTypes.length === 0
-                  ? <Text as="span" tone="subdued">—</Text>
-                  : <Dropdown size="slim" options={orderTypes} value={o.orderType} onChange={(v) => updateOrder(o.id, { orderType: v })} />}
-              </IndexTable.Cell>
-              <IndexTable.Cell><EditableAmount value={o.codAmount} editable onSave={(n) => updateOrder(o.id, { codAmount: n })} /></IndexTable.Cell>
+              {isLocal ? (
+                <IndexTable.Cell>
+                  <TextField
+                    label="" labelHidden autoComplete="off" variant="borderless" size="slim" placeholder="Optional"
+                    value={o.trackingRef || ''} onChange={(v) => updateOrder(o.id, { trackingRef: v })}
+                  />
+                </IndexTable.Cell>
+              ) : (
+                <>
+                  <IndexTable.Cell>
+                    <Dropdown
+                      searchable size="slim" disabled={courierCities.length === 0}
+                      placeholder={courierCitiesLoading ? 'Loading…' : '—'}
+                      options={courierCities} value={o.courierCity || ''} onChange={(city) => updateOrder(o.id, { courierCity: city })}
+                    />
+                  </IndexTable.Cell>
+                  <IndexTable.Cell>
+                    {orderTypes.length === 0
+                      ? <Text as="span" tone="subdued">—</Text>
+                      : <Dropdown size="slim" options={orderTypes} value={o.orderType} onChange={(v) => updateOrder(o.id, { orderType: v })} />}
+                  </IndexTable.Cell>
+                  <IndexTable.Cell><EditableAmount value={o.codAmount} editable onSave={(n) => updateOrder(o.id, { codAmount: n })} /></IndexTable.Cell>
+                </>
+              )}
               <IndexTable.Cell><RiskCell order={o} /></IndexTable.Cell>
               <IndexTable.Cell>
                 <Tooltip content="Shipping details">

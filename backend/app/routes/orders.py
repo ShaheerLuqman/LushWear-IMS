@@ -16,7 +16,10 @@ from app import shopify
 from app.advance_status import fetch_transaction_advance_totals, get_orders_ledger_id, recompute_advance_statuses
 from app.auth import get_org_id
 from app.config import settings
-from app.couriers import assign_courier_bills as _assign_courier_bills, canonical_courier, enabled_courier_ids
+from app.couriers import (
+    COURIER_CATALOG, LOCAL_DELIVERY_IDS, LOCAL_DELIVERY_LABELS, assign_courier_bills as _assign_courier_bills,
+    canonical_courier, enabled_courier_ids, fixed_delivery_charges,
+)
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
@@ -44,11 +47,11 @@ from app.services.shopify_sync import (
     SyncShopifyOrdersResult,
     derive_total_and_advance,
     _cost_from_line_items,
-    _other_courier_delivery_charge,
     _get_sync_status_row,
     _line_items_incomplete,
     _line_items_signature,
     _resolve_line_item_cost,
+    _synced_delivery_charge,
     _sync_shopify_orders,
 )
 from app.timezones import PKT_TIMEZONE
@@ -403,6 +406,75 @@ async def get_unfulfilled_orders(org_id: str = Depends(get_org_id)):
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
+class LocalDeliveryUpdate(BaseModel):
+    # None = not entered yet; 0 = the customer paid the rider, nothing to post.
+    delivery_charge: Optional[float] = Field(default=None, ge=0)
+    ledger_id: Optional[str] = None
+
+
+@router.get("/local-deliveries")
+async def list_local_deliveries(org_id: str = Depends(get_org_id)):
+    """Orders sent by Local Delivery, for the Local Deliveries page."""
+    return (
+        org_table(get_supabase(), org_id, "shopify_orders")
+        .select("id, order_number, customer_name, customer_city, tracking_number, fulfilled_at, "
+                "order_status, total_amount, delivery_charge, delivery_charge_ledger_id")
+        .in_("courier", LOCAL_DELIVERY_LABELS)
+        .not_.in_("order_status", ["unfulfilled", "cancelled"])
+        .order("fulfilled_at", desc=True)
+        .execute()
+        .data
+        or []
+    )
+
+
+@router.put("/{order_id}/local-delivery")
+async def update_local_delivery(order_id: str, body: LocalDeliveryUpdate, org_id: str = Depends(get_org_id)):
+    """Set a Local Delivery order's delivery charge and the ledger the rider was paid
+    from; a trigger (re)posts that payment - see post_local_delivery_charge."""
+    supabase = get_supabase()
+    if body.ledger_id:
+        _cash_or_bank_side(supabase, org_id, body.ledger_id)
+    try:
+        response = (
+            org_table(supabase, org_id, "shopify_orders")
+            .update({
+                "delivery_charge": body.delivery_charge,
+                "delivery_charge_ledger_id": body.ledger_id,
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            })
+            .eq("id", order_id)
+            .in_("courier", LOCAL_DELIVERY_LABELS)
+            .execute()
+        )
+        if not response.data:
+            raise HTTPException(status_code=404, detail="Local Delivery order not found")
+        event_bus.publish(org_id, {"type": "orders_changed"})
+        return response.data[0]
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("local delivery update failed")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+def _settle_local_deliveries(supabase, org_id: str, order_ids: List[str]) -> None:
+    """A delivered Local Delivery order is settled - there is no payout to wait for.
+    Local only: shopify.mark_order_settled's "Settled" tag would make the sync read a
+    checkout payment as a courier payout and zero the advance (derive_total_and_advance).
+    The bill's own status follows via assign_courier_bills."""
+    if not order_ids:
+        return
+    (
+        org_table(supabase, org_id, "shopify_orders")
+        .update({"is_order_settled": True})
+        .in_("id", order_ids)
+        .eq("order_status", "delivered")
+        .in_("courier", LOCAL_DELIVERY_LABELS)
+        .execute()
+    )
+
+
 @router.get("/enabled-couriers")
 async def get_enabled_couriers(org_id: str = Depends(get_org_id)):
     """Courier ids turned on in Settings > Couriers, for the Order Fulfillment courier
@@ -432,7 +504,8 @@ async def get_courier_supported_cities(courier: str, org_id: str = Depends(get_o
 
 class FulfillOrderRequest(BaseModel):
     order_id: str
-    courier_city: str
+    # Required by the courier APIs (checked in _book_one_order); a Local Delivery rider has none.
+    courier_city: Optional[str] = None
     # PostEx-only (see postex.ORDER_TYPES); ignored for couriers whose API has no
     # equivalent, which is why it defaults rather than being required.
     order_type: str = "Normal"
@@ -452,11 +525,14 @@ class FulfillOrderRequest(BaseModel):
     # "Standard" | "Fragile". Neither courier's API has a handling field, so "Fragile"
     # is surfaced by prefixing the instructions note the courier does receive.
     handling: Optional[str] = None
+    # Local Delivery only: the rider's booking ID or phone, if the user has one to hand.
+    tracking_number: Optional[str] = None
 
 
 class FulfillOrdersBody(BaseModel):
     courier: str
-    pickup_address_code: str
+    # Required for courier APIs (checked in fulfill_orders); Local Delivery has no pickup.
+    pickup_address_code: Optional[str] = None
     orders: List[FulfillOrderRequest]
 
 
@@ -633,6 +709,42 @@ async def _book_one_order(
             order_id=order_id, order_number=order_number, ok=False, error=str(exc),
         ), None
 
+    return _record_booking(supabase, org_id, order_id, row, courier_name, tracking_number, fixed_delivery_charge)
+
+
+async def _book_local_delivery(
+    order_id: str, request: FulfillOrderRequest, row: Optional[dict], courier_name: str,
+    supabase, org_id: str, fixed_delivery_charge: Optional[float],
+) -> Tuple[FulfillOrderResult, Optional[Tuple[dict, Optional[str]]]]:
+    """_book_one_order for a Local Delivery courier: the rider is booked outside the app,
+    so this only records the dispatch. The order must already be paid in full - there's
+    no COD, and any shortfall would post as a receivable owed by the rider
+    (post_courier_bill_journal's total - advance)."""
+    if not row:
+        return FulfillOrderResult(order_id=order_id, ok=False, error="Order not found"), None
+    order_number = row["order_number"]
+    if row.get("order_status") != "unfulfilled" or row.get("tracking_number"):
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False, error="Already fulfilled",
+        ), None
+    total = money(row.get("total_amount") or 0)
+    advance = money(row.get("advance_amount") or 0)
+    if advance < total:
+        return FulfillOrderResult(
+            order_id=order_id, order_number=order_number, ok=False,
+            error=f"Not fully paid in advance ({advance:,.2f} of {total:,.2f}) - record the advance first",
+        ), None
+    tracking_number = (request.tracking_number or "").strip() or None
+    return _record_booking(supabase, org_id, order_id, row, courier_name, tracking_number, fixed_delivery_charge)
+
+
+def _record_booking(
+    supabase, org_id: str, order_id: str, row: dict, courier_name: str,
+    tracking_number: Optional[str], fixed_delivery_charge: Optional[float],
+) -> Tuple[FulfillOrderResult, Optional[Tuple[dict, Optional[str]]]]:
+    """Mark a booked order fulfilled locally, returning its outcome and the (row,
+    tracking_number) pair the Shopify fulfillment push needs."""
+    order_number = row["order_number"]
     try:
         now_iso = datetime.now(timezone.utc).isoformat()
         org_table(supabase, org_id, "shopify_orders").update({
@@ -650,7 +762,7 @@ async def _book_one_order(
                          order_number, courier_name, tracking_number)
         return FulfillOrderResult(
             order_id=order_id, order_number=order_number, ok=False, tracking_number=tracking_number,
-            error=f"Booked as {tracking_number}, but saving it locally failed - record it manually.",
+            error=f"Booked{f' as {tracking_number}' if tracking_number else ''}, but saving it locally failed - record it manually.",
         ), None
 
     # _push_fulfillments_to_shopify reads the courier off the row rather than taking it as
@@ -681,28 +793,32 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
     bookings are mirrored into Shopify, then a final
     `{"type": "done", "booked_count", "failed_count"}` line.
     """
-    if body.courier not in _FULFILL_COURIER_NAMES:
+    local = body.courier in LOCAL_DELIVERY_IDS
+    if not local and body.courier not in _FULFILL_COURIER_NAMES:
         raise HTTPException(status_code=400, detail=f"Fulfillment is not supported for courier '{body.courier}' yet.")
     if not body.orders:
         raise HTTPException(status_code=400, detail="No orders selected.")
+    if not local and not body.pickup_address_code:
+        raise HTTPException(status_code=400, detail="Select a pickup location.")
     if body.courier == "postex":
         bad_types = {o.order_type for o in body.orders} - set(postex.ORDER_TYPES)
         if bad_types:
             raise HTTPException(status_code=400, detail=f"Unknown PostEx order type(s): {', '.join(sorted(bad_types))}.")
 
     org_creds = get_org_integration_settings(org_id)
-    courier_name = _FULFILL_COURIER_NAMES[body.courier]
+    courier_name = COURIER_CATALOG[body.courier]["label"] if local else _FULFILL_COURIER_NAMES[body.courier]
     credential = (
-        org_creds.postex_merchant_token if body.courier == "postex" else org_creds.couriers_next_auth_key
+        None if local
+        else org_creds.postex_merchant_token if body.courier == "postex" else org_creds.couriers_next_auth_key
     )
-    if not credential:
+    if not local and not credential:
         raise HTTPException(status_code=400, detail=f"{courier_name} credentials are not configured for this organization. Set them in Settings > Integrations.")
+
+    fixed_delivery_charge = (org_creds.couriers.get(body.courier) or {}).get("fixed_delivery_charge")
 
     # Couriers Next identifies the merchant on every booking by a client_code that is
     # not stored alongside the auth key - it is read back from the same call that lists
     # the shipper profiles, so it is fetched once here rather than per order.
-    fixed_delivery_charge = (org_creds.couriers.get(body.courier) or {}).get("fixed_delivery_charge")
-
     client_code = None
     if body.courier == "couriers_next":
         client_code, _ = await couriers_next.fetch_shippers(credential)
@@ -729,6 +845,10 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             async def _book_bounded(order_id: str, request: FulfillOrderRequest):
+                if local:
+                    return await _book_local_delivery(
+                        order_id, request, rows_by_id.get(order_id), courier_name, supabase, org_id, fixed_delivery_charge,
+                    )
                 async with sem:
                     return await _book_one_order(
                         client, body, order_id, request, rows_by_id.get(order_id),
@@ -754,7 +874,11 @@ async def fulfill_orders(body: FulfillOrdersBody, org_id: str = Depends(get_org_
             # but PostEx generates a label asynchronously - the parcel booked last has had
             # no time to be ready yet. A short pause here is cheaper than the airway-bill
             # endpoint's own retry (get_airway_bill) having to catch up after the fact.
-            await asyncio.sleep(_POST_BOOKING_LABEL_DELAY)
+            if not local:
+                await asyncio.sleep(_POST_BOOKING_LABEL_DELAY)
+            # Onto their dispatch-day bill now, so the sale posts without waiting for the
+            # Shopify sync to pick the booking up.
+            await _assign_courier_bills(org_id, [row["id"] for row, _ in booked])
             event_bus.publish(org_id, {"type": "orders_changed"})
             yield json.dumps({"type": "shopify_sync"}) + "\n"
             # Not awaited: this generator is tied to the client's HTTP connection, and a
@@ -905,7 +1029,9 @@ async def sweep_unsynced_shopify_fulfillments() -> None:
             .data
             or []
         )
-        booked = [(row, row["tracking_number"]) for row in rows if row.get("tracking_number")]
+        # A Local Delivery booking may have no tracking number; fulfilled_at is only ever
+        # set by the app's own booking, so every row here still needs its push.
+        booked = [(row, row["tracking_number"]) for row in rows]
         if not booked:
             continue
         org_creds = get_org_integration_settings(org_id)
@@ -1330,6 +1456,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
     try:
         supabase = get_supabase()
         org_creds = await ensure_valid_shopify_token(org_id, get_org_integration_settings(org_id))
+        fixed_charges = fixed_delivery_charges(org_creds.couriers)
         current_time = datetime.now(timezone.utc).isoformat()
         order_numbers_input = list(dict.fromkeys(body.order_numbers))
 
@@ -1594,21 +1721,11 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             else:
                 order_received_date = current_time
 
-            other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
-            delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else (other_charge if other_charge is not None else 0.0)
             tax_amount = 0.0
-
-            if existing_order:
-                existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
-                # The tracking number / courier tag is the authoritative source for "Other",
-                # re-derived on every force-sync; falls back to what's on file when neither
-                # matches, so a manually set charge isn't zeroed out just because nothing carries one.
-                if str(courier or "").strip().lower() == "other":
-                    final_delivery_charge = other_charge if other_charge is not None else existing_delivery_charge
-                else:
-                    final_delivery_charge = existing_delivery_charge
-            else:
-                final_delivery_charge = delivery_charge
+            final_delivery_charge = _synced_delivery_charge(
+                courier, tracking_number, sp_order.get("tags"),
+                (existing_order or {}).get("delivery_charge"), fixed_charges,
+            )
 
             payload: Dict[str, Any] = {
                 "order_number": target_order_number,
@@ -2293,15 +2410,15 @@ async def cancel_order(order_id: str, org_id: str = Depends(get_org_id)):
     return {"order_number": row["order_number"], "order_status": "cancelled"}
 
 
-def _advance_account(supabase, org_id: str, ledger_id: str) -> Optional[str]:
-    """The entry side for the cash, bank or wallet ledger an advance moves through - None
-    for Cash, which is stored as an empty side (see TransactionEntryBase)."""
+def _cash_or_bank_side(supabase, org_id: str, ledger_id: str) -> Optional[str]:
+    """The entry side for the cash, bank or wallet ledger money moves through - None for
+    Cash, which is stored as an empty side (see TransactionEntryBase)."""
     ledgers = (
         org_table(supabase, org_id, "finances_ledgers")
         .select("type, system_key").eq("id", ledger_id).limit(1).execute().data
     )
     if not ledgers or ledgers[0].get("type") != "Asset" or (ledgers[0].get("system_key") or "").startswith("courier_"):
-        raise HTTPException(status_code=400, detail="Pick a cash, bank or wallet account for the advance.")
+        raise HTTPException(status_code=400, detail="Pick a cash, bank or wallet account.")
     return None if ledgers[0].get("system_key") == "cash" else ledger_id
 
 
@@ -2344,7 +2461,7 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
     if total and money(row.get("advance_amount") or 0) >= total and 0 < advance < total:
         raise HTTPException(status_code=400, detail="A fully paid order's advance can only be refunded in full.")
 
-    account = _advance_account(supabase, org_id, body.ledger_id)
+    account = _cash_or_bank_side(supabase, org_id, body.ledger_id)
     orders_ledger_id = get_orders_ledger_id(supabase, org_id)
     if not orders_ledger_id:
         raise HTTPException(status_code=400, detail="This organization has no Customer Advances ledger.")
@@ -2490,7 +2607,7 @@ async def refund_returned_advances(body: RefundReturnedAdvancesBody, org_id: str
     rows = _unrefunded_advances(supabase, org_id, body.order_numbers)
     if not rows:
         return {"refunded_order_numbers": []}
-    account = _advance_account(supabase, org_id, body.ledger_id)
+    account = _cash_or_bank_side(supabase, org_id, body.ledger_id)
     org_rows = supabase.table("system_organizations").select("onboarding_date").eq("id", org_id).limit(1).execute().data
     onboarding = str((org_rows or [{}])[0].get("onboarding_date") or "")
 
@@ -2973,6 +3090,7 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
         orders = response.data or []
         updated_at = datetime.now(timezone.utc).isoformat()
         updated_order_numbers = []
+        updated_ids = []
         for order in orders:
             order_id = order.get("id")
             if not order_id:
@@ -2993,9 +3111,13 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
             if body.piece_received:
                 update_payload["piece_received"] = body.piece_received
             org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
+            updated_ids.append(order_id)
             onum = order.get("order_number")
             if onum is not None:
                 updated_order_numbers.append(onum)
+        if body.order_status == "delivered":
+            _settle_local_deliveries(supabase, org_id, updated_ids)
+        await _assign_courier_bills(org_id, updated_ids)
         if updated_order_numbers:
             event_bus.publish(org_id, {"type": "orders_changed"})
         requested_set = set(body.order_numbers)
@@ -3173,6 +3295,8 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
             raise HTTPException(status_code=404, detail="Order not found")
         event_bus.publish(org_id, {"type": "orders_changed"})
         updated = response.data[0]
+        if update_data.get("order_status") == "delivered":
+            _settle_local_deliveries(supabase, org_id, [order_id])
         if update_data.keys() & {"courier", "courier_pickup_date", "order_status"}:
             await _assign_courier_bills(org_id, [order_id])
         # If the advance amount changed, recompute this order's advance status.

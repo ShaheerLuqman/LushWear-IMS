@@ -8,11 +8,18 @@ const money = (v: unknown) => (parseFloat(String(v)) || 0).toLocaleString('en-US
 // Plain (no thousands separator) decimal string - comma-formatted drafts don't parse back.
 const plainDecimal = (v: unknown) => (parseFloat(String(v)) || 0).toFixed(2);
 
-export function EditableAmount({ value, editable, onSave, placeholder }: { value: unknown; editable: boolean; onSave: (v: number) => void; placeholder?: string }) {
+export function EditableAmount({ value, editable, onSave, placeholder, emptyLabel }: {
+  value: unknown; editable: boolean; onSave: (v: number) => void; placeholder?: string;
+  /** Shown greyed, read-only, for a null value. */
+  emptyLabel?: string;
+}) {
   const [text, setText] = useState(() => (value == null && placeholder ? '' : plainDecimal(value)));
   useEffect(() => { setText(value == null && placeholder ? '' : plainDecimal(value)); }, [value, placeholder]);
 
-  if (!editable) return <Text as="span" alignment="end" numeric>{value == null ? '' : money(value)}</Text>;
+  if (!editable) {
+    if (value == null && emptyLabel) return <Text as="span" alignment="end" tone="subdued">{emptyLabel}</Text>;
+    return <Text as="span" alignment="end" numeric>{value == null ? '' : money(value)}</Text>;
+  }
   return (
     <TextField
       /* text, not number: Polaris renders a spin-button control for type="number" that
@@ -21,7 +28,9 @@ export function EditableAmount({ value, editable, onSave, placeholder }: { value
       placeholder={placeholder} value={text} onChange={setText}
       onBlur={() => {
         const n = parseFloat(text.replace(/,/g, ''));
-        if (!isNaN(n) && n >= 0 && n !== (parseFloat(String(value)) || 0)) onSave(n);
+        // A blank (null) value differs from 0, so typing 0 into it still saves.
+        const current = value == null && placeholder ? null : (parseFloat(String(value)) || 0);
+        if (!isNaN(n) && n >= 0 && n !== current) onSave(n);
         else setText(value == null && placeholder ? '' : plainDecimal(value));
       }}
     />

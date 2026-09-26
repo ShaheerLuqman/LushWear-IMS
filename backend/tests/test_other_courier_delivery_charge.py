@@ -1,4 +1,4 @@
-from app.services.shopify_sync import _other_courier_delivery_charge
+from app.services.shopify_sync import _other_courier_delivery_charge, _synced_delivery_charge
 
 
 class TestOtherCourierDeliveryCharge:
@@ -65,3 +65,19 @@ class TestOtherCourierDeliveryCharge:
 
     def test_tracking_number_ignored_for_other_couriers(self):
         assert _other_courier_delivery_charge("PostEx", "Bykea 300", "") is None
+
+
+class TestSyncedDeliveryCharge:
+    """What the sync writes as delivery_charge: None = not entered, 0 = entered as zero."""
+    FIXED = {"scs": 180.0}
+
+    def test_fixed_charge_fills_only_a_charge_never_entered(self):
+        assert _synced_delivery_charge("SCS", None, "", None, self.FIXED) == 180.0
+        assert _synced_delivery_charge("SCS", None, "", 0, self.FIXED) == 0.0
+        assert _synced_delivery_charge("SCS", None, "", 150, self.FIXED) == 150.0
+
+    def test_no_fixed_charge_leaves_it_not_entered(self):
+        assert _synced_delivery_charge("PostEx", None, "", None, self.FIXED) is None
+
+    def test_other_courier_tag_still_wins(self):
+        assert _synced_delivery_charge("Other", None, "Bykea 300", 220, self.FIXED) == 300.0

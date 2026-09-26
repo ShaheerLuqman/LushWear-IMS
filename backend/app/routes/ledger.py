@@ -40,16 +40,28 @@ def _system_key(supabase, org_id: str, ledger_id: str):
     return resp.data[0].get("system_key") if resp.data else None
 
 
-def _name_taken(supabase, org_id: str, name: str, exclude_id: str = None) -> bool:
-    """Case-insensitive name clash check within this org (mirrors findLedgerByName
-    in renderer.js). Backstopped by idx_ledgers_org_id_name_lower for races/non-API
-    writers; this just gives a friendly error for the common case."""
-    target = name.strip().lower()
-    resp = org_table(supabase, org_id, "finances_ledgers").select("id, name").execute()
-    return any(
-        row["id"] != exclude_id and (row.get("name") or "").strip().lower() == target
-        for row in resp.data or []
-    )
+_RESERVED_NAMES = {name.lower() for name in (*SYSTEM_LEDGER_LABELS.values(), *COURIER_LEDGER_LABELS.values())}
+
+
+def _check_name(supabase, org_id: str, name: str, ledger_id: str = None) -> None:
+    """Raise unless `name` may be given to `ledger_id` (a new ledger when None).
+
+    System ledger names are fixed, and reserved even in an org that doesn't have that
+    ledger yet: ensure_system_ledger creates some lazily (courier_other,
+    tax_on_purchases, ...) and would otherwise land on "<name> (2)" beside a user's
+    same-named account. The case-insensitive clash check (mirrors findLedgerByName) is
+    backstopped by idx_ledgers_org_id_name_lower; this just gives a friendly error."""
+    rows = org_table(supabase, org_id, "finances_ledgers").select("id, name, system_key").execute().data or []
+    own = next((r for r in rows if r["id"] == ledger_id), None)
+    if own and own.get("system_key"):
+        if name != own.get("name"):
+            raise HTTPException(status_code=400, detail="System ledgers can't be renamed")
+        return
+    target = name.lower()
+    if target in _RESERVED_NAMES:
+        raise HTTPException(status_code=400, detail=f"{name} is reserved for a system ledger")
+    if any(r["id"] != ledger_id and (r.get("name") or "").strip().lower() == target for r in rows):
+        raise HTTPException(status_code=400, detail="A ledger with this name already exists")
 
 
 @router.get("/", response_model=List[Ledger])
@@ -72,8 +84,7 @@ async def create_ledger(ledger: LedgerCreate, org_id: str = Depends(get_org_id))
         raise HTTPException(status_code=400, detail="Type is required")
 
     supabase = get_supabase()
-    if _name_taken(supabase, org_id, name):
-        raise HTTPException(status_code=400, detail="A ledger with this name already exists")
+    _check_name(supabase, org_id, name)
 
     response = org_table(supabase, org_id, "finances_ledgers").insert({
         "name": name,
@@ -122,8 +133,7 @@ async def update_ledger(ledger_id: str, ledger: LedgerUpdate, org_id: str = Depe
         payload["name"] = (payload["name"] or "").strip()
         if not payload["name"]:
             raise HTTPException(status_code=400, detail="Ledger name cannot be empty")
-        if _name_taken(supabase, org_id, payload["name"], exclude_id=ledger_id):
-            raise HTTPException(status_code=400, detail="A ledger with this name already exists")
+        _check_name(supabase, org_id, payload["name"], ledger_id)
     if "type" in payload and not payload["type"]:
         raise HTTPException(status_code=400, detail="Type cannot be empty")
 

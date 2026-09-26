@@ -16,7 +16,7 @@ import { isFullyPaid, money } from './ordersPolarisColumns';
 export function AdvanceModal({
   order, ledgers, onClose, onSaved,
 }: {
-  order: Order;
+  order: Pick<Order, 'id' | 'order_number' | 'total_amount' | 'advance_amount'>;
   ledgers: Ledger[];
   onClose: () => void;
   onSaved: (patch: Pick<Order, 'advance_amount' | 'advance_status' | 'tags'>) => void;

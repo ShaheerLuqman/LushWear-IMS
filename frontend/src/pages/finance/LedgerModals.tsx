@@ -5,7 +5,7 @@ import { apiJson, apiRequest } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
-import { findLedgerByName, SYSTEM_LEDGER_LABELS, type Ledger } from '../../logic/ledgers';
+import { findLedgerByName, type Ledger } from '../../logic/ledgers';
 import { Banner, BlockStack, Checkbox, FormLayout, TextField } from '@shopify/polaris';
 import { Dropdown } from '../../components/Dropdown';
 import { FormModal } from '../../components/FormModal';
@@ -222,7 +222,7 @@ export function EditLedgerModal({
       extraActions={[{ content: 'Delete', destructive: true, disabled: cannotDelete, onAction: remove }]}
     >
       <BlockStack gap="400">
-        {isSystem && <Banner tone="info">System account ({SYSTEM_LEDGER_LABELS[ledger.system_key!] || ledger.system_key}) — used by the app, so it can't be deleted.</Banner>}
+        {isSystem && <Banner tone="info">System account — used by the app, so it can't be renamed or deleted.</Banner>}
         {!isSystem && hasEntries && <Banner tone="info">This ledger has entries, so it can't be deleted.</Banner>}
         <LedgerFormFields v={form} onChange={onChange} nameReadOnly={isSystem} />
       </BlockStack>

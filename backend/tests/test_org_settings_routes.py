@@ -274,8 +274,12 @@ def test_courier_bill_assignment_passes_enabled_names(monkeypatch):
     monkeypatch.setattr(couriers, "get_supabase", lambda: fake)
     monkeypatch.setattr(couriers, "enabled_courier_ids", lambda _org: ["postex", "tcs"])
     asyncio.run(couriers.assign_courier_bills("org-1", None))
-    fake.rpc.assert_called_once_with("assign_courier_bills", {
+    fake.rpc.assert_any_call("assign_courier_bills", {
         "p_org_id": "org-1", "p_order_ids": None, "p_couriers": ["postex", "tcs"],
+    })
+    # Local Delivery bills' status is re-derived right after, from the same orders.
+    fake.rpc.assert_any_call("sync_local_delivery_bill_status", {
+        "p_org_id": "org-1", "p_order_ids": None, "p_couriers": ["local delivery"],
     })
 
 

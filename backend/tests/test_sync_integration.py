@@ -443,6 +443,26 @@ class TestOtherCourierDeliveryCharge:
         target["tags"] = tag if tag is not None else ""
         return target
 
+    def test_a_local_delivery_order_is_not_reverted_to_other(self, monkeypatch):
+        """Shopify only knows a Local Delivery order as "Other"; the courier on file wins,
+        and the charge set on the Local Deliveries page isn't re-derived from the tag."""
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number, tracking_number="Bykea 300")
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        row = fake_db.orders.rows_by_number[order_number]
+        row["courier"] = "Local Delivery"
+        row["delivery_charge"] = 0.0
+
+        for status in ("fulfilled", "delivered"):
+            row["order_status"] = status
+            asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+            row = fake_db.orders.rows_by_number[order_number]
+            assert row["courier"] == "Local Delivery"
+            assert row["delivery_charge"] == 0.0
+
     def test_new_order_gets_delivery_charge_from_a_courier_tag(self, monkeypatch):
         orders_fixture = _load_fixture_orders()
         order_number = _find_order_number(orders_fixture, fulfilled=True)
@@ -506,7 +526,7 @@ class TestOtherCourierDeliveryCharge:
 
         fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
-        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 0.0
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] is None
 
         self._set_other_courier(orders_fixture, order_number, tag="Bykea 300")
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
@@ -524,7 +544,7 @@ class TestOtherCourierDeliveryCharge:
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
         row = fake_db.orders.rows_by_number[order_number]
         row["order_status"] = "delivered"
-        assert row["delivery_charge"] == 0.0
+        assert row["delivery_charge"] is None
 
         self._set_other_courier(orders_fixture, order_number, tag="Bykea 300")
         asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
@@ -550,7 +570,7 @@ class TestOtherCourierDeliveryCharge:
 
     def test_zero_charge_orders_stay_a_no_op_when_no_tag_matches(self, monkeypatch):
         """A courier "Other" order with no courier tag must not be flagged as changed on
-        every sync just because delivery_charge is (legitimately) 0 - only the
+        every sync just because delivery_charge is (legitimately) not entered - only the
         delivered-freeze bypass branch skips has_changed(), so this guards that branch
         specifically against a perpetual no-op-that-isn't."""
         orders_fixture = _load_fixture_orders()
@@ -564,7 +584,7 @@ class TestOtherCourierDeliveryCharge:
 
         second_result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
 
-        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 0.0
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] is None
         assert second_result["updated"] == 0
         assert second_result["skipped"] == len(orders_fixture)
 

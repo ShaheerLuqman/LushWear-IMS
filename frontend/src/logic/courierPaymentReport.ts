@@ -3,7 +3,7 @@ import { formatDateDDMMYYYY } from './shared';
 
 export interface CourierBillOrder {
   id: string; order_number?: number; folio?: string; tracking_number?: string; order_status?: string;
-  total_amount?: number; advance_amount?: number; delivery_charge?: number; tax_amount?: number; cost_price?: number;
+  total_amount?: number; advance_amount?: number; delivery_charge?: number | null; tax_amount?: number; cost_price?: number;
   is_order_settled?: boolean;
 }
 

@@ -141,7 +141,8 @@ class OrderBase(BaseModel):
     delivery_status: Optional[Dict[str, Any]] = None
     total_amount: float
     advance_amount: float = 0.0
-    delivery_charge: float = 0.0
+    # None = not entered yet; 0 is a real, entered charge.
+    delivery_charge: Optional[float] = None
     tax_amount: float = 0.0
     cost_price: float = 0.0
     order_receiving_date: datetime

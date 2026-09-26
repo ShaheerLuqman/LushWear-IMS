@@ -32,14 +32,6 @@ export const LEDGER_VOUCHER_LABELS: Record<string, string> = {
   manual: 'Journal',
 };
 
-export const SYSTEM_LEDGER_LABELS: Record<string, string> = {
-  cash: 'Cash',
-  opening_balance_equity: 'Opening Balance Equity',
-  orders: 'Customer Advances',
-  inventory: 'Inventory',
-  tax_on_purchases: 'Tax on Purchases',
-  other_expenses: 'Other Expenses',
-};
 
 // Ledgers that are bookkeeping plumbing rather than accounts a user reasons about
 // day-to-day - kept out of the type-grouped sections. Only OBE for now.
