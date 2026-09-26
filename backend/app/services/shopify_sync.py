@@ -25,6 +25,7 @@ from supabase import create_client
 from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.config import settings
+from app.couriers import assign_courier_bills
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
@@ -193,20 +194,21 @@ def partial_advance_from_tags(tags_raw) -> Optional[float]:
         return None
 
 
-def _delivery_charge_from_other_tags(courier: Optional[str], tags_raw) -> Optional[float]:
-    """Courier "Other" has no tracking API. Shopify's free-text tracking-number field for
-    it turned out to get inconsistently formatted by the fulfillment flow ("Bykea 300",
-    "300 bykea", "bykea300" have all shown up in real data), so the merchant instead tags
-    the order with the courier name and delivery charge together (e.g. tag "Bykea 300" ->
-    Bykea, 300). Returns the number from the first tag matching "<name> <number>"; None if
-    no tag matches. `tags_raw` is Shopify's own `tags` field - a comma-separated string."""
+def _other_courier_delivery_charge(courier: Optional[str], tracking_number: Optional[str], tags_raw) -> Optional[float]:
+    """Courier "Other" has no tracking API, so the merchant writes the courier name and
+    delivery charge together as "<name> <number>" (e.g. "Bykea 300" -> 300) - in the
+    fulfillment's tracking number, or on older orders as an order tag. The tracking number
+    wins; otherwise the first matching tag. None if neither matches, or the amount is 0 -
+    "Bykea 0" (customer paid the rider) must not overwrite a DC set by hand, e.g. the 1
+    the merchant uses to mark those orders. `tags_raw` is Shopify's own `tags` field - a
+    comma-separated string."""
     if (courier or "").strip().lower() != "other":
         return None
     tags_str = tags_raw if isinstance(tags_raw, str) else (str(tags_raw) if tags_raw is not None else "")
-    for tag in tags_str.split(","):
-        m = _OTHER_COURIER_TAG_CHARGE_RE.match(tag.strip())
+    for candidate in [tracking_number or "", *tags_str.split(",")]:
+        m = _OTHER_COURIER_TAG_CHARGE_RE.match(candidate.strip())
         if m:
-            return float(m.group(1))
+            return float(m.group(1)) or None
     return None
 
 
@@ -818,7 +820,7 @@ def _reconcile_one_order(
     if courier.upper() == "SCS":
         delivery_charge = 180.0
     else:
-        other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+        other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
         if other_charge is not None:
             delivery_charge = other_charge
     structured_line_items = extract_line_items(
@@ -914,13 +916,12 @@ def _reconcile_one_order(
         shopify_courier_lower = (courier or "").strip().lower()
         if existing_courier_lower == "other" or shopify_courier_lower == "other":
             # "Other" has no tracking API, so the courier name / delivery charge can
-            # only ever be corrected via the courier tag - keep pulling that (and the
-            # fulfillment's own courier/tracking_number) in even past the
-            # delivered/returned freeze below.
+            # only ever be corrected via the tracking number or courier tag - keep pulling
+            # those in even past the delivered/returned freeze below.
             existing_tracking_frozen = (existing_order.get("tracking_number") or "").strip() or None
             shopify_tracking_frozen = (tracking_number or "").strip() or None
             existing_delivery_charge_frozen = float(existing_order.get("delivery_charge") or 0)
-            other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+            other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
             new_delivery_charge_frozen = other_charge if other_charge is not None else existing_delivery_charge_frozen
             if (
                 shopify_courier_lower != existing_courier_lower
@@ -1019,12 +1020,10 @@ def _reconcile_one_order(
         # Only set to 180 if courier is SCS and delivery_charge hasn't been set yet
         order_data["delivery_charge"] = 180.0
     elif final_courier == "OTHER":
-        # The courier tag is the authoritative source (unlike the free-text
-        # tracking-number field, it's not stored anywhere to diff against, so
-        # just re-derive from Shopify's live tags on every sync); falls back to
-        # whatever's on file when no tag matches, so a manually set charge isn't
-        # zeroed out just because the order has no courier tag.
-        other_charge = _delivery_charge_from_other_tags(order_data.get("courier"), sp_order.get("tags"))
+        # The tracking number / courier tag is the authoritative source, re-derived
+        # on every sync; falls back to whatever's on file when neither matches, so a
+        # manually set charge isn't zeroed out just because nothing carries one.
+        other_charge = _other_courier_delivery_charge(order_data.get("courier"), order_data.get("tracking_number"), sp_order.get("tags"))
         order_data["delivery_charge"] = other_charge if other_charge is not None else existing_delivery_charge
     else:
         # Preserve existing delivery_charge (including any non-zero values)
@@ -1157,10 +1156,11 @@ async def reconcile_and_persist_single_order(org_id: str, sp_order: dict) -> Opt
     if result is None or result.action == "skip":
         return result
 
-    org_table(supabase, org_id, "shopify_orders").upsert(
+    saved = org_table(supabase, org_id, "shopify_orders").upsert(
         result.order_data, on_conflict="org_id,order_number"
     ).execute()
     event_bus.publish(org_id, {"type": "orders_changed"})
+    await assign_courier_bills(org_id, [r["id"] for r in saved.data or []])
 
     # Same replacement_of_order_no -> reset-the-original's-piece_received step
     # _sync_shopify_orders does after its own batch upsert, scoped to this one order.
@@ -1322,12 +1322,13 @@ async def _sync_shopify_orders(
                 orders_to_skip.append(result.order_number)
         t_diff_loop = time.perf_counter()
 
+        touched_ids = []
         created_count = 0
         if orders_to_insert:
             batch_size = 1000
             for i in range(0, len(orders_to_insert), batch_size):
                 batch = orders_to_insert[i:i + batch_size]
-                org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
+                touched_ids += [r["id"] for r in org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute().data or []]
                 created_count += len(batch)
 
         updated_count = 0
@@ -1335,8 +1336,9 @@ async def _sync_shopify_orders(
             batch_size = 1000
             for i in range(0, len(orders_to_update), batch_size):
                 batch = orders_to_update[i:i + batch_size]
-                org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
+                touched_ids += [r["id"] for r in org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute().data or []]
                 updated_count += len(batch)
+        await assign_courier_bills(org_id, touched_ids)
         t_upserts = time.perf_counter()
 
         if original_orders_to_reset_piece_received:

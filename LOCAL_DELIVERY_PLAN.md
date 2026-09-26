@@ -1,6 +1,6 @@
 # Local Delivery — Implementation Plan
 
-Status: design in progress, nothing implemented.
+Status: design settled, nothing implemented.
 
 ## Goal
 
@@ -25,6 +25,14 @@ never cash to collect. The only money on the order is the delivery charge (DC).
   delivered.
 - **The paid-from ledger is chosen per order** on that page, not configured
   once in Settings.
+- **Customers always pay the full amount in advance.** Booking rejects a Local
+  Delivery order whose `advance_amount < total_amount`. Otherwise the sale
+  posting would book the difference as COD owed by the rider, a receivable no
+  one will ever pay.
+- **Delivered means settled:** the Delivered button sets
+  `order_status = delivered` and `is_order_settled = true` together.
+- **Failed deliveries are handled by hand for now.** No Returned action; revisit
+  if they stop being rare.
 
 ## Current state
 
@@ -34,7 +42,7 @@ never cash to collect. The only money on the order is the delivery charge (DC).
   and booking only dispatches to PostEx or Couriers Next (`routes/orders.py`
   `_book_one_order`).
 - Current workaround: fulfill as courier "Other" and tag the Shopify order
-  `Bykea 300`, which `_delivery_charge_from_other_tags` (`services/shopify_sync.py`)
+  `Bykea 300`, which `_other_courier_delivery_charge` (`services/shopify_sync.py`)
   parses into the DC. Local Delivery replaces this for new orders.
 - The sale posting (`post_order_journal`) debits the courier's ledger for
   `total - advance` as "COD due from courier". For a Local Delivery order this
@@ -46,6 +54,8 @@ never cash to collect. The only money on the order is the delivery charge (DC).
    courier city, order type and COD. Booking needs only the selected orders plus
    an optional ref (Bykea booking ID or rider phone), saved as `tracking_number`.
    The DC is not asked for here; it's entered on the Local Deliveries page.
+   Orders without a full advance are rejected per order, the same way booking
+   failures are already reported per order.
 2. **Booking (backend):** no courier API. Save `courier`,
    `order_status = fulfilled` and `fulfilled_at` locally, then reuse the existing
    Shopify fulfillment push. `pickup_address_code` and `courier_city` become
@@ -55,7 +65,13 @@ never cash to collect. The only money on the order is the delivery charge (DC).
    - **DC:** editable amount, default 0.
    - **Paid from:** a ledger dropdown (cash/bank), required when DC > 0. Reuse
      whatever ledger picker payment vouchers already use.
-   - **Delivered:** a button that sets `order_status = delivered`.
+   - **Delivered:** a button that sets `order_status = delivered` and
+    `is_order_settled = true`. This is local only: do **not** call
+    `shopify.mark_order_settled`. Its "Settled" tag tells the sync's advance
+    derivation (`shopify_sync.py`, the `has_settled_tag` check) that a "paid"
+    status came from a courier payout, not the customer. On a prepaid Local
+    Delivery order that would reset the advance to 0. Shopify already shows
+    these orders as paid, so there's nothing to push.
 4. **Accounting:** saving a row (re)posts one journal entry per order,
    `source_type = 'local_delivery_charge'`, `source_id = order id`, dated
    `fulfilled_at`: **Dr Delivery Charges (5100) / Cr <paid-from ledger>**.
@@ -67,12 +83,4 @@ never cash to collect. The only money on the order is the delivery charge (DC).
 
 ## Open questions
 
-1. How do Local Delivery customers pay for the goods? The sale posting reads
-   `total - advance` as COD owed by the courier. So either these orders are
-   always recorded with a full advance, or booking must reject an order whose
-   advance is less than its total. Otherwise Bykea's ledger builds up a
-   receivable nobody will ever pay.
-2. Does "delivered" also mean settled (`is_order_settled = true`)? There's no
-   payout to wait for, so it probably should.
-3. Failed deliveries (rider brings the parcel back): do they need a "Returned"
-   action on the page, or is that rare enough to handle by hand?
+None. Design is settled and ready to implement when asked.

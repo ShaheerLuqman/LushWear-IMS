@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
 from app.auth import create_state_token, get_org_id
-from app.couriers import get_org_couriers, update_org_courier
+from app.couriers import assign_courier_bills, get_org_couriers, update_org_courier
 from app.fiscal_settings import get_org_fiscal_settings, set_org_fiscal_settings
 from app.models import (
     CourierStatus,
@@ -64,7 +64,7 @@ async def list_couriers(org_id: str = Depends(get_org_id)):
 @router.put("/couriers/{courier_id}", response_model=CourierStatus)
 async def update_courier(courier_id: str, body: CourierUpdate, org_id: str = Depends(get_org_id)):
     try:
-        return update_org_courier(
+        status = update_org_courier(
             org_id, courier_id, body.enabled, body.credentials,
             **body.model_dump(include={"fixed_delivery_charge"}, exclude_unset=True),
         )
@@ -72,6 +72,8 @@ async def update_courier(courier_id: str, body: CourierUpdate, org_id: str = Dep
         raise HTTPException(status_code=404, detail="Unknown courier")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    await assign_courier_bills(org_id, None)
+    return status
 
 
 @router.get("/fiscal", response_model=OrgFiscalSettingsPublic)

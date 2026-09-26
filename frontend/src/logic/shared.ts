@@ -25,17 +25,16 @@ export function formatCourierForDisplay(courier: unknown): string {
 }
 
 /** When courier is "Other" and tracking_number is not purely numeric, show tracking_number
- * in the Courier column. Fedex is shown as TCS. */
+ * in the Courier column. Either way a trailing delivery charge is dropped ("Bykea 300" ->
+ * "Bykea"; the sync moves that amount into delivery_charge). Fedex is shown as TCS. */
 export function getCourierDisplayName(order: { courier?: string; tracking_number?: string } | null | undefined): string {
   if (!order) return '-';
   const courier = order.courier != null ? String(order.courier).trim() : '';
   const tracking = order.tracking_number != null ? String(order.tracking_number).trim() : '';
   const isOther = courier.toLowerCase() === 'other';
   const trackingIsNotNumeric = tracking !== '' && !/^\d+$/.test(tracking);
-  if (isOther && trackingIsNotNumeric) return tracking;
-  const raw = courier || '-';
-  if (raw === '-') return raw;
-  return formatCourierForDisplay(raw) || '-';
+  const name = (isOther && trackingIsNotNumeric ? tracking : courier).replace(/\s+\d+(\.\d+)?$/, '');
+  return name ? formatCourierForDisplay(name) : '-';
 }
 
 export function getPKTDate(): Date {

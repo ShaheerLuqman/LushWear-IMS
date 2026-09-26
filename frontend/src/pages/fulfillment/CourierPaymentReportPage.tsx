@@ -121,8 +121,7 @@ function BillDetail({ id, initial }: { id: string; initial?: CourierBill }) {
   const downloadPdf = async () => {
     setDownloading(true);
     try {
-      const query = new URLSearchParams({ pickup_date: bill.pickupDateKey, courier: bill.courier });
-      const response = await apiRequest(`/orders/courier-bill-summary-pdf?${query}`, { fallback: 'Failed to generate PDF' });
+      const response = await apiRequest(`/orders/courier-bill-summary-pdf?bill_id=${bill.id}`, { fallback: 'Failed to generate PDF' });
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');

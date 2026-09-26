@@ -10,11 +10,14 @@ The `enable_courier_system_ledger` RPC call below is create-or-return and
 mostly a no-op now; it stays so an org whose ledger predates this seeding (or
 that already renamed/adopted a same-named ledger by hand) is left alone.
 
-The `enabled` flag drives this screen and the ledger only; nothing in the
-booking path checks it.
+The `enabled` flag drives this screen, the ledger, and courier-bill grouping
+(an order of a disabled courier goes on the shared 'Other' bill); nothing in
+the booking path checks it.
 """
 
-from typing import Dict, List
+import asyncio
+import logging
+from typing import Dict, List, Optional
 
 from app.database import get_supabase
 from app.ledger_roles import get_system_ledger_id
@@ -25,6 +28,8 @@ from app.org_settings import (
     upsert_org_integration_settings,
 )
 
+logger = logging.getLogger("app.couriers")
+
 SYSTEM_KEY_PREFIX = "courier_"
 
 # Ordered: the Settings screen renders couriers in this order. `credentials` is
@@ -33,7 +38,8 @@ SYSTEM_KEY_PREFIX = "courier_"
 COURIER_CATALOG = {
     "postex": {"label": "PostEx", "ledger_code": "1150"},
     "couriers_next": {"label": "Couriers Next", "ledger_code": "1151"},
-    "tcs": {"label": "TCS", "ledger_code": "1152"},
+    # Orders still carry TCS under its old name (see formatCourierForDisplay).
+    "tcs": {"label": "TCS", "ledger_code": "1152", "aliases": ["FedEx"]},
     "bykea": {"label": "Bykea", "ledger_code": "1153"},
 }
 
@@ -82,6 +88,41 @@ def _status(courier_id: str, couriers: dict, org_id: str, supabase) -> CourierSt
 def enabled_courier_ids(org_id: str) -> List[str]:
     couriers = get_org_integration_settings(org_id).couriers
     return [cid for cid in COURIER_CATALOG if _is_enabled(couriers.get(cid) or {}, cid)]
+
+
+async def assign_courier_bills(org_id: str, order_ids: Optional[List[str]]) -> None:
+    """Put orders on their (courier, dispatch date) bill - the order's own courier's if
+    enabled, else the shared 'Other' one (see assign_courier_bills in SQL). None regroups
+    the whole org. Call after any write that can change an order's courier, status or
+    dispatch date; it is idempotent.
+
+    Orders whose courier/date moved them off a settled or pre-onboarding bill are kept
+    there by the function and only logged - silently rewriting a bill you have closed out
+    with the courier would be worse than leaving it stale. Best-effort: a failure leaves
+    the orders saved but unassigned until the next call picks them up."""
+    if order_ids is not None and not order_ids:
+        return
+
+    def run():
+        names = [
+            name.lower()
+            for cid in enabled_courier_ids(org_id)
+            for name in (COURIER_CATALOG[cid]["label"], *COURIER_CATALOG[cid].get("aliases", ()))
+        ]
+        return get_supabase().rpc(
+            "assign_courier_bills", {"p_org_id": org_id, "p_order_ids": order_ids, "p_couriers": names}
+        ).execute()
+
+    try:
+        result = await asyncio.to_thread(run)
+        blocked = (result.data or [{}])[0].get("blocked") or []
+        if blocked:
+            logger.warning(
+                "[courier-bills] %d order(s) kept on a settled/pre-onboarding bill despite a "
+                "changed courier/date: %s", len(blocked), blocked,
+            )
+    except Exception:
+        logger.exception("[courier-bills] assignment failed for org %s", org_id)
 
 
 def get_org_couriers(org_id: str) -> List[CourierStatus]:

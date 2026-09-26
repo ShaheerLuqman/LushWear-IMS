@@ -262,3 +262,18 @@ class TestOrgFiscalSettings:
         client = make_client({"system_organizations": [{"id": "test-org", "name": "Test Org"}]})
         r = client.put("/api/org-settings/fiscal", json=body)
         assert r.status_code == 422
+
+
+def test_courier_bill_assignment_passes_enabled_names_and_aliases(monkeypatch):
+    """SQL can't read the encrypted couriers blob, so the enabled set (TCS under its old
+    FedEx name too) reaches assign_courier_bills as lowercased order-courier names."""
+    import asyncio
+    import app.couriers as couriers
+
+    fake = MagicMock()
+    monkeypatch.setattr(couriers, "get_supabase", lambda: fake)
+    monkeypatch.setattr(couriers, "enabled_courier_ids", lambda _org: ["postex", "tcs"])
+    asyncio.run(couriers.assign_courier_bills("org-1", None))
+    fake.rpc.assert_called_once_with("assign_courier_bills", {
+        "p_org_id": "org-1", "p_order_ids": None, "p_couriers": ["postex", "tcs", "fedex"],
+    })

@@ -16,7 +16,7 @@ from app import shopify
 from app.advance_status import fetch_transaction_advance_totals, get_orders_ledger_id, recompute_advance_statuses
 from app.auth import get_org_id
 from app.config import settings
-from app.couriers import enabled_courier_ids
+from app.couriers import assign_courier_bills as _assign_courier_bills, enabled_courier_ids
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
@@ -44,7 +44,7 @@ from app.services.shopify_sync import (
     SyncShopifyOrdersResult,
     derive_total_and_advance,
     _cost_from_line_items,
-    _delivery_charge_from_other_tags,
+    _other_courier_delivery_charge,
     _get_sync_status_row,
     _line_items_incomplete,
     _line_items_signature,
@@ -1594,16 +1594,15 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             else:
                 order_received_date = current_time
 
-            other_charge = _delivery_charge_from_other_tags(courier, sp_order.get("tags"))
+            other_charge = _other_courier_delivery_charge(courier, tracking_number, sp_order.get("tags"))
             delivery_charge = 180.0 if str(courier or "").strip().upper() == "SCS" else (other_charge if other_charge is not None else 0.0)
             tax_amount = 0.0
 
             if existing_order:
                 existing_delivery_charge = float(existing_order.get("delivery_charge") or 0)
-                # The courier tag is the authoritative source for "Other" - not stored anywhere
-                # to diff against, so just re-derive from Shopify's live tags on every
-                # force-sync; falls back to what's on file when no tag matches, so a manually
-                # set charge isn't zeroed out just because the order has no courier tag.
+                # The tracking number / courier tag is the authoritative source for "Other",
+                # re-derived on every force-sync; falls back to what's on file when neither
+                # matches, so a manually set charge isn't zeroed out just because nothing carries one.
                 if str(courier or "").strip().lower() == "other":
                     final_delivery_charge = other_charge if other_charge is not None else existing_delivery_charge
                 else:
@@ -1653,14 +1652,16 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
         # do have "id" (existing orders) makes it null out id for the new rows instead of
         # leaving it unset, which trips the NOT NULL constraint.
         batch_size = 500
+        touched_ids = []
         for i in range(0, len(to_insert), batch_size):
             batch = to_insert[i:i + batch_size]
-            org_table(supabase, org_id, "shopify_orders").insert(batch).execute()
+            touched_ids += [r["id"] for r in org_table(supabase, org_id, "shopify_orders").insert(batch).execute().data or []]
         for i in range(0, len(to_update), batch_size):
             batch = to_update[i:i + batch_size]
-            org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute()
+            touched_ids += [r["id"] for r in org_table(supabase, org_id, "shopify_orders").upsert(batch, on_conflict="org_id,order_number").execute().data or []]
         if to_insert or to_update:
             event_bus.publish(org_id, {"type": "orders_changed"})
+            await _assign_courier_bills(org_id, touched_ids)
 
         return {
             "requested_count": len(order_numbers_input),
@@ -2042,38 +2043,26 @@ async def get_courier_performance_by_city(
 @limiter.limit("10/minute")
 async def get_courier_bill_summary_pdf(
     request: Request,
-    pickup_date: str = Query(..., description="Pickup date as YYYY-MM-DD"),
-    courier: str = Query(...),
+    bill_id: str = Query(...),
     org_id: str = Depends(get_org_id),
 ):
-    """Settlement summary PDF for one courier payment bill (one courier's pickup on one day)."""
+    """Settlement summary PDF for one courier payment bill, over the same members the bill
+    detail screen lists (see courier_bills.get_courier_bill)."""
     try:
-        try:
-            day = datetime.strptime(pickup_date, "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="pickup_date must be YYYY-MM-DD")
-
         supabase = get_supabase()
-        # courier_pickup_date is TIMESTAMPTZ, so the day is a half-open range rather than an
-        # equality match, and the bounds are anchored to PKT - the frontend groups by the
-        # browser's local calendar date, and bare dates would be read as UTC, shifting the
-        # window five hours and pulling in the neighbouring day's pickups.
-        start = datetime(day.year, day.month, day.day, tzinfo=PKT_TIMEZONE)
-        response = (
-            org_table(supabase, org_id, "shopify_orders")
-            .select("*")
-            .gte("courier_pickup_date", start.isoformat())
-            .lt("courier_pickup_date", (start + timedelta(days=1)).isoformat())
-            .execute()
+        bill = (
+            org_table(supabase, org_id, "shopify_courier_bills")
+            .select("courier, pickup_date").eq("id", bill_id).limit(1).execute().data
         )
-        courier_name = courier.strip()
-        orders = [
-            row for row in (response.data or [])
-            if (row.get("courier") or "").strip().lower() == courier_name.lower()
-        ]
+        orders = bill and (
+            org_table(supabase, org_id, "shopify_orders")
+            .select("*").eq("courier_bill_id", bill_id).neq("order_status", "cancelled")
+            .execute().data
+        )
         if not orders:
             raise HTTPException(status_code=404, detail="No orders found for this bill")
 
+        courier_name, pickup_date = bill[0]["courier"], bill[0]["pickup_date"]
         pdf_buffer = await asyncio.to_thread(
             generate_courier_bill_summary_pdf, orders, pickup_date, courier_name
         )
@@ -2116,8 +2105,8 @@ async def get_airway_bill_list(
     """Fulfilled orders with a tracking number, for the Print Airway Bill screen.
 
     Only PostEx / Couriers Next orders - the two couriers whose airway bills the app can
-    fetch. `fulfilled_at` is a TIMESTAMPTZ, so the range is half-open and anchored to PKT
-    (same reasoning as get_courier_bill_summary_pdf)."""
+    fetch. `fulfilled_at` is a TIMESTAMPTZ, so the range is half-open and anchored to PKT -
+    bare dates would be read as UTC, shifting the window five hours."""
     try:
         supabase = get_supabase()
 
@@ -3184,7 +3173,7 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
             raise HTTPException(status_code=404, detail="Order not found")
         event_bus.publish(org_id, {"type": "orders_changed"})
         updated = response.data[0]
-        if "courier" in update_data or "courier_pickup_date" in update_data:
+        if update_data.keys() & {"courier", "courier_pickup_date", "order_status"}:
             await _assign_courier_bills(org_id, [order_id])
         # If the advance amount changed, recompute this order's advance status.
         if "advance_amount" in update_data and updated.get("order_number"):
@@ -3393,32 +3382,6 @@ async def _sync_pre_onboarding_bill(org_id: str, courier: str) -> int:
     except Exception:
         logger.exception("[pre-onboarding] bill sync failed for %s", courier)
         return 0
-
-
-async def _assign_courier_bills(org_id: str, order_ids: List[str]) -> None:
-    """Put the given orders on their (courier, pickup date) bill, creating it if needed.
-    Call after any write that can change an order's courier or courier_pickup_date; it is
-    idempotent, so calling it when nothing relevant changed costs one no-op query.
-
-    Orders whose pickup date moved them off a bill already marked settled are refused by
-    the function and logged here - silently rewriting a bill you have closed out with the
-    courier would be worse than leaving it stale."""
-    if not order_ids:
-        return
-    try:
-        result = await asyncio.to_thread(
-            lambda: get_supabase().rpc(
-                "assign_courier_bills", {"p_org_id": org_id, "p_order_ids": order_ids}
-            ).execute()
-        )
-        blocked = (result.data or [{}])[0].get("blocked") or []
-        if blocked:
-            logger.warning(
-                "[courier-bills] %d order(s) kept on a settled bill despite a changed "
-                "courier/pickup date: %s", len(blocked), blocked,
-            )
-    except Exception:
-        logger.exception("[courier-bills] assignment failed for %d orders", len(order_ids))
 
 
 async def _post_postex_payout(org_id: str, order_ids: List[str], cash_ledger_id: str) -> bool:

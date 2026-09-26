@@ -1,13 +1,14 @@
 """Courier payment bills: what each courier owes for the parcels it picked up on one date.
 
-A bill is the (courier, pickup_date) bundle the Courier Payment Report page shows. Its
+A bill is the (courier, pickup_date) bundle the Courier Payment Report page shows - one per
+enabled courier, and one shared 'Other' bill for every other courier's parcels. Its
 money is never stored - shopify_courier_bills_with_totals derives every figure from the
 member orders, so a PostEx CSV that changes charges or settles an order is reflected with
 no bill write at all (see 20260830030000_courier_bills.sql).
 
 Membership is maintained by assign_courier_bills(), called after any write that can change
-an order's courier or pickup date. Orders without a pickup date belong to no bill and are
-absent from this page entirely - they cannot be placed on the pickup-date timeline.
+an order's courier, status or dispatch date. An order with no courier pickup date is dated
+by fulfilled_at, else its order date; unfulfilled and cancelled ones belong to no bill.
 """
 import logging
 from datetime import date, datetime, timezone

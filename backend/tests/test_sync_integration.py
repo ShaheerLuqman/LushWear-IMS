@@ -62,6 +62,10 @@ def _load_fixture_products_and_variants():
 _NOT_NULL_ORDER_COLUMNS = ("courier", "order_status")
 
 
+async def _no_assign_courier_bills(*_a, **_k):
+    return None
+
+
 class _FakeResp:
     def __init__(self, data):
         self.data = data
@@ -145,6 +149,7 @@ class _FakeOrdersQuery:
         # or missing on_conflict target.
         self._store.last_on_conflict = on_conflict
         key_col = (on_conflict or "").split(",")[-1].strip()
+        saved = []
         for row in rows:
             for col in _NOT_NULL_ORDER_COLUMNS:
                 if col in row and row[col] is None:
@@ -156,7 +161,9 @@ class _FakeOrdersQuery:
             merged = {**self._store.rows_by_number.get(key, {}), **row}
             merged.setdefault("id", f"gen-{key}")
             self._store.rows_by_number[key] = merged
-        self._pending = ("upsert", rows)
+            saved.append(merged)
+        # PostgREST returns the stored rows, so callers can read back generated ids.
+        self._pending = ("upsert", saved)
         return self
 
     def update(self, payload):
@@ -232,6 +239,7 @@ def synced_once(monkeypatch):
     monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
     monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
     monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", fake_recompute)
+    monkeypatch.setattr(shopify_sync, "assign_courier_bills", _no_assign_courier_bills)
 
     result = asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
     return fake_db, result, orders_fixture
@@ -418,15 +426,14 @@ def _run_sync_with_fixture(monkeypatch, orders_fixture):
     monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
     monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
     monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", lambda *_a, **_k: 0)
+    monkeypatch.setattr(shopify_sync, "assign_courier_bills", _no_assign_courier_bills)
     return fake_db
 
 
 class TestOtherCourierDeliveryCharge:
-    """Courier "Other" has no tracking API - the merchant tags the order with the courier
-    name and delivery charge together (e.g. tag "Bykea 300"), parsed by
-    _delivery_charge_from_other_tags. Shopify's free-text tracking-number field was tried
-    first but turned out to get inconsistently formatted by the fulfillment flow, so the
-    tag is now the authoritative source; tracking_number itself still syncs normally."""
+    """Courier "Other" has no tracking API - the merchant writes the courier name and
+    delivery charge together (e.g. "Bykea 300") in the tracking number or an order tag,
+    parsed by _other_courier_delivery_charge; tracking_number itself still syncs normally."""
 
     def _set_other_courier(self, orders_fixture, order_number, *, tag=None, tracking_number="111111"):
         target = next(o for o in orders_fixture if int(o["order_number"]) == order_number)
@@ -447,6 +454,23 @@ class TestOtherCourierDeliveryCharge:
         row = fake_db.orders.rows_by_number[order_number]
         assert row["courier"] == "Other"
         assert row["delivery_charge"] == 300.0
+
+    def test_delivery_charge_from_the_tracking_number(self, monkeypatch):
+        orders_fixture = _load_fixture_orders()
+        order_number = _find_order_number(orders_fixture, fulfilled=True)
+        self._set_other_courier(orders_fixture, order_number, tracking_number="Bykea 300")
+
+        fake_db = _run_sync_with_fixture(monkeypatch, orders_fixture)
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+        assert fake_db.orders.rows_by_number[order_number]["delivery_charge"] == 300.0
+
+        fake_db.orders.rows_by_number[order_number]["order_status"] = "delivered"
+        self._set_other_courier(orders_fixture, order_number, tracking_number="Bykea 350")
+        asyncio.run(shopify_sync._sync_shopify_orders(TEST_ORG_ID))
+
+        row = fake_db.orders.rows_by_number[order_number]
+        assert row["tracking_number"] == "Bykea 350"
+        assert row["delivery_charge"] == 350.0
 
     def test_resyncs_past_the_delivered_freeze_when_the_tag_changes(self, monkeypatch):
         """Every other field freezes once an order is delivered/returned (see
@@ -586,6 +610,7 @@ class TestIncrementalSyncWindow:
         monkeypatch.setattr(shopify_sync, "get_org_integration_settings", lambda _org_id: _FAKE_ORG_CREDS)
         monkeypatch.setattr(shopify_sync, "_fetch_shopify_orders_in_range", fake_fetch_range)
         monkeypatch.setattr(shopify_sync, "recompute_advance_statuses", lambda *_a, **_k: 0)
+        monkeypatch.setattr(shopify_sync, "assign_courier_bills", _no_assign_courier_bills)
         return fake_db, captured_windows
 
     def test_first_sync_uses_the_backfill_window(self, monkeypatch):
