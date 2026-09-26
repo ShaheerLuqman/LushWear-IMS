@@ -16,7 +16,7 @@ from app import shopify
 from app.advance_status import fetch_transaction_advance_totals, get_orders_ledger_id, recompute_advance_statuses
 from app.auth import get_org_id
 from app.config import settings
-from app.couriers import assign_courier_bills as _assign_courier_bills, enabled_courier_ids
+from app.couriers import assign_courier_bills as _assign_courier_bills, canonical_courier, enabled_courier_ids
 from app.database import get_supabase
 from app.db_utils import fetch_all
 from app.fiscal_settings import DEFAULT_FISCAL_MONTH_START_DAY, get_org_fiscal_settings
@@ -1411,7 +1411,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
                 latest_fulfillment = fulfillments_to_check[-1]
             tracking_company = (latest_fulfillment or {}).get("tracking_company")
             tracking_company = str(tracking_company or "").strip()
-            return tracking_company or "Unassigned"
+            return canonical_courier(tracking_company) if tracking_company else "Unassigned"
 
         def extract_tracking_number(order):
             fulfillments = order.get("fulfillments") or []

@@ -264,9 +264,9 @@ class TestOrgFiscalSettings:
         assert r.status_code == 422
 
 
-def test_courier_bill_assignment_passes_enabled_names_and_aliases(monkeypatch):
-    """SQL can't read the encrypted couriers blob, so the enabled set (TCS under its old
-    FedEx name too) reaches assign_courier_bills as lowercased order-courier names."""
+def test_courier_bill_assignment_passes_enabled_names(monkeypatch):
+    """SQL can't read the encrypted couriers blob, so the enabled set reaches
+    assign_courier_bills as lowercased courier names."""
     import asyncio
     import app.couriers as couriers
 
@@ -275,5 +275,15 @@ def test_courier_bill_assignment_passes_enabled_names_and_aliases(monkeypatch):
     monkeypatch.setattr(couriers, "enabled_courier_ids", lambda _org: ["postex", "tcs"])
     asyncio.run(couriers.assign_courier_bills("org-1", None))
     fake.rpc.assert_called_once_with("assign_courier_bills", {
-        "p_org_id": "org-1", "p_order_ids": None, "p_couriers": ["postex", "tcs", "fedex"],
+        "p_org_id": "org-1", "p_order_ids": None, "p_couriers": ["postex", "tcs"],
     })
+
+
+def test_shopify_courier_names_map_onto_ours():
+    from app.couriers import canonical_courier
+    from app.services.shopify_sync import extract_courier
+
+    assert canonical_courier("FedEx") == "TCS"
+    assert canonical_courier("fedex") == "TCS"
+    assert canonical_courier("PostEx") == "PostEx"
+    assert extract_courier({"fulfillments": [{"tracking_company": " FedEx ", "created_at": "2026-09-01T00:00:00Z"}]}) == "TCS"

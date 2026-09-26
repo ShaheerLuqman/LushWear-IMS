@@ -22,7 +22,7 @@ import { formatMoney } from '../../logic/ledgers';
 import { computeReceivable } from '../../logic/orders';
 import {
   BILL_STATUS_META, COURIER_PAYMENT_STATUSES, COURIER_PAYMENT_STATUS_LABELS, COURIER_RESOLVED_STATUSES,
-  billCourierLabel, billDateSortValue, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
+  billDateSortValue, billPickupDateLabel, computeCod, courierPaymentReportSummary, mapCourierBillRow,
   paymentProgressPieStops, paymentProgressStats, PAYMENT_PROGRESS_COLORS, type CourierBill,
 } from '../../logic/courierPaymentReport';
 
@@ -156,7 +156,7 @@ function BillDetail({ id, initial }: { id: string; initial?: CourierBill }) {
         <InlineStack align="space-between" blockAlign="center">
           <BlockStack gap="050">
             <InlineStack gap="200" blockAlign="center"><Text as="h2" variant="headingMd">Bill Details</Text><Badge tone={meta.tone}>{meta.label}</Badge></InlineStack>
-            <Text as="span" tone="subdued">{billPickupDateLabel(bill)} · {billCourierLabel(bill)} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</Text>
+            <Text as="span" tone="subdued">{billPickupDateLabel(bill)} · {bill.courier} · {bill.totalOrders} order{bill.totalOrders === 1 ? '' : 's'}</Text>
           </BlockStack>
           <Button icon={ExportIcon} loading={downloading} onClick={downloadPdf}>Download Summary (PDF)</Button>
         </InlineStack>
@@ -193,7 +193,7 @@ function BillDetail({ id, initial }: { id: string; initial?: CourierBill }) {
             <BlockStack gap="300">
               <Text as="h3" variant="headingSm">Courier Summary</Text>
               <KeyValueList rows={[
-                { label: 'Courier', value: billCourierLabel(bill) },
+                { label: 'Courier', value: bill.courier },
                 { label: 'Pickup Date', value: billPickupDateLabel(bill) },
                 { label: 'Total Parcels', value: String(bill.totalOrders) },
                 { label: 'Resolved', value: String(bill.resolvedCount) },
@@ -293,7 +293,7 @@ export function CourierPaymentReportPage() {
     if (!q) return bills;
     // Bill value is matched both formatted ("197,730.00") and bare ("197730") so a
     // typed amount hits whether or not the separators are included.
-    return bills.filter((b) => [b.courier, billCourierLabel(b), billPickupDateLabel(b), b.pickupDateKey, formatMoney(b.billValue), String(b.billValue),
+    return bills.filter((b) => [b.courier, billPickupDateLabel(b), b.pickupDateKey, formatMoney(b.billValue), String(b.billValue),
       b.status, BILL_STATUS_META[b.status]?.label ?? '']
       .some((field) => field.toLowerCase().includes(q))
       || (b.orders || []).some((o) => String(o.order_number ?? '').toLowerCase().includes(q)));
@@ -342,7 +342,7 @@ export function CourierPaymentReportPage() {
       ) : billPickupDateLabel(b)),
       sortValue: (b) => billDateSortValue(b),
     },
-    { key: 'courier', heading: 'Courier', render: (b) => billCourierLabel(b), sortValue: (b) => b.courier },
+    { key: 'courier', heading: 'Courier', render: (b) => b.courier, sortValue: (b) => b.courier },
     { key: 'billValue', heading: 'Bill Value', alignment: 'end', render: (b) => formatMoney(b.billValue), sortValue: (b) => b.billValue },
     { key: 'remainingAmount', heading: 'Remaining', alignment: 'end', render: (b) => formatMoney(b.remainingAmount), sortValue: (b) => b.remainingAmount },
     { key: 'settled', heading: 'Settled Orders', render: (b) => <SettledOrdersCell bill={b} />, sortValue: (b) => (b.totalOrders ? b.settledCount / b.totalOrders : 0) },

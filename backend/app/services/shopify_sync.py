@@ -25,7 +25,7 @@ from supabase import create_client
 from app import shopify
 from app.advance_status import recompute_advance_statuses
 from app.config import settings
-from app.couriers import assign_courier_bills
+from app.couriers import assign_courier_bills, canonical_courier
 from app.database import get_supabase
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
@@ -471,7 +471,7 @@ def extract_courier(order: dict) -> str:
     if tracking_company:
         tracking_company = str(tracking_company).strip()
         if tracking_company:
-            return tracking_company
+            return canonical_courier(tracking_company)
     return "Unassigned"
 
 

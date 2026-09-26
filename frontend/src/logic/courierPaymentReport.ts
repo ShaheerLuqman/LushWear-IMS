@@ -1,5 +1,5 @@
 // Courier Payment Report business logic - ported 1:1 from courier-payment-report.js.
-import { formatDateDDMMYYYY, formatCourierForDisplay } from './shared';
+import { formatDateDDMMYYYY } from './shared';
 
 export interface CourierBillOrder {
   id: string; order_number?: number; folio?: string; tracking_number?: string; order_status?: string;
@@ -36,10 +36,6 @@ export function billPickupDateLabel(bill: CourierBill): string {
  *  the one that compares *higher* - hence '1' for pre-onboarding, '0' otherwise. */
 export function billDateSortValue(bill: CourierBill): string {
   return `${bill.pickupDateKey}${bill.isPreOnboarding ? '1' : '0'}`;
-}
-
-export function billCourierLabel(bill: CourierBill): string {
-  return formatCourierForDisplay(bill.courier) as string;
 }
 
 export const BILL_STATUS_META: Record<string, { label: string; tone: 'attention' | 'success' | 'info' | 'warning'; barColor: string }> = {

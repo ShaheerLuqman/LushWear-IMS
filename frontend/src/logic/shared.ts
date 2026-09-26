@@ -17,16 +17,9 @@ export function formatAmount(value: unknown): string {
   return safeVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
-/** Show Fedex as TCS in the app. */
-export function formatCourierForDisplay(courier: unknown): string {
-  if (courier == null || String(courier).trim() === '') return courier as string;
-  if (String(courier).trim().toLowerCase() === 'fedex') return 'TCS';
-  return String(courier);
-}
-
 /** When courier is "Other" and tracking_number is not purely numeric, show tracking_number
  * in the Courier column. Either way a trailing delivery charge is dropped ("Bykea 300" ->
- * "Bykea"; the sync moves that amount into delivery_charge). Fedex is shown as TCS. */
+ * "Bykea"; the sync moves that amount into delivery_charge). */
 export function getCourierDisplayName(order: { courier?: string; tracking_number?: string } | null | undefined): string {
   if (!order) return '-';
   const courier = order.courier != null ? String(order.courier).trim() : '';
@@ -34,7 +27,7 @@ export function getCourierDisplayName(order: { courier?: string; tracking_number
   const isOther = courier.toLowerCase() === 'other';
   const trackingIsNotNumeric = tracking !== '' && !/^\d+$/.test(tracking);
   const name = (isOther && trackingIsNotNumeric ? tracking : courier).replace(/\s+\d+(\.\d+)?$/, '');
-  return name ? formatCourierForDisplay(name) : '-';
+  return name || '-';
 }
 
 export function getPKTDate(): Date {

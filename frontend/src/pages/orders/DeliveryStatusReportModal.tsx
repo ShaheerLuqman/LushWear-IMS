@@ -8,7 +8,6 @@ import { FormModal, InfoModal } from '../../components/FormModal';
 import { ReportTable } from '../../components/ReportTable';
 import { apiJson } from '../../api';
 import { useToast } from '../../toast/ToastContext';
-import { formatCourierForDisplay } from '../../logic/shared';
 import { DELIVERY_REPORT_CATEGORIES, SHIPPER_ADVICE_LABELS, deliveryStatusIsUnderReview, type DeliveryReport, type DeliveryReportEntry } from '../../logic/deliveryStatus';
 
 interface EntryMeta extends DeliveryReportEntry { canViewDetails: boolean; canAdvise: boolean }
@@ -88,7 +87,7 @@ export function DeliveryStatusReportModal({
               ...(bulkEligible ? [m.canAdvise && !m.advised
                 ? <Checkbox label="" labelHidden checked={selectedAdvise.has(i)} onChange={(checked) => setSelectedAdvise((prev) => { const next = new Set(prev); if (checked) next.add(i); else next.delete(i); return next; })} />
                 : ''] : []),
-              String(m.order.order_number || ''), formatCourierForDisplay(m.order.courier) || '', m.order.tracking_number || '',
+              String(m.order.order_number || ''), m.order.courier || '', m.order.tracking_number || '',
               ...(showIssueColumn ? [m.issueType ? <Badge tone="attention">{m.issueType}</Badge> : ''] : []),
               m.note || '',
               <InlineStack gap="100" align="end" wrap={false}>

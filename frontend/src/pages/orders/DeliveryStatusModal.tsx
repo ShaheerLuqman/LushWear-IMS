@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Banner, BlockStack, DescriptionList, InlineStack, Link, Spinner, Text } from '@shopify/polaris';
 import { InfoModal } from '../../components/FormModal';
 import { apiJson } from '../../api';
-import { formatCourierForDisplay, formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../logic/shared';
+import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY } from '../../logic/shared';
 import { mergeDeliveryStatusData, normalizePakPhone, type DeliveryStatusData } from '../../logic/deliveryStatus';
 import { useToast } from '../../toast/ToastContext';
 
@@ -67,7 +67,7 @@ export function DeliveryStatusModal({
   const history = [...(data?.status_history || [])].reverse();
   const waNumber = customer.phone ? normalizePakPhone(customer.phone) : null;
   const items = data ? [
-    { term: 'Courier', description: formatCourierForDisplay(data.courier) || '' },
+    { term: 'Courier', description: data.courier || '' },
     { term: 'Tracking Number', description: data.tracking_number || '' },
     ...(customer.name ? [{ term: 'Customer Name', description: customer.name }] : []),
     ...(customer.phone ? [{

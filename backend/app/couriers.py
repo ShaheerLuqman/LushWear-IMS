@@ -38,7 +38,7 @@ SYSTEM_KEY_PREFIX = "courier_"
 COURIER_CATALOG = {
     "postex": {"label": "PostEx", "ledger_code": "1150"},
     "couriers_next": {"label": "Couriers Next", "ledger_code": "1151"},
-    # Orders still carry TCS under its old name (see formatCourierForDisplay).
+    # `aliases`: names Shopify reports for this courier - see canonical_courier.
     "tcs": {"label": "TCS", "ledger_code": "1152", "aliases": ["FedEx"]},
     "bykea": {"label": "Bykea", "ledger_code": "1153"},
 }
@@ -51,6 +51,19 @@ CREDENTIAL_LABELS = {
 COURIER_LEDGER_LABELS = {
     f"{SYSTEM_KEY_PREFIX}{cid}": spec["label"] for cid, spec in COURIER_CATALOG.items()
 }
+
+_LABEL_BY_ALIAS = {
+    alias.lower(): spec["label"]
+    for spec in COURIER_CATALOG.values()
+    for alias in spec.get("aliases", ())
+}
+
+
+def canonical_courier(name: str) -> str:
+    """Our courier name for a Shopify fulfillment's tracking_company. Shopify only knows
+    its own carrier list and auto-assigns a scanned tracking number to one of them - a
+    TCS number comes back as "FedEx" - so its name is mapped onto ours on the way in."""
+    return _LABEL_BY_ALIAS.get(name.lower(), name)
 
 
 def _credential_keys(courier_id: str) -> List[str]:
@@ -104,11 +117,7 @@ async def assign_courier_bills(org_id: str, order_ids: Optional[List[str]]) -> N
         return
 
     def run():
-        names = [
-            name.lower()
-            for cid in enabled_courier_ids(org_id)
-            for name in (COURIER_CATALOG[cid]["label"], *COURIER_CATALOG[cid].get("aliases", ()))
-        ]
+        names = [COURIER_CATALOG[cid]["label"].lower() for cid in enabled_courier_ids(org_id)]
         return get_supabase().rpc(
             "assign_courier_bills", {"p_org_id": org_id, "p_order_ids": order_ids, "p_couriers": names}
         ).execute()

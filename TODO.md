@@ -52,6 +52,7 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **FedEx stored as TCS** — Shopify's auto-assigned "FedEx" is saved as TCS; bills, filter and ledger all read TCS.
 - [x] **Descriptive courier particulars** — ledger lines read e.g. "CPR PostEx 8/9/26 - Advances Applied", "Payout PostEx 1/4/26 - Delivery Charges".
 - [x] **All orders in courier bills** — every shipped order is on a bill; enabled couriers get their own, the rest share an "Other" bill.
 - [x] **Bykea DC from tracking number** — "Bykea 300" tracking now sets DC 300; Courier column shows just "Bykea".
