@@ -26,6 +26,7 @@ from app.order_pdf import extract_order_numbers
 from app.ordering import _order_number_sort_key
 from app.org_scope import org_table
 from app.org_settings import OrgIntegrationSettings, ensure_valid_shopify_token, get_org_integration_settings
+from app.ledger_roles import SYSTEM_LEDGER_LABELS, get_system_ledger_id
 from app.rate_limit import limiter
 from app.routes.transactions import create_transaction_entry
 from app.services import couriers_next, event_bus, postex
@@ -157,7 +158,7 @@ ORDERS_LIST_SELECT = (
     "id, order_number, courier, tracking_number, folio, order_status, piece_received, "
     "total_amount, advance_amount, delivery_charge, tax_amount, cost_price, "
     "order_receiving_date, courier_pickup_date, line_items, advance_status, is_order_settled, replacement_of_order_no, customer_name, "
-    "created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
+    "tags, created_at, updated_at, delivery_status_latest:delivery_status->>latest_status"
 )
 
 
@@ -1320,7 +1321,8 @@ class ForceSyncOrdersResult(BaseModel):
 async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody, org_id: str = Depends(get_org_id)):
     """
     Force-sync specific orders from Shopify by order number.
-    Skips normal sync restrictions (delivered/returned freeze, assigned courier guard, etc.).
+    Skips normal sync restrictions (delivered/returned freeze, assigned courier guard, etc.) -
+    except the money freeze: total and advance lock exactly as in the normal sync.
     """
     if not body.order_numbers:
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
@@ -1369,7 +1371,7 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             .select(
                 "id, order_number, courier, tracking_number, order_status, piece_received, delivery_status, "
                 "delivery_charge, tax_amount, order_receiving_date, replacement_of_order_no, "
-                "cost_price, line_items, fulfilled_at"
+                "cost_price, line_items, fulfilled_at, total_amount, advance_amount"
             )
             .in_("order_number", order_numbers_input)
             .execute()
@@ -1540,6 +1542,15 @@ async def sync_shopify_orders_force(request: Request, body: ForceSyncOrdersBody,
             tracking_number = extract_tracking_number(sp_order)
             order_status = extract_order_status(sp_order)
             total_amount, advance_amount = derive_total_and_advance(sp_order, order_status)
+            # Same money freeze as shopify_sync._reconcile_one_order: the total locks once the
+            # order leaves "unfulfilled", the advance once it's past "fulfilled". Without it, a
+            # force sync re-prices history - an old discount-as-advance order would now read its
+            # discount as a price cut and come out with a negative COD.
+            existing_status = (existing_order or {}).get("order_status")
+            if existing_order and existing_status != "unfulfilled":
+                total_amount = float(existing_order.get("total_amount") or 0)
+                if existing_status != "fulfilled":
+                    advance_amount = float(existing_order.get("advance_amount") or 0)
 
             structured_line_items = extract_line_items(sp_order, order_status)
             cost_price = extract_cost_price(sp_order)
@@ -2192,7 +2203,7 @@ _MONEY_RESOLVED_STATUSES = ("delivered", "returned")
 async def _order_for_action(supabase, org_id: str, order_id: str) -> dict:
     rows = (
         org_table(supabase, org_id, "shopify_orders")
-        .select("id, order_number, order_status, courier, tracking_number, tags")
+        .select("id, order_number, order_status, courier, tracking_number, tags, advance_amount")
         .eq("id", order_id).limit(1).execute().data
     )
     if not rows:
@@ -2261,6 +2272,13 @@ async def cancel_order(order_id: str, org_id: str = Depends(get_org_id)):
         raise HTTPException(status_code=400, detail="Order is already cancelled.")
     if status in _MONEY_RESOLVED_STATUSES:
         raise HTTPException(status_code=400, detail=f"Order is already {row['order_status']} and cannot be cancelled.")
+    # Cancelling on Shopify refunds nothing, so the advance would be left held in Customer
+    # Advances with no order behind it.
+    if money(row.get("advance_amount") or 0):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Order #{row['order_number']} holds an advance of {money(row['advance_amount']):,.2f}. Refund it before cancelling.",
+        )
 
     try:
         shopify_order_id, org_creds = await _shopify_order_id_for(row["order_number"], org_id)
@@ -2286,6 +2304,18 @@ async def cancel_order(order_id: str, org_id: str = Depends(get_org_id)):
     return {"order_number": row["order_number"], "order_status": "cancelled"}
 
 
+def _advance_account(supabase, org_id: str, ledger_id: str) -> Optional[str]:
+    """The entry side for the cash, bank or wallet ledger an advance moves through - None
+    for Cash, which is stored as an empty side (see TransactionEntryBase)."""
+    ledgers = (
+        org_table(supabase, org_id, "finances_ledgers")
+        .select("type, system_key").eq("id", ledger_id).limit(1).execute().data
+    )
+    if not ledgers or ledgers[0].get("type") != "Asset" or (ledgers[0].get("system_key") or "").startswith("courier_"):
+        raise HTTPException(status_code=400, detail="Pick a cash, bank or wallet account for the advance.")
+    return None if ledgers[0].get("system_key") == "cash" else ledger_id
+
+
 class OrderAdvanceBody(BaseModel):
     advance: float = Field(ge=0)
     ledger_id: str
@@ -2299,15 +2329,16 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
     """Set an order's total customer advance. Posts only the difference from what the
     Customer Advances ledger already holds for it (received into, or handed back from, `ledger_id`),
     then mirrors it to Shopify: a "Partial Advance" tag, or an "Advance Paid" tag plus
-    Mark as paid once the whole total is in. Saving the amount the ledger already holds posts nothing and just retries
-    the Shopify step.
+    Mark as paid once the whole total is in. Lowering it refunds, on Shopify too, whatever
+    Shopify shows as paid above the new advance. Saving the amount the ledger already holds
+    posts nothing and just retries the Shopify step.
 
-    Only before booking - the courier is handed total - advance as its COD - and a full
-    advance is final, since Shopify's paid status can't be taken back."""
+    Only before booking - the courier is handed total - advance as its COD - and a refund
+    is one-time, as on Shopify: once the order has one, its advance is locked."""
     supabase = get_supabase()
     rows = (
         org_table(supabase, org_id, "shopify_orders")
-        .select("id, order_number, order_status, courier, tracking_number, total_amount, advance_amount")
+        .select("id, order_number, order_status, courier, tracking_number, total_amount, advance_amount, tags")
         .eq("id", order_id).limit(1).execute().data
     )
     if not rows:
@@ -2319,41 +2350,49 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
         raise HTTPException(status_code=400, detail="An advance can only be recorded before the order is booked with a courier.")
     total = money(row.get("total_amount") or 0)
     advance = money(body.advance)
-    if total and money(row.get("advance_amount") or 0) >= total:
-        raise HTTPException(status_code=400, detail="This order is already fully paid in advance.")
     if advance > total:
         raise HTTPException(status_code=400, detail=f"The advance cannot exceed the order total ({total:,.2f}).")
+    if total and money(row.get("advance_amount") or 0) >= total and 0 < advance < total:
+        raise HTTPException(status_code=400, detail="A fully paid order's advance can only be refunded in full.")
 
-    ledgers = (
-        org_table(supabase, org_id, "finances_ledgers")
-        .select("type, system_key").eq("id", body.ledger_id).limit(1).execute().data
-    )
-    if not ledgers or ledgers[0].get("type") != "Asset" or (ledgers[0].get("system_key") or "").startswith("courier_"):
-        raise HTTPException(status_code=400, detail="Pick a cash, bank or wallet account for the advance.")
+    account = _advance_account(supabase, org_id, body.ledger_id)
     orders_ledger_id = get_orders_ledger_id(supabase, org_id)
     if not orders_ledger_id:
         raise HTTPException(status_code=400, detail="This organization has no Customer Advances ledger.")
 
     try:
         shopify_order_id, org_creds = await _shopify_order_id_for(row["order_number"], org_id)
+        payments = await shopify.fetch_order_payments(shopify_order_id, org_creds) if shopify_order_id else None
     except Exception as exc:
         logger.exception("Advance: could not look up order %s on Shopify", order_number)
         raise HTTPException(status_code=502, detail=f"Could not reach Shopify: {exc}")
     if not shopify_order_id:
         raise HTTPException(status_code=400, detail=f"Order #{order_number} was not found on Shopify.")
-
     held = money(fetch_transaction_advance_totals(supabase, org_id, order_number).get(order_number, 0))
     difference = money(advance - held)
+    # Shopify's own refund record, not the tag, so a refund made in Shopify admin counts too.
+    # After one, the only change left is finishing the refund (advance 0): it records what
+    # Shopify already refunded and refunds any remainder. Saving the unchanged amount still
+    # goes through - that's how a refund whose later Shopify step failed is retried.
+    refunded_on_shopify = any(t.get("kind") == "REFUND" and t.get("status") == "SUCCESS" for t in payments["transactions"])
+    if refunded_on_shopify and difference and advance:
+        raise HTTPException(status_code=400, detail=f"Order #{order_number}'s advance was refunded; it can't be changed again.")
+    # Planned before the ledger is touched, so a refund Shopify can't make (a card
+    # payment) is refused with nothing posted.
+    try:
+        refund_plan = shopify.plan_manual_refund(payments["transactions"], money(payments["net_paid"] - advance))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    refunded = not advance and (bool(refund_plan) or refunded_on_shopify)
+
     if difference:
         received = difference > 0
-        # Cash is stored as an empty side, not as the cash ledger's id (see TransactionEntryBase).
-        account = None if ledgers[0].get("system_key") == "cash" else body.ledger_id
         await create_transaction_entry(TransactionEntryCreate(
             entry_date=body.entry_date,
             amount=abs(difference),
             description=body.description or (
                 f"{'Additional advance' if held else 'Advance'} received for Order #{order_number}" if received
-                else f"Advance returned for Order #{order_number}"
+                else f"Advance {'refunded' if total and money(row.get('advance_amount') or 0) >= total else 'returned'} for Order #{order_number}"
             ),
             from_account_id=orders_ledger_id if received else account,
             to_account_id=account if received else orders_ledger_id,
@@ -2368,7 +2407,11 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
             else:
                 tag = shopify.partial_advance_tag(advance) if advance else None
             await shopify.set_advance_tag(shopify_order_id, tag, org_creds, client)
-            if advance == total:
+            if refund_plan:
+                await shopify.refund_manual_payments(shopify_order_id, refund_plan, org_creds, client)
+            if refunded:
+                await shopify.add_order_tag(shopify_order_id, shopify.ADVANCE_REFUNDED_TAG, org_creds, client)
+            if advance == total and payments["outstanding"] > 0:
                 await shopify.mark_order_paid(shopify_order_id, org_creds, client)
     except Exception as exc:
         logger.exception("Advance: could not update order %s on Shopify", order_number)
@@ -2377,8 +2420,13 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
             detail=f"The ledger entry was saved, but Shopify could not be updated ({exc}). Save the same amount again to retry.",
         )
 
+    tags = row.get("tags") or ""
+    if refunded and shopify.ADVANCE_REFUNDED_TAG not in tags:
+        # Mirrors the Shopify tag right away, so the grid locks the order before the webhook lands.
+        tags = ", ".join(t for t in [tags, shopify.ADVANCE_REFUNDED_TAG] if t)
     org_table(supabase, org_id, "shopify_orders").update({
         "advance_amount": advance,
+        "tags": tags,
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }).eq("id", order_id).execute()
     recompute_advance_statuses(supabase, org_id, [order_number])
@@ -2386,7 +2434,152 @@ async def set_order_advance(order_id: str, body: OrderAdvanceBody, org_id: str =
     status_rows = (
         org_table(supabase, org_id, "shopify_orders").select("advance_status").eq("id", order_id).limit(1).execute().data
     )
-    return {"advance_amount": advance, "advance_status": status_rows[0]["advance_status"] if status_rows else None}
+    return {
+        "advance_amount": advance,
+        "advance_status": status_rows[0]["advance_status"] if status_rows else None,
+        "tags": tags,
+        # Refunded in Shopify admin beforehand - this call only recorded it here.
+        "already_refunded_on_shopify": refunded and not refund_plan,
+    }
+
+
+def _unrefunded_advances(supabase, org_id: str, order_numbers: List[int]) -> List[dict]:
+    """Orders among `order_numbers` still holding an advance that hasn't been refunded."""
+    rows = (
+        org_table(supabase, org_id, "shopify_orders")
+        .select("id, order_number, advance_amount, tags, courier_bill_id, order_receiving_date")
+        .in_("order_number", order_numbers).gt("advance_amount", 0).execute().data or []
+    )
+    return [
+        r for r in rows
+        if not any(t.strip().lower() == shopify.ADVANCE_REFUNDED_TAG.lower() for t in (r.get("tags") or "").split(","))
+    ]
+
+
+def _require_returned_advances_refunded(supabase, org_id: str, order_numbers: List[int]) -> None:
+    """Piece Received means the parcel is back, and a returned order's advance is never
+    kept - so it waits until the advance is refunded (POST /orders/returned-advances/refund)."""
+    pending = _unrefunded_advances(supabase, org_id, order_numbers)
+    if pending:
+        numbers = ", ".join(f"#{r['order_number']}" for r in sorted(pending, key=lambda r: r["order_number"]))
+        raise HTTPException(status_code=400, detail=f"Refund the advance on {numbers} before marking Piece Received.")
+
+
+class OrderNumbersBody(BaseModel):
+    order_numbers: List[int]
+
+
+@router.post("/returned-advances/pending")
+async def pending_returned_advances(body: OrderNumbersBody, org_id: str = Depends(get_org_id)):
+    """The orders whose advance must be refunded before they can be marked Piece Received."""
+    rows = _unrefunded_advances(get_supabase(), org_id, body.order_numbers)
+    return [{"order_number": r["order_number"], "advance_amount": money(r["advance_amount"])} for r in rows]
+
+
+class RefundReturnedAdvancesBody(BaseModel):
+    order_numbers: List[int]
+    ledger_id: str
+    entry_date: date
+
+
+@router.post("/returned-advances/refund")
+async def refund_returned_advances(body: RefundReturnedAdvancesBody, org_id: str = Depends(get_org_id)):
+    """Refund the advance of each returned order - it is never kept. Where the refund comes
+    out of depends on whether the sale was ever booked:
+
+    - a regular courier bill picked up on/after onboarding booked it (the bill applied the
+      advance as revenue, and the return payout reverses only total - advance): Sales Return;
+    - a pre-onboarding bill, a regular bill picked up before onboarding, or no bill for an
+      order from before onboarding never booked it: Opening Balance Equity;
+    - no bill for a later order means the advance was never applied - it is still in Customer
+      Advances, so it is refunded from there and the order's advance cleared, as Refund
+      advance does. A billed order keeps its advance: changing it would repost the bill.
+
+    The Shopify "Mark as paid" payment is refunded too, and the order tagged Advance Refunded.
+    Everything is checked before anything is written; a retry never posts a second entry."""
+    supabase = get_supabase()
+    rows = _unrefunded_advances(supabase, org_id, body.order_numbers)
+    if not rows:
+        return {"refunded_order_numbers": []}
+    account = _advance_account(supabase, org_id, body.ledger_id)
+    org_rows = supabase.table("system_organizations").select("onboarding_date").eq("id", org_id).limit(1).execute().data
+    onboarding = str((org_rows or [{}])[0].get("onboarding_date") or "")
+
+    def before_onboarding(value) -> bool:
+        return bool(onboarding and value and str(value)[:10] < onboarding)
+
+    bill_ids = [r["courier_bill_id"] for r in rows if r.get("courier_bill_id")]
+    bills = {
+        b["id"]: b for b in (
+            org_table(supabase, org_id, "shopify_courier_bills")
+            .select("id, is_pre_onboarding, pickup_date").in_("id", bill_ids).execute().data or []
+        )
+    } if bill_ids else {}
+    ledger_ids = {role: get_system_ledger_id(supabase, org_id, role) for role in ("orders", "sales_return", "opening_balance_equity")}
+
+    plans = []
+    for r in rows:
+        order_number = str(r["order_number"])
+        bill = bills.get(r.get("courier_bill_id"))
+        if bill is None and not before_onboarding(r.get("order_receiving_date")):
+            role = "orders"
+        elif bill is not None and not bill.get("is_pre_onboarding") and not before_onboarding(bill.get("pickup_date")):
+            role = "sales_return"
+        else:
+            role = "opening_balance_equity"
+        if not ledger_ids[role]:
+            raise HTTPException(status_code=400, detail=f"This organization has no {SYSTEM_LEDGER_LABELS[role]} ledger.")
+        advance = money(r["advance_amount"])
+        try:
+            shopify_order_id, org_creds = await _shopify_order_id_for(r["order_number"], org_id)
+            payments = await shopify.fetch_order_payments(shopify_order_id, org_creds) if shopify_order_id else None
+        except Exception as exc:
+            logger.exception("Returned advance: could not look up order %s on Shopify", order_number)
+            raise HTTPException(status_code=502, detail=f"Could not reach Shopify: {exc}")
+        if not shopify_order_id:
+            raise HTTPException(status_code=400, detail=f"Order #{order_number} was not found on Shopify.")
+        try:
+            refund_plan = shopify.plan_manual_refund(payments["transactions"], min(advance, payments["net_paid"]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Order #{order_number}: {exc}")
+        plans.append((r, order_number, advance, role, shopify_order_id, org_creds, refund_plan))
+
+    refunded, cleared = [], []
+    async with httpx.AsyncClient(timeout=shopify._TIMEOUT) as client:
+        for r, order_number, advance, role, shopify_order_id, org_creds, refund_plan in plans:
+            await create_transaction_entry(TransactionEntryCreate(
+                entry_date=body.entry_date,
+                amount=advance,
+                description=f"Advance refunded for returned Order #{order_number}",
+                from_account_id=account,
+                to_account_id=ledger_ids[role],
+                order_number=order_number,
+                # Fixed per order, so retrying after a failed Shopify step can't post it twice.
+                idempotency_key=f"returned-advance-refund-{r['id']}",
+            ), org_id=org_id)
+            try:
+                if refund_plan:
+                    await shopify.refund_manual_payments(shopify_order_id, refund_plan, org_creds, client)
+                await shopify.add_order_tag(shopify_order_id, shopify.ADVANCE_REFUNDED_TAG, org_creds, client)
+            except Exception as exc:
+                logger.exception("Returned advance: could not update order %s on Shopify", order_number)
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Order #{order_number}'s ledger entry was saved, but Shopify could not be updated ({exc}). Refund again to retry.",
+                )
+            update = {
+                "tags": ", ".join(t for t in [r.get("tags") or "", shopify.ADVANCE_REFUNDED_TAG] if t),
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }
+            if role == "orders":
+                update["advance_amount"] = 0
+                cleared.append(order_number)
+            org_table(supabase, org_id, "shopify_orders").update(update).eq("id", r["id"]).execute()
+            refunded.append(r["order_number"])
+    if cleared:
+        recompute_advance_statuses(supabase, org_id, cleared)
+    event_bus.publish(org_id, {"type": "orders_changed"})
+    return {"refunded_order_numbers": sorted(refunded)}
 
 
 @router.post("/postex-airway-bills")
@@ -2765,6 +2958,7 @@ def _delivery_status_with_latest_status(existing: Optional[Dict[str, Any]], orde
 class BulkUpdateStatusBody(BaseModel):
     order_numbers: List[int]
     order_status: str  # "delivered", "returned", or "cancelled"
+    piece_received: Optional[str] = None  # "Received" for Returned + Piece Received
 
 
 @router.post("/bulk-update-status")
@@ -2774,8 +2968,12 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
         raise HTTPException(status_code=400, detail="order_status must be 'delivered', 'returned', or 'cancelled'")
     if not body.order_numbers:
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    if body.piece_received not in (None, "Received"):
+        raise HTTPException(status_code=400, detail="piece_received must be 'Received'")
+    supabase = get_supabase()
+    if body.piece_received:
+        _require_returned_advances_refunded(supabase, org_id, body.order_numbers)
     try:
-        supabase = get_supabase()
         # Fetch orders so we can merge delivery_status and optionally set piece_received per order
         response = (
             org_table(supabase, org_id, "shopify_orders")
@@ -2803,6 +3001,8 @@ async def bulk_update_order_status(body: BulkUpdateStatusBody, org_id: str = Dep
                 current_piece = (order.get("piece_received") or "").strip().lower()
                 if current_piece == "pending":
                     update_payload["piece_received"] = "Done"
+            if body.piece_received:
+                update_payload["piece_received"] = body.piece_received
             org_table(supabase, org_id, "shopify_orders").update(update_payload).eq("id", order_id).execute()
             onum = order.get("order_number")
             if onum is not None:
@@ -2880,8 +3080,9 @@ async def bulk_update_piece_received(body: BulkUpdatePieceReceivedBody, org_id: 
     """Set piece_received to 'Received' for multiple orders by order_number."""
     if not body.order_numbers:
         raise HTTPException(status_code=400, detail="order_numbers cannot be empty")
+    supabase = get_supabase()
+    _require_returned_advances_refunded(supabase, org_id, body.order_numbers)
     try:
-        supabase = get_supabase()
         update_data = {
             "piece_received": "Received",
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -2973,6 +3174,10 @@ async def update_order(order_id: str, order: OrderUpdate, org_id: str = Depends(
         supabase = get_supabase()
         # Include only fields that were sent (so we can set optional fields like folio to null)
         update_data = {k: v for k, v in order.model_dump(exclude_unset=True).items()}
+        if update_data.get("piece_received") == "Received":
+            existing = org_table(supabase, org_id, "shopify_orders").select("order_number").eq("id", order_id).limit(1).execute().data
+            if existing:
+                _require_returned_advances_refunded(supabase, org_id, [existing[0]["order_number"]])
         update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         response = org_table(supabase, org_id, "shopify_orders").update(update_data).eq("id", order_id).execute()
         if not response.data:

@@ -547,6 +547,8 @@ async def add_order_tag(
 # tagged ADVANCE_PAID_TAG alongside Shopify's own paid status.
 PARTIAL_ADVANCE_TAG = "Partial Advance"
 ADVANCE_PAID_TAG = "Advance Paid"
+# Marks an order whose advance was refunded - a one-time step, after which the advance is locked.
+ADVANCE_REFUNDED_TAG = "Advance Refunded"
 
 
 def partial_advance_tag(amount: float) -> str:
@@ -600,6 +602,90 @@ async def mark_order_paid(
     data = await graphql(
         _MARK_AS_PAID_MUTATION, {"input": {"id": f"gid://shopify/Order/{shopify_order_id}"}}, org_creds, client)
     _check_user_errors("orderMarkAsPaid", data.get("orderMarkAsPaid"))
+
+
+_ORDER_PAYMENTS_QUERY = """
+query($id: ID!) {
+  order(id: $id) {
+    netPaymentSet { shopMoney { amount } }
+    totalOutstandingSet { shopMoney { amount } }
+    transactions {
+      id kind status manualPaymentGateway
+      amountSet { shopMoney { amount } }
+      parentTransaction { id }
+    }
+  }
+}
+"""
+
+
+def _amount(money_set: Optional[dict]) -> float:
+    return float(((money_set or {}).get("shopMoney") or {}).get("amount") or 0)
+
+
+async def fetch_order_payments(
+    shopify_order_id: int, org_creds: OrgIntegrationSettings, client: Optional[httpx.AsyncClient] = None,
+) -> Dict[str, Any]:
+    """What the order has been paid on Shopify: net_paid (received minus refunded),
+    outstanding and the raw transactions."""
+    order = (await graphql(
+        _ORDER_PAYMENTS_QUERY, {"id": f"gid://shopify/Order/{shopify_order_id}"}, org_creds, client))["order"]
+    return {
+        "net_paid": _amount(order.get("netPaymentSet")),
+        "outstanding": _amount(order.get("totalOutstandingSet")),
+        "transactions": order.get("transactions") or [],
+    }
+
+
+def plan_manual_refund(transactions: List[dict], amount: float) -> List[tuple]:
+    """Split `amount` across the order's manual payments ("Mark as paid"), newest first,
+    net of what each has already had refunded - as (parent transaction id, amount) pairs.
+
+    Only manual payments: a card or wallet refund would send real money back, which is
+    not this app's call. Raises ValueError when they can't cover `amount`."""
+    refunded: Dict[str, float] = {}
+    for t in transactions:
+        parent = (t.get("parentTransaction") or {}).get("id")
+        if t.get("kind") == "REFUND" and t.get("status") == "SUCCESS" and parent:
+            refunded[parent] = refunded.get(parent, 0.0) + _amount(t.get("amountSet"))
+    plan, left = [], round(amount, 2)
+    for t in reversed(transactions):
+        if left <= 0:
+            break
+        if t.get("kind") in ("SALE", "CAPTURE") and t.get("status") == "SUCCESS" and t.get("manualPaymentGateway"):
+            available = round(_amount(t.get("amountSet")) - refunded.get(t["id"], 0.0), 2)
+            if available > 0:
+                take = min(available, left)
+                plan.append((t["id"], take))
+                left = round(left - take, 2)
+    if left > 0:
+        raise ValueError(f"Only {amount - left:,.2f} of the payment was recorded with Mark as paid; refund the rest in Shopify admin.")
+    return plan
+
+
+_REFUND_MUTATION = """
+mutation($input: RefundInput!) {
+  refundCreate(input: $input) { userErrors { field message } }
+}
+"""
+
+
+async def refund_manual_payments(
+    shopify_order_id: int, plan: List[tuple], org_creds: OrgIntegrationSettings,
+    client: Optional[httpx.AsyncClient] = None,
+) -> None:
+    """Refund money only, per plan_manual_refund's split - no line items, so nothing is restocked."""
+    order_gid = f"gid://shopify/Order/{shopify_order_id}"
+    data = await graphql(_REFUND_MUTATION, {"input": {
+        "orderId": order_gid,
+        "notify": False,
+        "note": "Advance refund",
+        "transactions": [
+            {"orderId": order_gid, "parentId": parent_id, "amount": f"{amount:.2f}", "gateway": "manual", "kind": "REFUND"}
+            for parent_id, amount in plan
+        ],
+    }}, org_creds, client)
+    _check_user_errors("refundCreate", data.get("refundCreate"))
 
 
 async def cancel_fulfillments(

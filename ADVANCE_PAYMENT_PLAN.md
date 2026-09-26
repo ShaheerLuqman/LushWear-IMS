@@ -1,7 +1,8 @@
 # Receive Advance from the Orders Grid — Plan
 
-Status: implemented (2026-09-26). Not yet released: the deferred Shopify tests and the
-migration run are still to do.
+Status: released (2026-09-26). Mark-paid and the tag round-trip were verified on live
+orders, and the migration tagged #13321, #13963 and #14066. Still to fix by hand: the
+ledger for #13963 (no entry) and #14066 (looks posted twice).
 
 | Piece | Where |
 |---|---|
@@ -34,11 +35,14 @@ The goal is to do all of this in a single popup opened from the order row.
 | When an advance can be received or edited | **Only before the courier is booked.** The COD amount is fixed at booking, so once an order has a courier or tracking number, the action is hidden and the endpoint refuses it. |
 | Overpayment | **Rejected.** The advance can never exceed the order total. |
 | Undo | **Edit it again**, for partial advances only. The same popup reopens with the current advance, and saving a lower amount (down to 0) reverses the difference. There is no separate reverse action. |
-| Full advance | **Final.** It can never be refunded or edited down. Once `advance = total`, the action is hidden and the endpoint refuses it, so Shopify's paid status never has to be undone. |
+| Full advance | **Refundable** (2026-09-26, superseding "final"). Lowering it refunds, on Shopify, whatever Shopify shows as paid above the new advance - only against manual (Mark as paid) payments, never a card. Once an order is fully paid, Receive/Edit advance is replaced by **Refund advance**, which refunds the **full** advance only (2026-09-26: the "all but delivery charge" option was dropped - the kept charge would have sat in Customer Advances with no path to revenue if the order was cancelled; the endpoint refuses a partial refund of a paid order). |
 | Orders not in Shopify | **Not a case.** Every order comes from Shopify. An order with no Shopify ID is an error, not a separate path. |
 | Tests on Shopify (`orderMarkAsPaid`, tag round-trip, discount removal) | **Deferred.** They are run before this ships, not now. |
 | Other ways to set an advance | **Removed.** The inline Advance cell in the Orders grid becomes read-only. The Transaction Entry modal's "Order Advance Amount" checkbox and the `Order#` bulk-entry shorthand go away. The popup is the only way to record an advance. |
-| Force sync | **Same per-order logic as the normal sync.** It exists only to catch orders whose Shopify `updated_at` never moved, so it differs only in which orders it fetches. |
+| Force sync | **Same per-order logic as the normal sync.** It exists only to catch orders whose Shopify `updated_at` never moved, so it differs only in which orders it fetches. It now keeps the normal sync's money freeze (total locks after unfulfilled, advance after fulfilled), so it can't re-price old discount-as-advance orders. |
+| Refunded in Shopify admin first | **Recorded, not refused.** Refund advance checks Shopify's refund record: if the money was already refunded there, it only posts the ledger entry, tags `Advance Refunded` and zeroes the advance (refunding any manual remainder). After any refund, a full refund is the only change allowed. |
+| Cancelling | **Blocked while the order holds an advance** - Shopify's cancel refunds nothing, so the advance would be stranded in Customer Advances. Refund it first. |
+| Pre-onboarding in-flight orders | #4398 and #4448 (fulfilled) tagged `Partial Advance: 15000` / `12050` by hand on 2026-09-26, so they keep their advance. |
 | Ledger name | **Customer Advances**, renamed from "Orders" (`20260926000000_rename_orders_ledger_to_customer_advances.sql`). The internal key stays `orders`; the ledger only ever holds customer advances. |
 | Sequencing | **Implementation first, then the migration script**, in the same change. The script reuses the tag helper and runs at release, straight after the new sync rule is live. |
 
@@ -179,6 +183,53 @@ the record, because it lowers the sale and gets confused with real discounts.
     total, and neither counts as an advance.
   - One endpoint test: it rejects `advance > total`, rejects a booked order, and a lower
     amount posts a return entry.
+
+## Advances on returned orders (built 2026-09-26)
+
+**Why it differs from Refund advance.** By the time a parcel comes back, its advance has
+already left Customer Advances: the courier bill applied it at dispatch (Dr Customer
+Advances, Cr Sales Revenue), and the return payout reverses only total - advance through
+Sales Return. So the advance sits in revenue. Clearing it the way Refund advance does
+(advance -> 0) would repost the courier bill as if the courier had to collect the full
+total, and would disagree with a return payout already posted - so it is not reused.
+
+**Decision: a returned order's advance is always refunded** (2026-09-26: an advance is
+never kept), **at Returned + Piece Received.** That step is always done by staff when the
+parcel physically arrives, so it is the checkpoint (returns set automatically by courier
+tracking or the PostEx CSV can't be gated). For every order in the action - one row or a
+bulk selection - that holds an advance not yet refunded, a popup lists the orders and
+amounts, asks for the account and date, and confirms that the refund can't be undone.
+Piece Received only completes once they are refunded. Per order:
+
+| | |
+|---|---|
+| Ledger | Dr Sales Return / Cr the chosen account, carrying the order number |
+| Shopify | refund the "Mark as paid" payment if the order was marked paid (same manual-only refund as Refund advance); nothing to refund for a partial advance |
+| Order | tag `Advance Refunded`; `advance_amount` unchanged |
+
+The one-time lock is the same as Refund advance's (the tag, or Shopify's refund record), so
+an order is never refunded twice.
+
+Reused: `plan_manual_refund`, `refund_manual_payments`, `add_order_tag`, the
+`create_transaction_entry` path, and the Shopify refund-record check.
+
+**Also decided (2026-09-26):**
+- **Refund account:** chosen in the popup, once for all the orders in it.
+- **Pre-onboarding returns:** refunded out of **Opening Balance Equity** instead of Sales
+  Return, since their sale was never booked. "Pre-onboarding" uses the same test as the
+  courier return payout: the order's courier bill is the pre-onboarding bill. An order with
+  no courier bill whose dispatch was before `onboarding_date` counts too - its sale was
+  never booked either.
+
+**Built as:** `POST /orders/returned-advances/pending` and `/refund` in `routes/orders.py`,
+the popup in `frontend/src/pages/orders/ReturnedAdvanceRefund.tsx`. Two additions beyond
+the decisions above:
+- **An order with no courier bill after onboarding** (never picked up - e.g. "Other"
+  couriers with no tracking) never had its advance applied, so it is still in Customer
+  Advances: it is refunded from there and its advance cleared, as Refund advance does.
+- **The gate covers every way to set Piece Received:** the row action, bulk edit, the
+  grid's dropdown and `/bulk-update-piece-received`. Returned + Piece Received also never
+  actually saved Piece Received before (the route dropped the field); that is fixed.
 
 ## Open questions
 

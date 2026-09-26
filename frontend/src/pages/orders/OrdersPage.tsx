@@ -46,7 +46,8 @@ import { GenerateLoadSheetModal } from './GenerateLoadSheetModal';
 import { PackagingListModal } from './PackagingListModal';
 import { UploadPostExModal } from './UploadPostExModal';
 import { PostExUploadReportModal, type PostExUploadReportData } from './PostExUploadReportModal';
-import { ReceiveAdvanceModal } from './ReceiveAdvanceModal';
+import { AdvanceModal } from './AdvanceModal';
+import { useReturnedAdvanceGate } from './ReturnedAdvanceRefund';
 
 const ORDERS_VIEW_TABS = [
   { id: 'all', label: 'All', statuses: null as string[] | null },
@@ -215,6 +216,7 @@ export function OrdersPage() {
   const condensed = useBreakpoints().mdDown;
 
   const { ledgers, loadLedgersList } = useLedgersData();
+  const { gate: returnedAdvanceGate, element: returnedAdvanceGateElement } = useReturnedAdvanceGate();
   const { riderNames, nextAssignmentNumber, load: loadLoadSheetLogs } = useLoadSheetLogs();
   const { mode, setMode } = useSetIndexFiltersMode();
 
@@ -241,8 +243,11 @@ export function OrdersPage() {
   useEffect(() => { loadLoadSheetLogs(); }, [loadLoadSheetLogs]);
 
   const saveOrderField = useCallback((orderId: string, field: string, value: unknown) => {
-    setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, [field]: value } : o)));
     (async () => {
+      // Piece Received means the parcel is back, so its advance is refunded first.
+      const orderNumber = ordersRef.current.find((o) => o.id === orderId)?.order_number;
+      if (field === 'piece_received' && value === 'Received' && orderNumber && !await returnedAdvanceGate([orderNumber])) return;
+      setOrders((prev) => prev.map((o) => (o.id === orderId ? { ...o, [field]: value } : o)));
       try {
         await apiJson<Order>(`/orders/${orderId}`, { method: 'PUT', body: { [field]: value }, fallback: `Failed to update ${field}` });
         showToast(`Order ${field.replace('_', ' ')} updated`, 'success');
@@ -251,7 +256,7 @@ export function OrdersPage() {
         showToast(`Failed to save ${field}`, 'error');
       }
     })();
-  }, [setOrders, showToast]);
+  }, [setOrders, showToast, returnedAdvanceGate]);
 
   const confirmActionOnTerminalOrders = useCallback(async (orderNumbers: Array<string | number>, actionLabel: string, statuses: string[] = ['delivered', 'returned']) => {
     const wanted = new Set(orderNumbers.map(String));
@@ -300,6 +305,7 @@ export function OrdersPage() {
       const label = pieceReceived ? 'mark it Returned + Piece Received' : `mark it ${status === 'delivered' ? 'Delivered' : 'Returned'}`;
       const conflicting = pieceReceived ? ['delivered'] : ['delivered', 'returned'].filter((s) => s !== status);
       if (!await confirmActionOnTerminalOrders([order.order_number!], label, conflicting)) return;
+      if (pieceReceived && !await returnedAdvanceGate([order.order_number!])) return;
       await bulkForOne(order, '/orders/bulk-update-status',
         { order_status: status, ...(pieceReceived ? { piece_received: 'Received' } : {}) },
         { order_status: status, ...(pieceReceived ? { piece_received: 'Received' } : {}) },
@@ -310,14 +316,16 @@ export function OrdersPage() {
       message: `This cancels the Shopify fulfillment and clears the ${getCourierDisplayName(order)} booking (${order.tracking_number || 'no tracking number'}) so the order can be booked again.\n\nThe parcel itself is not cancelled with the courier.`,
       confirmText: 'Unbook',
     }),
-    onCancel: (order) => runOrderAction(order, 'cancel', {
+    onCancel: (order) => ((parseFloat(String(order.advance_amount)) || 0) > 0
+      ? showToast(`Order #${order.order_number} holds an advance. Refund it before cancelling.`, 'error')
+      : runOrderAction(order, 'cancel', {
       title: `Cancel order #${order.order_number}?`,
       message: 'This cancels the order on Shopify (and its fulfillment, if any) and marks it cancelled here. Any courier booking stays on record.',
       confirmText: 'Cancel order',
-    }),
+    })),
     onView: (order) => setViewOrderId(order.id),
     onAdvance: (order) => { loadLedgersList(); setAdvanceOrderId(order.id); },
-  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne, loadLedgersList]);
+  }), [isEditingAllowed, saveOrderField, confirmActionOnTerminalOrders, runOrderAction, bulkForOne, loadLedgersList, showToast, returnedAdvanceGate]);
 
   function removeFetchedByNumberRows() {
     if (fetchedByNumberIdsRef.current.size === 0) return;
@@ -326,7 +334,7 @@ export function OrdersPage() {
     fetchedByNumberIdsRef.current.clear();
   }
 
-  async function fetchOrderByNumber(orderNumber: string) {
+  async function fetchOrderByNumber(orderNumber: string, silent = false) {
     if (fetchByNumberInFlightRef.current === orderNumber) return;
     fetchByNumberInFlightRef.current = orderNumber;
     try {
@@ -334,7 +342,7 @@ export function OrdersPage() {
       if (order && order.id) {
         fetchedByNumberIdsRef.current.add(order.id);
         setOrders((prev) => [order, ...prev]);
-        showToast(`Order #${orderNumber} loaded from database`, 'success');
+        if (!silent) showToast(`Order #${orderNumber} loaded from database`, 'success');
       }
     } catch (e: any) {
       if (e?.status === 404) showToast(`Order #${orderNumber} not found in database`, 'info');
@@ -344,18 +352,28 @@ export function OrdersPage() {
     }
   }
 
-  // Order-number auto-fetch: when the order # column filter holds a full order number
-  // (4+ digits) that matches nothing currently loaded, pull it straight from the DB.
+  // Order-number auto-fetch: when the order # column filter or the header search holds a full
+  // order number (4+ digits) that matches nothing currently loaded, pull it straight from the DB.
   const orderNumberFilter = String(columnFilters.order_number || '').trim();
+  const fetchByNumberQuery = [orderNumberFilter, search.trim()].find((q) => /^\d{4,}$/.test(q)) || '';
   useEffect(() => {
-    const isFullOrderNumber = /^\d{4,}$/.test(orderNumberFilter);
-    if (!isFullOrderNumber) { removeFetchedByNumberRows(); return; }
-    const hasMatch = ordersRealRows(ordersRef.current).some((o) => String(o.order_number) === orderNumberFilter);
+    if (!fetchByNumberQuery) { removeFetchedByNumberRows(); return; }
+    const hasMatch = ordersRealRows(ordersRef.current).some((o) => String(o.order_number) === fetchByNumberQuery);
     if (hasMatch) return;
-    const t = setTimeout(() => { removeFetchedByNumberRows(); fetchOrderByNumber(orderNumberFilter); }, 400);
+    const t = setTimeout(() => { removeFetchedByNumberRows(); fetchOrderByNumber(fetchByNumberQuery); }, 400);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderNumberFilter]);
+  }, [fetchByNumberQuery]);
+
+  // Any reload (live ORDERS_CHANGED_EVENT, cache-then-fresh load) replaces `orders` wholesale,
+  // dropping the injected row - quietly fetch it back so it doesn't vanish mid-search.
+  useEffect(() => {
+    const ids = fetchedByNumberIdsRef.current;
+    if (ids.size === 0 || orders.some((o) => ids.has(o.id))) return;
+    ids.clear();
+    fetchOrderByNumber(fetchByNumberQuery, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orders]);
 
   // Metrics strip + tab counts, derived from the currently loaded `orders` (not the current
   // filter/search - the strip always summarizes the whole loaded period).
@@ -1116,10 +1134,11 @@ export function OrdersPage() {
         const order = orders.find((o) => o.id === viewOrderId);
         return order ? <OrderDetailsModal order={order} ctx={columnCtx} onClose={() => setViewOrderId(null)} /> : null;
       })()}
+      {returnedAdvanceGateElement}
       {advanceOrderId && (() => {
         const order = orders.find((o) => o.id === advanceOrderId);
         return order ? (
-          <ReceiveAdvanceModal
+          <AdvanceModal
             order={order}
             ledgers={ledgers}
             onClose={() => setAdvanceOrderId(null)}

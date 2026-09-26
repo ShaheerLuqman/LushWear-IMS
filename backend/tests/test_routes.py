@@ -174,6 +174,23 @@ class TestOrders:
         assert body["shopify_fetch_failed_count"] == 1
         assert body["shopify_fetch_failed_order_numbers"] == [100]
 
+    def test_sync_shopify_orders_force_keeps_a_frozen_total_and_advance(self, make_client, monkeypatch):
+        """An old discount-as-advance order: its discount now reads as a price cut, so
+        without the money freeze a force sync would re-price it to total 1000 / advance 0."""
+        import app.routes.orders as orders_module
+
+        async def fake_fetch(order_number, org_creds):
+            return {"id": 1, "order_number": 100, "financial_status": "pending", "current_total_discounts": "1500.00",
+                    "fulfillment_status": "fulfilled",
+                    "fulfillments": [{"status": "success", "line_items": [{"price": "2500.00", "quantity": 1}]}]}
+
+        monkeypatch.setattr(orders_module, "_fetch_shopify_order_by_order_number", fake_fetch)
+        existing = {"id": "o1", "order_number": 100, "order_status": "delivered", "total_amount": 2500.0, "advance_amount": 1500.0}
+        client = make_client({"shopify_products": [], "shopify_variants": [], "shopify_orders": [existing]})
+        assert client.post("/api/orders/sync-shopify-force", json={"order_numbers": [100]}).status_code == 200
+        written = orders_module.get_supabase().upserted["shopify_orders"][0]
+        assert (written["total_amount"], written["advance_amount"]) == (2500.0, 1500.0)
+
     def test_create_load_sheet_log_returns_the_typed_shape(self, make_client):
         seeded_log = {
             "id": "log-1",
@@ -599,6 +616,12 @@ class TestUnbookAndCancelRoutes:
         assert r.status_code == 200
         assert r.json() == {"order_number": 101, "order_status": "cancelled"}
         assert calls == [("cancel_order", 555)]
+
+    def test_cancel_refuses_an_order_holding_an_advance(self, make_client, monkeypatch):
+        calls = self._spy_shopify(monkeypatch)
+        r = make_client({"shopify_orders": [{**self.BOOKED, "advance_amount": 1500}]}).post("/api/orders/o1/cancel")
+        assert r.status_code == 400
+        assert calls == []
 
     def test_cancel_refuses_an_already_cancelled_or_resolved_order(self, make_client, monkeypatch):
         self._spy_shopify(monkeypatch)
@@ -1634,21 +1657,29 @@ class TestResolveScan:
 
 class TestSetOrderAdvance:
     """PUT /orders/{id}/advance posts only the difference to the ledger, then mirrors the
-    advance to Shopify (tag for partial, Mark as paid for full). Shopify and the ledger
-    write are spied, not performed."""
+    advance to Shopify (tag for partial, Mark as paid for full, a refund when lowered below
+    what Shopify shows as paid). Shopify and the ledger write are spied, not performed."""
 
     ORDER = {"id": "o1", "order_number": 14204, "order_status": "unfulfilled", "courier": "Unassigned",
              "tracking_number": None, "total_amount": 3000, "advance_amount": 0, "advance_status": 1}
     BANK = {"id": "bank", "type": "Asset", "system_key": None}
+    UNPAID = {"net_paid": 0.0, "outstanding": 3000.0, "transactions": []}
+    PAID = {"net_paid": 3000.0, "outstanding": 0.0, "transactions": [
+        {"id": "sale1", "kind": "SALE", "status": "SUCCESS", "manualPaymentGateway": True,
+         "amountSet": {"shopMoney": {"amount": "3000.0"}}, "parentTransaction": None},
+    ]}
 
     @staticmethod
-    def _spy(monkeypatch, held=0.0, shopify_fails=False):
+    def _spy(monkeypatch, held=0.0, payments=UNPAID, shopify_fails=False):
         import app.routes.orders as orders
 
         calls = []
 
         async def _lookup(_order_number, _org_id):
             return 555, object()
+
+        async def _payments(*_a):
+            return payments
 
         async def _create_entry(entry, org_id):
             calls.append(("entry", entry.amount, entry.from_account_id, entry.to_account_id))
@@ -1658,16 +1689,25 @@ class TestSetOrderAdvance:
                 raise RuntimeError("shopify down")
             calls.append(("tag", tag))
 
+        async def _refund(order_id, plan, *_a):
+            calls.append(("refund", plan))
+
         async def _paid(order_id, *_a):
             calls.append(("paid", order_id))
+
+        async def _add_tag(order_id, tag, *_a):
+            calls.append(("add_tag", tag))
 
         monkeypatch.setattr(orders, "_shopify_order_id_for", _lookup)
         monkeypatch.setattr(orders, "get_orders_ledger_id", lambda *_a: "orders-ledger")
         monkeypatch.setattr(orders, "fetch_transaction_advance_totals", lambda *_a: {"14204": held})
         monkeypatch.setattr(orders, "create_transaction_entry", _create_entry)
         monkeypatch.setattr(orders, "recompute_advance_statuses", lambda *_a: 0)
+        monkeypatch.setattr(orders.shopify, "fetch_order_payments", _payments)
         monkeypatch.setattr(orders.shopify, "set_advance_tag", _tag)
+        monkeypatch.setattr(orders.shopify, "refund_manual_payments", _refund)
         monkeypatch.setattr(orders.shopify, "mark_order_paid", _paid)
+        monkeypatch.setattr(orders.shopify, "add_order_tag", _add_tag)
         return calls
 
     def _put(self, make_client, advance, order=None, ledger=None):
@@ -1676,21 +1716,54 @@ class TestSetOrderAdvance:
 
     def test_partial_advance_posts_the_receipt_and_tags_the_order(self, make_client, monkeypatch):
         calls = self._spy(monkeypatch)
-        r = self._put(make_client, 1500)
-        assert r.status_code == 200
+        assert self._put(make_client, 1500).status_code == 200
         assert calls == [("entry", 1500, "orders-ledger", "bank"), ("tag", "Partial Advance: 1500")]
 
     def test_full_advance_tags_advance_paid_and_marks_paid(self, make_client, monkeypatch):
         calls = self._spy(monkeypatch, held=1000)
-        r = self._put(make_client, 3000, order={**self.ORDER, "advance_amount": 1000})
-        assert r.status_code == 200
+        assert self._put(make_client, 3000, order={**self.ORDER, "advance_amount": 1000}).status_code == 200
         assert calls == [("entry", 2000, "orders-ledger", "bank"), ("tag", "Advance Paid"), ("paid", 555)]
 
-    def test_lowering_the_advance_posts_a_return(self, make_client, monkeypatch):
+    def test_lowering_a_partial_advance_posts_a_return(self, make_client, monkeypatch):
         calls = self._spy(monkeypatch, held=1500)
-        r = self._put(make_client, 500, order={**self.ORDER, "advance_amount": 1500})
-        assert r.status_code == 200
+        assert self._put(make_client, 500, order={**self.ORDER, "advance_amount": 1500}).status_code == 200
         assert calls == [("entry", 1000, "bank", "orders-ledger"), ("tag", "Partial Advance: 500")]
+
+    def test_refunding_a_paid_order_refunds_the_manual_payment(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=3000, payments=self.PAID)
+        assert self._put(make_client, 0, order={**self.ORDER, "advance_amount": 3000}).status_code == 200
+        assert calls == [("entry", 3000, "bank", "orders-ledger"), ("tag", None), ("refund", [("sale1", 3000.0)]),
+                         ("add_tag", "Advance Refunded")]
+
+    def test_a_paid_order_is_only_refunded_in_full(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=3000, payments=self.PAID)
+        assert self._put(make_client, 250, order={**self.ORDER, "advance_amount": 3000}).status_code == 400
+        assert calls == []
+
+    REFUNDED = {"net_paid": 250.0, "outstanding": 0.0, "transactions": PAID["transactions"] + [
+        {"id": "ref1", "kind": "REFUND", "status": "SUCCESS", "manualPaymentGateway": True,
+         "amountSet": {"shopMoney": {"amount": "2750.0"}}, "parentTransaction": {"id": "sale1"}},
+    ]}
+
+    def test_a_refunded_order_is_locked(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=250, payments=self.REFUNDED)
+        assert self._put(make_client, 3000, order={**self.ORDER, "advance_amount": 250}).status_code == 400
+        assert calls == []
+
+    def test_a_refund_already_made_in_shopify_admin_is_only_recorded(self, make_client, monkeypatch):
+        admin_refunded = {**self.REFUNDED, "net_paid": 0.0, "transactions": self.PAID["transactions"] + [
+            {**self.REFUNDED["transactions"][-1], "amountSet": {"shopMoney": {"amount": "3000.0"}}},
+        ]}
+        calls = self._spy(monkeypatch, held=3000, payments=admin_refunded)
+        r = self._put(make_client, 0, order={**self.ORDER, "advance_amount": 3000})
+        assert r.status_code == 200
+        assert r.json()["already_refunded_on_shopify"] is True
+        assert calls == [("entry", 3000, "bank", "orders-ledger"), ("tag", None), ("add_tag", "Advance Refunded")]
+
+    def test_a_refunded_order_can_still_retry_shopify(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, held=250, payments=self.REFUNDED)
+        assert self._put(make_client, 250, order={**self.ORDER, "advance_amount": 250}).status_code == 200
+        assert calls == [("tag", "Partial Advance: 250")]
 
     def test_same_amount_posts_nothing_and_retries_shopify(self, make_client, monkeypatch):
         calls = self._spy(monkeypatch, held=1500)
@@ -1700,7 +1773,6 @@ class TestSetOrderAdvance:
     @pytest.mark.parametrize("advance, order, ledger", [
         (1000, {**ORDER, "courier": "PostEx", "tracking_number": "PX1"}, None),
         (1000, {**ORDER, "order_status": "fulfilled"}, None),
-        (1000, {**ORDER, "advance_amount": 3000}, None),
         (3001, None, None),
         (1000, None, {"id": "bank", "type": "Liability", "system_key": None}),
         (1000, None, {"id": "bank", "type": "Asset", "system_key": "courier_postex"}),
@@ -1710,8 +1782,133 @@ class TestSetOrderAdvance:
         assert self._put(make_client, advance, order, ledger).status_code == 400
         assert calls == []
 
+    def test_a_card_payment_is_never_refunded(self, make_client, monkeypatch):
+        card = {**self.PAID, "transactions": [{**self.PAID["transactions"][0], "manualPaymentGateway": False}]}
+        calls = self._spy(monkeypatch, held=3000, payments=card)
+        assert self._put(make_client, 0, order={**self.ORDER, "advance_amount": 3000}).status_code == 400
+        assert calls == []
+
     def test_shopify_failure_keeps_the_entry_and_reports_it(self, make_client, monkeypatch):
         calls = self._spy(monkeypatch, shopify_fails=True)
-        r = self._put(make_client, 1500)
-        assert r.status_code == 502
+        assert self._put(make_client, 1500).status_code == 502
         assert calls == [("entry", 1500, "orders-ledger", "bank")]
+
+
+def test_manual_refund_is_split_across_payments_net_of_earlier_refunds():
+    from app.shopify import plan_manual_refund
+
+    def txn(tid, kind, amount, parent=None):
+        return {"id": tid, "kind": kind, "status": "SUCCESS", "manualPaymentGateway": True,
+                "amountSet": {"shopMoney": {"amount": str(amount)}}, "parentTransaction": {"id": parent} if parent else None}
+
+    txns = [txn("s1", "SALE", 3000), txn("r1", "REFUND", 2000, "s1"), txn("s2", "SALE", 2000)]
+    assert plan_manual_refund(txns, 2500) == [("s2", 2000.0), ("s1", 500.0)]
+    assert plan_manual_refund(txns, 0) == []
+    with pytest.raises(ValueError):
+        plan_manual_refund(txns, 3001)
+
+
+class TestReturnedAdvanceRefunds:
+    """A returned order's advance is never kept: Returned + Piece Received waits until it is
+    refunded, and the refund comes out of Sales Return, Opening Balance Equity or Customer
+    Advances depending on whether the sale was booked. Shopify and the ledger are spied."""
+
+    ORG = {"id": "test-org", "name": "Test Org", "enabled_features": ["orders", "finance"], "onboarding_date": "2026-04-01"}
+    BANK = {"id": "bank", "type": "Asset", "system_key": None}
+    BILLED = {"id": "o1", "order_number": 101, "advance_amount": 1000, "tags": "Partial Advance: 1000",
+              "courier_bill_id": "bill", "order_receiving_date": "2026-09-01T10:00:00+00:00"}
+
+    @staticmethod
+    def _spy(monkeypatch, net_paid=0.0):
+        import app.routes.orders as orders
+
+        calls = []
+
+        async def _lookup(_order_number, _org_id):
+            return 555, object()
+
+        async def _payments(*_a):
+            txns = [{"id": "sale1", "kind": "SALE", "status": "SUCCESS", "manualPaymentGateway": True,
+                     "amountSet": {"shopMoney": {"amount": str(net_paid)}}, "parentTransaction": None}] if net_paid else []
+            return {"net_paid": net_paid, "outstanding": 0.0, "transactions": txns}
+
+        async def _create_entry(entry, org_id):
+            calls.append(("entry", entry.amount, entry.from_account_id, entry.to_account_id))
+
+        async def _refund(order_id, plan, *_a):
+            calls.append(("refund", plan))
+
+        async def _add_tag(order_id, tag, *_a):
+            calls.append(("add_tag", tag))
+
+        monkeypatch.setattr(orders, "_shopify_order_id_for", _lookup)
+        monkeypatch.setattr(orders, "get_system_ledger_id", lambda _s, _o, role: f"{role}-ledger")
+        monkeypatch.setattr(orders, "create_transaction_entry", _create_entry)
+        monkeypatch.setattr(orders, "recompute_advance_statuses", lambda *_a: 0)
+        monkeypatch.setattr(orders.shopify, "fetch_order_payments", _payments)
+        monkeypatch.setattr(orders.shopify, "refund_manual_payments", _refund)
+        monkeypatch.setattr(orders.shopify, "add_order_tag", _add_tag)
+        return calls
+
+    def _refund(self, make_client, order, bill=None):
+        client = make_client({
+            "system_organizations": [self.ORG], "finances_ledgers": [self.BANK],
+            "shopify_orders": [order], "shopify_courier_bills": [bill] if bill else [],
+        })
+        return client.post("/api/orders/returned-advances/refund", json={"order_numbers": [101], "ledger_id": "bank", "entry_date": "2026-09-26"})
+
+    def test_a_booked_sale_is_refunded_from_sales_return(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch)
+        r = self._refund(make_client, self.BILLED, {"id": "bill", "is_pre_onboarding": False, "pickup_date": "2026-09-02"})
+        assert r.status_code == 200 and r.json() == {"refunded_order_numbers": [101]}
+        assert calls == [("entry", 1000, "bank", "sales_return-ledger"), ("add_tag", "Advance Refunded")]
+
+    def test_a_paid_order_also_refunds_the_shopify_payment(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch, net_paid=1000.0)
+        self._refund(make_client, self.BILLED, {"id": "bill", "is_pre_onboarding": False, "pickup_date": "2026-09-02"})
+        assert ("refund", [("sale1", 1000.0)]) in calls
+
+    @pytest.mark.parametrize("bill", [
+        {"id": "bill", "is_pre_onboarding": True, "pickup_date": "2026-04-01"},
+        {"id": "bill", "is_pre_onboarding": False, "pickup_date": "2026-03-20"},
+    ])
+    def test_a_sale_never_booked_is_refunded_from_opening_balance_equity(self, make_client, monkeypatch, bill):
+        calls = self._spy(monkeypatch)
+        assert self._refund(make_client, self.BILLED, bill).status_code == 200
+        assert calls[0] == ("entry", 1000, "bank", "opening_balance_equity-ledger")
+
+    def test_an_unbilled_order_is_refunded_from_customer_advances(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch)
+        assert self._refund(make_client, {**self.BILLED, "courier_bill_id": None}).status_code == 200
+        assert calls[0] == ("entry", 1000, "bank", "orders-ledger")
+
+    def test_an_already_refunded_order_is_skipped(self, make_client, monkeypatch):
+        calls = self._spy(monkeypatch)
+        r = self._refund(make_client, {**self.BILLED, "tags": "Advance Refunded"})
+        assert r.json() == {"refunded_order_numbers": []} and calls == []
+
+    def test_piece_received_waits_for_the_refund(self, make_client):
+        client = make_client({"shopify_orders": [self.BILLED]})
+        r = client.post("/api/orders/bulk-update-status", json={"order_numbers": [101], "order_status": "returned", "piece_received": "Received"})
+        assert r.status_code == 400 and "#101" in r.json()["detail"]
+        assert client.post("/api/orders/returned-advances/pending", json={"order_numbers": [101]}).json() == [
+            {"order_number": 101, "advance_amount": 1000.0}]
+
+    def test_a_refunded_order_is_marked_piece_received(self, make_client):
+        import app.routes.orders as orders
+
+        updates = []
+        client = make_client({"shopify_orders": [{"id": "o2", "order_number": 102, "advance_amount": 500, "tags": "Advance Refunded", "piece_received": "Pending"}]})
+        fake = orders.get_supabase()
+        original_table = fake.table
+
+        def spying_table(name):
+            q = original_table(name)
+            if name == "shopify_orders":
+                q.update = lambda payload: (updates.append(payload), q)[1]
+            return q
+
+        fake.table = spying_table
+        r = client.post("/api/orders/bulk-update-status", json={"order_numbers": [102], "order_status": "returned", "piece_received": "Received"})
+        assert r.status_code == 200
+        assert updates and updates[0]["piece_received"] == "Received"

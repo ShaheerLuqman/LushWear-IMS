@@ -10,6 +10,7 @@ import { useAuth } from '../../auth/AuthContext';
 import { useConfirm } from '../../components/ConfirmContext';
 import { useToast } from '../../toast/ToastContext';
 import type { Order } from '../../logic/orders';
+import { useReturnedAdvanceGate } from './ReturnedAdvanceRefund';
 
 interface BulkResult {
   updated_order_numbers?: Array<string | number>;
@@ -43,6 +44,7 @@ export function BulkUpdateOrderModal({
   const [busy, setBusy] = useState<string | null>(null);
   const [results, setResults] = useState<BulkResult | null>(null);
   const [deliveryChargesOpen, setDeliveryChargesOpen] = useState(false);
+  const { gate: returnedAdvanceGate, element: returnedAdvanceGateElement } = useReturnedAdvanceGate();
 
   const orderNumbers = useMemo(() => parseOrderNumbers(text), [text]);
 
@@ -94,6 +96,7 @@ export function BulkUpdateOrderModal({
   async function setPieceReceived() {
     if (!guardEditing() || !requireOrderNumbers()) return;
     if (!(await confirmActionOnTerminalOrders(orders, orderNumbers, 'mark them Returned + Piece Received', ['delivered'], confirm))) return;
+    if (!(await returnedAdvanceGate(orderNumbers))) return;
     await withBusy('piece_received', async () => {
       try {
         const result = await apiJson<BulkResult>('/orders/bulk-update-status', {
@@ -181,6 +184,7 @@ export function BulkUpdateOrderModal({
           </BlockStack>
         )}
       </InfoModal>
+      {returnedAdvanceGateElement}
       {deliveryChargesOpen && (
         <BulkUpdateDeliveryChargesModal
           orderNumbers={orderNumbers}

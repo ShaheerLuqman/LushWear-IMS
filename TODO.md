@@ -33,10 +33,6 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 - [ ] **Unresolved sold line items in month summary** — ~1,061 units show as "Others"; no matching product row (renamed/deleted products).
 - [ ] **Shopify orders still on REST** — kept on REST deliberately (GraphQL bills ~105 cost points per nested order); revisit before REST is retired.
 
-#### Orders
-- [ ] **Advance release checks** — test mark-paid and tag round-trip on Shopify, then run the migration.
-- [ ] **Advance refund on return** — Return + Piece Received (row/bulk) asks if advances were refunded; post refunds.
-
 #### Couriers
 - [ ] **Couriers Next status lag** — `TrackOrder.php` shows stale status vs `CurrentStatus.php`; ask their team before fixing.
 
@@ -56,6 +52,12 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Advance refund on return** — Piece Received first refunds every advance on the orders.
+- [x] **Piece Received saved** — Returned + Piece Received now actually stores Piece Received.
+- [x] **Cancel blocked with advance** — orders holding an advance must be refunded before cancelling.
+- [x] **Force sync money freeze** — force sync no longer re-prices frozen totals/advances.
+- [x] **Advance refunds** — fully paid orders get a one-time full Refund advance, with confirmation.
+- [x] **Advance release checks** — mark-paid and tag round-trip verified live; discount-advance migration applied.
 - [x] **Customer Advances ledger** — renamed the Orders system ledger to reflect what it holds.
 - [x] **Receive advance popup** — orders row records full/partial advance to a ledger and tags or marks paid on Shopify.
 - [x] **Tag-based advances** — sync reads `Partial Advance: N` tags; discounts are now price reductions only.

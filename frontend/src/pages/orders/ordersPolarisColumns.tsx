@@ -36,6 +36,11 @@ export function cod(order: Order): number {
   return (parseFloat(String(order.total_amount)) || 0) - (parseFloat(String(order.advance_amount)) || 0);
 }
 
+export function isFullyPaid(order: Order): boolean {
+  const total = parseFloat(String(order.total_amount)) || 0;
+  return total > 0 && (parseFloat(String(order.advance_amount)) || 0) >= total;
+}
+
 export function profitPercent(order: Order): number | null {
   const netProfit = computeNetProfit(order);
   if (netProfit == null) return null;
@@ -119,10 +124,12 @@ export function orderActionItems(order: Order, ctx: OrdersColumnCtx): ActionList
     if (status !== 'returned') items.push({ content: 'Mark Returned', onAction: () => ctx.onSetStatus(order, 'returned') });
     if (!(status === 'returned' && pieceReceived)) items.push({ content: 'Mark Returned + Piece Received', onAction: () => ctx.onSetStatus(order, 'returned', true) });
   }
-  // Only before booking: the courier is handed total - advance as its COD. A full advance is final.
-  const advance = parseFloat(String(order.advance_amount)) || 0;
-  if (status === 'unfulfilled' && !booked && advance < (parseFloat(String(order.total_amount)) || 0)) {
-    items.push({ content: advance ? 'Edit advance' : 'Receive advance', onAction: () => ctx.onAdvance(order) });
+  // Only before booking: the courier is handed total - advance as its COD.
+  // A refund is one-time, as on Shopify - the advance is locked after it.
+  const refunded = String(order.tags || '').split(',').some((t) => t.trim().toLowerCase() === 'advance refunded');
+  if (status === 'unfulfilled' && !booked && !refunded) {
+    const verb = isFullyPaid(order) ? 'Refund' : (parseFloat(String(order.advance_amount)) || 0) ? 'Edit' : 'Receive';
+    items.push({ content: `${verb} advance`, onAction: () => ctx.onAdvance(order) });
   }
   if (booked && !resolved) items.push({ content: 'Unbook courier', destructive: true, onAction: () => ctx.onUnbook(order) });
   if (status !== 'cancelled' && !resolved) items.push({ content: 'Cancel order', destructive: true, onAction: () => ctx.onCancel(order) });
