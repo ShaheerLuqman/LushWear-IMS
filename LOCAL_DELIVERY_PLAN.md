@@ -137,7 +137,7 @@ never cash to collect. The only money on the order is the delivery charge (DC).
    so their bill (and so their sale) posts at once. `fulfill_orders` doesn't call
    it today and relies on the Shopify sync picking them up later.
 3. **Local Deliveries page:** a list of orders whose courier is a Local Delivery
-   courier, with pending ones first. Per row:
+   courier, newest order number first. Per row:
    - **DC:** editable amount; blank (NULL) until entered, and 0 is a valid entry.
      A row needs attention while its DC is NULL, or while it's above 0 with no
      paid-from ledger.

@@ -14,10 +14,13 @@ import { formatDateDDMMYYYY, formatDateTimeDDMMYYYY, getCourierDisplayName } fro
 import { normalizePakPhone, type DeliveryStatusData } from '../../logic/deliveryStatus';
 import { RowActions } from '../../components/RowActions';
 import { ORDERS_COLUMNS, cod, money, orderActionItems, profitPercent, statusTone, type OrdersColumnCtx } from './ordersPolarisColumns';
+import { isLocalDeliveryCourier } from '../../logic/fulfillment';
+import { DeliveryChargeModal, type DeliveryChargePatch } from '../fulfillment/DeliveryChargeModal';
 
 type FullOrder = Order & {
   customer_name?: string; customer_phone?: string; customer_address?: string; customer_city?: string;
   courier_pickup_date?: string; fulfilled_at?: string; returned_at?: string; tags?: string;
+  delivery_charge_ledger_id?: string | null;
 };
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
@@ -59,13 +62,17 @@ const dash = (v: unknown) => (v == null || String(v).trim() === '' ? '-' : Strin
 export function OrderDetailsModal({ order, ctx, onClose }: { order: Order; ctx: OrdersColumnCtx; onClose: () => void }) {
   const [full, setFull] = useState<FullOrder | null>(null);
   const [loadFailed, setLoadFailed] = useState(false);
+  // A Local Delivery charge is edited in its own popup (it also records the ledger the rider
+  // was paid from); what it saved overrides both the fetched row and the list row.
+  const [editingCharge, setEditingCharge] = useState(false);
+  const [chargePatch, setChargePatch] = useState<DeliveryChargePatch | null>(null);
 
   useEffect(() => {
     apiJson<FullOrder>(`/orders/${order.id}`, { fallback: 'Failed to load order' }).then(setFull, () => setLoadFailed(true));
   }, [order.id]);
 
   // The list row wins for fields edited inline since the fetch; the fetched row adds the rest.
-  const o: FullOrder = { ...full, ...order, delivery_status: full?.delivery_status ?? order.delivery_status };
+  const o: FullOrder = { ...full, ...order, ...chargePatch, delivery_status: full?.delivery_status ?? order.delivery_status };
   const status = o.order_status || '';
   const finalStatus = computeFinalStatus(o);
   const lineItems = o.line_items || [];
@@ -83,6 +90,15 @@ export function OrderDetailsModal({ order, ctx, onClose }: { order: Order; ctx: 
   const field = (key: string, label: string, end = true) => (ctx.isEditingAllowed()
     ? <PencilEdit label={label} display={render(key, readOnlyCtx)} editor={render(key, ctx)} end={end} />
     : render(key, readOnlyCtx));
+  const localDelivery = isLocalDeliveryCourier(o.courier);
+  const chargeField = localDelivery && ctx.isEditingAllowed()
+    ? (
+      <InlineStack gap="100" blockAlign="center" align="end" wrap={false}>
+        <Button icon={EditIcon} variant="tertiary" size="slim" accessibilityLabel="Edit delivery charge" disabled={loading} onClick={() => setEditingCharge(true)} />
+        {render('delivery_charge', readOnlyCtx)}
+      </InlineStack>
+    )
+    : field('delivery_charge', 'delivery charge');
 
   return (
     <InfoModal title={`Order #${o.order_number}`} onClose={onClose} size="large">
@@ -126,7 +142,7 @@ export function OrderDetailsModal({ order, ctx, onClose }: { order: Order; ctx: 
                   { label: 'Total', value: render('total_amount', readOnlyCtx), kind: 'subtotal' },
                   { label: 'Advance', value: render('advance_amount', readOnlyCtx) },
                   { label: 'CoD', value: money(cod(o)) },
-                  { label: 'Delivery charge', value: field('delivery_charge', 'delivery charge') },
+                  { label: 'Delivery charge', value: chargeField },
                   { label: 'Tax', value: field('tax_amount', 'tax') },
                   { label: 'Cost price', value: field('cost_price', 'cost price') },
                   { label: 'Receivable', value: receivable == null ? '-' : money(receivable), kind: receivable != null && receivable < 0 ? 'negative' : 'subtotal' },
@@ -193,6 +209,9 @@ export function OrderDetailsModal({ order, ctx, onClose }: { order: Order; ctx: 
           </InlineGrid>
         </BlockStack>
       </div>
+      {editingCharge && (
+        <DeliveryChargeModal order={o} onClose={() => setEditingCharge(false)} onSaved={setChargePatch} />
+      )}
     </InfoModal>
   );
 }

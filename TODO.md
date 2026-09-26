@@ -53,6 +53,11 @@ settled decisions live in [`backend/BACKEND.md`](backend/BACKEND.md)
 
 > Same one-line format, `[x]`, newest first.
 
+- [x] **Read-only Orders rows** — fields edited only from the View popup; row menu unchanged.
+- [x] **Delivery charge popup** — Local Delivery charge edited with its paid-from ledger in a popup.
+- [x] **CPR shows all couriers** — Courier Payment Report no longer defaults to PostEx only.
+- [x] **This/Last Year date presets** — date range picker gains This Year and Last Year.
+- [x] **Local Deliveries by order #** — list sorted by order number, newest first.
 - [x] **Old rider orders on Local Deliveries** — last 60 days of "Other" rider orders moved to Local Delivery.
 - [x] **Blank DC shown as dash** — unentered delivery charge shows a greyed dash instead of 0.00.
 - [x] **Advance from fulfillment** — unpaid Local Delivery booking offers Record Advance, then Retry Failed.

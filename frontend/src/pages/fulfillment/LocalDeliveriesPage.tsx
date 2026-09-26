@@ -1,21 +1,20 @@
 // Local Deliveries: orders sent by Local Delivery (a rider booked on demand). Per row, the delivery
-// charge and the ledger the rider was paid from - saving (re)posts that payment (PUT
-// /orders/{id}/local-delivery) - and Delivered, which also settles the order and, once the
-// day's orders are all delivered, its courier bill. See LOCAL_DELIVERY_PLAN.md.
+// charge and the ledger the rider was paid from - edited in DeliveryChargeModal, which (re)posts
+// that payment - and Delivered, which also settles the order and, once the day's orders are
+// all delivered, its courier bill. See LOCAL_DELIVERY_PLAN.md.
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Badge, BlockStack, Button, Text } from '@shopify/polaris';
+import { Badge, BlockStack, Button, InlineStack, Text } from '@shopify/polaris';
+import { EditIcon } from '@shopify/polaris-icons';
 import { apiJson } from '../../api';
 import { useAuth } from '../../auth/AuthContext';
 import { useToast } from '../../toast/ToastContext';
 import { usePageHeader } from '../../layout/PageHeaderContext';
 import { HeaderButton } from '../../components/HeaderButton';
 import { DataTable, type DataColumn } from '../../components/DataTable';
-import { Dropdown } from '../../components/Dropdown';
-import { EditableAmount } from '../../components/EditableCell';
 import { ORDERS_CHANGED_EVENT } from '../../eventsStream';
-import { postExCashLedgerOptions } from '../../logic/ledgers';
 import { formatAmount, formatDateDDMMYYYY, rowMatchesQuery } from '../../logic/shared';
 import { useLedgersData } from '../finance/useLedgersData';
+import { DeliveryChargeModal } from './DeliveryChargeModal';
 
 interface LocalDelivery {
   id: string;
@@ -31,10 +30,6 @@ interface LocalDelivery {
   delivery_charge_ledger_id: string | null;
 }
 
-function needsAttention(d: LocalDelivery): boolean {
-  return d.order_status !== 'delivered' || d.delivery_charge == null || (d.delivery_charge > 0 && !d.delivery_charge_ledger_id);
-}
-
 export function LocalDeliveriesPage() {
   const { showToast } = useToast();
   const { isEditingAllowed } = useAuth();
@@ -42,6 +37,7 @@ export function LocalDeliveriesPage() {
   const [rows, setRows] = useState<LocalDelivery[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [editingId, setEditingId] = useState<string | null>(null);
 
   // No loading flag on refresh: this also runs on every orders_changed event, including
   // the one each save here triggers, and the table shouldn't blank out for those.
@@ -67,21 +63,6 @@ export function LocalDeliveriesPage() {
     actions: <HeaderButton onClick={load}>Refresh</HeaderButton>,
   });
 
-  async function save(d: LocalDelivery, patch: Partial<Pick<LocalDelivery, 'delivery_charge' | 'delivery_charge_ledger_id'>>) {
-    if (!isEditingAllowed()) { showToast('Editing is locked', 'error', { silent: true }); return; }
-    const next = { ...d, ...patch };
-    try {
-      await apiJson(`/orders/${d.id}/local-delivery`, {
-        method: 'PUT',
-        body: { delivery_charge: next.delivery_charge, ledger_id: next.delivery_charge_ledger_id },
-        fallback: 'Failed to save the delivery charge',
-      });
-      setRows((prev) => prev.map((r) => (r.id === d.id ? next : r)));
-    } catch (error: any) {
-      showToast(error?.message || 'Failed to save the delivery charge', 'error');
-    }
-  }
-
   async function markDelivered(d: LocalDelivery) {
     if (!isEditingAllowed()) { showToast('Editing is locked', 'error', { silent: true }); return; }
     try {
@@ -95,15 +76,10 @@ export function LocalDeliveriesPage() {
     }
   }
 
-  const ledgerOptions = useMemo(() => postExCashLedgerOptions(ledgers).map((l) => ({ value: l.id, label: l.name })), [ledgers]);
-  // Pending rows first; the server's newest-dispatch-first order is kept within each group.
-  const shown = useMemo(() => {
-    const matched = rows.filter((r) => rowMatchesQuery(r, search));
-    return [...matched.filter(needsAttention), ...matched.filter((r) => !needsAttention(r))];
-  }, [rows, search]);
+  const shown = useMemo(() => rows.filter((r) => rowMatchesQuery(r, search)), [rows, search]);
 
   const columns: DataColumn<LocalDelivery>[] = [
-    { key: 'order', heading: 'Order', render: (d) => <Text as="span" fontWeight="semibold">#{d.order_number}</Text> },
+    { key: 'order', heading: 'Order', render: (d) => <Text as="span" fontWeight="semibold">#{d.order_number}</Text>, sortValue: (d) => d.order_number },
     {
       key: 'customer', heading: 'Customer',
       render: (d) => (
@@ -118,17 +94,21 @@ export function LocalDeliveriesPage() {
     { key: 'total', heading: 'Total', alignment: 'end', render: (d) => formatAmount(d.total_amount) },
     {
       key: 'dc', heading: 'Delivery charge', alignment: 'end',
-      render: (d) => <EditableAmount value={d.delivery_charge} placeholder="—" editable onSave={(n) => save(d, { delivery_charge: n })} />,
+      render: (d) => (
+        <InlineStack gap="100" align="end" blockAlign="center" wrap={false}>
+          {isEditingAllowed() && (
+            <Button icon={EditIcon} variant="tertiary" size="slim" accessibilityLabel={`Edit delivery charge for order ${d.order_number}`} onClick={() => setEditingId(d.id)} />
+          )}
+          {d.delivery_charge == null ? <Text as="span" tone="subdued">—</Text> : formatAmount(d.delivery_charge)}
+        </InlineStack>
+      ),
     },
     {
       key: 'ledger', heading: 'Paid from',
-      render: (d) => (
-        <Dropdown
-          size="slim" placeholder={d.delivery_charge ? 'Select ledger' : '—'} disabled={!d.delivery_charge}
-          options={ledgerOptions} value={d.delivery_charge_ledger_id || ''}
-          onChange={(id) => save(d, { delivery_charge_ledger_id: id })}
-        />
-      ),
+      render: (d) => {
+        const name = ledgers.find((l) => l.id === d.delivery_charge_ledger_id)?.name;
+        return name || <Text as="span" tone="subdued">—</Text>;
+      },
     },
     {
       key: 'status', heading: 'Status',
@@ -138,11 +118,21 @@ export function LocalDeliveriesPage() {
     },
   ];
 
+  const editing = editingId ? rows.find((r) => r.id === editingId) : undefined;
   return (
-    <DataTable
-      columns={columns} rows={shown} rowId={(d) => d.id} loading={loading} pageSize={50}
-      resourceName={{ singular: 'local delivery', plural: 'local deliveries' }}
-      emptyMessage="No orders sent by Local Delivery yet."
-    />
+    <>
+      <DataTable
+        columns={columns} rows={shown} rowId={(d) => d.id} loading={loading} pageSize={50}
+        initialSort={{ key: 'order', direction: 'descending' }}
+        resourceName={{ singular: 'local delivery', plural: 'local deliveries' }}
+        emptyMessage="No orders sent by Local Delivery yet."
+      />
+      {editing && (
+        <DeliveryChargeModal
+          order={editing} onClose={() => setEditingId(null)}
+          onSaved={(patch) => setRows((prev) => prev.map((r) => (r.id === editing.id ? { ...r, ...patch } : r)))}
+        />
+      )}
+    </>
   );
 }

@@ -17,6 +17,10 @@ export const FULFILLMENT_COURIERS: FulfillmentCourier[] = [
   { id: 'other', name: 'Other', monogram: '···', color: '#6d6d78' },
 ];
 
+export function isLocalDeliveryCourier(courier: string | null | undefined): boolean {
+  return FULFILLMENT_COURIERS.some((c) => c.kind === 'local_delivery' && c.name === courier);
+}
+
 // Order types each courier's booking API accepts, keyed by courier id. Mirrors
 // postex.ORDER_TYPES on the backend; a courier absent here has no equivalent field.
 export const FULFILLMENT_ORDER_TYPES: Record<string, string[]> = {

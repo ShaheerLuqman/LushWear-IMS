@@ -421,7 +421,7 @@ async def list_local_deliveries(org_id: str = Depends(get_org_id)):
                 "order_status, total_amount, delivery_charge, delivery_charge_ledger_id")
         .in_("courier", LOCAL_DELIVERY_LABELS)
         .not_.in_("order_status", ["unfulfilled", "cancelled"])
-        .order("fulfilled_at", desc=True)
+        .order("order_number", desc=True)
         .execute()
         .data
         or []

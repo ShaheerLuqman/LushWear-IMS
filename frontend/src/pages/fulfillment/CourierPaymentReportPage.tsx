@@ -249,7 +249,7 @@ export function CourierPaymentReportPage() {
   const { showToast } = useToast();
   const [bills, setBills] = useState<CourierBill[]>([]);
   const [couriers, setCouriers] = useState<string[]>([]);
-  const [courierFilter, setCourierFilter] = useState<string[] | null | undefined>(undefined); // undefined = not yet defaulted
+  const [courierFilter, setCourierFilter] = useState<string[] | null>(null); // null = all couriers
   const [statusFilter, setStatusFilter] = useState<string[] | null>(null);
   const [dateRange, setDateRange] = useState<DateRange | null>(defaultRange());
   const [search, setSearch] = useState('');
@@ -270,13 +270,6 @@ export function CourierPaymentReportPage() {
       const mapped = rows.map(mapCourierBillRow);
       setBills(mapped);
       setCouriers((prev) => [...new Set([...prev, ...mapped.map((b) => b.courier).filter(Boolean)])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' })));
-      // Default to PostEx alone once the courier list is known, for now the only courier
-      // this report gets used for day to day - refetch once with it applied.
-      if (courierFilter === undefined) {
-        const list = [...new Set(mapped.map((b) => b.courier).filter(Boolean))];
-        const postex = list.find((c) => c.toLowerCase() === 'postex');
-        setCourierFilter(postex ? [postex] : null);
-      }
     } catch (error) {
       console.error('Error loading courier payment report:', error);
       showToast('Failed to load courier payment report data', 'error');
@@ -355,7 +348,7 @@ export function CourierPaymentReportPage() {
     actions: detailId ? undefined : (
       <>
         <DateRangePopover value={dateRange} onChange={setDateRange} title="Filter by pickup date range" />
-        <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter === undefined ? null : courierFilter} onChange={setCourierFilter} />
+        <Dropdown multiple allLabel="All couriers" options={couriers} value={courierFilter} onChange={setCourierFilter} />
         <Dropdown multiple allLabel="All Status" options={COURIER_PAYMENT_STATUSES.map((v) => ({ value: v, label: COURIER_PAYMENT_STATUS_LABELS[v] }))} value={statusFilter} onChange={setStatusFilter} />
         <HeaderButton onClick={clearFilters}>Clear Filters</HeaderButton>
         <HeaderButton loading={fetchingSettlements} onClick={fetchPostExSettlements}>Fetch Settlements</HeaderButton>

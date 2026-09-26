@@ -121,9 +121,9 @@ function aggregateCell(col: OrdersColumnDef, sums: SelectionSums): React.ReactNo
 const WIDTH_CAPPED_COLUMNS = new Set(['courier', 'delivery']);
 
 /* Selecting a row re-renders OrdersPage, which would otherwise re-run every column's render()
-   (several are live TextField/Select inputs) for all PAGE_SIZE rows just to flip one checkbox.
-   Memoized so only the row whose `selected` actually changed re-renders - columnCtx is itself
-   memoized above, so unrelated rows' props are reference-equal and this fully bails out. */
+   for all PAGE_SIZE rows just to flip one checkbox. Memoized so only the row whose `selected`
+   actually changed re-renders - columnCtx is itself memoized above, so unrelated rows' props
+   are reference-equal and this fully bails out. */
 const OrderRow = memo(function OrderRow({
   order, index, selected, tone, columnCtx, condensed,
 }: {
@@ -159,6 +159,10 @@ const OrderRow = memo(function OrderRow({
     );
   }
 
+  // Fields are edited from the order's View popup, never in the row itself; only the
+  // Actions column keeps the real ctx, for its row menu.
+  const readOnlyCtx = { ...columnCtx, isEditingAllowed: () => false };
+
   // Polaris' `tone` only tints the row background; the class is what actually
   // greys the content, since IndexTable.Row takes no className of its own.
   const cellClass = [
@@ -173,7 +177,7 @@ const OrderRow = memo(function OrderRow({
           className={[cellClass, WIDTH_CAPPED_COLUMNS.has(col.key) ? 'orders-cell-capped' : '']
             .filter(Boolean).join(' ') || undefined}
         >
-          {col.render(order, columnCtx)}
+          {col.render(order, col.key === 'actions' ? columnCtx : readOnlyCtx)}
         </IndexTable.Cell>
       ))}
     </IndexTable.Row>

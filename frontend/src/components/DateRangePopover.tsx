@@ -39,6 +39,8 @@ export function buildDateRangePresets({ oldestStart }: { oldestStart?: Date } = 
     'Last 30 Days': [addDays(-29), today],
     'This Month': [new Date(y, m, 1), new Date(y, m + 1, 0)],
     'Last Month': [new Date(y, m - 1, 1), new Date(y, m, 0)],
+    'This Year': [new Date(y, 0, 1), new Date(y, 11, 31)],
+    'Last Year': [new Date(y - 1, 0, 1), new Date(y - 1, 11, 31)],
   };
 }
 
